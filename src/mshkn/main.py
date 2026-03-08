@@ -13,6 +13,7 @@ from mshkn.api.checkpoints import router as checkpoints_router
 from mshkn.api.computers import router as computers_router
 from mshkn.config import Config
 from mshkn.db import run_migrations
+from mshkn.vm.manager import VMManager
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -28,6 +29,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await run_migrations(db, config.migrations_dir)
     app.state.db = db
     app.state.config = config
+    vm_manager = VMManager(config, db)
+    await vm_manager.initialize()
+    app.state.vm_manager = vm_manager
     yield
     await db.close()
 
