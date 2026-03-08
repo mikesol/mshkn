@@ -41,17 +41,9 @@ async def fork_checkpoint(
     if ckpt is None or ckpt.account_id != account.id:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
 
-    # TODO: Full restore path:
-    # 1. Download checkpoint from R2 if not cached locally
-    # 2. Create new dm-thin snapshot from the checkpoint's volume
-    # 3. Start new Firecracker process
-    # 4. Load VM snapshot (memory + vmstate)
-    # 5. Resume VM
-    # For now, raise NotImplementedError with context
-    raise NotImplementedError(
-        f"Fork from checkpoint {checkpoint_id} not yet implemented — "
-        "requires VM restore from snapshot"
-    )
+    vm_mgr = request.app.state.vm_manager
+    computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt)
+    return ForkResponse(computer_id=computer.id, checkpoint_id=checkpoint_id)
 
 
 class MergeRequest(BaseModel):

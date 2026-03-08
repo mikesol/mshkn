@@ -12,7 +12,7 @@ from mshkn.db import (
     list_computers_by_account,
     update_computer_status,
 )
-from mshkn.models import Computer, Manifest
+from mshkn.models import Checkpoint, Computer, Manifest
 from mshkn.vm.firecracker import (
     FirecrackerClient,
     FirecrackerConfig,
@@ -118,6 +118,88 @@ class VMManager:
         )
         await insert_computer(self.db, computer)
         logger.info("Created computer %s (slot=%d, ip=%s)", computer_id, slot, vm_ip)
+        return computer
+
+    async def fork_from_checkpoint(self, account_id: str, checkpoint: Checkpoint) -> Computer:
+        """Fork a new computer from a checkpoint.
+
+        Creates a dm-thin CoW snapshot of the checkpoint's disk (O(1)) and cold-boots
+        a new VM from it. Cold boot is used because snapshot restore requires the same
+        network config (IP) as the original — which conflicts with running the original
+        VM concurrently. The disk snapshot preserves all filesystem state from the
+        checkpoint.
+
+        TODO: Implement snapshot restore for cases where the original VM is destroyed,
+        or solve the networking reconfiguration problem for true instant resume.
+        """
+        computer_id = f"comp-{uuid.uuid4().hex[:12]}"
+        slot = self._allocate_slot()
+        volume_id = self._allocate_volume_id()
+        _host_ip, vm_ip = slot_to_ip(slot)
+        mac = slot_to_mac(slot)
+        tap = slot_to_tap(slot)
+        socket_path = f"/tmp/fc-{computer_id}.socket"
+        volume_name = f"mshkn-{computer_id}"
+
+        # Find the source computer's volume to snapshot from
+        source_computer = await get_computer(self.db, checkpoint.computer_id or "")
+        if source_computer is None:
+            msg = f"Source computer {checkpoint.computer_id} not found for checkpoint"
+            raise ValueError(msg)
+
+        # 1. Create tap device
+        await create_tap(slot)
+
+        # 2. Create dm-thin snapshot from the checkpoint's source volume (O(1) CoW)
+        await create_snapshot(
+            pool_name=self.config.thin_pool_name,
+            source_volume_id=source_computer.thin_volume_id,
+            new_volume_id=volume_id,
+            new_volume_name=volume_name,
+            sectors=self.config.thin_volume_sectors,
+        )
+
+        # 3. Start Firecracker and cold-boot from the snapshot disk
+        pid = await start_firecracker_process(socket_path)
+        fc_client = FirecrackerClient(socket_path)
+        try:
+            await fc_client.configure_and_boot(
+                FirecrackerConfig(
+                    socket_path=socket_path,
+                    kernel_path=str(self.config.kernel_path),
+                    rootfs_path=f"/dev/mapper/{volume_name}",
+                    tap_device=tap,
+                    guest_mac=mac,
+                    vcpu_count=2,
+                    mem_size_mib=512,
+                )
+            )
+        finally:
+            await fc_client.close()
+
+        # 4. Wait for SSH readiness
+        await self._wait_for_ssh(vm_ip)
+
+        # 5. Record in DB
+        now = datetime.now(UTC).isoformat()
+        computer = Computer(
+            id=computer_id,
+            account_id=account_id,
+            thin_volume_id=volume_id,
+            tap_device=tap,
+            vm_ip=vm_ip,
+            socket_path=socket_path,
+            firecracker_pid=pid,
+            manifest_hash=checkpoint.manifest_hash,
+            status="running",
+            created_at=now,
+            last_exec_at=None,
+        )
+        await insert_computer(self.db, computer)
+        logger.info(
+            "Forked computer %s from checkpoint %s (slot=%d, ip=%s)",
+            computer_id, checkpoint.id, slot, vm_ip,
+        )
         return computer
 
     async def destroy(self, computer_id: str) -> None:
