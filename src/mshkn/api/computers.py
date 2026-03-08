@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -21,6 +22,9 @@ if TYPE_CHECKING:
     from mshkn.vm.manager import VMManager
 
 router = APIRouter(prefix="/computers", tags=["computers"])
+
+# Hold references to background tasks to prevent GC
+_background_tasks: set[asyncio.Task[None]] = set()
 
 _require_account = Depends(require_account)
 
@@ -188,6 +192,71 @@ async def computer_status(
         "created_at": computer.created_at,
         "last_exec_at": computer.last_exec_at,
     }
+
+
+class CheckpointRequest(BaseModel):
+    label: str | None = None
+    pin: bool = False
+
+
+class CheckpointResponse(BaseModel):
+    checkpoint_id: str
+    manifest_hash: str
+
+
+@router.post("/{computer_id}/checkpoint", response_model=CheckpointResponse)
+async def checkpoint_computer(
+    computer_id: str,
+    request: Request,
+    body: CheckpointRequest | None = None,
+    account: Account = _require_account,
+) -> CheckpointResponse:
+    import uuid
+    from datetime import UTC, datetime
+
+    from mshkn.checkpoint.r2 import upload_checkpoint
+    from mshkn.checkpoint.snapshot import create_vm_snapshot
+    from mshkn.db import insert_checkpoint
+    from mshkn.models import Checkpoint
+
+    db: aiosqlite.Connection = request.app.state.db
+    config: Config = request.app.state.config
+    computer = await _get_running_computer(db, computer_id, account)
+
+    checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
+    snapshot_dir = config.checkpoint_local_dir / checkpoint_id
+
+    # Pause/snapshot/resume (sub-1s for the agent)
+    await create_vm_snapshot(computer.socket_path, snapshot_dir)
+
+    # Record in DB
+    now = datetime.now(UTC).isoformat()
+    r2_prefix = f"{account.id}/{checkpoint_id}"
+    ckpt = Checkpoint(
+        id=checkpoint_id,
+        account_id=account.id,
+        parent_id=None,
+        computer_id=computer_id,
+        manifest_hash=computer.manifest_hash,
+        manifest_json="{}",  # TODO: store actual manifest
+        r2_prefix=r2_prefix,
+        disk_delta_size_bytes=None,
+        memory_size_bytes=None,
+        label=body.label if body else None,
+        pinned=body.pin if body else False,
+        created_at=now,
+    )
+    await insert_checkpoint(db, ckpt)
+
+    # Async background upload to R2
+    task = asyncio.create_task(upload_checkpoint(snapshot_dir, r2_prefix, config.r2_bucket))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return CheckpointResponse(
+        checkpoint_id=checkpoint_id,
+        manifest_hash=computer.manifest_hash,
+    )
 
 
 @router.delete("/{computer_id}")
