@@ -103,6 +103,32 @@ async def get_computer(db: aiosqlite.Connection, computer_id: str) -> Computer |
     )
 
 
+async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
+    """Return all non-destroyed computers across all accounts."""
+    cursor = await db.execute(
+        "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
+        "firecracker_pid, manifest_hash, status, created_at, last_exec_at "
+        "FROM computers WHERE status != 'destroyed'",
+    )
+    rows = await cursor.fetchall()
+    return [
+        Computer(
+            id=r[0],
+            account_id=r[1],
+            thin_volume_id=r[2],
+            tap_device=r[3],
+            vm_ip=r[4],
+            socket_path=r[5],
+            firecracker_pid=r[6],
+            manifest_hash=r[7],
+            status=r[8],
+            created_at=r[9],
+            last_exec_at=r[10],
+        )
+        for r in rows
+    ]
+
+
 async def list_computers_by_account(
     db: aiosqlite.Connection, account_id: str
 ) -> list[Computer]:

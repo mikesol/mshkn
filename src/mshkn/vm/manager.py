@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from mshkn.db import (
     get_computer,
     insert_computer,
-    list_computers_by_account,
+    list_all_computers,
     update_computer_status,
 )
 from mshkn.models import Checkpoint, Computer, Manifest
@@ -36,10 +36,11 @@ class VMManager:
         self.db = db
         self._next_slot = 1  # slot 0 reserved; will be loaded from DB on startup
         self._next_volume_id = 100  # volume 0 is base; start high to avoid conflicts
+        self._alloc_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """Load state from DB to set counters correctly."""
-        computers = await list_computers_by_account(self.db, "%")  # TODO: list all
+        computers = await list_all_computers(self.db)
         if computers:
             max_vol = max(c.thin_volume_id for c in computers)
             self._next_volume_id = max_vol + 1
@@ -58,8 +59,9 @@ class VMManager:
 
     async def create(self, account_id: str, manifest: Manifest) -> Computer:
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
-        slot = self._allocate_slot()
-        volume_id = self._allocate_volume_id()
+        async with self._alloc_lock:
+            slot = self._allocate_slot()
+            volume_id = self._allocate_volume_id()
         _host_ip, vm_ip = slot_to_ip(slot)
         mac = slot_to_mac(slot)
         tap = slot_to_tap(slot)
@@ -133,8 +135,9 @@ class VMManager:
         or solve the networking reconfiguration problem for true instant resume.
         """
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
-        slot = self._allocate_slot()
-        volume_id = self._allocate_volume_id()
+        async with self._alloc_lock:
+            slot = self._allocate_slot()
+            volume_id = self._allocate_volume_id()
         _host_ip, vm_ip = slot_to_ip(slot)
         mac = slot_to_mac(slot)
         tap = slot_to_tap(slot)

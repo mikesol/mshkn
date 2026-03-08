@@ -263,8 +263,12 @@ async def checkpoint_computer(
 async def destroy_computer(
     request: Request,
     computer_id: str,
-    account: Account = _require_account,  # noqa: ARG001
+    account: Account = _require_account,
 ) -> dict[str, str]:
+    db: aiosqlite.Connection = request.app.state.db
+    computer = await get_computer(db, computer_id)
+    if computer is None or computer.account_id != account.id:
+        raise HTTPException(status_code=404, detail="Computer not found")
     vm_mgr: VMManager = request.app.state.vm_manager
     await vm_mgr.destroy(computer_id)
     return {"status": "destroyed"}

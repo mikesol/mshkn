@@ -1,3 +1,5 @@
+import asyncio
+
 from mshkn.config import Config
 from mshkn.vm.manager import VMManager
 
@@ -13,6 +15,7 @@ def test_slot_allocation() -> None:
     manager.config = config
     manager._next_slot = 1
     manager._next_volume_id = 100
+    manager._alloc_lock = asyncio.Lock()
 
     assert manager._allocate_slot() == 1
     assert manager._allocate_slot() == 2
