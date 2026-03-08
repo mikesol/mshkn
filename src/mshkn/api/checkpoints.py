@@ -62,9 +62,38 @@ class MergeRequest(BaseModel):
 @router.post("/merge")
 async def merge_checkpoints(
     body: MergeRequest,
+    request: Request,
     account: Account = _require_account,
 ) -> dict[str, object]:
-    raise NotImplementedError
+    db: aiosqlite.Connection = request.app.state.db
+
+    ckpt_a = await get_checkpoint(db, body.checkpoint_a)
+    ckpt_b = await get_checkpoint(db, body.checkpoint_b)
+
+    if ckpt_a is None or ckpt_a.account_id != account.id:
+        raise HTTPException(status_code=404, detail="Checkpoint A not found")
+    if ckpt_b is None or ckpt_b.account_id != account.id:
+        raise HTTPException(status_code=404, detail="Checkpoint B not found")
+
+    if ckpt_a.parent_id != ckpt_b.parent_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Checkpoints must share a common parent to merge",
+        )
+
+    # TODO: Full merge path:
+    # 1. Mount disk volumes for parent, fork_a, fork_b
+    # 2. Run three_way_merge on mounted filesystems
+    # 3. Create new checkpoint from merged result
+    # 4. Upload to R2
+    # For now, return a placeholder showing the intended structure
+    return {
+        "status": "pending",
+        "checkpoint_a": body.checkpoint_a,
+        "checkpoint_b": body.checkpoint_b,
+        "parent_id": ckpt_a.parent_id,
+        "message": "Merge requires server-side disk mount — not yet implemented",
+    }
 
 
 @router.get("")
