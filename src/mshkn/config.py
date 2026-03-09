@@ -16,7 +16,7 @@ class Config:
     db_path: Path = field(default_factory=lambda: Path("/opt/mshkn/mshkn.db"))
     migrations_dir: Path = field(default_factory=lambda: Path("migrations"))
     base_rootfs_path: Path = field(
-        default_factory=lambda: Path("/opt/firecracker/rootfs-proper.ext4"),
+        default_factory=lambda: Path("/opt/firecracker/rootfs.ext4"),
     )
     kernel_path: Path = field(default_factory=lambda: Path("/opt/firecracker/vmlinux.bin"))
     capability_cache_dir: Path = field(default_factory=lambda: Path("/opt/mshkn/capability-cache"))
