@@ -85,7 +85,7 @@ class TestT103ParallelExploration:
             # Write base state
             await exec_command(
                 long_client, computer_id,
-                "echo 'base_state' > /tmp/experiment.txt",
+                "echo 'base_state' > /root/experiment.txt",
             )
 
             # Checkpoint the base state
@@ -103,14 +103,14 @@ class TestT103ParallelExploration:
             for fid, experiment in zip(forked_ids, experiments):
                 await exec_command(
                     long_client, fid,
-                    f"echo '{experiment}' >> /tmp/experiment.txt",
+                    f"echo '{experiment}' >> /root/experiment.txt",
                 )
 
             # Verify each fork has different content
             contents: list[str] = []
             for fid in forked_ids:
                 result = await exec_command(
-                    long_client, fid, "cat /tmp/experiment.txt"
+                    long_client, fid, "cat /root/experiment.txt"
                 )
                 contents.append(result.stdout.strip())
 
@@ -137,7 +137,7 @@ class TestT103ParallelExploration:
             # Pick the "best" fork (just pick the first one for the test)
             best_idx = 0
             best_result = await exec_command(
-                long_client, forked_ids[best_idx], "cat /tmp/experiment.txt"
+                long_client, forked_ids[best_idx], "cat /root/experiment.txt"
             )
             assert experiments[best_idx] in best_result.stdout
 
@@ -170,12 +170,12 @@ class TestT104FailureRecovery:
             # Write important file
             await exec_command(
                 long_client, computer_id,
-                "echo 'critical_data_12345' > /tmp/important.txt",
+                "echo 'critical_data_12345' > /root/important.txt",
             )
 
             # Verify it exists
             result = await exec_command(
-                long_client, computer_id, "cat /tmp/important.txt"
+                long_client, computer_id, "cat /root/important.txt"
             )
             assert "critical_data_12345" in result.stdout
 
@@ -186,13 +186,13 @@ class TestT104FailureRecovery:
 
             # Corrupt the state: delete the important file
             await exec_command(
-                long_client, computer_id, "rm /tmp/important.txt"
+                long_client, computer_id, "rm /root/important.txt"
             )
 
             # Verify it's gone
             result = await exec_command(
                 long_client, computer_id,
-                "cat /tmp/important.txt 2>&1 || echo FILE_MISSING",
+                "cat /root/important.txt 2>&1 || echo FILE_MISSING",
             )
             assert "FILE_MISSING" in result.stdout or "No such file" in result.stdout + result.stderr
 
@@ -200,7 +200,7 @@ class TestT104FailureRecovery:
             recovered_id = await fork_checkpoint(long_client, checkpoint_id)
 
             result = await exec_command(
-                long_client, recovered_id, "cat /tmp/important.txt"
+                long_client, recovered_id, "cat /root/important.txt"
             )
             assert "critical_data_12345" in result.stdout, (
                 f"File should be recovered from checkpoint, got: {result.stdout}"

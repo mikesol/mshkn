@@ -35,7 +35,7 @@ async def test_fork_isolation(long_client: httpx.AsyncClient) -> None:
         computers.append(comp_origin)
 
         await exec_command(
-            long_client, comp_origin, 'echo -n "A" > /tmp/original.txt'
+            long_client, comp_origin, 'echo -n "A" > /root/original.txt'
         )
 
         # Checkpoint
@@ -46,16 +46,16 @@ async def test_fork_isolation(long_client: httpx.AsyncClient) -> None:
         comp_a = await fork_checkpoint(long_client, ckpt_base)
         computers.append(comp_a)
 
-        await exec_command(long_client, comp_a, 'echo -n "B" > /tmp/original.txt')
+        await exec_command(long_client, comp_a, 'echo -n "B" > /root/original.txt')
 
-        result_a = await exec_command(long_client, comp_a, "cat /tmp/original.txt")
+        result_a = await exec_command(long_client, comp_a, "cat /root/original.txt")
         assert result_a.stdout.strip() == "B", f"Fork A should see 'B', got {result_a.stdout!r}"
 
         # Fork B: must still see "A" (isolated from Fork A's write)
         comp_b = await fork_checkpoint(long_client, ckpt_base)
         computers.append(comp_b)
 
-        result_b = await exec_command(long_client, comp_b, "cat /tmp/original.txt")
+        result_b = await exec_command(long_client, comp_b, "cat /root/original.txt")
         assert result_b.stdout.strip() == "A", (
             f"Fork B should see 'A' (from checkpoint), got {result_b.stdout!r}"
         )
@@ -355,7 +355,7 @@ async def test_merge_no_process_state(long_client: httpx.AsyncClient) -> None:
         await exec_command(
             long_client,
             comp_origin,
-            "nohup sleep 9999 &>/dev/null & echo $! > /tmp/bg.pid",
+            "nohup sleep 9999 &>/dev/null & echo $! > /root/bg.pid",
         )
 
         ckpt_base = await checkpoint_computer(long_client, comp_origin, label="base")
@@ -364,13 +364,13 @@ async def test_merge_no_process_state(long_client: httpx.AsyncClient) -> None:
         # Fork A and B, checkpoint both
         comp_a = await fork_checkpoint(long_client, ckpt_base)
         computers.append(comp_a)
-        await exec_command(long_client, comp_a, 'echo -n "a_data" > /tmp/a.txt')
+        await exec_command(long_client, comp_a, 'echo -n "a_data" > /root/a.txt')
         ckpt_a = await checkpoint_computer(long_client, comp_a, label="fork_a")
         checkpoints.append(ckpt_a)
 
         comp_b = await fork_checkpoint(long_client, ckpt_base)
         computers.append(comp_b)
-        await exec_command(long_client, comp_b, 'echo -n "b_data" > /tmp/b.txt')
+        await exec_command(long_client, comp_b, 'echo -n "b_data" > /root/b.txt')
         ckpt_b = await checkpoint_computer(long_client, comp_b, label="fork_b")
         checkpoints.append(ckpt_b)
 
@@ -397,10 +397,10 @@ async def test_merge_no_process_state(long_client: httpx.AsyncClient) -> None:
         )
 
         # But filesystem state should be present
-        result_a = await exec_command(long_client, comp_merged, "cat /tmp/a.txt")
+        result_a = await exec_command(long_client, comp_merged, "cat /root/a.txt")
         assert result_a.stdout.strip() == "a_data"
 
-        result_b = await exec_command(long_client, comp_merged, "cat /tmp/b.txt")
+        result_b = await exec_command(long_client, comp_merged, "cat /root/b.txt")
         assert result_b.stdout.strip() == "b_data"
 
     finally:
@@ -424,21 +424,21 @@ async def test_deep_fork_chains(long_client: httpx.AsyncClient) -> None:
         # Level 0: create original, write file, checkpoint
         comp_0 = await create_computer(long_client)
         computers.append(comp_0)
-        await exec_command(long_client, comp_0, 'echo -n "level0" > /tmp/level0.txt')
+        await exec_command(long_client, comp_0, 'echo -n "level0" > /root/level0.txt')
         ckpt_0 = await checkpoint_computer(long_client, comp_0, label="level0")
         checkpoints.append(ckpt_0)
 
         # Level 1: fork from ckpt_0, write another file, checkpoint
         comp_1 = await fork_checkpoint(long_client, ckpt_0)
         computers.append(comp_1)
-        await exec_command(long_client, comp_1, 'echo -n "level1" > /tmp/level1.txt')
+        await exec_command(long_client, comp_1, 'echo -n "level1" > /root/level1.txt')
         ckpt_1 = await checkpoint_computer(long_client, comp_1, label="level1")
         checkpoints.append(ckpt_1)
 
         # Level 2: fork from ckpt_1, write another file, checkpoint
         comp_2 = await fork_checkpoint(long_client, ckpt_1)
         computers.append(comp_2)
-        await exec_command(long_client, comp_2, 'echo -n "level2" > /tmp/level2.txt')
+        await exec_command(long_client, comp_2, 'echo -n "level2" > /root/level2.txt')
         ckpt_2 = await checkpoint_computer(long_client, comp_2, label="level2")
         checkpoints.append(ckpt_2)
 
@@ -446,17 +446,17 @@ async def test_deep_fork_chains(long_client: httpx.AsyncClient) -> None:
         comp_final = await fork_checkpoint(long_client, ckpt_2)
         computers.append(comp_final)
 
-        result_0 = await exec_command(long_client, comp_final, "cat /tmp/level0.txt")
+        result_0 = await exec_command(long_client, comp_final, "cat /root/level0.txt")
         assert result_0.stdout.strip() == "level0", (
             f"Level 0 file missing or wrong: {result_0.stdout!r}"
         )
 
-        result_1 = await exec_command(long_client, comp_final, "cat /tmp/level1.txt")
+        result_1 = await exec_command(long_client, comp_final, "cat /root/level1.txt")
         assert result_1.stdout.strip() == "level1", (
             f"Level 1 file missing or wrong: {result_1.stdout!r}"
         )
 
-        result_2 = await exec_command(long_client, comp_final, "cat /tmp/level2.txt")
+        result_2 = await exec_command(long_client, comp_final, "cat /root/level2.txt")
         assert result_2.stdout.strip() == "level2", (
             f"Level 2 file missing or wrong: {result_2.stdout!r}"
         )

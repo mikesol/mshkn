@@ -169,7 +169,7 @@ class TestT71AllEndpoints:
         """POST checkpoint, then POST fork — full lifecycle."""
         async with managed_computer(long_client) as cid:
             # Write state
-            await exec_command(long_client, cid, "echo checkpoint-state > /tmp/state.txt")
+            await exec_command(long_client, cid, "echo checkpoint-state > /root/state.txt")
 
             # Checkpoint
             cp_id = await checkpoint_computer(long_client, cid, label="t71-test")
@@ -180,7 +180,7 @@ class TestT71AllEndpoints:
                 try:
                     # Verify state carried over
                     result = await exec_command(
-                        long_client, forked_id, "cat /tmp/state.txt"
+                        long_client, forked_id, "cat /root/state.txt"
                     )
                     assert result.stdout.strip() == "checkpoint-state"
                 finally:

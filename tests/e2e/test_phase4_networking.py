@@ -164,7 +164,7 @@ class TestT44UrlChangesOnCheckpointResume:
         forked_id = None
         try:
             # Write a marker so we can verify state was preserved
-            await exec_command(client, computer_id, "echo marker42 > /tmp/marker.txt")
+            await exec_command(client, computer_id, "echo marker42 > /root/marker.txt")
 
             checkpoint_id = await checkpoint_computer(client, computer_id, label="url-test")
             forked_id = await fork_checkpoint(long_client, checkpoint_id)
@@ -184,7 +184,7 @@ class TestT44UrlChangesOnCheckpointResume:
             )
 
             # Verify state was preserved in the fork
-            result = await exec_command(client, forked_id, "cat /tmp/marker.txt")
+            result = await exec_command(client, forked_id, "cat /root/marker.txt")
             assert "marker42" in result.stdout
         finally:
             await destroy_computer(client, computer_id)
