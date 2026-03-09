@@ -28,7 +28,7 @@ class Config:
     thin_pool_meta_path: Path = field(default_factory=lambda: Path("/opt/mshkn/thin-pool-meta"))
     thin_pool_data_size_gb: int = 100
     thin_pool_name: str = "mshkn-pool"
-    thin_volume_sectors: int = 4194304  # 2GB
+    thin_volume_sectors: int = 16777216  # 8GB
 
     # R2
     r2_bucket: str = "mshkn-checkpoints"
