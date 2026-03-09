@@ -77,8 +77,6 @@ async def create_computer(
     body: CreateRequest,
     account: Account = _require_account,
 ) -> CreateResponse:
-    _check_rate_limit(request)
-
     db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
     vm_mgr: VMManager = request.app.state.vm_manager
