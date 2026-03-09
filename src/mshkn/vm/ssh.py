@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,11 +50,19 @@ async def ssh_exec_stream(
     vm_ip: str,
     command: str,
     ssh_key_path: Path,
+    timeout: float = 60.0,
 ) -> AsyncIterator[tuple[str, str]]:
     """Execute a command via SSH and yield (stream, line) tuples as they arrive.
 
     stream is "stdout" or "stderr". Yields ("exit", "<code>") at the end.
+
+    Background processes that inherit the shell's stdout/stderr keep the SSH
+    streams open after the main command exits.  We work around this by racing
+    stream reads against ``process.wait()`` and draining whatever is left for
+    a short grace period once the process exits.
     """
+    log = logging.getLogger("mshkn.ssh")
+
     async with asyncssh.connect(
         vm_ip,
         username="root",
@@ -62,23 +71,38 @@ async def ssh_exec_stream(
     ) as conn:
         process = await conn.create_process(command)
 
+        collected: list[tuple[str, str]] = []
+
         async def read_stream(
             stream: asyncssh.SSHReader[str], name: str
-        ) -> list[tuple[str, str]]:
-            lines: list[tuple[str, str]] = []
+        ) -> None:
             async for line in stream:
-                lines.append((name, line.rstrip("\n")))
-            return lines
+                collected.append((name, line.rstrip("\n")))
 
         stdout_task = asyncio.create_task(read_stream(process.stdout, "stdout"))
         stderr_task = asyncio.create_task(read_stream(process.stderr, "stderr"))
 
-        stdout_lines, stderr_lines = await asyncio.gather(stdout_task, stderr_task)
-        await process.wait()
+        # Wait for the process to exit first — streams may stay open if
+        # background children inherited the file descriptors.
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+        except TimeoutError:
+            log.warning("ssh_exec_stream: process did not exit within %.1fs", timeout)
+            process.kill()
 
-        for item in stdout_lines:
-            yield item
-        for item in stderr_lines:
+        # Give streams a short grace period to deliver remaining output,
+        # then cancel them so we don't hang forever.
+        grace = 2.0
+        _done, pending = await asyncio.wait(
+            [stdout_task, stderr_task], timeout=grace,
+        )
+        for task in pending:
+            log.debug("ssh_exec_stream: cancelling lingering stream reader")
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        for item in collected:
             yield item
         yield ("exit", str(process.exit_status or 0))
 

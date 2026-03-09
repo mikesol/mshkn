@@ -98,6 +98,7 @@ async def list_checkpoints(
     return [
         {
             "id": c.id,
+            "checkpoint_id": c.id,
             "parent_id": c.parent_id,
             "computer_id": c.computer_id,
             "manifest_hash": c.manifest_hash,
