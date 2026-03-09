@@ -33,4 +33,4 @@ class RateLimiter:
 
 
 # Global rate limiter instance
-rate_limiter = RateLimiter(max_requests=50, window_seconds=10.0)
+rate_limiter = RateLimiter(max_requests=80, window_seconds=10.0)
