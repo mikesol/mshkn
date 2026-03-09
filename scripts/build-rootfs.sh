@@ -77,6 +77,9 @@ rm -f "$ROOTFS_DIR/usr/bin/apt" "$ROOTFS_DIR/usr/bin/apt-get" "$ROOTFS_DIR/usr/b
 rm -f "$ROOTFS_DIR/usr/bin/dpkg" "$ROOTFS_DIR/usr/bin/dpkg-deb"
 rm -rf "$ROOTFS_DIR/var/lib/apt/lists"/* "$ROOTFS_DIR/var/cache/apt"/*
 
+echo "==> Ensure /sbin/init symlink"
+ln -sf ../lib/systemd/systemd "$ROOTFS_DIR/sbin/init"
+
 echo "==> Pre-create /nix structure"
 mkdir -p "$ROOTFS_DIR/nix/store"
 mkdir -p "$ROOTFS_DIR/nix/var/nix"
