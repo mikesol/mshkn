@@ -40,7 +40,7 @@ class VMManager:
         self._alloc_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        """Load state from DB to set counters correctly."""
+        """Load state from DB and actual pool to set counters correctly."""
         computers = await list_all_computers(self.db)
         max_vol = 99  # start at 100 by default
         if computers:
@@ -51,7 +51,51 @@ class VMManager:
         ckpt_max = await get_max_checkpoint_volume_id(self.db)
         if ckpt_max is not None:
             max_vol = max(max_vol, ckpt_max)
+        # Scan actual dm-thin pool for orphaned volumes the DB doesn't know about
+        pool_max = await self._scan_pool_max_volume_id()
+        if pool_max is not None:
+            max_vol = max(max_vol, pool_max)
         self._next_volume_id = max_vol + 1
+        logger.info(
+            "Initialized: next_volume_id=%d, next_slot=%d",
+            self._next_volume_id, self._next_slot,
+        )
+
+    async def _scan_pool_max_volume_id(self) -> int | None:
+        """Scan the dm-thin pool for the highest volume ID in use.
+
+        This catches orphaned volumes that the DB doesn't know about
+        (e.g. checkpoint volumes whose DB rows were deleted but whose
+        thin volumes were never removed from the pool).
+        """
+        from mshkn.shell import ShellError, run
+
+        try:
+            # dmsetup ls --target thin outputs lines like:
+            #   mshkn-base\t(252, 1)
+            #   mshkn-comp-abc123\t(252, 5)
+            # The number in the table line is the device minor, not the
+            # thin volume ID.  To get the actual thin ID we need to parse
+            # the table for each device.  But a simpler approach: dmsetup
+            # table output for a thin device looks like:
+            #   0 <sectors> thin <pool_major:minor> <volume_id>
+            output = await run("dmsetup table --target thin")
+        except ShellError:
+            return None
+
+        max_id = None
+        for line in output.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 6 and parts[3] == "thin":
+                try:
+                    vol_id = int(parts[5])
+                    if max_id is None or vol_id > max_id:
+                        max_id = vol_id
+                except ValueError:
+                    continue
+        if max_id is not None:
+            logger.info("Pool scan found max volume ID: %d", max_id)
+        return max_id
 
     def _allocate_slot(self) -> int:
         slot = self._next_slot

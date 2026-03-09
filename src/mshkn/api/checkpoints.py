@@ -119,9 +119,18 @@ async def delete_checkpoint(
     request: Request,
     account: Account = _require_account,
 ) -> dict[str, str]:
+    from mshkn.vm.storage import remove_volume
+
     db: aiosqlite.Connection = request.app.state.db
+    config = request.app.state.config
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account.id:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
+
+    # Clean up dm-thin volume if one was allocated
+    if ckpt.thin_volume_id is not None:
+        volume_name = f"mshkn-ckpt-{checkpoint_id}"
+        await remove_volume(config.thin_pool_name, volume_name, ckpt.thin_volume_id)
+
     await db_delete_checkpoint(db, checkpoint_id)
     return {"status": "deleted"}
