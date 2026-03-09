@@ -227,6 +227,13 @@ async def checkpoint_computer(
     checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
     snapshot_dir = config.checkpoint_local_dir / checkpoint_id
 
+    # Flush guest filesystem buffers to the block device so the disk
+    # snapshot captures all written data (guest page cache is not visible
+    # to dm-thin snapshots).
+    from mshkn.vm.ssh import ssh_exec
+
+    await ssh_exec(computer.vm_ip, "sync", config.ssh_key_path, timeout=10.0)
+
     # Pause/snapshot/resume (sub-1s for the agent)
     await create_vm_snapshot(computer.socket_path, snapshot_dir)
 
