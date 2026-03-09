@@ -6,3 +6,6 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 dist/
+telegram/.env
+telegram/offset.txt
+telegram/incoming.jsonl

@@ -16,6 +16,7 @@ left off across invocations.
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -27,7 +28,7 @@ import requests
 
 HERE = Path(__file__).resolve().parent
 
-TOKEN = "8423315118:AAHU6xQbyfO1GndLYXeKM98mj5BuTAYWh08"
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 API = f"https://api.telegram.org/bot{TOKEN}"
 FILES_DIR = HERE / "files"
