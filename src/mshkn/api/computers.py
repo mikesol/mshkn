@@ -15,6 +15,7 @@ from mshkn.api.metrics import (
     computers_created_total,
     exec_duration_seconds,
 )
+from mshkn.api.ratelimit import rate_limiter
 from mshkn.db import count_active_computers_by_account, get_computer
 from mshkn.models import Manifest
 from mshkn.vm.ssh import ssh_download, ssh_exec, ssh_exec_bg, ssh_exec_stream, ssh_upload
@@ -51,6 +52,13 @@ class ExecRequest(BaseModel):
     command: str
 
 
+def _check_rate_limit(request: Request) -> None:
+    """Check per-API-key rate limit; raise 429 if exceeded."""
+    api_key = request.headers.get("Authorization", "")[7:]
+    if not rate_limiter.check(api_key):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+
 async def _get_running_computer(
     db: aiosqlite.Connection, computer_id: str, account: Account
 ) -> Computer:
@@ -69,6 +77,8 @@ async def create_computer(
     body: CreateRequest,
     account: Account = _require_account,
 ) -> CreateResponse:
+    _check_rate_limit(request)
+
     db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
     vm_mgr: VMManager = request.app.state.vm_manager
@@ -95,6 +105,8 @@ async def exec_command(
     request: Request,
     account: Account = _require_account,
 ) -> EventSourceResponse:
+    _check_rate_limit(request)
+
     db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
     computer = await _get_running_computer(db, computer_id, account)
