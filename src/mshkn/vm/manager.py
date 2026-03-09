@@ -221,6 +221,7 @@ class VMManager:
             status="running",
             created_at=now,
             last_exec_at=None,
+            source_checkpoint_id=checkpoint.id,
         )
         await insert_computer(self.db, computer)
         logger.info(

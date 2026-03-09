@@ -222,7 +222,7 @@ async def checkpoint_computer(
 
     from mshkn.checkpoint.r2 import upload_checkpoint
     from mshkn.checkpoint.snapshot import create_vm_snapshot
-    from mshkn.db import insert_checkpoint
+    from mshkn.db import get_latest_checkpoint_for_computer, insert_checkpoint
     from mshkn.models import Checkpoint
 
     db: aiosqlite.Connection = request.app.state.db
@@ -249,13 +249,22 @@ async def checkpoint_computer(
         computer, checkpoint_id,
     )
 
+    # Determine parent_id for DAG lineage
+    latest = await get_latest_checkpoint_for_computer(db, computer_id)
+    if latest is not None:
+        parent_id = latest.id
+    elif computer.source_checkpoint_id is not None:
+        parent_id = computer.source_checkpoint_id
+    else:
+        parent_id = None
+
     # Record in DB
     now = datetime.now(UTC).isoformat()
     r2_prefix = f"{account.id}/{checkpoint_id}"
     ckpt = Checkpoint(
         id=checkpoint_id,
         account_id=account.id,
-        parent_id=None,
+        parent_id=parent_id,
         computer_id=computer_id,
         thin_volume_id=ckpt_volume_id,
         manifest_hash=computer.manifest_hash,
