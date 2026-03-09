@@ -182,7 +182,7 @@ async def computer_status(
 ) -> dict[str, object]:
     db: aiosqlite.Connection = request.app.state.db
     computer = await get_computer(db, computer_id)
-    if computer is None or computer.account_id != account.id:
+    if computer is None or computer.account_id != account.id or computer.status == "destroyed":
         raise HTTPException(status_code=404, detail="Computer not found")
     return {
         "computer_id": computer.id,
@@ -268,6 +268,8 @@ async def destroy_computer(
     db: aiosqlite.Connection = request.app.state.db
     computer = await get_computer(db, computer_id)
     if computer is None or computer.account_id != account.id:
+        raise HTTPException(status_code=404, detail="Computer not found")
+    if computer.status == "destroyed":
         raise HTTPException(status_code=404, detail="Computer not found")
     vm_mgr: VMManager = request.app.state.vm_manager
     await vm_mgr.destroy(computer_id)

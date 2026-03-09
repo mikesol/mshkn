@@ -89,12 +89,18 @@ async def ssh_exec_bg(
     ssh_key_path: Path,
 ) -> int:
     """Run a command in the background via SSH, return PID."""
+    # Wrap in bash -c to ensure $$ and $! expand correctly
+    escaped = command.replace("'", "'\\''")
     result = await ssh_exec(
         vm_ip,
-        f"nohup {command} > /tmp/bg-$$.log 2>&1 & echo $!",
+        f"bash -c 'nohup {escaped} > /tmp/bg-$$.log 2>&1 & echo $!'",
         ssh_key_path,
     )
-    return int(result.stdout.strip())
+    pid_str = result.stdout.strip()
+    if not pid_str:
+        msg = f"Failed to get PID for background command: stderr={result.stderr!r}"
+        raise RuntimeError(msg)
+    return int(pid_str)
 
 
 async def ssh_upload(
@@ -103,7 +109,7 @@ async def ssh_upload(
     data: bytes,
     ssh_key_path: Path,
 ) -> None:
-    """Upload data to a file on the VM."""
+    """Upload data to a file on the VM via SFTP (supports binary data)."""
     async with asyncssh.connect(
         vm_ip,
         username="root",
@@ -112,11 +118,8 @@ async def ssh_upload(
     ) as conn:
         parent = str(Path(remote_path).parent)
         await conn.run(f"mkdir -p {parent}", check=True)
-        process = await conn.create_process(f"cat > {remote_path}")
-        assert process.stdin is not None
-        process.stdin.write(data.decode("utf-8", errors="surrogateescape"))
-        process.stdin.write_eof()
-        await process.wait()
+        async with conn.start_sftp_client() as sftp, sftp.open(remote_path, "wb") as f:
+            await f.write(data)
 
 
 async def ssh_download(
@@ -124,8 +127,15 @@ async def ssh_download(
     remote_path: str,
     ssh_key_path: Path,
 ) -> bytes:
-    """Download a file from the VM."""
-    result = await ssh_exec(vm_ip, f"cat {remote_path}", ssh_key_path)
-    if result.exit_code != 0:
-        raise FileNotFoundError(f"File not found: {remote_path}")
-    return result.stdout.encode("utf-8", errors="surrogateescape")
+    """Download a file from the VM via SFTP (supports binary data)."""
+    async with asyncssh.connect(
+        vm_ip,
+        username="root",
+        client_keys=[str(ssh_key_path)],
+        known_hosts=None,
+    ) as conn, conn.start_sftp_client() as sftp:
+        try:
+            async with sftp.open(remote_path, "rb") as f:
+                return await f.read()
+        except asyncssh.SFTPNoSuchFile:
+            raise FileNotFoundError(f"File not found: {remote_path}") from None
