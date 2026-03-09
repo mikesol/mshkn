@@ -129,6 +129,18 @@ async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
     ]
 
 
+async def count_active_computers_by_account(
+    db: aiosqlite.Connection, account_id: str
+) -> int:
+    """Count non-destroyed computers for the given account."""
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM computers WHERE account_id = ? AND status != 'destroyed'",
+        (account_id,),
+    )
+    row = await cursor.fetchone()
+    return row[0] if row else 0
+
+
 async def list_computers_by_account(
     db: aiosqlite.Connection, account_id: str
 ) -> list[Computer]:

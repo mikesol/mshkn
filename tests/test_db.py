@@ -3,6 +3,7 @@ from pathlib import Path
 import aiosqlite
 
 from mshkn.db import (
+    count_active_computers_by_account,
     get_account_by_key,
     get_checkpoint,
     get_computer,
@@ -120,6 +121,64 @@ async def test_update_computer_status(tmp_path: Path) -> None:
         result = await get_computer(db, "comp-1")
     assert result is not None
     assert result.status == "destroyed"
+
+
+async def test_count_active_computers(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    async with aiosqlite.connect(db_path) as db:
+        await run_migrations(db, Path("migrations"))
+        await insert_account(
+            db,
+            Account(
+                id="acct-1",
+                api_key="key-abc",
+                vm_limit=10,
+                created_at="2026-03-08T00:00:00",
+            ),
+        )
+        # No computers yet
+        assert await count_active_computers_by_account(db, "acct-1") == 0
+
+        # Add a running computer
+        await insert_computer(
+            db,
+            Computer(
+                id="comp-1",
+                account_id="acct-1",
+                thin_volume_id=1,
+                tap_device="tap1",
+                vm_ip="172.16.1.2",
+                socket_path="/tmp/fc.socket",
+                firecracker_pid=999,
+                manifest_hash="abc",
+                status="running",
+                created_at="2026-03-08T00:00:00",
+                last_exec_at=None,
+            ),
+        )
+        assert await count_active_computers_by_account(db, "acct-1") == 1
+
+        # Add a destroyed computer — should not count
+        await insert_computer(
+            db,
+            Computer(
+                id="comp-2",
+                account_id="acct-1",
+                thin_volume_id=2,
+                tap_device="tap2",
+                vm_ip="172.16.1.3",
+                socket_path="/tmp/fc2.socket",
+                firecracker_pid=1000,
+                manifest_hash="abc",
+                status="destroyed",
+                created_at="2026-03-08T00:00:00",
+                last_exec_at=None,
+            ),
+        )
+        assert await count_active_computers_by_account(db, "acct-1") == 1
+
+        # Different account should be 0
+        assert await count_active_computers_by_account(db, "acct-other") == 0
 
 
 async def test_checkpoint_roundtrip(tmp_path: Path) -> None:

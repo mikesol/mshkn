@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from mshkn.api.auth import require_account
-from mshkn.db import get_computer
+from mshkn.db import count_active_computers_by_account, get_computer
 from mshkn.models import Manifest
 from mshkn.vm.ssh import ssh_download, ssh_exec, ssh_exec_bg, ssh_exec_stream, ssh_upload
 
@@ -62,8 +62,14 @@ async def create_computer(
     body: CreateRequest,
     account: Account = _require_account,
 ) -> CreateResponse:
+    db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
     vm_mgr: VMManager = request.app.state.vm_manager
+
+    active_count = await count_active_computers_by_account(db, account.id)
+    if active_count >= account.vm_limit:
+        raise HTTPException(status_code=429, detail="VM limit reached")
+
     manifest = Manifest(uses=body.uses)
     computer = await vm_mgr.create(account.id, manifest)
     return CreateResponse(
