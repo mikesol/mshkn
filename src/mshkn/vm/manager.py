@@ -79,6 +79,12 @@ class VMManager:
         ckpt_max = await get_max_checkpoint_volume_id(self.db)
         if ckpt_max is not None:
             max_vol = max(max_vol, ckpt_max)
+        # Also check capability cache volumes
+        from mshkn.capability.cache import get_max_capability_volume_id
+
+        cap_max = await get_max_capability_volume_id(self.db)
+        if cap_max is not None:
+            max_vol = max(max_vol, cap_max)
         # Scan actual dm-thin pool for orphaned volumes the DB doesn't know about
         pool_max = await self._scan_pool_max_volume_id()
         if pool_max is not None:
@@ -135,6 +141,68 @@ class VMManager:
         self._next_volume_id += 1
         return vol_id
 
+    async def _get_or_build_capability_volume(self, manifest: Manifest) -> int:
+        """Return the volume_id of a capability base volume for this manifest.
+
+        Checks cache first. On miss, builds the Nix closure and creates
+        a new capability base volume. Returns volume 0 (bare base) for empty manifests.
+        """
+        if not manifest.uses:
+            return 0  # bare base image
+
+        manifest_hash = manifest.content_hash()
+
+        # Check cache
+        from mshkn.capability.cache import get_cached_volume
+
+        cached_vol = await get_cached_volume(self.db, manifest_hash)
+        if cached_vol is not None:
+            logger.info("Capability cache hit for %s (vol %d)", manifest_hash, cached_vol)
+            return cached_vol
+
+        # Cache miss — build
+        logger.info("Capability cache miss for %s, building...", manifest_hash)
+
+        from mshkn.capability.builder import inject_closure_into_volume, nix_build
+        from mshkn.capability.resolver import manifest_to_nix
+
+        nix_expr = manifest_to_nix(manifest.uses)
+        store_path = await nix_build(nix_expr)
+
+        # Allocate a volume for the capability base
+        async with self._alloc_lock:
+            cap_volume_id = self._allocate_volume_id()
+        cap_volume_name = f"mshkn-cap-{manifest_hash}"
+
+        # Create dm-thin snapshot of base volume
+        await create_snapshot(
+            pool_name=self.config.thin_pool_name,
+            source_volume_id=0,
+            new_volume_id=cap_volume_id,
+            new_volume_name=cap_volume_name,
+            sectors=self.config.thin_volume_sectors,
+        )
+
+        # Inject Nix closure into the volume
+        closure_size = await inject_closure_into_volume(
+            cap_volume_name,
+            store_path,
+            manifest.uses,
+        )
+
+        # Register in cache
+        from mshkn.capability.cache import cache_volume
+
+        await cache_volume(self.db, manifest_hash, cap_volume_id, closure_size)
+
+        logger.info(
+            "Built capability volume %s (vol %d, closure %d bytes)",
+            manifest_hash,
+            cap_volume_id,
+            closure_size,
+        )
+        return cap_volume_id
+
     async def create(
         self,
         account_id: str,
@@ -143,6 +211,10 @@ class VMManager:
     ) -> Computer:
         mem_size_mib, vcpu_count = parse_needs(needs)
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
+
+        # Get capability base volume (builds if cache miss)
+        source_volume_id = await self._get_or_build_capability_volume(manifest)
+
         async with self._alloc_lock:
             slot = self._allocate_slot()
             volume_id = self._allocate_volume_id()
@@ -155,10 +227,10 @@ class VMManager:
         # 1. Create tap device
         await create_tap(slot)
 
-        # 2. Create dm-thin snapshot from base
+        # 2. Create dm-thin snapshot from capability base
         await create_snapshot(
             pool_name=self.config.thin_pool_name,
-            source_volume_id=0,  # base volume
+            source_volume_id=source_volume_id,
             new_volume_id=volume_id,
             new_volume_name=volume_name,
             sectors=self.config.thin_volume_sectors,
