@@ -67,8 +67,7 @@ class Checkpoint:
 @dataclass
 class CapabilityCacheEntry:
     manifest_hash: str
-    image_path: str
+    volume_id: int
     nix_closure_size_bytes: int | None
-    image_size_bytes: int | None
     last_used_at: str
     created_at: str
