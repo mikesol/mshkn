@@ -84,7 +84,10 @@ async def inject_closure_into_volume(
             _install_shims(Path(mount_point), manifest_uses)
 
             # Make /nix/store immutable (even root can't modify)
-            await run(f"chattr +i -R {mount_point}/nix/store")
+            # Use find to skip symlinks — chattr doesn't support them
+            await run(
+                f"find {mount_point}/nix/store -not -type l -exec chattr +i {{}} +"
+            )
 
             # Calculate closure size
             size_output = await run(f"du -sb {mount_point}/nix/store")
