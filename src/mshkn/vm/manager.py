@@ -160,7 +160,13 @@ class VMManager:
             logger.info("Capability cache hit for %s (vol %d)", manifest_hash, cached_vol)
             return cached_vol
 
-        # Cache miss — build
+        # Cache miss — evict stale volumes if disk is tight, then build
+        from mshkn.capability.eviction import evict_lru_capabilities
+
+        evicted = await evict_lru_capabilities(self.db, self.config.thin_pool_name)
+        if evicted:
+            logger.info("Evicted %d capability volumes before build", evicted)
+
         logger.info("Capability cache miss for %s, building...", manifest_hash)
 
         from mshkn.capability.builder import inject_closure_into_volume, nix_build
