@@ -304,7 +304,9 @@ class VMManager:
         )
         return volume_id
 
-    async def fork_from_checkpoint(self, account_id: str, checkpoint: Checkpoint) -> Computer:
+    async def fork_from_checkpoint(
+        self, account_id: str, checkpoint: Checkpoint, manifest: Manifest | None = None,
+    ) -> Computer:
         """Fork a new computer from a checkpoint.
 
         Creates a dm-thin CoW snapshot of the checkpoint's frozen disk (O(1)) and
@@ -360,6 +362,9 @@ class VMManager:
 
         # 5. Record in DB
         now = datetime.now(UTC).isoformat()
+        effective_manifest = manifest if manifest is not None else Manifest.from_json(
+            checkpoint.manifest_json,
+        )
         computer = Computer(
             id=computer_id,
             account_id=account_id,
@@ -368,7 +373,8 @@ class VMManager:
             vm_ip=vm_ip,
             socket_path=socket_path,
             firecracker_pid=pid,
-            manifest_hash=checkpoint.manifest_hash,
+            manifest_hash=effective_manifest.content_hash(),
+            manifest_json=effective_manifest.to_json(),
             status="running",
             created_at=now,
             last_exec_at=None,

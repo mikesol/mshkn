@@ -21,6 +21,7 @@ _require_account = Depends(require_account)
 
 class ForkRequest(BaseModel):
     manifest: dict[str, object] | None = None
+    skip_manifest_check: bool = False
 
 
 class ForkResponse(BaseModel):
@@ -28,21 +29,48 @@ class ForkResponse(BaseModel):
     checkpoint_id: str
 
 
+def _is_manifest_additive(parent_uses: list[str], new_uses: list[str]) -> bool:
+    """Check if new manifest is a superset of parent (additive change)."""
+    return set(parent_uses).issubset(set(new_uses))
+
+
 @router.post("/{checkpoint_id}/fork", response_model=ForkResponse)
 async def fork_checkpoint(
     checkpoint_id: str,
     request: Request,
-    body: ForkRequest | None = None,  # noqa: ARG001
+    body: ForkRequest | None = None,
     account: Account = _require_account,
 ) -> ForkResponse:
+    from mshkn.models import Manifest
+
     db: aiosqlite.Connection = request.app.state.db
 
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account.id:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
 
+    # Determine manifest for fork
+    if body and body.manifest and "uses" in body.manifest:
+        raw_uses = body.manifest["uses"]
+        if not isinstance(raw_uses, list):
+            raise HTTPException(status_code=422, detail="uses must be a list")
+        new_uses = [str(u) for u in raw_uses]
+        parent_manifest = Manifest.from_json(ckpt.manifest_json)
+
+        is_breaking = not _is_manifest_additive(parent_manifest.uses, new_uses)
+        if is_breaking and not body.skip_manifest_check:
+            raise HTTPException(
+                status_code=409,
+                detail="Breaking manifest change (removal or version change). "
+                       "Set skip_manifest_check: true to proceed anyway.",
+            )
+
+        fork_manifest = Manifest(uses=new_uses)
+    else:
+        fork_manifest = Manifest.from_json(ckpt.manifest_json)
+
     vm_mgr = request.app.state.vm_manager
-    computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt)
+    computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, fork_manifest)
     return ForkResponse(computer_id=computer.id, checkpoint_id=checkpoint_id)
 
 
