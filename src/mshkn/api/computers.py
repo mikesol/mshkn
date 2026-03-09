@@ -221,6 +221,7 @@ async def checkpoint_computer(
 
     db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
+    vm_mgr: VMManager = request.app.state.vm_manager
     computer = await _get_running_computer(db, computer_id, account)
 
     checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
@@ -228,6 +229,12 @@ async def checkpoint_computer(
 
     # Pause/snapshot/resume (sub-1s for the agent)
     await create_vm_snapshot(computer.socket_path, snapshot_dir)
+
+    # Freeze disk state: create a dm-thin CoW snapshot so fork gets the disk
+    # as it was at checkpoint time, not the computer's evolving state.
+    ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(
+        computer, checkpoint_id,
+    )
 
     # Record in DB
     now = datetime.now(UTC).isoformat()
@@ -237,6 +244,7 @@ async def checkpoint_computer(
         account_id=account.id,
         parent_id=None,
         computer_id=computer_id,
+        thin_volume_id=ckpt_volume_id,
         manifest_hash=computer.manifest_hash,
         manifest_json="{}",  # TODO: store actual manifest
         r2_prefix=r2_prefix,

@@ -140,6 +140,7 @@ async def test_checkpoint_roundtrip(tmp_path: Path) -> None:
             account_id="acct-1",
             parent_id=None,
             computer_id="comp-1",
+            thin_volume_id=42,
             manifest_hash="abc",
             manifest_json='{"uses":["python-3.12"]}',
             r2_prefix="acct-1/ckpt-1",
@@ -154,3 +155,4 @@ async def test_checkpoint_roundtrip(tmp_path: Path) -> None:
     assert result is not None
     assert result.manifest_hash == "abc"
     assert result.parent_id is None
+    assert result.thin_volume_id == 42

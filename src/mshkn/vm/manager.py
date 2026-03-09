@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from mshkn.db import (
     get_computer,
+    get_max_checkpoint_volume_id,
     insert_computer,
     list_all_computers,
     update_computer_status,
@@ -41,11 +42,16 @@ class VMManager:
     async def initialize(self) -> None:
         """Load state from DB to set counters correctly."""
         computers = await list_all_computers(self.db)
+        max_vol = 99  # start at 100 by default
         if computers:
-            max_vol = max(c.thin_volume_id for c in computers)
-            self._next_volume_id = max_vol + 1
+            max_vol = max(max_vol, max(c.thin_volume_id for c in computers))
             slots = [int(c.tap_device.replace("tap", "")) for c in computers]
             self._next_slot = max(slots) + 1
+        # Also check checkpoint volumes (frozen disk snapshots)
+        ckpt_max = await get_max_checkpoint_volume_id(self.db)
+        if ckpt_max is not None:
+            max_vol = max(max_vol, ckpt_max)
+        self._next_volume_id = max_vol + 1
 
     def _allocate_slot(self) -> int:
         slot = self._next_slot
@@ -122,18 +128,42 @@ class VMManager:
         logger.info("Created computer %s (slot=%d, ip=%s)", computer_id, slot, vm_ip)
         return computer
 
+    async def snapshot_disk_for_checkpoint(
+        self, computer: Computer, checkpoint_id: str,
+    ) -> int:
+        """Create a dm-thin CoW snapshot of a computer's disk for checkpoint.
+
+        Returns the new volume ID. The snapshot freezes the disk at this point
+        in time so forks get the correct state regardless of what the source
+        computer does afterwards.
+        """
+        async with self._alloc_lock:
+            volume_id = self._allocate_volume_id()
+        volume_name = f"mshkn-ckpt-{checkpoint_id}"
+        await create_snapshot(
+            pool_name=self.config.thin_pool_name,
+            source_volume_id=computer.thin_volume_id,
+            new_volume_id=volume_id,
+            new_volume_name=volume_name,
+            sectors=self.config.thin_volume_sectors,
+        )
+        logger.info(
+            "Snapshot disk for checkpoint %s (vol %d from %d)",
+            checkpoint_id, volume_id, computer.thin_volume_id,
+        )
+        return volume_id
+
     async def fork_from_checkpoint(self, account_id: str, checkpoint: Checkpoint) -> Computer:
         """Fork a new computer from a checkpoint.
 
-        Creates a dm-thin CoW snapshot of the checkpoint's disk (O(1)) and cold-boots
-        a new VM from it. Cold boot is used because snapshot restore requires the same
-        network config (IP) as the original — which conflicts with running the original
-        VM concurrently. The disk snapshot preserves all filesystem state from the
-        checkpoint.
-
-        TODO: Implement snapshot restore for cases where the original VM is destroyed,
-        or solve the networking reconfiguration problem for true instant resume.
+        Creates a dm-thin CoW snapshot of the checkpoint's frozen disk (O(1)) and
+        cold-boots a new VM from it. The checkpoint's thin_volume_id holds the disk
+        state at checkpoint time, so forks always see the correct state.
         """
+        if checkpoint.thin_volume_id is None:
+            msg = f"Checkpoint {checkpoint.id} has no disk snapshot (created before this fix)"
+            raise ValueError(msg)
+
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
         async with self._alloc_lock:
             slot = self._allocate_slot()
@@ -144,19 +174,13 @@ class VMManager:
         socket_path = f"/tmp/fc-{computer_id}.socket"
         volume_name = f"mshkn-{computer_id}"
 
-        # Find the source computer's volume to snapshot from
-        source_computer = await get_computer(self.db, checkpoint.computer_id or "")
-        if source_computer is None:
-            msg = f"Source computer {checkpoint.computer_id} not found for checkpoint"
-            raise ValueError(msg)
-
         # 1. Create tap device
         await create_tap(slot)
 
-        # 2. Create dm-thin snapshot from the checkpoint's source volume (O(1) CoW)
+        # 2. Create dm-thin snapshot from the checkpoint's frozen disk (O(1) CoW)
         await create_snapshot(
             pool_name=self.config.thin_pool_name,
-            source_volume_id=source_computer.thin_volume_id,
+            source_volume_id=checkpoint.thin_volume_id,
             new_volume_id=volume_id,
             new_volume_name=volume_name,
             sectors=self.config.thin_volume_sectors,
@@ -210,9 +234,10 @@ class VMManager:
         if computer is None:
             raise ValueError(f"Computer {computer_id} not found")
 
-        # Kill Firecracker
+        # Kill Firecracker and wait for kernel to release the block device
         if computer.firecracker_pid is not None:
             await kill_firecracker_process(computer.firecracker_pid)
+            await asyncio.sleep(0.5)
 
         # Remove dm-thin volume
         volume_name = f"mshkn-{computer_id}"

@@ -170,14 +170,15 @@ async def update_computer_status(
 async def insert_checkpoint(db: aiosqlite.Connection, checkpoint: Checkpoint) -> None:
     await db.execute(
         "INSERT INTO checkpoints "
-        "(id, account_id, parent_id, computer_id, manifest_hash, manifest_json, "
+        "(id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, manifest_json, "
         "r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, pinned, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             checkpoint.id,
             checkpoint.account_id,
             checkpoint.parent_id,
             checkpoint.computer_id,
+            checkpoint.thin_volume_id,
             checkpoint.manifest_hash,
             checkpoint.manifest_json,
             checkpoint.r2_prefix,
@@ -193,8 +194,9 @@ async def insert_checkpoint(db: aiosqlite.Connection, checkpoint: Checkpoint) ->
 
 async def get_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> Checkpoint | None:
     cursor = await db.execute(
-        "SELECT id, account_id, parent_id, computer_id, manifest_hash, manifest_json, "
-        "r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, pinned, created_at "
+        "SELECT id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, "
+        "manifest_json, r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, "
+        "pinned, created_at "
         "FROM checkpoints WHERE id = ?",
         (checkpoint_id,),
     )
@@ -206,14 +208,15 @@ async def get_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> Checkp
         account_id=row[1],
         parent_id=row[2],
         computer_id=row[3],
-        manifest_hash=row[4],
-        manifest_json=row[5],
-        r2_prefix=row[6],
-        disk_delta_size_bytes=row[7],
-        memory_size_bytes=row[8],
-        label=row[9],
-        pinned=bool(row[10]),
-        created_at=row[11],
+        thin_volume_id=row[4],
+        manifest_hash=row[5],
+        manifest_json=row[6],
+        r2_prefix=row[7],
+        disk_delta_size_bytes=row[8],
+        memory_size_bytes=row[9],
+        label=row[10],
+        pinned=bool(row[11]),
+        created_at=row[12],
     )
 
 
@@ -221,8 +224,9 @@ async def list_checkpoints_by_account(
     db: aiosqlite.Connection, account_id: str
 ) -> list[Checkpoint]:
     cursor = await db.execute(
-        "SELECT id, account_id, parent_id, computer_id, manifest_hash, manifest_json, "
-        "r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, pinned, created_at "
+        "SELECT id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, "
+        "manifest_json, r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, "
+        "pinned, created_at "
         "FROM checkpoints WHERE account_id = ? ORDER BY created_at DESC",
         (account_id,),
     )
@@ -233,17 +237,27 @@ async def list_checkpoints_by_account(
             account_id=r[1],
             parent_id=r[2],
             computer_id=r[3],
-            manifest_hash=r[4],
-            manifest_json=r[5],
-            r2_prefix=r[6],
-            disk_delta_size_bytes=r[7],
-            memory_size_bytes=r[8],
-            label=r[9],
-            pinned=bool(r[10]),
-            created_at=r[11],
+            thin_volume_id=r[4],
+            manifest_hash=r[5],
+            manifest_json=r[6],
+            r2_prefix=r[7],
+            disk_delta_size_bytes=r[8],
+            memory_size_bytes=r[9],
+            label=r[10],
+            pinned=bool(r[11]),
+            created_at=r[12],
         )
         for r in rows
     ]
+
+
+async def get_max_checkpoint_volume_id(db: aiosqlite.Connection) -> int | None:
+    """Return the highest thin_volume_id across all checkpoints, or None."""
+    cursor = await db.execute(
+        "SELECT MAX(thin_volume_id) FROM checkpoints WHERE thin_volume_id IS NOT NULL"
+    )
+    row = await cursor.fetchone()
+    return row[0] if row and row[0] is not None else None
 
 
 async def delete_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> None:

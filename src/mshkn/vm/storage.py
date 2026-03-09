@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from mshkn.shell import run
+from mshkn.shell import ShellError, run
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -70,7 +71,34 @@ async def create_snapshot(
 
 
 async def remove_volume(pool_name: str, volume_name: str, volume_id: int) -> None:
-    """Remove a dm-thin volume."""
-    await run(f"dmsetup remove {volume_name}", check=False)
-    await run(f"dmsetup message {pool_name} 0 'delete {volume_id}'", check=False)
+    """Remove a dm-thin volume.
+
+    Retries dmsetup remove because the kernel may still hold the block device
+    briefly after the firecracker process exits.
+    """
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            await run(f"dmsetup remove {volume_name}")
+            break
+        except ShellError as e:
+            if attempt < max_retries - 1:
+                logger.debug(
+                    "dmsetup remove %s failed (attempt %d/%d): %s",
+                    volume_name, attempt + 1, max_retries, e.stderr.strip(),
+                )
+                await asyncio.sleep(0.5)
+            else:
+                logger.warning(
+                    "dmsetup remove %s failed after %d attempts: %s",
+                    volume_name, max_retries, e.stderr.strip(),
+                )
+
+    try:
+        await run(f"dmsetup message {pool_name} 0 'delete {volume_id}'")
+    except ShellError as e:
+        logger.warning(
+            "dmsetup delete vol %d failed: %s", volume_id, e.stderr.strip(),
+        )
+
     logger.info("Removed volume %s (vol %d)", volume_name, volume_id)

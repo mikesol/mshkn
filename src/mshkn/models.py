@@ -52,6 +52,7 @@ class Checkpoint:
     account_id: str
     parent_id: str | None
     computer_id: str | None
+    thin_volume_id: int | None
     manifest_hash: str
     manifest_json: str
     r2_prefix: str

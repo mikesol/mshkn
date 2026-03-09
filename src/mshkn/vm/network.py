@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from mshkn.shell import run
+from mshkn.shell import ShellError, run
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,12 @@ async def create_tap(slot: int) -> None:
 
 async def destroy_tap(slot: int) -> None:
     tap = slot_to_tap(slot)
-    await run(f"ip link del {tap}", check=False)
-    logger.info("Destroyed tap device %s", tap)
+    try:
+        await run(f"ip link del {tap}")
+    except ShellError as e:
+        logger.warning("Failed to delete tap %s: %s", tap, e.stderr.strip())
+    else:
+        logger.info("Destroyed tap device %s", tap)
 
 
 async def ensure_nat(interface: str = "enp35s0") -> None:
