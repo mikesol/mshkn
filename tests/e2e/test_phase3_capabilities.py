@@ -237,11 +237,12 @@ async def test_tarball_escape_hatch(long_client: httpx.AsyncClient) -> None:
     computers: list[str] = []
 
     try:
-        # The exact API for tarball escape hatch is TBD, but the concept is:
-        # provide a URL to a tarball that gets extracted into the VM's filesystem.
+        # Use a real small tarball — jq static binary release
         comp = await create_computer(
             long_client,
-            uses=["tarball:https://example.com/my-tools.tar.gz:/opt/tools"],
+            uses=[
+                "tarball:https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64:/opt/tools",
+            ],
         )
         computers.append(comp)
 

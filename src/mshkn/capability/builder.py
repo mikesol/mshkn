@@ -47,6 +47,11 @@ async def inject_closure_into_volume(
     mount_point = tempfile.mkdtemp(prefix="mshkn-cap-mount-")
 
     try:
+        # Resize ext4 filesystem to fill the 8GB volume (rootfs is only 1GB)
+        await run(f"e2fsck -fy /dev/mapper/{volume_name}", check=False)
+        await run(f"resize2fs /dev/mapper/{volume_name}")
+        logger.info("Resized filesystem on %s", volume_name)
+
         await mount_volume(volume_name, mount_point)
 
         try:
@@ -78,6 +83,13 @@ async def inject_closure_into_volume(
                     # Don't overwrite existing shims
                     if not link_path.exists():
                         link_path.symlink_to(link_target)
+
+            # Handle tarball extract directories — copy extracted files
+            # into their target paths in the rootfs
+            extract_dir = Path(store_path) / "extract"
+            if extract_dir.is_dir():
+                await run(f"cp -a {extract_dir}/. {mount_point}/")
+                logger.info("Copied tarball extract into rootfs")
 
             # Install pip/npm shims (overwrites the base rootfs shims with
             # manifest-aware versions that include the current uses list)
