@@ -30,6 +30,34 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_MEM_MIB = 512
+_DEFAULT_VCPU = 2
+
+
+def parse_needs(needs: dict[str, object] | None) -> tuple[int, int]:
+    """Parse a needs dict into (mem_size_mib, vcpu_count)."""
+    if not needs:
+        return _DEFAULT_MEM_MIB, _DEFAULT_VCPU
+
+    mem_size_mib = _DEFAULT_MEM_MIB
+    vcpu_count = _DEFAULT_VCPU
+
+    ram = needs.get("ram")
+    if isinstance(ram, str):
+        raw = ram.strip().upper()
+        if raw.endswith("GB"):
+            mem_size_mib = int(float(raw[:-2]) * 1024)
+        elif raw.endswith("MB"):
+            mem_size_mib = int(float(raw[:-2]))
+
+    cores = needs.get("cores")
+    if isinstance(cores, int):
+        vcpu_count = cores
+    elif isinstance(cores, str):
+        vcpu_count = int(cores)
+
+    return mem_size_mib, vcpu_count
+
 
 class VMManager:
     def __init__(self, config: Config, db: aiosqlite.Connection) -> None:
@@ -107,7 +135,13 @@ class VMManager:
         self._next_volume_id += 1
         return vol_id
 
-    async def create(self, account_id: str, manifest: Manifest) -> Computer:
+    async def create(
+        self,
+        account_id: str,
+        manifest: Manifest,
+        needs: dict[str, object] | None = None,
+    ) -> Computer:
+        mem_size_mib, vcpu_count = parse_needs(needs)
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
         async with self._alloc_lock:
             slot = self._allocate_slot()
@@ -143,8 +177,8 @@ class VMManager:
                     rootfs_path=f"/dev/mapper/{volume_name}",
                     tap_device=tap,
                     guest_mac=mac,
-                    vcpu_count=2,
-                    mem_size_mib=512,
+                    vcpu_count=vcpu_count,
+                    mem_size_mib=mem_size_mib,
                 )
             )
         finally:

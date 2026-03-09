@@ -78,7 +78,7 @@ async def create_computer(
         raise HTTPException(status_code=429, detail="VM limit reached")
 
     manifest = Manifest(uses=body.uses)
-    computer = await vm_mgr.create(account.id, manifest)
+    computer = await vm_mgr.create(account.id, manifest, needs=body.needs)
     computers_created_total.inc()
     computers_active.inc()
     return CreateResponse(
