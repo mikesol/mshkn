@@ -102,3 +102,23 @@ async def remove_volume(pool_name: str, volume_name: str, volume_id: int) -> Non
         )
 
     logger.info("Removed volume %s (vol %d)", volume_name, volume_id)
+
+
+async def mount_volume(volume_name: str, mount_point: str) -> None:
+    """Mount a dm-thin volume at the given path."""
+    await run(f"mkdir -p {mount_point}")
+    await run(f"mount /dev/mapper/{volume_name} {mount_point}")
+
+
+async def umount_volume(mount_point: str) -> None:
+    """Unmount a volume. Retries on busy."""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            await run(f"umount {mount_point}")
+            return
+        except ShellError:
+            if attempt < max_retries - 1:
+                await asyncio.sleep(0.5)
+            else:
+                raise
