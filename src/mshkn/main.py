@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -14,7 +15,24 @@ from mshkn.api.computers import router as computers_router
 from mshkn.api.metrics import router as metrics_router
 from mshkn.config import Config
 from mshkn.db import run_migrations
+from mshkn.logging import JSONFormatter
 from mshkn.vm.manager import VMManager
+
+
+def _configure_logging() -> None:
+    """Set up structured JSON logging for the application."""
+    handler = logging.StreamHandler()
+    handler.setFormatter(JSONFormatter())
+    logging.root.handlers = [handler]
+    logging.root.setLevel(logging.INFO)
+    # Ensure uvicorn loggers also use our formatter
+    for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        uv_logger = logging.getLogger(name)
+        uv_logger.handlers = [handler]
+        uv_logger.propagate = False
+
+
+_configure_logging()
 
 
 async def get_db() -> aiosqlite.Connection:
