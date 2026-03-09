@@ -44,6 +44,7 @@ class Computer:
     status: str
     created_at: str
     last_exec_at: str | None
+    source_checkpoint_id: str | None = None
 
 
 @dataclass

@@ -59,8 +59,9 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
     await db.execute(
         "INSERT INTO computers "
         "(id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, status, created_at, last_exec_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "firecracker_pid, manifest_hash, status, created_at, last_exec_at, "
+        "source_checkpoint_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             computer.id,
             computer.account_id,
@@ -73,6 +74,7 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
             computer.status,
             computer.created_at,
             computer.last_exec_at,
+            computer.source_checkpoint_id,
         ),
     )
     await db.commit()
@@ -81,7 +83,8 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
 async def get_computer(db: aiosqlite.Connection, computer_id: str) -> Computer | None:
     cursor = await db.execute(
         "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, status, created_at, last_exec_at "
+        "firecracker_pid, manifest_hash, status, created_at, last_exec_at, "
+        "source_checkpoint_id "
         "FROM computers WHERE id = ?",
         (computer_id,),
     )
@@ -100,6 +103,7 @@ async def get_computer(db: aiosqlite.Connection, computer_id: str) -> Computer |
         status=row[8],
         created_at=row[9],
         last_exec_at=row[10],
+        source_checkpoint_id=row[11],
     )
 
 
@@ -107,7 +111,8 @@ async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
     """Return all non-destroyed computers across all accounts."""
     cursor = await db.execute(
         "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, status, created_at, last_exec_at "
+        "firecracker_pid, manifest_hash, status, created_at, last_exec_at, "
+        "source_checkpoint_id "
         "FROM computers WHERE status != 'destroyed'",
     )
     rows = await cursor.fetchall()
@@ -124,6 +129,7 @@ async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
             status=r[8],
             created_at=r[9],
             last_exec_at=r[10],
+            source_checkpoint_id=r[11],
         )
         for r in rows
     ]
@@ -134,7 +140,8 @@ async def list_computers_by_account(
 ) -> list[Computer]:
     cursor = await db.execute(
         "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, status, created_at, last_exec_at "
+        "firecracker_pid, manifest_hash, status, created_at, last_exec_at, "
+        "source_checkpoint_id "
         "FROM computers WHERE account_id = ? AND status != 'destroyed'",
         (account_id,),
     )
@@ -152,6 +159,7 @@ async def list_computers_by_account(
             status=r[8],
             created_at=r[9],
             last_exec_at=r[10],
+            source_checkpoint_id=r[11],
         )
         for r in rows
     ]
@@ -249,6 +257,37 @@ async def list_checkpoints_by_account(
         )
         for r in rows
     ]
+
+
+async def get_latest_checkpoint_for_computer(
+    db: aiosqlite.Connection, computer_id: str
+) -> Checkpoint | None:
+    """Return the most recent checkpoint for a given computer_id, or None."""
+    cursor = await db.execute(
+        "SELECT id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, "
+        "manifest_json, r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, "
+        "pinned, created_at "
+        "FROM checkpoints WHERE computer_id = ? ORDER BY created_at DESC LIMIT 1",
+        (computer_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return Checkpoint(
+        id=row[0],
+        account_id=row[1],
+        parent_id=row[2],
+        computer_id=row[3],
+        thin_volume_id=row[4],
+        manifest_hash=row[5],
+        manifest_json=row[6],
+        r2_prefix=row[7],
+        disk_delta_size_bytes=row[8],
+        memory_size_bytes=row[9],
+        label=row[10],
+        pinned=bool(row[11]),
+        created_at=row[12],
+    )
 
 
 async def get_max_checkpoint_volume_id(db: aiosqlite.Connection) -> int | None:
