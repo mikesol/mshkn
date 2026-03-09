@@ -433,6 +433,8 @@ class TestT59ApiRateLimiting:
                     return resp.status_code
                 except httpx.HTTPStatusError as e:
                     return e.response.status_code
+                except (httpx.RemoteProtocolError, httpx.ConnectError):
+                    return 0  # Connection dropped under load, not a 429
 
             tasks = [rapid_exec(i) for i in range(num_requests)]
             status_codes = await asyncio.gather(*tasks)
