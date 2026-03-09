@@ -79,6 +79,7 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thre
 - **No papering over failures.** If you can't solve something, say so. Don't mark tests as xfail, don't weaken assertions, don't add workarounds that hide the real issue. Failing tests are honest reminders of what's left.
 - **Be mega-rigorous.** Don't code to the benchmark. Don't sweep stuff under the carpet. Evidence before assertions.
 - **Wait for CI before merging.** After creating a PR, use `gh pr checks <N> --watch` to confirm all checks pass before requesting merge authorization. Never merge a red PR.
+- **No backwards compatibility or versioning.** This is a pre-alpha research project with zero users. Don't version APIs, don't keep fallback images, don't maintain backwards-compatible code paths. Just replace things directly. The only exception is DB migrations, which must be sequential and additive. If something needs to change, change it — don't create a "v2" alongside the old thing.
 
 ## Server reference
 
