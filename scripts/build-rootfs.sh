@@ -17,7 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> debootstrap minimal Ubuntu 24.04"
-debootstrap --variant=minbase --include=openssh-server,bash,coreutils,ca-certificates,iproute2,iputils-ping,curl,sudo,e2fsprogs,util-linux \
+debootstrap --variant=minbase --include=openssh-server,bash,coreutils,ca-certificates,iproute2,iputils-ping,curl,sudo,e2fsprogs,util-linux,udev,systemd,dbus \
     noble "$ROOTFS_DIR" http://archive.ubuntu.com/ubuntu
 
 echo "==> Configure SSH"
@@ -26,18 +26,51 @@ sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' "$ROOTFS_DIR/etc/ssh/sshd_con
 sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' "$ROOTFS_DIR/etc/ssh/sshd_config"
 chroot "$ROOTFS_DIR" ssh-keygen -A
 
-echo "==> Configure networking"
-cat > "$ROOTFS_DIR/etc/network/interfaces" <<'IFACES'
-auto lo
-iface lo inet loopback
+echo "==> Configure networking (Firecracker MAC-based IP)"
+# fcnet-setup.sh decodes the IP from the MAC address set by the host
+cat > "$ROOTFS_DIR/usr/local/bin/fcnet-setup.sh" <<'FCNET'
+#!/bin/bash
+for dev in $(ls /sys/class/net | grep -v lo); do
+    mac_ip=$(ip link show dev "$dev" | grep link/ether | grep -oP "(?<=06:00:)[0-9a-f:]{11}")
+    if [ -n "$mac_ip" ]; then
+        ip=$(printf "%d.%d.%d.%d" $(echo "0x${mac_ip}" | sed "s/:/ 0x/g"))
+        ip addr add "$ip/30" dev "$dev"
+        ip link set "$dev" up
+        gw=$(echo "$ip" | awk -F. '{printf "%d.%d.%d.%d", $1, $2, $3, $4-1}')
+        ip route add default via "$gw"
+    fi
+done
+FCNET
+chmod +x "$ROOTFS_DIR/usr/local/bin/fcnet-setup.sh"
 
-auto eth0
-iface eth0 inet dhcp
-IFACES
+# systemd service for fcnet
+mkdir -p "$ROOTFS_DIR/etc/systemd/system/sysinit.target.wants"
+cat > "$ROOTFS_DIR/etc/systemd/system/fcnet.service" <<'FCNET_SVC'
+[Unit]
+Description=Firecracker network setup
+DefaultDependencies=no
+After=systemd-udevd.service
+Before=network.target
+Wants=ssh.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/udevadm settle
+ExecStart=/usr/local/bin/fcnet-setup.sh
+RemainAfterExit=true
+FCNET_SVC
+ln -sf /etc/systemd/system/fcnet.service "$ROOTFS_DIR/etc/systemd/system/sysinit.target.wants/fcnet.service"
 
 # Enable SSH on boot
 chroot "$ROOTFS_DIR" systemctl enable ssh 2>/dev/null || \
     ln -sf /lib/systemd/system/ssh.service "$ROOTFS_DIR/etc/systemd/system/multi-user.target.wants/ssh.service"
+
+echo "==> Install SSH authorized key"
+# Copy the host's public key so the host can SSH into VMs
+if [ -f /root/.ssh/id_ed25519.pub ]; then
+    cat /root/.ssh/id_ed25519.pub >> "$ROOTFS_DIR/root/.ssh/authorized_keys"
+    chmod 600 "$ROOTFS_DIR/root/.ssh/authorized_keys"
+fi
 
 echo "==> Remove apt/dpkg to enforce purity"
 rm -f "$ROOTFS_DIR/usr/bin/apt" "$ROOTFS_DIR/usr/bin/apt-get" "$ROOTFS_DIR/usr/bin/apt-cache"
