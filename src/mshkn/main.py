@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from mshkn.api.checkpoints import router as checkpoints_router
 from mshkn.api.computers import router as computers_router
+from mshkn.api.metrics import router as metrics_router
 from mshkn.config import Config
 from mshkn.db import run_migrations
 from mshkn.vm.manager import VMManager
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="mshkn", version="0.1.0", lifespan=lifespan)
 app.include_router(computers_router)
 app.include_router(checkpoints_router)
+app.include_router(metrics_router)
 
 
 @app.get("/health")

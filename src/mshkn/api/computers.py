@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -8,6 +9,12 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from mshkn.api.auth import require_account
+from mshkn.api.metrics import (
+    checkpoints_total,
+    computers_active,
+    computers_created_total,
+    exec_duration_seconds,
+)
 from mshkn.db import count_active_computers_by_account, get_computer
 from mshkn.models import Manifest
 from mshkn.vm.ssh import ssh_download, ssh_exec, ssh_exec_bg, ssh_exec_stream, ssh_upload
@@ -72,6 +79,8 @@ async def create_computer(
 
     manifest = Manifest(uses=body.uses)
     computer = await vm_mgr.create(account.id, manifest)
+    computers_created_total.inc()
+    computers_active.inc()
     return CreateResponse(
         computer_id=computer.id,
         url=f"https://{computer.id}.{config.domain}",
@@ -91,10 +100,14 @@ async def exec_command(
     computer = await _get_running_computer(db, computer_id, account)
 
     async def event_stream() -> AsyncIterator[dict[str, str]]:
-        async for stream, line in ssh_exec_stream(
-            computer.vm_ip, body.command, config.ssh_key_path
-        ):
-            yield {"event": stream, "data": line}
+        t0 = time.monotonic()
+        try:
+            async for stream, line in ssh_exec_stream(
+                computer.vm_ip, body.command, config.ssh_key_path
+            ):
+                yield {"event": stream, "data": line}
+        finally:
+            exec_duration_seconds.observe(time.monotonic() - t0)
 
     return EventSourceResponse(event_stream())
 
@@ -277,6 +290,7 @@ async def checkpoint_computer(
         created_at=now,
     )
     await insert_checkpoint(db, ckpt)
+    checkpoints_total.inc()
 
     # Async background upload to R2
     task = asyncio.create_task(upload_checkpoint(snapshot_dir, r2_prefix, config.r2_bucket))
@@ -303,4 +317,5 @@ async def destroy_computer(
         raise HTTPException(status_code=404, detail="Computer not found")
     vm_mgr: VMManager = request.app.state.vm_manager
     await vm_mgr.destroy(computer_id)
+    computers_active.dec()
     return {"status": "destroyed"}
