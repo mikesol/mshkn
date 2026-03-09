@@ -270,6 +270,7 @@ class VMManager:
             socket_path=socket_path,
             firecracker_pid=pid,
             manifest_hash=manifest.content_hash(),
+            manifest_json=manifest.to_json(),
             status="running",
             created_at=now,
             last_exec_at=None,

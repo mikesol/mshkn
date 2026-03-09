@@ -11,6 +11,7 @@ def test_computer_creation() -> None:
         socket_path="/tmp/fc-comp-abc.socket",
         firecracker_pid=1234,
         manifest_hash="abc123",
+        manifest_json='{"uses": []}',
         status="running",
         created_at="2026-03-08T12:00:00",
         last_exec_at=None,

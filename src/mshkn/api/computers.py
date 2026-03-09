@@ -291,7 +291,7 @@ async def checkpoint_computer(
         computer_id=computer_id,
         thin_volume_id=ckpt_volume_id,
         manifest_hash=computer.manifest_hash,
-        manifest_json="{}",  # TODO: store actual manifest
+        manifest_json=computer.manifest_json,
         r2_prefix=r2_prefix,
         disk_delta_size_bytes=None,
         memory_size_bytes=None,

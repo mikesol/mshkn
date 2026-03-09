@@ -59,9 +59,9 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
     await db.execute(
         "INSERT INTO computers "
         "(id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, status, created_at, last_exec_at, "
+        "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
         "source_checkpoint_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             computer.id,
             computer.account_id,
@@ -71,6 +71,7 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
             computer.socket_path,
             computer.firecracker_pid,
             computer.manifest_hash,
+            computer.manifest_json,
             computer.status,
             computer.created_at,
             computer.last_exec_at,
@@ -83,7 +84,7 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
 async def get_computer(db: aiosqlite.Connection, computer_id: str) -> Computer | None:
     cursor = await db.execute(
         "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, status, created_at, last_exec_at, "
+        "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
         "source_checkpoint_id "
         "FROM computers WHERE id = ?",
         (computer_id,),
@@ -100,10 +101,11 @@ async def get_computer(db: aiosqlite.Connection, computer_id: str) -> Computer |
         socket_path=row[5],
         firecracker_pid=row[6],
         manifest_hash=row[7],
-        status=row[8],
-        created_at=row[9],
-        last_exec_at=row[10],
-        source_checkpoint_id=row[11],
+        manifest_json=row[8],
+        status=row[9],
+        created_at=row[10],
+        last_exec_at=row[11],
+        source_checkpoint_id=row[12],
     )
 
 
@@ -111,7 +113,7 @@ async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
     """Return all non-destroyed computers across all accounts."""
     cursor = await db.execute(
         "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, status, created_at, last_exec_at, "
+        "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
         "source_checkpoint_id "
         "FROM computers WHERE status != 'destroyed'",
     )
@@ -126,10 +128,11 @@ async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
             socket_path=r[5],
             firecracker_pid=r[6],
             manifest_hash=r[7],
-            status=r[8],
-            created_at=r[9],
-            last_exec_at=r[10],
-            source_checkpoint_id=r[11],
+            manifest_json=r[8],
+            status=r[9],
+            created_at=r[10],
+            last_exec_at=r[11],
+            source_checkpoint_id=r[12],
         )
         for r in rows
     ]
@@ -152,7 +155,7 @@ async def list_computers_by_account(
 ) -> list[Computer]:
     cursor = await db.execute(
         "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, status, created_at, last_exec_at, "
+        "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
         "source_checkpoint_id "
         "FROM computers WHERE account_id = ? AND status != 'destroyed'",
         (account_id,),
@@ -168,10 +171,11 @@ async def list_computers_by_account(
             socket_path=r[5],
             firecracker_pid=r[6],
             manifest_hash=r[7],
-            status=r[8],
-            created_at=r[9],
-            last_exec_at=r[10],
-            source_checkpoint_id=r[11],
+            manifest_json=r[8],
+            status=r[9],
+            created_at=r[10],
+            last_exec_at=r[11],
+            source_checkpoint_id=r[12],
         )
         for r in rows
     ]

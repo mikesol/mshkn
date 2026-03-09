@@ -35,6 +35,7 @@ def _make_computer(n: int, status: str = "running") -> Computer:
         socket_path=f"/tmp/fc-{n}.socket",
         firecracker_pid=1000 + n,
         manifest_hash="abc",
+        manifest_json='{"uses": []}',
         status=status,
         created_at="2026-03-08T00:00:00",
         last_exec_at=None,

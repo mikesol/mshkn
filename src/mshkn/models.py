@@ -41,6 +41,7 @@ class Computer:
     socket_path: str
     firecracker_pid: int | None
     manifest_hash: str
+    manifest_json: str
     status: str
     created_at: str
     last_exec_at: str | None

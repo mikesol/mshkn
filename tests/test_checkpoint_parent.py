@@ -35,6 +35,7 @@ def _make_computer(
         socket_path="/tmp/fc-comp-1.socket",
         firecracker_pid=999,
         manifest_hash="abc",
+        manifest_json='{"uses": []}',
         status="running",
         created_at="2026-03-08T00:00:00",
         last_exec_at=None,
