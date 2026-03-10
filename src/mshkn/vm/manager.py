@@ -305,8 +305,10 @@ class VMManager:
         finally:
             await fc_client.close()
 
-        # 5. Wait for SSH readiness
+        # 5. Wait for SSH readiness and warm connection pool
         await self._wait_for_ssh(vm_ip)
+        if self.ssh_pool is not None:
+            await self.ssh_pool.get(vm_ip)
 
         # 6. Record in DB
         now = datetime.now(UTC).isoformat()
@@ -411,8 +413,10 @@ class VMManager:
         finally:
             await fc_client.close()
 
-        # 4. Wait for SSH readiness
+        # 4. Wait for SSH readiness and warm connection pool
         await self._wait_for_ssh(vm_ip)
+        if self.ssh_pool is not None:
+            await self.ssh_pool.get(vm_ip)
 
         # 5. Record in DB
         now = datetime.now(UTC).isoformat()
