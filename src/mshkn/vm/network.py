@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from mshkn.shell import ShellError, run
@@ -24,9 +25,18 @@ def slot_to_tap(slot: int) -> str:
 async def create_tap(slot: int) -> None:
     tap = slot_to_tap(slot)
     host_ip, vm_ip = slot_to_ip(slot)
-    # Remove stale tap if it exists from a previous run
+    # Remove stale tap if it exists from a previous run.
+    # Retry the add in case a dying process still holds the device fd.
     await run(f"ip link del {tap}", check=False)
-    await run(f"ip tuntap add dev {tap} mode tap")
+    for attempt in range(3):
+        try:
+            await run(f"ip tuntap add dev {tap} mode tap")
+            break
+        except ShellError:
+            if attempt == 2:
+                raise
+            await asyncio.sleep(0.5)
+            await run(f"ip link del {tap}", check=False)
     await run(f"ip addr add {host_ip}/30 dev {tap}")
     await run(f"ip link set {tap} up")
     # Allow VM → internet (non-172.16.0.0/12 destinations) but block VM → VM

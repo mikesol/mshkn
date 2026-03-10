@@ -128,6 +128,26 @@ async def ssh_exec(
             stdout=str(result.stdout) if result.stdout else "",
             stderr=str(result.stderr) if result.stderr else "",
         )
+    except (asyncssh.ChannelOpenError, asyncssh.ConnectionLost) as exc:
+        # Pooled connection went stale — evict and retry once
+        if pool is not None and not owned:
+            logger.warning("SSH channel error for %s, retrying: %s", vm_ip, exc)
+            await pool.remove(vm_ip)
+            conn2, owned2 = await _get_conn(vm_ip, ssh_key_path, pool)
+            try:
+                result = await asyncio.wait_for(
+                    conn2.run(command, check=False),
+                    timeout=timeout,
+                )
+                return ExecResult(
+                    exit_code=result.exit_status or 0,
+                    stdout=str(result.stdout) if result.stdout else "",
+                    stderr=str(result.stderr) if result.stderr else "",
+                )
+            finally:
+                if owned2:
+                    conn2.close()
+        raise
     finally:
         if owned:
             conn.close()
