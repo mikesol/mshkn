@@ -1,26 +1,34 @@
 """Phase 4: Networking — "Public URLs and Isolation"
 
-These tests run against a LIVE server with real Firecracker VMs.
-Caddy dynamic routing is not yet configured, so these tests will fail.
+These tests run against a LIVE server with real Firecracker VMs and Caddy reverse proxy.
 """
 
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import urlparse
 
 import httpx
 import pytest
 
 from .conftest import (
-    create_computer,
     checkpoint_computer,
+    create_computer,
     destroy_computer,
     exec_command,
     fork_checkpoint,
     managed_computer,
-    API_URL,
-    HEADERS,
 )
+
+
+def port_url(base_url: str, port: int) -> str:
+    """Construct a port-specific URL from a base computer URL.
+
+    base_url: https://comp-abc123.mshkn.dev
+    returns:  https://{port}-comp-abc123.mshkn.dev
+    """
+    parsed = urlparse(base_url)
+    return f"{parsed.scheme}://{port}-{parsed.hostname}"
 
 
 # ---------------------------------------------------------------------------
@@ -47,11 +55,14 @@ class TestT41AutoHttps:
             # Get the computer's public URL
             status_resp = await client.get(f"/computers/{computer_id}/status")
             status_resp.raise_for_status()
-            public_url = status_resp.json().get("url") or f"{API_URL}/computers/{computer_id}/proxy"
+            base_url = status_resp.json()["url"]
 
-            # Hit the public URL
+            # Construct port-specific URL: https://8080-comp-xxx.mshkn.dev
+            url = port_url(base_url, 8080)
+
+            # Hit the public URL (follow redirects, verify TLS)
             async with httpx.AsyncClient(timeout=10.0) as external:
-                resp = await external.get(public_url)
+                resp = await external.get(url)
                 assert resp.status_code == 200
                 assert "Directory listing" in resp.text or "<html" in resp.text.lower()
 
@@ -88,13 +99,11 @@ class TestT42MultiplePorts:
 
             status_resp = await client.get(f"/computers/{computer_id}/status")
             status_resp.raise_for_status()
-            base_url = status_resp.json().get("url", f"{API_URL}/computers/{computer_id}/proxy")
+            base_url = status_resp.json()["url"]
 
             async with httpx.AsyncClient(timeout=10.0) as external:
                 for port in ports:
-                    # The URL scheme for per-port routing depends on Caddy config.
-                    # Possible: base_url:port, or base_url/port, or port-subdomain.
-                    url = f"{base_url}:{port}"
+                    url = port_url(base_url, port)
                     resp = await external.get(url)
                     assert resp.status_code == 200
                     assert f"port-{port}" in resp.text
@@ -133,14 +142,13 @@ class TestT43WebSocket:
 
             status_resp = await client.get(f"/computers/{computer_id}/status")
             status_resp.raise_for_status()
-            base_url = status_resp.json().get("url", "")
+            base_url = status_resp.json()["url"]
 
-            # Convert https://... to wss://...
-            ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
-            ws_url = f"{ws_url}:9000"
+            # Construct wss://9000-comp-xxx.mshkn.dev
+            ws_url = port_url(base_url, 9000).replace("https://", "wss://")
 
             try:
-                import websockets  # noqa: F811
+                import websockets
 
                 async with websockets.connect(ws_url) as ws:
                     await ws.send("ping-from-test")
