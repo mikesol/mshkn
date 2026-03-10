@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import uuid
+from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mshkn.db import (
@@ -33,6 +37,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MEM_MIB = 512
+_ALERT_HISTORY_SIZE = 100
+
+
+@dataclass
+class Alert:
+    level: str  # "warning" or "critical"
+    source: str  # e.g. "nvme", "ram", "s3"
+    message: str
+    value: float  # the metric value that triggered it
+    threshold: float  # the threshold that was exceeded
+    timestamp: str  # ISO 8601
 _DEFAULT_VCPU = 2
 
 
@@ -72,6 +87,7 @@ class VMManager:
         self._free_slots: list[int] = []  # recycled slots from destroyed VMs
         self._next_volume_id = 100  # volume 0 is base; start high to avoid conflicts
         self._alloc_lock = asyncio.Lock()
+        self.alerts: deque[Alert] = deque(maxlen=_ALERT_HISTORY_SIZE)
 
     async def initialize(self) -> None:
         """Load state from DB and actual pool to set counters correctly."""
@@ -703,6 +719,61 @@ class VMManager:
 
         return pruned
 
+    async def check_host_resources(self) -> list[Alert]:
+        """Check host-level resource usage and return any new alerts."""
+        now = datetime.now(UTC).isoformat()
+        new_alerts: list[Alert] = []
+
+        # Check NVMe disk usage
+        try:
+            disk = shutil.disk_usage("/")
+            pct = (disk.used / disk.total) * 100
+            if pct > 80:
+                level = "critical" if pct > 95 else "warning"
+                alert = Alert(
+                    level=level,
+                    source="nvme",
+                    message=f"NVMe usage at {pct:.1f}%",
+                    value=round(pct, 1),
+                    threshold=80.0,
+                    timestamp=now,
+                )
+                new_alerts.append(alert)
+                logger.warning("ALERT [%s]: %s", level, alert.message)
+        except Exception:
+            logger.exception("Failed to check disk usage")
+
+        # Check host RAM usage
+        try:
+            with Path("/proc/meminfo").open() as f:
+                meminfo: dict[str, int] = {}
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        key = parts[0].rstrip(":")
+                        meminfo[key] = int(parts[1])  # kB
+            total = meminfo.get("MemTotal", 0)
+            available = meminfo.get("MemAvailable", 0)
+            if total > 0:
+                used_pct = ((total - available) / total) * 100
+                if used_pct > 90:
+                    alert = Alert(
+                        level="critical",
+                        source="ram",
+                        message=f"Host RAM usage at {used_pct:.1f}%",
+                        value=round(used_pct, 1),
+                        threshold=90.0,
+                        timestamp=now,
+                    )
+                    new_alerts.append(alert)
+                    logger.warning("ALERT [critical]: %s", alert.message)
+        except Exception:
+            logger.exception("Failed to check RAM usage")
+
+        for alert in new_alerts:
+            self.alerts.append(alert)
+        return new_alerts
+
     async def run_reaper_loop(self, interval: float = 60.0) -> None:
         """Background loop that reaps dead VMs, idle VMs, and excess checkpoints."""
         idle_timeout = self.config.idle_timeout_seconds
@@ -717,10 +788,12 @@ class VMManager:
                 dead = await self.reap_dead_vms()
                 idle = await self.reap_idle_vms()
                 pruned = await self.prune_checkpoints()
-                if dead or idle or pruned:
+                host_alerts = await self.check_host_resources()
+                if dead or idle or pruned or host_alerts:
                     logger.info(
-                        "Reaper cycle: %d dead, %d idle VM(s), %d checkpoint(s) pruned",
-                        dead, idle, pruned,
+                        "Reaper cycle: %d dead, %d idle VM(s), "
+                        "%d checkpoint(s) pruned, %d alert(s)",
+                        dead, idle, pruned, len(host_alerts),
                     )
             except Exception:
                 logger.exception("Reaper cycle failed")

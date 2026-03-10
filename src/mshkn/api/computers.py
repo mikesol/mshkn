@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import TYPE_CHECKING
 
@@ -18,7 +19,14 @@ from mshkn.api.metrics import (
 from mshkn.api.ratelimit import rate_limiter
 from mshkn.db import count_active_computers_by_account, get_computer, update_last_exec_at
 from mshkn.models import Manifest
-from mshkn.vm.ssh import ssh_download, ssh_exec, ssh_exec_bg, ssh_exec_stream, ssh_upload
+from mshkn.vm.ssh import (
+    ssh_download,
+    ssh_exec,
+    ssh_exec_bg,
+    ssh_exec_stream,
+    ssh_gather_metrics,
+    ssh_upload,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -28,6 +36,8 @@ if TYPE_CHECKING:
     from mshkn.config import Config
     from mshkn.models import Account, Computer
     from mshkn.vm.manager import VMManager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/computers", tags=["computers"])
 
@@ -222,7 +232,7 @@ async def computer_status(
     computer = await get_computer(db, computer_id)
     if computer is None or computer.account_id != account.id or computer.status == "destroyed":
         raise HTTPException(status_code=404, detail="Computer not found")
-    return {
+    result: dict[str, object] = {
         "computer_id": computer.id,
         "status": computer.status,
         "url": f"https://{computer.id}.{config.domain}",
@@ -231,6 +241,21 @@ async def computer_status(
         "created_at": computer.created_at,
         "last_exec_at": computer.last_exec_at,
     }
+    # Enrich with live VM metrics if the VM is running
+    if computer.status == "running" and computer.vm_ip:
+        try:
+            metrics = await ssh_gather_metrics(
+                computer.vm_ip, config.ssh_key_path, timeout=10.0,
+            )
+            result["cpu_pct"] = metrics.cpu_pct
+            result["ram_usage_mb"] = metrics.ram_usage_mb
+            result["ram_total_mb"] = metrics.ram_total_mb
+            result["disk_usage_mb"] = metrics.disk_usage_mb
+            result["disk_total_mb"] = metrics.disk_total_mb
+            result["processes"] = metrics.processes
+        except Exception:
+            logger.warning("Failed to gather metrics for %s", computer_id)
+    return result
 
 
 class CheckpointRequest(BaseModel):

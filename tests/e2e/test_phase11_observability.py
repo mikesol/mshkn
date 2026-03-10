@@ -9,8 +9,6 @@ from __future__ import annotations
 import pytest
 
 from .conftest import (
-    API_URL,
-    HEADERS,
     checkpoint_computer,
     create_computer,
     delete_checkpoint,
@@ -19,7 +17,6 @@ from .conftest import (
     fork_checkpoint,
     managed_computer,
 )
-
 
 # ---------------------------------------------------------------------------
 # T11.1 — Prometheus Endpoint
@@ -259,36 +256,149 @@ class TestT118CheckpointDag:
 
 
 class TestT119ResourceUsage:
-    """Verify per-computer resource usage metrics are available."""
+    """T11.5 — Verify computer_status returns accurate live VM metrics."""
 
     async def test_status_includes_resource_usage(self, client):
         """GET /computers/{id}/status should include CPU, memory, disk usage.
 
-        Expected additional fields:
-        - cpu_percent (float, 0-100)
-        - memory_used_bytes (int)
-        - disk_used_bytes (int)
-        - network_rx_bytes (int)
-        - network_tx_bytes (int)
+        Maps to spec T11.5: ram_usage_mb is sane, disk_usage_mb reflects reality,
+        processes array has entries with PIDs and commands.
         """
-        pass
+        async with managed_computer(client, uses=[]) as computer_id:
+            resp = await client.get(f"/computers/{computer_id}/status")
+            resp.raise_for_status()
+            body = resp.json()
+
+            # Must have live metric fields
+            assert "cpu_pct" in body, f"Missing cpu_pct: {body}"
+            assert "ram_usage_mb" in body, f"Missing ram_usage_mb: {body}"
+            assert "ram_total_mb" in body, f"Missing ram_total_mb: {body}"
+            assert "disk_usage_mb" in body, f"Missing disk_usage_mb: {body}"
+            assert "disk_total_mb" in body, f"Missing disk_total_mb: {body}"
+            assert "processes" in body, f"Missing processes: {body}"
+
+            # Sanity checks
+            assert isinstance(body["cpu_pct"], (int, float))
+            assert body["cpu_pct"] >= 0
+            assert body["ram_usage_mb"] > 0, "RAM usage should not be zero"
+            assert body["ram_total_mb"] > 0, "RAM total should not be zero"
+            assert body["ram_usage_mb"] <= body["ram_total_mb"]
+            assert body["disk_usage_mb"] >= 0
+            assert body["disk_total_mb"] > 0
+
+            # Processes should be a list with at least init
+            assert isinstance(body["processes"], list)
+            assert len(body["processes"]) >= 1, "Expected at least 1 process"
+            proc = body["processes"][0]
+            assert "pid" in proc
+            assert "command" in proc
+
+    async def test_disk_usage_reflects_writes(self, client):
+        """Write data to disk, verify status reflects increased usage."""
+        async with managed_computer(client, uses=[]) as computer_id:
+            # Get baseline
+            resp = await client.get(f"/computers/{computer_id}/status")
+            resp.raise_for_status()
+            baseline_disk = resp.json()["disk_usage_mb"]
+
+            # Write ~50MB of data
+            await exec_command(
+                client, computer_id, "dd if=/dev/zero of=/tmp/bigfile bs=1M count=50"
+            )
+
+            # Check that disk usage increased
+            resp = await client.get(f"/computers/{computer_id}/status")
+            resp.raise_for_status()
+            new_disk = resp.json()["disk_usage_mb"]
+            assert new_disk > baseline_disk, (
+                f"Disk usage didn't increase after write: {baseline_disk} -> {new_disk}"
+            )
 
 
 # ---------------------------------------------------------------------------
-# T11.10 — Alerting Thresholds
+# T11.10 — computer_status vs exec consistency (T11.6)
 # ---------------------------------------------------------------------------
 
 
-class TestT1110AlertingThresholds:
-    """Verify alerting when resource usage exceeds thresholds."""
+class TestT1110StatusConsistency:
+    """T11.6 — Verify computer_status metrics match exec output."""
 
-    async def test_high_disk_usage_alert(self):
-        """Filling disk past 80% should trigger an alert/warning.
+    async def test_ram_matches_free(self, client):
+        """computer_status ram_usage_mb should roughly match `free -m`."""
+        async with managed_computer(client, uses=[]) as computer_id:
+            # Get status
+            resp = await client.get(f"/computers/{computer_id}/status")
+            resp.raise_for_status()
+            status_ram = resp.json()["ram_usage_mb"]
 
-        The system should:
-        1. Monitor disk usage on the thin pool
-        2. Emit a warning metric/log when usage > 80%
-        3. Emit a critical alert when usage > 95%
-        4. Optionally: refuse new creates when pool is nearly full
-        """
-        pass
+            # Get free -m output and parse used MB from "Mem: total used free ..."
+            result = await exec_command(client, computer_id, "free -m")
+            for line in result.splitlines():
+                if line.startswith("Mem:"):
+                    parts = line.split()
+                    exec_ram = int(parts[2])
+                    break
+            else:
+                pytest.fail(f"Could not parse free -m output: {result}")
+
+            # Within 20% — both readings are point-in-time snapshots
+            diff = abs(status_ram - exec_ram)
+            tolerance = max(exec_ram * 0.2, 10)  # at least 10MB tolerance
+            assert diff <= tolerance, (
+                f"RAM mismatch: status={status_ram}MB, free={exec_ram}MB, diff={diff}MB"
+            )
+
+    async def test_disk_matches_df(self, client):
+        """computer_status disk_usage_mb should roughly match `df`."""
+        async with managed_computer(client, uses=[]) as computer_id:
+            # Get status
+            resp = await client.get(f"/computers/{computer_id}/status")
+            resp.raise_for_status()
+            status_disk = resp.json()["disk_usage_mb"]
+
+            # Get df output
+            result = await exec_command(client, computer_id, "df -BM /")
+            for line in result.splitlines():
+                if line.startswith("/"):
+                    parts = line.split()
+                    exec_disk = int(parts[2].rstrip("M"))
+                    break
+            else:
+                pytest.fail(f"Could not parse df output: {result}")
+
+            # Within 20%
+            diff = abs(status_disk - exec_disk)
+            tolerance = max(exec_disk * 0.2, 10)
+            assert diff <= tolerance, (
+                f"Disk mismatch: status={status_disk}MB, df={exec_disk}MB, diff={diff}MB"
+            )
+
+
+# ---------------------------------------------------------------------------
+# T11.4 — Alerting (GET /alerts endpoint exists and returns structured data)
+# ---------------------------------------------------------------------------
+
+
+class TestT114Alerting:
+    """T11.4 — Verify the alerting endpoint exists and returns structured data."""
+
+    async def test_alerts_endpoint_exists(self, client):
+        """GET /alerts should return a list (possibly empty on a healthy system)."""
+        resp = await client.get("/alerts")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, list)
+
+    async def test_alert_structure(self, client):
+        """If any alerts exist, they should have the expected fields."""
+        resp = await client.get("/alerts")
+        resp.raise_for_status()
+        alerts = resp.json()
+        for alert in alerts:
+            assert "level" in alert
+            assert alert["level"] in ("warning", "critical")
+            assert "source" in alert
+            assert "message" in alert
+            assert "value" in alert
+            assert "threshold" in alert
+            assert "timestamp" in alert

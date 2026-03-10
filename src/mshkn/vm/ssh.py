@@ -129,6 +129,81 @@ async def ssh_exec_bg(
     return int(pid_str)
 
 
+@dataclass
+class VmMetrics:
+    cpu_pct: float
+    ram_usage_mb: int
+    ram_total_mb: int
+    disk_usage_mb: int
+    disk_total_mb: int
+    processes: list[dict[str, object]]
+
+
+async def ssh_gather_metrics(
+    vm_ip: str,
+    ssh_key_path: Path,
+    timeout: float = 10.0,
+) -> VmMetrics:
+    """Gather CPU, RAM, disk, and process metrics from a VM via SSH."""
+    # Single compound command to minimize SSH round-trips
+    cmd = (
+        "top -bn1 -d0.5 | grep '%Cpu' | awk '{print $8}'; "
+        "free -m | awk '/^Mem:/{print $2,$3}'; "
+        "df -BM / | awk 'NR==2{gsub(/M/,\"\",$2); gsub(/M/,\"\",$3); print $2,$3}'; "
+        "ps -eo pid,comm --no-headers | head -50"
+    )
+    result = await ssh_exec(vm_ip, cmd, ssh_key_path, timeout=timeout)
+    lines = result.stdout.strip().splitlines()
+
+    # Parse CPU idle → usage
+    cpu_pct = 0.0
+    if lines:
+        try:
+            idle = float(lines[0].strip().replace(",", "."))
+            cpu_pct = round(100.0 - idle, 1)
+        except ValueError:
+            pass
+
+    # Parse RAM
+    ram_total_mb, ram_usage_mb = 0, 0
+    if len(lines) > 1:
+        parts = lines[1].split()
+        if len(parts) >= 2:
+            try:
+                ram_total_mb = int(parts[0])
+                ram_usage_mb = int(parts[1])
+            except ValueError:
+                pass
+
+    # Parse disk
+    disk_total_mb, disk_usage_mb = 0, 0
+    if len(lines) > 2:
+        parts = lines[2].split()
+        if len(parts) >= 2:
+            try:
+                disk_total_mb = int(parts[0])
+                disk_usage_mb = int(parts[1])
+            except ValueError:
+                pass
+
+    # Parse processes (remaining lines)
+    processes: list[dict[str, object]] = []
+    for line in lines[3:]:
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            with contextlib.suppress(ValueError):
+                processes.append({"pid": int(parts[0]), "command": parts[1]})
+
+    return VmMetrics(
+        cpu_pct=cpu_pct,
+        ram_usage_mb=ram_usage_mb,
+        ram_total_mb=ram_total_mb,
+        disk_usage_mb=disk_usage_mb,
+        disk_total_mb=disk_total_mb,
+        processes=processes,
+    )
+
+
 async def ssh_upload(
     vm_ip: str,
     remote_path: str,

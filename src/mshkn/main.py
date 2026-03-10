@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+from dataclasses import asdict
+
 import aiosqlite
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from mshkn.api.checkpoints import router as checkpoints_router
 from mshkn.api.computers import router as computers_router
@@ -76,3 +78,10 @@ app.include_router(metrics_router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/alerts")
+async def get_alerts(request: Request) -> list[dict[str, object]]:
+    """Return recent resource alerts."""
+    vm_manager: VMManager = request.app.state.vm_manager
+    return [asdict(a) for a in vm_manager.alerts]
