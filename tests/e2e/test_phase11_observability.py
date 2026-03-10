@@ -333,13 +333,13 @@ class TestT1110StatusConsistency:
 
             # Get free -m output and parse used MB from "Mem: total used free ..."
             result = await exec_command(client, computer_id, "free -m")
-            for line in result.splitlines():
+            for line in result.stdout.splitlines():
                 if line.startswith("Mem:"):
                     parts = line.split()
                     exec_ram = int(parts[2])
                     break
             else:
-                pytest.fail(f"Could not parse free -m output: {result}")
+                pytest.fail(f"Could not parse free -m output: {result.stdout}")
 
             # Within 20% — both readings are point-in-time snapshots
             diff = abs(status_ram - exec_ram)
@@ -358,13 +358,13 @@ class TestT1110StatusConsistency:
 
             # Get df output
             result = await exec_command(client, computer_id, "df -BM /")
-            for line in result.splitlines():
+            for line in result.stdout.splitlines():
                 if line.startswith("/"):
                     parts = line.split()
                     exec_disk = int(parts[2].rstrip("M"))
                     break
             else:
-                pytest.fail(f"Could not parse df output: {result}")
+                pytest.fail(f"Could not parse df output: {result.stdout}")
 
             # Within 20%
             diff = abs(status_disk - exec_disk)
