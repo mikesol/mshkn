@@ -565,8 +565,8 @@ class VMManager:
         computers = await list_all_computers(self.db)
         running = [c for c in computers if c.status == "running"]
         now = datetime.now(UTC)
-        reaped = 0
 
+        idle_vms: list[Computer] = []
         for computer in running:
             # Use last_exec_at if available, otherwise created_at
             ref_time_str = computer.last_exec_at or computer.created_at
@@ -578,20 +578,30 @@ class VMManager:
                 continue
 
             idle_seconds = (now - ref_time).total_seconds()
-            if idle_seconds < self.config.idle_timeout_seconds:
-                continue
+            if idle_seconds >= self.config.idle_timeout_seconds:
+                logger.info(
+                    "Auto-checkpointing idle VM %s (idle %.0fs, timeout %ds)",
+                    computer.id, idle_seconds, self.config.idle_timeout_seconds,
+                )
+                idle_vms.append(computer)
 
-            logger.info(
-                "Auto-checkpointing idle VM %s (idle %.0fs, timeout %ds)",
-                computer.id, idle_seconds, self.config.idle_timeout_seconds,
-            )
-            try:
-                await self._auto_checkpoint_and_destroy(computer)
-                reaped += 1
-            except Exception:
-                logger.exception("Failed to auto-checkpoint idle VM %s", computer.id)
+        if not idle_vms:
+            return 0
 
-        return reaped
+        # Process idle VMs concurrently (up to 5 at a time)
+        sem = asyncio.Semaphore(5)
+
+        async def _process(comp: Computer) -> bool:
+            async with sem:
+                try:
+                    await self._auto_checkpoint_and_destroy(comp)
+                    return True
+                except Exception:
+                    logger.exception("Failed to auto-checkpoint idle VM %s", comp.id)
+                    return False
+
+        results = await asyncio.gather(*[_process(c) for c in idle_vms])
+        return sum(1 for r in results if r)
 
     async def _auto_checkpoint_and_destroy(self, computer: Computer) -> None:
         """Auto-checkpoint a VM and then destroy it."""
