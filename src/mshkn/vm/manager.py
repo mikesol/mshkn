@@ -524,15 +524,130 @@ class VMManager:
         await update_computer_status(self.db, computer.id, "destroyed")
         logger.info("Reaped dead VM %s", computer.id)
 
+    async def reap_idle_vms(self) -> int:
+        """Find VMs that have been idle beyond the timeout and auto-checkpoint + destroy.
+
+        Returns the number of VMs reaped.
+        """
+        if self.config.idle_timeout_seconds <= 0:
+            return 0
+
+        computers = await list_all_computers(self.db)
+        running = [c for c in computers if c.status == "running"]
+        now = datetime.now(UTC)
+        reaped = 0
+
+        for computer in running:
+            # Use last_exec_at if available, otherwise created_at
+            ref_time_str = computer.last_exec_at or computer.created_at
+            try:
+                ref_time = datetime.fromisoformat(ref_time_str)
+                if ref_time.tzinfo is None:
+                    ref_time = ref_time.replace(tzinfo=UTC)
+            except (ValueError, TypeError):
+                continue
+
+            idle_seconds = (now - ref_time).total_seconds()
+            if idle_seconds < self.config.idle_timeout_seconds:
+                continue
+
+            logger.info(
+                "Auto-checkpointing idle VM %s (idle %.0fs, timeout %ds)",
+                computer.id, idle_seconds, self.config.idle_timeout_seconds,
+            )
+            try:
+                await self._auto_checkpoint_and_destroy(computer)
+                reaped += 1
+            except Exception:
+                logger.exception("Failed to auto-checkpoint idle VM %s", computer.id)
+
+        return reaped
+
+    async def _auto_checkpoint_and_destroy(self, computer: Computer) -> None:
+        """Auto-checkpoint a VM and then destroy it."""
+        import uuid as _uuid
+
+        from mshkn.checkpoint.r2 import upload_checkpoint
+        from mshkn.checkpoint.snapshot import create_vm_snapshot
+        from mshkn.db import (
+            get_latest_checkpoint_for_computer,
+            insert_checkpoint,
+        )
+        from mshkn.models import Checkpoint
+        from mshkn.vm.ssh import ssh_exec
+
+        checkpoint_id = f"ckpt-{_uuid.uuid4().hex[:12]}"
+        snapshot_dir = self.config.checkpoint_local_dir / checkpoint_id
+
+        try:
+            # Flush guest filesystem
+            await ssh_exec(computer.vm_ip, "sync", self.config.ssh_key_path, timeout=10.0)
+
+            # Pause/snapshot/resume
+            await create_vm_snapshot(computer.socket_path, snapshot_dir)
+
+            # Freeze disk
+            ckpt_volume_id = await self.snapshot_disk_for_checkpoint(
+                computer, checkpoint_id,
+            )
+
+            # Determine parent
+            latest = await get_latest_checkpoint_for_computer(self.db, computer.id)
+            if latest is not None:
+                parent_id = latest.id
+            elif computer.source_checkpoint_id is not None:
+                parent_id = computer.source_checkpoint_id
+            else:
+                parent_id = None
+
+            now = datetime.now(UTC).isoformat()
+            r2_prefix = f"{computer.account_id}/{checkpoint_id}"
+            ckpt = Checkpoint(
+                id=checkpoint_id,
+                account_id=computer.account_id,
+                parent_id=parent_id,
+                computer_id=computer.id,
+                thin_volume_id=ckpt_volume_id,
+                manifest_hash=computer.manifest_hash,
+                manifest_json=computer.manifest_json,
+                r2_prefix=r2_prefix,
+                disk_delta_size_bytes=0,
+                memory_size_bytes=0,
+                label="auto-idle-timeout",
+                pinned=False,
+                created_at=now,
+            )
+            await insert_checkpoint(self.db, ckpt)
+
+            # Upload to R2 (best-effort)
+            try:
+                await upload_checkpoint(
+                    snapshot_dir,
+                    r2_prefix,
+                    self.config.r2_bucket,
+                )
+            except Exception:
+                logger.warning("R2 upload failed for auto-checkpoint %s", checkpoint_id)
+
+            logger.info("Auto-checkpoint %s created for idle VM %s", checkpoint_id, computer.id)
+        except Exception:
+            logger.exception("Auto-checkpoint failed for VM %s, destroying anyway", computer.id)
+
+        # Destroy the VM
+        await self.destroy(computer.id)
+        logger.info("Destroyed idle VM %s", computer.id)
+
     async def run_reaper_loop(self, interval: float = 60.0) -> None:
-        """Background loop that periodically reaps dead VMs."""
-        logger.info("Reaper started (interval=%.0fs)", interval)
+        """Background loop that periodically reaps dead and idle VMs."""
+        idle_timeout = self.config.idle_timeout_seconds
+        logger.info("Reaper started (interval=%.0fs, idle_timeout=%ds)", interval, idle_timeout)
         while True:
             await asyncio.sleep(interval)
             try:
-                reaped = await self.reap_dead_vms()
-                if reaped:
-                    logger.info("Reaper cycle: cleaned up %d dead VM(s)", reaped)
+                dead = await self.reap_dead_vms()
+                idle = await self.reap_idle_vms()
+                if dead or idle:
+                    logger.info("Reaper cycle: %d dead, %d idle VM(s) cleaned up", dead, idle)
             except Exception:
                 logger.exception("Reaper cycle failed")
 

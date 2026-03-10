@@ -16,7 +16,7 @@ from mshkn.api.metrics import (
     exec_duration_seconds,
 )
 from mshkn.api.ratelimit import rate_limiter
-from mshkn.db import count_active_computers_by_account, get_computer
+from mshkn.db import count_active_computers_by_account, get_computer, update_last_exec_at
 from mshkn.models import Manifest
 from mshkn.vm.ssh import ssh_download, ssh_exec, ssh_exec_bg, ssh_exec_stream, ssh_upload
 
@@ -109,6 +109,10 @@ async def exec_command(
     config: Config = request.app.state.config
     computer = await _get_running_computer(db, computer_id, account)
 
+    from datetime import UTC, datetime
+
+    await update_last_exec_at(db, computer_id, datetime.now(UTC).isoformat())
+
     async def event_stream() -> AsyncIterator[dict[str, str]]:
         t0 = time.monotonic()
         try:
@@ -132,6 +136,10 @@ async def exec_bg(
     db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
     computer = await _get_running_computer(db, computer_id, account)
+
+    from datetime import UTC, datetime
+
+    await update_last_exec_at(db, computer_id, datetime.now(UTC).isoformat())
     pid = await ssh_exec_bg(computer.vm_ip, body.command, config.ssh_key_path)
     return {"pid": pid}
 

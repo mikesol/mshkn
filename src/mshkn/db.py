@@ -191,6 +191,16 @@ async def update_computer_status(
     await db.commit()
 
 
+async def update_last_exec_at(
+    db: aiosqlite.Connection, computer_id: str, timestamp: str
+) -> None:
+    await db.execute(
+        "UPDATE computers SET last_exec_at = ? WHERE id = ?",
+        (timestamp, computer_id),
+    )
+    await db.commit()
+
+
 async def insert_checkpoint(db: aiosqlite.Connection, checkpoint: Checkpoint) -> None:
     await db.execute(
         "INSERT INTO checkpoints "

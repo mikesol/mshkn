@@ -36,6 +36,9 @@ class Config:
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
 
+    # Idle timeout
+    idle_timeout_seconds: int = 1800  # 30 minutes
+
     # Networking
     domain: str = "mshkn.dev"
     caddy_admin_url: str = "http://localhost:2019"
@@ -52,11 +55,12 @@ class Config:
             "R2_SECRET_ACCESS_KEY": "r2_secret_access_key",
             "R2_BUCKET": "r2_bucket",
             "MSHKN_DOMAIN": "domain",
+            "MSHKN_IDLE_TIMEOUT": "idle_timeout_seconds",
         }
         for env_var, attr in env_map.items():
             val = os.environ.get(env_var)
             if val is not None:
-                if attr == "port":
+                if attr in ("port", "idle_timeout_seconds"):
                     kwargs[attr] = int(val)
                 elif attr in ("db_path", "migrations_dir", "base_rootfs_path", "kernel_path"):
                     kwargs[attr] = Path(val)
