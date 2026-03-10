@@ -14,6 +14,7 @@ def test_slot_allocation() -> None:
     manager = VMManager.__new__(VMManager)
     manager.config = config
     manager._next_slot = 1
+    manager._free_slots = []
     manager._next_volume_id = 100
     manager._alloc_lock = asyncio.Lock()
 
@@ -21,3 +22,8 @@ def test_slot_allocation() -> None:
     assert manager._allocate_slot() == 2
     assert manager._allocate_volume_id() == 100
     assert manager._allocate_volume_id() == 101
+
+    # Test slot recycling
+    manager._release_slot(1)
+    assert manager._allocate_slot() == 1  # reuses freed slot
+    assert manager._allocate_slot() == 3  # next new slot

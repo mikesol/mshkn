@@ -64,6 +64,7 @@ class VMManager:
         self.config = config
         self.db = db
         self._next_slot = 1  # slot 0 reserved; will be loaded from DB on startup
+        self._free_slots: list[int] = []  # recycled slots from destroyed VMs
         self._next_volume_id = 100  # volume 0 is base; start high to avoid conflicts
         self._alloc_lock = asyncio.Lock()
 
@@ -73,8 +74,16 @@ class VMManager:
         max_vol = 99  # start at 100 by default
         if computers:
             max_vol = max(max_vol, max(c.thin_volume_id for c in computers))
-            slots = [int(c.tap_device.replace("tap", "")) for c in computers]
-            self._next_slot = max(slots) + 1
+            running = [c for c in computers if c.status == "running"]
+            if running:
+                active_slots = {int(c.tap_device.replace("tap", "")) for c in running}
+                self._next_slot = min(max(active_slots) + 1, 256)
+                # Recycle any gaps in the slot range
+                for s in range(1, self._next_slot):
+                    if s not in active_slots:
+                        self._free_slots.append(s)
+            else:
+                self._next_slot = 1
         # Also check checkpoint volumes (frozen disk snapshots)
         ckpt_max = await get_max_checkpoint_volume_id(self.db)
         if ckpt_max is not None:
@@ -132,9 +141,16 @@ class VMManager:
         return max_id
 
     def _allocate_slot(self) -> int:
+        if self._free_slots:
+            return self._free_slots.pop()
         slot = self._next_slot
+        if slot > 255:
+            raise RuntimeError("No free VM slots (all 255 in use)")
         self._next_slot += 1
         return slot
+
+    def _release_slot(self, slot: int) -> None:
+        self._free_slots.append(slot)
 
     def _allocate_volume_id(self) -> int:
         vol_id = self._next_volume_id
@@ -409,9 +425,11 @@ class VMManager:
             self.config.thin_pool_name, volume_name, computer.thin_volume_id,
         )
 
-        # Remove tap device
+        # Remove tap device and recycle slot
         slot = int(computer.tap_device.replace("tap", ""))
         await destroy_tap(slot)
+        async with self._alloc_lock:
+            self._release_slot(slot)
 
         # Update DB
         await update_computer_status(self.db, computer_id, "destroyed")
