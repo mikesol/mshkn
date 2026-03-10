@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from .conftest import (
     LatencyStats,
     checkpoint_computer,
@@ -19,7 +17,6 @@ from .conftest import (
     fork_checkpoint,
     managed_computer,
 )
-
 
 # ---------------------------------------------------------------------------
 # T1.1 — Create Latency (Target: <= 2s)
@@ -58,7 +55,7 @@ class TestT11CreateLatency:
         created_ids: list[str] = []
 
         try:
-            for i in range(5):
+            for _i in range(5):
                 start = time.perf_counter()
                 computer_id = await create_computer(
                     client, uses=["python-3.12(numpy)"]
@@ -80,7 +77,7 @@ class TestT11CreateLatency:
         created_ids: list[str] = []
 
         try:
-            for i in range(5):
+            for _i in range(5):
                 start = time.perf_counter()
                 computer_id = await create_computer(
                     client, uses=["python-3.12(numpy)"]
@@ -355,10 +352,9 @@ class TestT15MergeLatency:
                 )
 
                 start = time.perf_counter()
-                # Merge endpoint doesn't exist yet
                 resp = await long_client.post(
-                    f"/checkpoints/{ckpt_a}/merge",
-                    json={"other_checkpoint_id": ckpt_b},
+                    f"/checkpoints/{ckpt}/merge",
+                    json={"checkpoint_a": ckpt_a, "checkpoint_b": ckpt_b},
                 )
                 resp.raise_for_status()
                 elapsed_ms = (time.perf_counter() - start) * 1000
