@@ -8,4 +8,7 @@ __pycache__/
 dist/
 telegram/.env
 telegram/offset.txt
+.agents/
+.claude/
+telegram/outgoing.jsonl
 telegram/incoming.jsonl
