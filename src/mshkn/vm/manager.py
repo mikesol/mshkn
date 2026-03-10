@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
     from mshkn.config import Config
     from mshkn.proxy.caddy import CaddyClient
+    from mshkn.vm.ssh import SSHPool
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +79,16 @@ def parse_needs(needs: dict[str, object] | None) -> tuple[int, int]:
 
 class VMManager:
     def __init__(
-        self, config: Config, db: aiosqlite.Connection, caddy: CaddyClient | None = None,
+        self,
+        config: Config,
+        db: aiosqlite.Connection,
+        caddy: CaddyClient | None = None,
+        ssh_pool: SSHPool | None = None,
     ) -> None:
         self.config = config
         self.db = db
         self.caddy = caddy
+        self.ssh_pool = ssh_pool
         self._next_slot = 1  # slot 0 reserved; will be loaded from DB on startup
         self._free_slots: list[int] = []  # recycled slots from destroyed VMs
         self._next_volume_id = 100  # volume 0 is base; start high to avoid conflicts
@@ -466,6 +472,10 @@ class VMManager:
         async with self._alloc_lock:
             self._release_slot(slot)
 
+        # Clean up SSH pool connection
+        if self.ssh_pool is not None and computer.vm_ip:
+            await self.ssh_pool.remove(computer.vm_ip)
+
         # Update DB
         await update_computer_status(self.db, computer_id, "destroyed")
         logger.info("Destroyed computer %s", computer_id)
@@ -597,7 +607,10 @@ class VMManager:
 
         try:
             # Flush guest filesystem
-            await ssh_exec(computer.vm_ip, "sync", self.config.ssh_key_path, timeout=10.0)
+            await ssh_exec(
+                computer.vm_ip, "sync", self.config.ssh_key_path,
+                timeout=10.0, pool=self.ssh_pool,
+            )
 
             # Pause/snapshot/resume
             await create_vm_snapshot(computer.socket_path, snapshot_dir)

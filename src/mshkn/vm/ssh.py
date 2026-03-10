@@ -15,6 +15,63 @@ import asyncssh
 logger = logging.getLogger(__name__)
 
 
+class SSHPool:
+    """Per-VM SSH connection pool. Reuses connections to avoid handshake overhead."""
+
+    def __init__(self, ssh_key_path: Path) -> None:
+        self._key_path = str(ssh_key_path)
+        self._conns: dict[str, asyncssh.SSHClientConnection] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    async def get(self, vm_ip: str) -> asyncssh.SSHClientConnection:
+        """Get or create a persistent SSH connection to the given VM."""
+        if vm_ip not in self._locks:
+            self._locks[vm_ip] = asyncio.Lock()
+
+        async with self._locks[vm_ip]:
+            conn = self._conns.get(vm_ip)
+            if conn is not None:
+                # Check if still alive
+                try:
+                    result = await asyncio.wait_for(
+                        conn.run("true", check=False), timeout=3.0,
+                    )
+                    if result.exit_status == 0:
+                        return conn
+                except Exception:
+                    pass
+                # Stale — remove and reconnect
+                with contextlib.suppress(Exception):
+                    conn.close()
+                del self._conns[vm_ip]
+
+            conn = await asyncssh.connect(
+                vm_ip,
+                username="root",
+                client_keys=[self._key_path],
+                known_hosts=None,
+                keepalive_interval=15,
+            )
+            self._conns[vm_ip] = conn
+            return conn
+
+    async def remove(self, vm_ip: str) -> None:
+        """Close and remove the connection for a destroyed VM."""
+        conn = self._conns.pop(vm_ip, None)
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.close()
+        self._locks.pop(vm_ip, None)
+
+    async def close_all(self) -> None:
+        """Close all pooled connections."""
+        for conn in self._conns.values():
+            with contextlib.suppress(Exception):
+                conn.close()
+        self._conns.clear()
+        self._locks.clear()
+
+
 @dataclass
 class ExecResult:
     exit_code: int
@@ -22,28 +79,45 @@ class ExecResult:
     stderr: str
 
 
+async def _get_conn(
+    vm_ip: str,
+    ssh_key_path: Path,
+    pool: SSHPool | None = None,
+) -> tuple[asyncssh.SSHClientConnection, bool]:
+    """Get an SSH connection, either from pool or new. Returns (conn, owned)."""
+    if pool is not None:
+        return await pool.get(vm_ip), False
+    conn = await asyncssh.connect(
+        vm_ip,
+        username="root",
+        client_keys=[str(ssh_key_path)],
+        known_hosts=None,
+    )
+    return conn, True
+
+
 async def ssh_exec(
     vm_ip: str,
     command: str,
     ssh_key_path: Path,
     timeout: float = 300.0,
+    pool: SSHPool | None = None,
 ) -> ExecResult:
     """Execute a command via SSH and return the full result."""
-    async with asyncssh.connect(
-        vm_ip,
-        username="root",
-        client_keys=[str(ssh_key_path)],
-        known_hosts=None,
-    ) as conn:
+    conn, owned = await _get_conn(vm_ip, ssh_key_path, pool)
+    try:
         result = await asyncio.wait_for(
             conn.run(command, check=False),
             timeout=timeout,
         )
-    return ExecResult(
-        exit_code=result.exit_status or 0,
-        stdout=str(result.stdout) if result.stdout else "",
-        stderr=str(result.stderr) if result.stderr else "",
-    )
+        return ExecResult(
+            exit_code=result.exit_status or 0,
+            stdout=str(result.stdout) if result.stdout else "",
+            stderr=str(result.stderr) if result.stderr else "",
+        )
+    finally:
+        if owned:
+            conn.close()
 
 
 async def ssh_exec_stream(
@@ -111,6 +185,7 @@ async def ssh_exec_bg(
     vm_ip: str,
     command: str,
     ssh_key_path: Path,
+    pool: SSHPool | None = None,
 ) -> int:
     """Run a command in the background via SSH, return PID."""
     # Use nohup bash -c so compound commands (for loops etc.) work.
@@ -121,6 +196,7 @@ async def ssh_exec_bg(
         f"nohup bash -c '{escaped}' > /tmp/bg-tmp-$$.log 2>&1 & "
         f"BG=$!; ln -sf /tmp/bg-tmp-$$.log /tmp/bg-$BG.log; echo $BG",
         ssh_key_path,
+        pool=pool,
     )
     pid_str = result.stdout.strip()
     if not pid_str:
@@ -143,6 +219,7 @@ async def ssh_gather_metrics(
     vm_ip: str,
     ssh_key_path: Path,
     timeout: float = 10.0,
+    pool: SSHPool | None = None,
 ) -> VmMetrics:
     """Gather CPU, RAM, disk, and process metrics from a VM via SSH."""
     # Single compound command to minimize SSH round-trips
@@ -152,7 +229,7 @@ async def ssh_gather_metrics(
         "df -BM / | awk 'NR==2{gsub(/M/,\"\",$2); gsub(/M/,\"\",$3); print $2,$3}'; "
         "ps -eo pid,comm --no-headers | head -50"
     )
-    result = await ssh_exec(vm_ip, cmd, ssh_key_path, timeout=timeout)
+    result = await ssh_exec(vm_ip, cmd, ssh_key_path, timeout=timeout, pool=pool)
     lines = result.stdout.strip().splitlines()
 
     # Parse CPU idle → usage
@@ -209,34 +286,34 @@ async def ssh_upload(
     remote_path: str,
     data: bytes,
     ssh_key_path: Path,
+    pool: SSHPool | None = None,
 ) -> None:
     """Upload data to a file on the VM via SFTP (supports binary data)."""
-    async with asyncssh.connect(
-        vm_ip,
-        username="root",
-        client_keys=[str(ssh_key_path)],
-        known_hosts=None,
-    ) as conn:
-        parent = str(Path(remote_path).parent)
-        await conn.run(f"mkdir -p {parent}", check=True)
+    conn, owned = await _get_conn(vm_ip, ssh_key_path, pool)
+    try:
+        await conn.run(f"mkdir -p {Path(remote_path).parent!s}", check=True)
         async with conn.start_sftp_client() as sftp, sftp.open(remote_path, "wb") as f:
             await f.write(data)
+    finally:
+        if owned:
+            conn.close()
 
 
 async def ssh_download(
     vm_ip: str,
     remote_path: str,
     ssh_key_path: Path,
+    pool: SSHPool | None = None,
 ) -> bytes:
     """Download a file from the VM via SFTP (supports binary data)."""
-    async with asyncssh.connect(
-        vm_ip,
-        username="root",
-        client_keys=[str(ssh_key_path)],
-        known_hosts=None,
-    ) as conn, conn.start_sftp_client() as sftp:
-        try:
-            async with sftp.open(remote_path, "rb") as f:
-                return await f.read()
-        except asyncssh.SFTPNoSuchFile:
-            raise FileNotFoundError(f"File not found: {remote_path}") from None
+    conn, owned = await _get_conn(vm_ip, ssh_key_path, pool)
+    try:
+        async with conn.start_sftp_client() as sftp:
+            try:
+                async with sftp.open(remote_path, "rb") as f:
+                    return await f.read()
+            except asyncssh.SFTPNoSuchFile:
+                raise FileNotFoundError(f"File not found: {remote_path}") from None
+    finally:
+        if owned:
+            conn.close()

@@ -28,6 +28,7 @@ from mshkn.db import (
 )
 from mshkn.models import Checkpoint, Manifest
 from mshkn.vm.ssh import (
+    SSHPool,
     ssh_download,
     ssh_exec,
     ssh_exec_bg,
@@ -48,6 +49,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/computers", tags=["computers"])
+
+
+def _get_pool(request: Request) -> SSHPool | None:
+    return getattr(request.app.state, "ssh_pool", None)
 
 # Hold references to background tasks to prevent GC
 _background_tasks: set[asyncio.Task[None]] = set()
@@ -158,7 +163,9 @@ async def exec_bg(
     from datetime import UTC, datetime
 
     await update_last_exec_at(db, computer_id, datetime.now(UTC).isoformat())
-    pid = await ssh_exec_bg(computer.vm_ip, body.command, config.ssh_key_path)
+    pid = await ssh_exec_bg(
+        computer.vm_ip, body.command, config.ssh_key_path, pool=_get_pool(request),
+    )
     return {"pid": pid}
 
 
@@ -173,12 +180,15 @@ async def exec_logs(
     config: Config = request.app.state.config
     computer = await _get_running_computer(db, computer_id, account)
 
+    pool = _get_pool(request)
+
     async def event_stream() -> AsyncIterator[dict[str, str]]:
         result = await ssh_exec(
             computer.vm_ip,
             f"cat /tmp/bg-{pid}.log 2>/dev/null || echo ''",
             config.ssh_key_path,
             timeout=10.0,
+            pool=pool,
         )
         for line in result.stdout.splitlines():
             yield {"event": "stdout", "data": line}
@@ -197,7 +207,9 @@ async def exec_kill(
     db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
     computer = await _get_running_computer(db, computer_id, account)
-    result = await ssh_exec(computer.vm_ip, f"kill {pid}", config.ssh_key_path)
+    result = await ssh_exec(
+        computer.vm_ip, f"kill {pid}", config.ssh_key_path, pool=_get_pool(request),
+    )
     if result.exit_code != 0:
         return {"status": "not_found", "stderr": result.stderr}
     return {"status": "killed"}
@@ -214,7 +226,7 @@ async def upload_file(
     config: Config = request.app.state.config
     computer = await _get_running_computer(db, computer_id, account)
     data = await request.body()
-    await ssh_upload(computer.vm_ip, path, data, config.ssh_key_path)
+    await ssh_upload(computer.vm_ip, path, data, config.ssh_key_path, pool=_get_pool(request))
     return {"status": "uploaded", "path": path}
 
 
@@ -228,7 +240,9 @@ async def download_file(
     db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
     computer = await _get_running_computer(db, computer_id, account)
-    data = await ssh_download(computer.vm_ip, path, config.ssh_key_path)
+    data = await ssh_download(
+        computer.vm_ip, path, config.ssh_key_path, pool=_get_pool(request),
+    )
     return Response(content=data, media_type="application/octet-stream")
 
 
@@ -257,6 +271,7 @@ async def computer_status(
         try:
             metrics = await ssh_gather_metrics(
                 computer.vm_ip, config.ssh_key_path, timeout=10.0,
+                pool=_get_pool(request),
             )
             result["cpu_pct"] = metrics.cpu_pct
             result["ram_usage_mb"] = metrics.ram_usage_mb
@@ -300,7 +315,10 @@ async def checkpoint_computer(
     # Flush guest filesystem buffers to the block device so the disk
     # snapshot captures all written data (guest page cache is not visible
     # to dm-thin snapshots).
-    await ssh_exec(computer.vm_ip, "sync", config.ssh_key_path, timeout=10.0)
+    await ssh_exec(
+        computer.vm_ip, "sync", config.ssh_key_path, timeout=10.0,
+        pool=_get_pool(request),
+    )
 
     # Pause/snapshot/resume (sub-1s for the agent)
     await create_vm_snapshot(computer.socket_path, snapshot_dir)

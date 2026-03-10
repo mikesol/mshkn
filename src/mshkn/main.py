@@ -21,6 +21,7 @@ from mshkn.db import run_migrations
 from mshkn.logging import JSONFormatter
 from mshkn.proxy.caddy import CaddyClient
 from mshkn.vm.manager import VMManager
+from mshkn.vm.ssh import SSHPool
 
 
 def _configure_logging() -> None:
@@ -54,7 +55,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db = db
     app.state.config = config
     caddy = CaddyClient(admin_url=config.caddy_admin_url, domain=config.domain)
-    vm_manager = VMManager(config, db, caddy=caddy)
+    ssh_pool = SSHPool(config.ssh_key_path)
+    app.state.ssh_pool = ssh_pool
+    vm_manager = VMManager(config, db, caddy=caddy, ssh_pool=ssh_pool)
     await vm_manager.initialize()
     # Reap any VMs that died while orchestrator was down
     reaped = await vm_manager.reap_dead_vms()
@@ -65,6 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     reaper_task = asyncio.create_task(vm_manager.run_reaper_loop())
     yield
     reaper_task.cancel()
+    await ssh_pool.close_all()
     await caddy.close()
     await db.close()
 
