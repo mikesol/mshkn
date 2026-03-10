@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-
-from dataclasses import asdict
 
 import aiosqlite
 from fastapi import FastAPI, Request
@@ -73,6 +73,15 @@ app = FastAPI(title="mshkn", version="0.1.0", lifespan=lifespan)
 app.include_router(computers_router)
 app.include_router(checkpoints_router)
 app.include_router(metrics_router)
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """Add X-Request-Id header to all responses."""
+    request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    return response
 
 
 @app.get("/health")

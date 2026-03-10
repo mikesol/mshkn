@@ -67,7 +67,7 @@ class TestT62HostReboot:
 
     async def test_checkpoint_survives_host_reboot(self, client):
         """Would require rebooting the Hetzner server mid-test."""
-        pytest.fail("Not implementable as an automated E2E test")
+        pytest.skip("Not implementable as an automated E2E test")
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ class TestT63S3Unavailable:
 
     async def test_checkpoint_when_s3_down(self, client):
         """Would require injecting a network partition to R2."""
-        pytest.fail("Not implementable without network fault injection")
+        pytest.skip("Not implementable without network fault injection")
 
 
 # ---------------------------------------------------------------------------

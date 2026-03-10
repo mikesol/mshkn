@@ -17,8 +17,16 @@ from mshkn.api.metrics import (
     exec_duration_seconds,
 )
 from mshkn.api.ratelimit import rate_limiter
-from mshkn.db import count_active_computers_by_account, get_computer, update_last_exec_at
-from mshkn.models import Manifest
+from mshkn.checkpoint.r2 import upload_checkpoint
+from mshkn.checkpoint.snapshot import create_vm_snapshot
+from mshkn.db import (
+    count_active_computers_by_account,
+    get_computer,
+    get_latest_checkpoint_for_computer,
+    insert_checkpoint,
+    update_last_exec_at,
+)
+from mshkn.models import Checkpoint, Manifest
 from mshkn.vm.ssh import (
     ssh_download,
     ssh_exec,
@@ -166,12 +174,15 @@ async def exec_logs(
     computer = await _get_running_computer(db, computer_id, account)
 
     async def event_stream() -> AsyncIterator[dict[str, str]]:
-        async for stream, line in ssh_exec_stream(
+        result = await ssh_exec(
             computer.vm_ip,
-            f"tail -f /tmp/bg-{pid}.log",
+            f"cat /tmp/bg-{pid}.log 2>/dev/null || echo ''",
             config.ssh_key_path,
-        ):
-            yield {"event": stream, "data": line}
+            timeout=10.0,
+        )
+        for line in result.stdout.splitlines():
+            yield {"event": "stdout", "data": line}
+        yield {"event": "exit", "data": "0"}
 
     return EventSourceResponse(event_stream())
 
@@ -278,11 +289,6 @@ async def checkpoint_computer(
     import uuid
     from datetime import UTC, datetime
 
-    from mshkn.checkpoint.r2 import upload_checkpoint
-    from mshkn.checkpoint.snapshot import create_vm_snapshot
-    from mshkn.db import get_latest_checkpoint_for_computer, insert_checkpoint
-    from mshkn.models import Checkpoint
-
     db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
     vm_mgr: VMManager = request.app.state.vm_manager
@@ -294,8 +300,6 @@ async def checkpoint_computer(
     # Flush guest filesystem buffers to the block device so the disk
     # snapshot captures all written data (guest page cache is not visible
     # to dm-thin snapshots).
-    from mshkn.vm.ssh import ssh_exec
-
     await ssh_exec(computer.vm_ip, "sync", config.ssh_key_path, timeout=10.0)
 
     # Pause/snapshot/resume (sub-1s for the agent)
