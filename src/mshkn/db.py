@@ -255,15 +255,20 @@ async def get_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> Checkp
 
 
 async def list_checkpoints_by_account(
-    db: aiosqlite.Connection, account_id: str
+    db: aiosqlite.Connection, account_id: str, label: str | None = None
 ) -> list[Checkpoint]:
-    cursor = await db.execute(
+    query = (
         "SELECT id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, "
         "manifest_json, r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, "
         "pinned, created_at "
-        "FROM checkpoints WHERE account_id = ? ORDER BY created_at DESC",
-        (account_id,),
+        "FROM checkpoints WHERE account_id = ?"
     )
+    params: list[str] = [account_id]
+    if label is not None:
+        query += " AND label = ?"
+        params.append(label)
+    query += " ORDER BY created_at DESC"
+    cursor = await db.execute(query, params)
     rows = await cursor.fetchall()
     return [
         Checkpoint(

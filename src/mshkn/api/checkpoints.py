@@ -262,10 +262,11 @@ async def merge_checkpoints(
 @router.get("")
 async def list_checkpoints(
     request: Request,
+    label: str | None = None,
     account: Account = _require_account,
 ) -> list[dict[str, object]]:
     db: aiosqlite.Connection = request.app.state.db
-    checkpoints = await list_checkpoints_by_account(db, account.id)
+    checkpoints = await list_checkpoints_by_account(db, account.id, label=label)
     return [
         {
             "id": c.id,
