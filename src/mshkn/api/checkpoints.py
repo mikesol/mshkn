@@ -147,6 +147,9 @@ async def delete_checkpoint(
     request: Request,
     account: Account = _require_account,
 ) -> dict[str, str]:
+    import shutil
+
+    from mshkn.checkpoint.r2 import delete_checkpoint_r2
     from mshkn.vm.storage import remove_volume
 
     db: aiosqlite.Connection = request.app.state.db
@@ -159,6 +162,14 @@ async def delete_checkpoint(
     if ckpt.thin_volume_id is not None:
         volume_name = f"mshkn-ckpt-{checkpoint_id}"
         await remove_volume(config.thin_pool_name, volume_name, ckpt.thin_volume_id)
+
+    # Clean up local snapshot directory
+    local_dir = config.checkpoint_local_dir / checkpoint_id
+    if local_dir.exists():
+        shutil.rmtree(local_dir)
+
+    # Clean up R2 uploads
+    await delete_checkpoint_r2(ckpt.r2_prefix, config.r2_bucket)
 
     await db_delete_checkpoint(db, checkpoint_id)
     return {"status": "deleted"}

@@ -21,6 +21,15 @@ async def upload_checkpoint(
     logger.info("Uploaded checkpoint to r2:%s/%s", bucket, r2_prefix)
 
 
+async def delete_checkpoint_r2(
+    r2_prefix: str,
+    bucket: str,
+) -> None:
+    """Delete checkpoint files from R2."""
+    await run(f"rclone purge r2:{bucket}/{r2_prefix}/", check=False)
+    logger.info("Deleted checkpoint from r2:%s/%s", bucket, r2_prefix)
+
+
 async def download_checkpoint(
     r2_prefix: str,
     bucket: str,
