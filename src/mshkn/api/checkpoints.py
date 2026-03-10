@@ -108,6 +108,13 @@ async def merge_checkpoints(
     if ckpt_parent is None or ckpt_parent.account_id != account.id:
         raise HTTPException(status_code=404, detail="Parent checkpoint not found")
 
+    # Reject self-merge
+    if body.checkpoint_a == body.checkpoint_b:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot merge a checkpoint with itself",
+        )
+
     # Validate fork checkpoints
     ckpt_a = await get_checkpoint(db, body.checkpoint_a)
     ckpt_b = await get_checkpoint(db, body.checkpoint_b)

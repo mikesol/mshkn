@@ -113,11 +113,13 @@ async def ssh_exec_bg(
     ssh_key_path: Path,
 ) -> int:
     """Run a command in the background via SSH, return PID."""
-    # Wrap in bash -c to ensure $$ and $! expand correctly
+    # Use nohup bash -c so compound commands (for loops etc.) work.
+    # Log file is named /tmp/bg-{pid}.log where pid matches the returned PID.
     escaped = command.replace("'", "'\\''")
     result = await ssh_exec(
         vm_ip,
-        f"bash -c 'nohup {escaped} > /tmp/bg-$$.log 2>&1 & echo $!'",
+        f"nohup bash -c '{escaped}' > /tmp/bg-tmp-$$.log 2>&1 & "
+        f"BG=$!; ln -sf /tmp/bg-tmp-$$.log /tmp/bg-$BG.log; echo $BG",
         ssh_key_path,
     )
     pid_str = result.stdout.strip()

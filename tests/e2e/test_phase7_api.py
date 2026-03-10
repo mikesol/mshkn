@@ -12,10 +12,8 @@ import os
 import time
 
 import httpx
-import pytest
 
 from .conftest import (
-    ExecResult,
     checkpoint_computer,
     create_computer,
     delete_checkpoint,
@@ -24,7 +22,6 @@ from .conftest import (
     fork_checkpoint,
     managed_computer,
 )
-
 
 # ---------------------------------------------------------------------------
 # T7.1 — All Endpoints Exercised
@@ -239,13 +236,66 @@ class TestT71AllEndpoints:
             }
             assert cp_id not in ids_remaining
 
-    async def test_checkpoint_merge(self, client):
-        """POST /checkpoints/{id}/merge — not yet implemented."""
-        pytest.fail("Merge endpoint does not exist yet")
+    async def test_checkpoint_merge(self, long_client):
+        """POST /checkpoints/{parent_id}/merge merges two forks."""
+        async with managed_computer(long_client) as cid:
+            await exec_command(long_client, cid, "echo parent > /tmp/base.txt")
+            parent_ckpt = await checkpoint_computer(long_client, cid)
 
-    async def test_checkpoint_resolve_conflicts(self, client):
-        """POST /checkpoints/{id}/resolve-conflicts — not yet implemented."""
-        pytest.fail("Conflict resolution endpoint does not exist yet")
+        fork_a = await fork_checkpoint(long_client, parent_ckpt)
+        await exec_command(long_client, fork_a, "echo fork_a > /tmp/a.txt")
+        ckpt_a = await checkpoint_computer(long_client, fork_a)
+        await destroy_computer(long_client, fork_a)
+
+        fork_b = await fork_checkpoint(long_client, parent_ckpt)
+        await exec_command(long_client, fork_b, "echo fork_b > /tmp/b.txt")
+        ckpt_b = await checkpoint_computer(long_client, fork_b)
+        await destroy_computer(long_client, fork_b)
+
+        resp = await long_client.post(
+            f"/checkpoints/{parent_ckpt}/merge",
+            json={"checkpoint_a": ckpt_a, "checkpoint_b": ckpt_b},
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        assert "checkpoint_id" in body
+        assert "auto_merged" in body
+
+        # Clean up
+        await delete_checkpoint(long_client, ckpt_a)
+        await delete_checkpoint(long_client, ckpt_b)
+        await delete_checkpoint(long_client, body["checkpoint_id"])
+        await delete_checkpoint(long_client, parent_ckpt)
+
+    async def test_checkpoint_resolve_conflicts(self, long_client):
+        """Conflicts are returned in merge response; no separate endpoint needed."""
+        async with managed_computer(long_client) as cid:
+            await exec_command(long_client, cid, "echo parent > /tmp/conflict.txt")
+            parent_ckpt = await checkpoint_computer(long_client, cid)
+
+        fork_a = await fork_checkpoint(long_client, parent_ckpt)
+        await exec_command(long_client, fork_a, "echo version_a > /tmp/conflict.txt")
+        ckpt_a = await checkpoint_computer(long_client, fork_a)
+        await destroy_computer(long_client, fork_a)
+
+        fork_b = await fork_checkpoint(long_client, parent_ckpt)
+        await exec_command(long_client, fork_b, "echo version_b > /tmp/conflict.txt")
+        ckpt_b = await checkpoint_computer(long_client, fork_b)
+        await destroy_computer(long_client, fork_b)
+
+        resp = await long_client.post(
+            f"/checkpoints/{parent_ckpt}/merge",
+            json={"checkpoint_a": ckpt_a, "checkpoint_b": ckpt_b},
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        assert len(body["conflicts"]) > 0, "Expected at least one conflict"
+
+        # Clean up
+        await delete_checkpoint(long_client, ckpt_a)
+        await delete_checkpoint(long_client, ckpt_b)
+        await delete_checkpoint(long_client, body["checkpoint_id"])
+        await delete_checkpoint(long_client, parent_ckpt)
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +460,7 @@ class TestT73BackgroundProcessLifecycle:
                 pass
 
             # We should have gotten at least some output lines
-            assert any("output_" in l for l in collected), (
+            assert any("output_" in line for line in collected), (
                 f"Expected 'output_' in log lines, got: {collected}"
             )
 
@@ -529,8 +579,27 @@ class TestT77ForkNonexistent:
 
 
 class TestT78MergeSelf:
-    """Merging a checkpoint with itself — not yet implemented."""
+    """Merging a checkpoint with itself should be rejected."""
 
-    async def test_merge_checkpoint_with_itself(self, client):
-        """Would test that merging a checkpoint with itself is a no-op or error."""
-        pytest.fail("Merge endpoint does not exist yet")
+    async def test_merge_checkpoint_with_itself(self, long_client):
+        """Merging a checkpoint with itself should return 400."""
+        async with managed_computer(long_client) as cid:
+            await exec_command(long_client, cid, "echo data > /tmp/test.txt")
+            parent_ckpt = await checkpoint_computer(long_client, cid)
+
+        fork_a = await fork_checkpoint(long_client, parent_ckpt)
+        ckpt_a = await checkpoint_computer(long_client, fork_a)
+        await destroy_computer(long_client, fork_a)
+
+        resp = await long_client.post(
+            f"/checkpoints/{parent_ckpt}/merge",
+            json={"checkpoint_a": ckpt_a, "checkpoint_b": ckpt_a},
+        )
+        # Should be rejected — same checkpoint can't be both A and B
+        assert resp.status_code == 400, (
+            f"Expected 400 for self-merge, got {resp.status_code}: {resp.text[:200]}"
+        )
+
+        # Clean up
+        await delete_checkpoint(long_client, ckpt_a)
+        await delete_checkpoint(long_client, parent_ckpt)
