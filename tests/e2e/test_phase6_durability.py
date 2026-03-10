@@ -104,10 +104,18 @@ class TestT64CheckpointRetention:
     async def test_excess_checkpoints_pruned(self, client):
         """Create more checkpoints than the retention limit; oldest should be pruned.
 
-        Creates 8 checkpoints (retention=5), waits for the reaper to prune,
-        then verifies at most 5 of ours remain.
+        Cleans up existing checkpoints first, then creates 8 (retention=5),
+        waits for the reaper to prune, and verifies at most 5 remain.
         """
         import time
+
+        # Clean up pre-existing checkpoints so we start from a known state
+        existing = await self._list_checkpoint_ids(client)
+        for cid in existing:
+            try:
+                await client.delete(f"/checkpoints/{cid}")
+            except Exception:
+                pass
 
         computer_id = await create_computer(client, uses=[])
         checkpoint_ids: list[str] = []
@@ -123,19 +131,13 @@ class TestT64CheckpointRetention:
                 checkpoint_ids.append(resp.json()["checkpoint_id"])
                 await asyncio.sleep(0.5)
 
-            our_ids = set(checkpoint_ids)
-
             # Wait for reaper to prune (up to 150s)
             deadline = time.time() + 150
             while time.time() < deadline:
                 await asyncio.sleep(10)
                 all_ids = await self._list_checkpoint_ids(client)
-                alive = len(our_ids & all_ids)
-                total = len(all_ids)
-                if total <= 5:
-                    # Retention enforced: at most 5 total checkpoints
-                    assert alive <= 5
-                    return
+                if len(all_ids) <= 5:
+                    return  # Success
 
             all_ids = await self._list_checkpoint_ids(client)
             assert len(all_ids) <= 5, (
