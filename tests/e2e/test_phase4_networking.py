@@ -41,7 +41,7 @@ class TestT41AutoHttps:
 
     async def test_http_server_reachable_via_public_url(self, client):
         """Start an HTTP server inside the VM and verify the public URL serves it."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client, uses=["python"]) as computer_id:
             # Start a simple HTTP server on port 8080 in the background
             await exec_command(
                 client,
@@ -77,7 +77,7 @@ class TestT42MultiplePorts:
 
     async def test_three_ports_reachable(self, client):
         """Start servers on ports 3000, 5000, and 8080; all should respond."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client, uses=["python"]) as computer_id:
             ports = [3000, 5000, 8080]
             for port in ports:
                 await exec_command(
@@ -119,7 +119,7 @@ class TestT43WebSocket:
 
     async def test_websocket_echo(self, client):
         """Start a WS echo server in the VM and verify a round trip."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client, uses=["python"]) as computer_id:
             # Install websockets and start an echo server
             await exec_command(
                 client,
