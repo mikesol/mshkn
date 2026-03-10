@@ -80,22 +80,30 @@ class TestT42MultiplePorts:
         async with managed_computer(client, uses=["python"]) as computer_id:
             ports = [3000, 5000, 8080]
             for port in ports:
+                # Write server script to file then execute — inline python -c
+                # with escaped newlines breaks over SSH
+                script = (
+                    f"import http.server, socketserver\\n"
+                    f"class H(http.server.BaseHTTPRequestHandler):\\n"
+                    f"    def do_GET(self):\\n"
+                    f"        self.send_response(200)\\n"
+                    f"        self.end_headers()\\n"
+                    f"        self.wfile.write(b'port-{port}')\\n"
+                    f"    def log_message(self, *a): pass\\n"
+                    f"http.server.HTTPServer(('', {port}), H).serve_forever()"
+                )
                 await exec_command(
-                    client,
-                    computer_id,
-                    f"nohup python3 -c \""
-                    f"from http.server import HTTPServer, BaseHTTPRequestHandler; "
-                    f"class H(BaseHTTPRequestHandler):\\n"
-                    f"  def do_GET(self):\\n"
-                    f"    self.send_response(200)\\n"
-                    f"    self.end_headers()\\n"
-                    f"    self.wfile.write(b'port-{port}')\\n"
-                    f"HTTPServer(('', {port}), H).serve_forever()"
-                    f"\" &>/dev/null &",
-                    timeout=10.0,
+                    client, computer_id,
+                    f"printf '{script}' > /tmp/srv{port}.py",
+                    timeout=5.0,
+                )
+                await exec_command(
+                    client, computer_id,
+                    f"nohup python3 /tmp/srv{port}.py &>/dev/null &",
+                    timeout=5.0,
                 )
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
             status_resp = await client.get(f"/computers/{computer_id}/status")
             status_resp.raise_for_status()
@@ -117,26 +125,31 @@ class TestT42MultiplePorts:
 class TestT43WebSocket:
     """WebSocket connections through the public URL should work."""
 
-    async def test_websocket_echo(self, client):
+    async def test_websocket_echo(self, client, long_client):
         """Start a WS echo server in the VM and verify a round trip."""
-        async with managed_computer(client, uses=["python"]) as computer_id:
-            # Install websockets and start an echo server
-            await exec_command(
-                client,
-                computer_id,
-                "pip3 install websockets 2>/dev/null || true",
-                timeout=30.0,
+        async with managed_computer(
+            long_client, uses=["python-3.12(websockets)"],
+        ) as computer_id:
+            # Write websocket echo server script
+            ws_script = (
+                "import asyncio, websockets\\n"
+                "async def echo(ws):\\n"
+                "    async for msg in ws:\\n"
+                "        await ws.send(msg)\\n"
+                "async def main():\\n"
+                "    async with websockets.serve(echo, '0.0.0.0', 9000):\\n"
+                "        await asyncio.Future()\\n"
+                "asyncio.run(main())"
             )
             await exec_command(
-                client,
-                computer_id,
-                "nohup python3 -c \""
-                "import asyncio, websockets; "
-                "async def echo(ws): "
-                "  async for msg in ws: await ws.send(msg); "
-                "asyncio.run(websockets.serve(echo, '0.0.0.0', 9000))"
-                "\" &>/dev/null &",
-                timeout=10.0,
+                client, computer_id,
+                f"printf '{ws_script}' > /tmp/ws_echo.py",
+                timeout=5.0,
+            )
+            await exec_command(
+                client, computer_id,
+                "nohup python3 /tmp/ws_echo.py &>/dev/null &",
+                timeout=5.0,
             )
             await asyncio.sleep(2)
 
