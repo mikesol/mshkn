@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -7,12 +10,14 @@ from pydantic import BaseModel
 
 from mshkn.api.auth import require_account
 from mshkn.db import delete_checkpoint as db_delete_checkpoint
-from mshkn.db import get_checkpoint, list_checkpoints_by_account
+from mshkn.db import get_checkpoint, insert_checkpoint, list_checkpoints_by_account
 
 if TYPE_CHECKING:
     import aiosqlite
 
     from mshkn.models import Account
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/checkpoints", tags=["checkpoints"])
 
@@ -79,14 +84,31 @@ class MergeRequest(BaseModel):
     checkpoint_b: str
 
 
-@router.post("/merge")
+@router.post("/{parent_id}/merge")
 async def merge_checkpoints(
+    parent_id: str,
     body: MergeRequest,
     request: Request,
     account: Account = _require_account,
 ) -> dict[str, object]:
-    db: aiosqlite.Connection = request.app.state.db
+    import shutil
+    import tempfile
+    from pathlib import Path
 
+    from mshkn.checkpoint.merge import three_way_merge
+    from mshkn.models import Checkpoint, Manifest
+    from mshkn.vm.storage import create_snapshot, mount_volume, umount_volume
+
+    db: aiosqlite.Connection = request.app.state.db
+    config = request.app.state.config
+    vm_mgr = request.app.state.vm_manager
+
+    # Validate parent checkpoint
+    ckpt_parent = await get_checkpoint(db, parent_id)
+    if ckpt_parent is None or ckpt_parent.account_id != account.id:
+        raise HTTPException(status_code=404, detail="Parent checkpoint not found")
+
+    # Validate fork checkpoints
     ckpt_a = await get_checkpoint(db, body.checkpoint_a)
     ckpt_b = await get_checkpoint(db, body.checkpoint_b)
 
@@ -95,24 +117,126 @@ async def merge_checkpoints(
     if ckpt_b is None or ckpt_b.account_id != account.id:
         raise HTTPException(status_code=404, detail="Checkpoint B not found")
 
-    if ckpt_a.parent_id != ckpt_b.parent_id:
+    # Verify both forks descend from the given parent
+    if ckpt_a.parent_id != parent_id or ckpt_b.parent_id != parent_id:
         raise HTTPException(
             status_code=400,
-            detail="Checkpoints must share a common parent to merge",
+            detail="Both checkpoints must be children of the specified parent",
         )
 
-    # TODO: Full merge path:
-    # 1. Mount disk volumes for parent, fork_a, fork_b
-    # 2. Run three_way_merge on mounted filesystems
-    # 3. Create new checkpoint from merged result
-    # 4. Upload to R2
-    # For now, return a placeholder showing the intended structure
+    # All three must have thin volumes
+    for label, ckpt in [("Parent", ckpt_parent), ("A", ckpt_a), ("B", ckpt_b)]:
+        if ckpt.thin_volume_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label} checkpoint has no disk snapshot",
+            )
+
+    # Create mount points
+    merge_dir = tempfile.mkdtemp(prefix="mshkn-merge-")
+    mount_parent = f"{merge_dir}/parent"
+    mount_a = f"{merge_dir}/fork_a"
+    mount_b = f"{merge_dir}/fork_b"
+    mount_output = f"{merge_dir}/output"
+
+    # Volume names for the three existing checkpoints
+    vol_parent = f"mshkn-ckpt-{parent_id}"
+    vol_a = f"mshkn-ckpt-{body.checkpoint_a}"
+    vol_b = f"mshkn-ckpt-{body.checkpoint_b}"
+
+    # Create a new volume for the merged output (snapshot of parent)
+    checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
+    async with vm_mgr._alloc_lock:
+        merged_volume_id = vm_mgr._allocate_volume_id()
+    merged_volume_name = f"mshkn-ckpt-{checkpoint_id}"
+
+    assert ckpt_parent.thin_volume_id is not None  # validated above
+    await create_snapshot(
+        pool_name=config.thin_pool_name,
+        source_volume_id=ckpt_parent.thin_volume_id,
+        new_volume_id=merged_volume_id,
+        new_volume_name=merged_volume_name,
+        sectors=config.thin_volume_sectors,
+    )
+
+    mounted: list[str] = []
+    try:
+        # Mount source volumes read-only
+        for vol, mnt in [(vol_parent, mount_parent), (vol_a, mount_a), (vol_b, mount_b)]:
+            await mount_volume(vol, mnt, readonly=True)
+            mounted.append(mnt)
+
+        # Mount merged output volume read-write and clear it
+        # (it starts as a snapshot of parent, but merge populates from scratch)
+        await mount_volume(merged_volume_name, mount_output)
+        mounted.append(mount_output)
+        for item in Path(mount_output).iterdir():
+            if item.name == "lost+found":
+                continue
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+
+        # Run three-way merge
+        result = three_way_merge(
+            parent=Path(mount_parent),
+            fork_a=Path(mount_a),
+            fork_b=Path(mount_b),
+            output=Path(mount_output),
+        )
+
+    finally:
+        # Always unmount everything
+        for mnt in reversed(mounted):
+            try:
+                await umount_volume(mnt)
+            except Exception:
+                logger.warning("Failed to unmount %s during merge cleanup", mnt)
+
+        # Clean up temp dir
+        shutil.rmtree(merge_dir, ignore_errors=True)
+
+    # Build conflict info for response
+    conflicts = [
+        {"path": c.path, "resolution": "fork_a"}
+        for c in result.conflicts
+    ]
+
+    # Create checkpoint record
+    now = datetime.now(UTC).isoformat()
+    r2_prefix = f"{account.id}/{checkpoint_id}"
+    # Merged checkpoint inherits parent's manifest
+    parent_manifest = Manifest.from_json(ckpt_parent.manifest_json)
+    ckpt = Checkpoint(
+        id=checkpoint_id,
+        account_id=account.id,
+        parent_id=parent_id,
+        computer_id=None,  # merge has no source computer
+        thin_volume_id=merged_volume_id,
+        manifest_hash=parent_manifest.content_hash(),
+        manifest_json=ckpt_parent.manifest_json,
+        r2_prefix=r2_prefix,
+        disk_delta_size_bytes=None,
+        memory_size_bytes=None,
+        label="merge",
+        pinned=False,
+        created_at=now,
+    )
+    await insert_checkpoint(db, ckpt)
+
+    # Background upload to R2 (snapshot dir doesn't exist for merges,
+    # but the volume itself is the checkpoint — skip R2 for now)
+    logger.info(
+        "Merged checkpoint %s: auto_merged=%d, unchanged=%d, conflicts=%d",
+        checkpoint_id, result.auto_merged, result.unchanged, len(result.conflicts),
+    )
+
     return {
-        "status": "pending",
-        "checkpoint_a": body.checkpoint_a,
-        "checkpoint_b": body.checkpoint_b,
-        "parent_id": ckpt_a.parent_id,
-        "message": "Merge requires server-side disk mount — not yet implemented",
+        "checkpoint_id": checkpoint_id,
+        "conflicts": conflicts,
+        "auto_merged": result.auto_merged,
+        "unchanged": result.unchanged,
     }
 
 

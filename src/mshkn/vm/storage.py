@@ -104,10 +104,11 @@ async def remove_volume(pool_name: str, volume_name: str, volume_id: int) -> Non
     logger.info("Removed volume %s (vol %d)", volume_name, volume_id)
 
 
-async def mount_volume(volume_name: str, mount_point: str) -> None:
+async def mount_volume(volume_name: str, mount_point: str, readonly: bool = False) -> None:
     """Mount a dm-thin volume at the given path."""
     await run(f"mkdir -p {mount_point}")
-    await run(f"mount /dev/mapper/{volume_name} {mount_point}")
+    opts = " -o ro" if readonly else ""
+    await run(f"mount{opts} /dev/mapper/{volume_name} {mount_point}")
 
 
 async def umount_volume(mount_point: str) -> None:
