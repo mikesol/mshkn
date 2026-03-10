@@ -24,6 +24,8 @@ def slot_to_tap(slot: int) -> str:
 async def create_tap(slot: int) -> None:
     tap = slot_to_tap(slot)
     host_ip, vm_ip = slot_to_ip(slot)
+    # Remove stale tap if it exists from a previous run
+    await run(f"ip link del {tap}", check=False)
     await run(f"ip tuntap add dev {tap} mode tap")
     await run(f"ip addr add {host_ip}/30 dev {tap}")
     await run(f"ip link set {tap} up")

@@ -390,7 +390,7 @@ async def test_merge_no_process_state(long_client: httpx.AsyncClient) -> None:
 
         # The old background sleep process should NOT be running
         result = await exec_command(
-            long_client, comp_merged, "pgrep -c 'sleep 9999' || echo 0"
+            long_client, comp_merged, "pgrep -c 'sleep 9999' || true"
         )
         assert result.stdout.strip() == "0", (
             "Merged checkpoint should have no process state from parent forks"
