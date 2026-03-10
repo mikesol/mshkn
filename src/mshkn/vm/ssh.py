@@ -18,10 +18,13 @@ logger = logging.getLogger(__name__)
 class SSHPool:
     """Per-VM SSH connection pool. Reuses connections to avoid handshake overhead."""
 
+    _HEALTH_CHECK_INTERVAL = 30.0  # seconds before re-checking liveness
+
     def __init__(self, ssh_key_path: Path) -> None:
         self._key_path = str(ssh_key_path)
         self._conns: dict[str, asyncssh.SSHClientConnection] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._last_used: dict[str, float] = {}
 
     async def get(self, vm_ip: str) -> asyncssh.SSHClientConnection:
         """Get or create a persistent SSH connection to the given VM."""
@@ -31,12 +34,19 @@ class SSHPool:
         async with self._locks[vm_ip]:
             conn = self._conns.get(vm_ip)
             if conn is not None:
-                # Check if still alive
+                now = asyncio.get_event_loop().time()
+                last = self._last_used.get(vm_ip, 0.0)
+                if now - last < self._HEALTH_CHECK_INTERVAL:
+                    # Recently used — trust keepalive for liveness
+                    self._last_used[vm_ip] = now
+                    return conn
+                # Not recently used — verify with a command
                 try:
                     result = await asyncio.wait_for(
                         conn.run("true", check=False), timeout=3.0,
                     )
                     if result.exit_status == 0:
+                        self._last_used[vm_ip] = now
                         return conn
                 except Exception:
                     pass
@@ -53,6 +63,7 @@ class SSHPool:
                 keepalive_interval=15,
             )
             self._conns[vm_ip] = conn
+            self._last_used[vm_ip] = asyncio.get_event_loop().time()
             return conn
 
     async def remove(self, vm_ip: str) -> None:
@@ -62,6 +73,7 @@ class SSHPool:
             with contextlib.suppress(Exception):
                 conn.close()
         self._locks.pop(vm_ip, None)
+        self._last_used.pop(vm_ip, None)
 
     async def close_all(self) -> None:
         """Close all pooled connections."""
@@ -70,6 +82,7 @@ class SSHPool:
                 conn.close()
         self._conns.clear()
         self._locks.clear()
+        self._last_used.clear()
 
 
 @dataclass
