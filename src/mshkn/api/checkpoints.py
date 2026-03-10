@@ -27,11 +27,15 @@ _require_account = Depends(require_account)
 class ForkRequest(BaseModel):
     manifest: dict[str, object] | None = None
     skip_manifest_check: bool = False
+    exec: str | None = None
 
 
 class ForkResponse(BaseModel):
     computer_id: str
     checkpoint_id: str
+    exec_exit_code: int | None = None
+    exec_stdout: str | None = None
+    exec_stderr: str | None = None
 
 
 def _is_manifest_additive(parent_uses: list[str], new_uses: list[str]) -> bool:
@@ -76,7 +80,30 @@ async def fork_checkpoint(
 
     vm_mgr = request.app.state.vm_manager
     computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, fork_manifest)
-    return ForkResponse(computer_id=computer.id, checkpoint_id=checkpoint_id)
+
+    exec_exit_code: int | None = None
+    exec_stdout: str | None = None
+    exec_stderr: str | None = None
+    if body and body.exec is not None:
+        config = request.app.state.config
+        from mshkn.vm.ssh import ssh_exec
+
+        pool = getattr(request.app.state, "ssh_pool", None)
+        result = await ssh_exec(
+            computer.vm_ip, body.exec, config.ssh_key_path,
+            pool=pool,
+        )
+        exec_exit_code = result.exit_code
+        exec_stdout = result.stdout
+        exec_stderr = result.stderr
+
+    return ForkResponse(
+        computer_id=computer.id,
+        checkpoint_id=checkpoint_id,
+        exec_exit_code=exec_exit_code,
+        exec_stdout=exec_stdout,
+        exec_stderr=exec_stderr,
+    )
 
 
 class MergeRequest(BaseModel):
