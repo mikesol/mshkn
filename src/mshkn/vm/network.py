@@ -23,15 +23,32 @@ def slot_to_tap(slot: int) -> str:
 
 async def create_tap(slot: int) -> None:
     tap = slot_to_tap(slot)
-    host_ip, _ = slot_to_ip(slot)
+    host_ip, vm_ip = slot_to_ip(slot)
     await run(f"ip tuntap add dev {tap} mode tap")
     await run(f"ip addr add {host_ip}/30 dev {tap}")
     await run(f"ip link set {tap} up")
+    # Allow VM → internet (non-172.16.0.0/12 destinations) but block VM → VM
+    await run(
+        f"iptables -I FORWARD -i {tap} -s {vm_ip} "
+        f"! -d 172.16.0.0/12 -j ACCEPT"
+    )
+    await run(f"iptables -I FORWARD -i {tap} -s {vm_ip} -d 172.16.0.0/12 -j DROP")
     logger.info("Created tap device %s at %s/30", tap, host_ip)
 
 
 async def destroy_tap(slot: int) -> None:
     tap = slot_to_tap(slot)
+    _, vm_ip = slot_to_ip(slot)
+    # Remove iptables rules (best-effort)
+    await run(
+        f"iptables -D FORWARD -i {tap} -s {vm_ip} "
+        f"! -d 172.16.0.0/12 -j ACCEPT",
+        check=False,
+    )
+    await run(
+        f"iptables -D FORWARD -i {tap} -s {vm_ip} -d 172.16.0.0/12 -j DROP",
+        check=False,
+    )
     try:
         await run(f"ip link del {tap}")
     except ShellError as e:
