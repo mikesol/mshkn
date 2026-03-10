@@ -38,10 +38,13 @@ def _parse_entry(entry: str) -> str:
     stripped = entry.strip()
 
     # --- python-X.Y(pkg1, pkg2) or node-X(pkg1, pkg2) ---
-    m = re.match(r"^(python|node)-(\d+(?:\.\d+)?)\((.+)\)$", stripped)
+    m = re.match(r"^(python|node)-(\d+(?:\.\d+)?)\((.*)\)$", stripped)
     if m:
         tool, version, pkgs_raw = m.group(1), m.group(2), m.group(3)
         attr = _versioned_attr(tool, version)
+        # Empty parens means just the interpreter, no packages
+        if not pkgs_raw.strip():
+            return f"pkgs.{attr}"
         # Strip version pins like ==1.26.0 from package names
         pkgs = [re.sub(r"[=<>!~]+.*", "", p.strip()) for p in pkgs_raw.split(",")]
         if tool == "python":
