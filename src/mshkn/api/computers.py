@@ -17,6 +17,7 @@ from mshkn.api.metrics import (
     exec_duration_seconds,
 )
 from mshkn.api.ratelimit import rate_limiter
+from mshkn.callback import deliver_callback
 from mshkn.checkpoint.r2 import upload_checkpoint
 from mshkn.checkpoint.snapshot import create_vm_snapshot
 from mshkn.db import (
@@ -64,6 +65,9 @@ class CreateRequest(BaseModel):
     uses: list[str] = []
     needs: dict[str, object] | None = None
     exec: str | None = None
+    self_destruct: bool = False
+    callback_url: str | None = None
+    label: str | None = None
 
 
 class CreateResponse(BaseModel):
@@ -73,6 +77,7 @@ class CreateResponse(BaseModel):
     exec_exit_code: int | None = None
     exec_stdout: str | None = None
     exec_stderr: str | None = None
+    created_checkpoint_id: str | None = None
 
 
 class ExecRequest(BaseModel):
@@ -84,6 +89,108 @@ def _check_rate_limit(request: Request) -> None:
     api_key = request.headers.get("Authorization", "")[7:]
     if not rate_limiter.check(api_key):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+
+async def _self_destruct(
+    *,
+    computer: Computer,
+    account: Account,
+    label: str | None,
+    source_checkpoint_id: str | None,
+    exec_exit_code: int,
+    exec_stdout: str,
+    exec_stderr: str,
+    callback_url: str | None,
+    db: aiosqlite.Connection,
+    config: Config,
+    vm_mgr: VMManager,
+    pool: SSHPool | None,
+) -> str:
+    """Auto-checkpoint, destroy computer, and fire callback.
+
+    Returns the created checkpoint ID.
+    """
+    import uuid
+    from datetime import UTC, datetime
+
+    checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
+    snapshot_dir = config.checkpoint_local_dir / checkpoint_id
+
+    # Flush guest filesystem
+    await ssh_exec(
+        computer.vm_ip, "sync", config.ssh_key_path, timeout=10.0, pool=pool,
+    )
+
+    # Pause/snapshot/resume
+    await create_vm_snapshot(computer.socket_path, snapshot_dir)
+
+    # Evict SSH pool connection
+    if pool is not None:
+        await pool.remove(computer.vm_ip)
+
+    # Freeze disk
+    ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(
+        computer, checkpoint_id,
+    )
+
+    # Determine parent_id for DAG lineage
+    latest = await get_latest_checkpoint_for_computer(db, computer.id)
+    if latest is not None:
+        parent_id = latest.id
+    elif computer.source_checkpoint_id is not None:
+        parent_id = computer.source_checkpoint_id
+    else:
+        parent_id = None
+
+    # Record checkpoint in DB
+    now = datetime.now(UTC).isoformat()
+    r2_prefix = f"{account.id}/{checkpoint_id}"
+    ckpt = Checkpoint(
+        id=checkpoint_id,
+        account_id=account.id,
+        parent_id=parent_id,
+        computer_id=computer.id,
+        thin_volume_id=ckpt_volume_id,
+        manifest_hash=computer.manifest_hash,
+        manifest_json=computer.manifest_json,
+        r2_prefix=r2_prefix,
+        disk_delta_size_bytes=None,
+        memory_size_bytes=None,
+        label=label,
+        pinned=False,
+        created_at=now,
+    )
+    await insert_checkpoint(db, ckpt)
+    checkpoints_total.inc()
+
+    # Background R2 upload
+    task = asyncio.create_task(upload_checkpoint(snapshot_dir, r2_prefix, config.r2_bucket))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    # Destroy the computer
+    await vm_mgr.destroy(computer.id)
+
+    # Fire callback
+    if callback_url:
+        payload = {
+            "computer_id": computer.id,
+            "checkpoint_id": source_checkpoint_id,
+            "label": label,
+            "exec_exit_code": exec_exit_code,
+            "exec_stdout": exec_stdout,
+            "exec_stderr": exec_stderr,
+            "created_checkpoint_id": checkpoint_id,
+        }
+        cb_task = asyncio.create_task(deliver_callback(callback_url, payload))
+        _background_tasks.add(cb_task)
+        cb_task.add_done_callback(_background_tasks.discard)
+
+    logger.info(
+        "Self-destruct: computer %s checkpointed as %s and destroyed",
+        computer.id, checkpoint_id,
+    )
+    return checkpoint_id
 
 
 async def _get_running_computer(
@@ -120,14 +227,35 @@ async def create_computer(
     exec_exit_code: int | None = None
     exec_stdout: str | None = None
     exec_stderr: str | None = None
+    created_checkpoint_id: str | None = None
+
+    # Exec on create
     if body.exec is not None:
+        pool = _get_pool(request)
         result = await ssh_exec(
-            computer.vm_ip, body.exec, config.ssh_key_path,
-            pool=_get_pool(request),
+            computer.vm_ip, body.exec, config.ssh_key_path, pool=pool,
         )
         exec_exit_code = result.exit_code
         exec_stdout = result.stdout
         exec_stderr = result.stderr
+
+        # Self-destruct: checkpoint + destroy
+        if body.self_destruct:
+            created_checkpoint_id = await _self_destruct(
+                computer=computer,
+                account=account,
+                label=body.label,
+                source_checkpoint_id=None,
+                exec_exit_code=exec_exit_code,
+                exec_stdout=exec_stdout,
+                exec_stderr=exec_stderr,
+                callback_url=body.callback_url,
+                db=db,
+                config=config,
+                vm_mgr=vm_mgr,
+                pool=pool,
+            )
+            computers_active.dec()
 
     return CreateResponse(
         computer_id=computer.id,
@@ -136,6 +264,7 @@ async def create_computer(
         exec_exit_code=exec_exit_code,
         exec_stdout=exec_stdout,
         exec_stderr=exec_stderr,
+        created_checkpoint_id=created_checkpoint_id,
     )
 
 
