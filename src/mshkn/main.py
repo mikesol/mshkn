@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -34,6 +35,7 @@ def _configure_logging() -> None:
 
 
 _configure_logging()
+logger = logging.getLogger(__name__)
 
 
 async def get_db() -> aiosqlite.Connection:
@@ -52,8 +54,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     caddy = CaddyClient(admin_url=config.caddy_admin_url, domain=config.domain)
     vm_manager = VMManager(config, db, caddy=caddy)
     await vm_manager.initialize()
+    # Reap any VMs that died while orchestrator was down
+    reaped = await vm_manager.reap_dead_vms()
+    if reaped:
+        logger.info("Startup: reaped %d dead VM(s)", reaped)
     app.state.vm_manager = vm_manager
+    # Start background reaper
+    reaper_task = asyncio.create_task(vm_manager.run_reaper_loop())
     yield
+    reaper_task.cancel()
     await caddy.close()
     await db.close()
 
