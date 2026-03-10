@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -215,11 +216,13 @@ class VMManager:
         manifest: Manifest,
         needs: dict[str, object] | None = None,
     ) -> Computer:
+        t0 = time.perf_counter()
         mem_size_mib, vcpu_count = parse_needs(needs)
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
 
         # Get capability base volume (builds if cache miss)
         source_volume_id = await self._get_or_build_capability_volume(manifest)
+        t_cap = time.perf_counter()
 
         async with self._alloc_lock:
             slot = self._allocate_slot()
@@ -232,6 +235,7 @@ class VMManager:
 
         # 1. Create tap device
         await create_tap(slot)
+        t_tap = time.perf_counter()
 
         # 2. Create dm-thin snapshot from capability base
         await create_snapshot(
@@ -241,9 +245,11 @@ class VMManager:
             new_volume_name=volume_name,
             sectors=self.config.thin_volume_sectors,
         )
+        t_snap = time.perf_counter()
 
         # 3. Start Firecracker
         pid = await start_firecracker_process(socket_path)
+        t_fc = time.perf_counter()
 
         # 4. Configure and boot
         fc_client = FirecrackerClient(socket_path)
@@ -261,9 +267,11 @@ class VMManager:
             )
         finally:
             await fc_client.close()
+        t_boot = time.perf_counter()
 
         # 5. Wait for SSH readiness
         await self._wait_for_ssh(vm_ip)
+        t_ssh = time.perf_counter()
 
         # 6. Record in DB
         now = datetime.now(UTC).isoformat()
@@ -282,7 +290,20 @@ class VMManager:
             last_exec_at=None,
         )
         await insert_computer(self.db, computer)
-        logger.info("Created computer %s (slot=%d, ip=%s)", computer_id, slot, vm_ip)
+        t_db = time.perf_counter()
+
+        logger.info(
+            "Created %s in %.0fms: cap=%.0f tap=%.0f snap=%.0f fc=%.0f boot=%.0f ssh=%.0f db=%.0f",
+            computer_id,
+            (t_db - t0) * 1000,
+            (t_cap - t0) * 1000,
+            (t_tap - t_cap) * 1000,
+            (t_snap - t_tap) * 1000,
+            (t_fc - t_snap) * 1000,
+            (t_boot - t_fc) * 1000,
+            (t_ssh - t_boot) * 1000,
+            (t_db - t_ssh) * 1000,
+        )
         return computer
 
     async def snapshot_disk_for_checkpoint(
@@ -418,29 +439,18 @@ class VMManager:
         logger.info("Destroyed computer %s", computer_id)
 
     async def _wait_for_ssh(self, vm_ip: str, timeout: float = 30.0) -> None:
-        """Poll SSH until the VM is reachable."""
+        """Poll until VM port 22 accepts TCP connections."""
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    "ssh",
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "ConnectTimeout=2",
-                    "-o",
-                    "IdentitiesOnly=yes",
-                    "-i",
-                    str(self.config.ssh_key_path),
-                    f"root@{vm_ip}",
-                    "true",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection(vm_ip, 22),
+                    timeout=1.0,
                 )
-                rc = await proc.wait()
-                if rc == 0:
-                    return
-            except Exception:
+                writer.close()
+                await writer.wait_closed()
+                return
+            except (OSError, TimeoutError):
                 pass
-            await asyncio.sleep(1)
-        raise TimeoutError(f"VM at {vm_ip} did not become reachable via SSH")
+            await asyncio.sleep(0.1)
+        raise TimeoutError(f"VM at {vm_ip} did not become reachable on port 22")

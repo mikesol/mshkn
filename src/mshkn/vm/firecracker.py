@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
@@ -109,9 +110,15 @@ async def start_firecracker_process(socket_path: str) -> int:
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
-    # Give it a moment to create the socket
-    await asyncio.sleep(0.5)
     assert proc.pid is not None
+    # Poll for socket creation instead of fixed 500ms sleep
+    deadline = asyncio.get_event_loop().time() + 2.0
+    while asyncio.get_event_loop().time() < deadline:
+        if Path(socket_path).exists():
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise TimeoutError(f"Firecracker socket {socket_path} not created within 2s")
     logger.info("Started Firecracker process PID=%d socket=%s", proc.pid, socket_path)
     return proc.pid
 
