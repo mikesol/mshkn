@@ -63,12 +63,16 @@ _require_account = Depends(require_account)
 class CreateRequest(BaseModel):
     uses: list[str] = []
     needs: dict[str, object] | None = None
+    exec: str | None = None
 
 
 class CreateResponse(BaseModel):
     computer_id: str
     url: str
     manifest_hash: str
+    exec_exit_code: int | None = None
+    exec_stdout: str | None = None
+    exec_stderr: str | None = None
 
 
 class ExecRequest(BaseModel):
@@ -112,10 +116,26 @@ async def create_computer(
     computer = await vm_mgr.create(account.id, manifest, needs=body.needs)
     computers_created_total.inc()
     computers_active.inc()
+
+    exec_exit_code: int | None = None
+    exec_stdout: str | None = None
+    exec_stderr: str | None = None
+    if body.exec is not None:
+        result = await ssh_exec(
+            computer.vm_ip, body.exec, config.ssh_key_path,
+            pool=_get_pool(request),
+        )
+        exec_exit_code = result.exit_code
+        exec_stdout = result.stdout
+        exec_stderr = result.stderr
+
     return CreateResponse(
         computer_id=computer.id,
         url=f"https://{computer.id}.{config.domain}",
         manifest_hash=computer.manifest_hash,
+        exec_exit_code=exec_exit_code,
+        exec_stdout=exec_stdout,
+        exec_stderr=exec_stderr,
     )
 
 
