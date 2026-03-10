@@ -166,25 +166,37 @@ async def merge_checkpoints(
             await mount_volume(vol, mnt, readonly=True)
             mounted.append(mnt)
 
-        # Mount merged output volume read-write and clear it
-        # (it starts as a snapshot of parent, but merge populates from scratch)
+        # Mount merged output volume read-write
+        # Output starts as a snapshot of parent — we apply the merge diff on top
         await mount_volume(merged_volume_name, mount_output)
         mounted.append(mount_output)
-        for item in Path(mount_output).iterdir():
-            if item.name == "lost+found":
-                continue
-            if item.is_dir():
-                shutil.rmtree(item)
-            else:
-                item.unlink()
 
-        # Run three-way merge
+        # Run three-way merge to a temp directory first
+        merge_output = Path(f"{merge_dir}/merge_result")
         result = three_way_merge(
             parent=Path(mount_parent),
             fork_a=Path(mount_a),
             fork_b=Path(mount_b),
-            output=Path(mount_output),
+            output=merge_output,
         )
+
+        # Apply merge result: sync changed/added files to output volume
+        # and remove files that were deleted (exist in parent but not in merge)
+        for rel in merge_output.rglob("*"):
+            if rel.is_file():
+                rel_path = rel.relative_to(merge_output)
+                dest = Path(mount_output) / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(rel, dest)
+
+        # Remove files that exist in parent but not in merge result (deletions)
+        for rel in Path(mount_parent).rglob("*"):
+            if rel.is_file():
+                rel_path = rel.relative_to(Path(mount_parent))
+                if not (merge_output / rel_path).exists():
+                    target = Path(mount_output) / rel_path
+                    if target.exists():
+                        target.unlink()
 
     finally:
         # Always unmount everything
