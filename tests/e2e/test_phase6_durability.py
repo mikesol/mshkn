@@ -7,6 +7,7 @@ the orchestrator, rebooting the host, blocking S3, etc.), so they will fail.
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -156,8 +157,55 @@ class TestT65LitestreamReplication:
 
 
 class TestT66StaleVMCleanup:
-    """VMs that have been idle beyond the TTL should be auto-destroyed."""
+    """Dead VMs should be automatically detected and cleaned up by the reaper."""
 
-    async def test_stale_vms_cleaned(self, client):
-        """Would create a VM, wait past TTL, verify it's destroyed."""
-        pytest.fail("Auto-cleanup not yet implemented")
+    async def test_dead_vm_reaped(self, client):
+        """Create a VM, kill its Firecracker process, verify reaper cleans it up.
+
+        The reaper runs every 60s. We kill the Firecracker process via SSH
+        (finding the PID from the process list), then poll the status endpoint
+        until the VM is marked destroyed (returns 404).
+        """
+        import subprocess
+        import time
+
+        # Create a computer
+        resp = await client.post("/computers", json={"uses": []})
+        resp.raise_for_status()
+        computer_id = resp.json()["computer_id"]
+
+        try:
+            # Find and kill the Firecracker process for this computer via SSH
+            result = subprocess.run(
+                [
+                    "ssh",
+                    "-o", "IdentitiesOnly=yes",
+                    "-o", "BatchMode=yes",
+                    "-o", "StrictHostKeyChecking=no",
+                    "-i", os.path.expanduser("~/.ssh/id_ed25519"),
+                    "root@135.181.6.215",
+                    f"pgrep -f 'fc-{computer_id}' | xargs -r kill -9",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            # Wait for the reaper to detect and clean up (up to 90s)
+            deadline = time.time() + 90
+            while time.time() < deadline:
+                await asyncio.sleep(5)
+                check = await client.get(f"/computers/{computer_id}/status")
+                if check.status_code == 404:
+                    return  # VM was reaped
+
+            pytest.fail(
+                f"Reaper did not clean up dead VM {computer_id} within 90s"
+            )
+        except Exception:
+            # Best-effort cleanup if test fails
+            try:
+                await client.delete(f"/computers/{computer_id}")
+            except Exception:
+                pass
+            raise

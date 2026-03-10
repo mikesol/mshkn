@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -452,6 +453,88 @@ class VMManager:
         # Update DB
         await update_computer_status(self.db, computer_id, "destroyed")
         logger.info("Destroyed computer %s", computer_id)
+
+    # ── Stale VM Reaper ───────────────────────────────────────────────────
+
+    def _is_pid_alive(self, pid: int) -> bool:
+        """Check if a process is still running."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # process exists but we can't signal it
+
+    async def reap_dead_vms(self) -> int:
+        """Find VMs whose Firecracker process has died and clean them up.
+
+        Returns the number of VMs reaped.
+        """
+        computers = await list_all_computers(self.db)
+        running = [c for c in computers if c.status == "running"]
+        reaped = 0
+
+        for computer in running:
+            if computer.firecracker_pid is None:
+                continue
+            if self._is_pid_alive(computer.firecracker_pid):
+                continue
+
+            logger.warning(
+                "Reaping dead VM %s (PID %d no longer running)",
+                computer.id, computer.firecracker_pid,
+            )
+            try:
+                await self._cleanup_dead_vm(computer)
+                reaped += 1
+            except Exception:
+                logger.exception("Failed to reap VM %s", computer.id)
+
+        return reaped
+
+    async def _cleanup_dead_vm(self, computer: Computer) -> None:
+        """Clean up resources for a VM whose process is already dead."""
+        # Remove Caddy route
+        if self.caddy is not None:
+            try:
+                await self.caddy.remove_route(computer.id)
+            except Exception:
+                logger.debug("Caddy route removal failed for %s (may not exist)", computer.id)
+
+        # Remove dm-thin volume (process is already dead, no need to wait)
+        volume_name = f"mshkn-{computer.id}"
+        try:
+            await remove_volume(
+                self.config.thin_pool_name, volume_name, computer.thin_volume_id,
+            )
+        except Exception:
+            logger.debug("Volume removal failed for %s (may already be gone)", computer.id)
+
+        # Remove tap device and recycle slot
+        slot = int(computer.tap_device.replace("tap", ""))
+        try:
+            await destroy_tap(slot)
+        except Exception:
+            logger.debug("TAP removal failed for %s (may already be gone)", computer.id)
+        async with self._alloc_lock:
+            self._release_slot(slot)
+
+        # Mark destroyed in DB
+        await update_computer_status(self.db, computer.id, "destroyed")
+        logger.info("Reaped dead VM %s", computer.id)
+
+    async def run_reaper_loop(self, interval: float = 60.0) -> None:
+        """Background loop that periodically reaps dead VMs."""
+        logger.info("Reaper started (interval=%.0fs)", interval)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                reaped = await self.reap_dead_vms()
+                if reaped:
+                    logger.info("Reaper cycle: cleaned up %d dead VM(s)", reaped)
+            except Exception:
+                logger.exception("Reaper cycle failed")
 
     async def _wait_for_ssh(self, vm_ip: str, timeout: float = 30.0) -> None:
         """Poll until VM port 22 accepts TCP connections."""
