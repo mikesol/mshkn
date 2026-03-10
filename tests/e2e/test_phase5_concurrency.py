@@ -381,7 +381,14 @@ class TestT58IdleTimeout:
     """Computers should be automatically destroyed after an idle period."""
 
     async def test_idle_computer_destroyed(self, client):
-        """A computer left idle should be auto-destroyed after the timeout."""
+        """A computer left idle should be auto-destroyed after the timeout.
+
+        The server idle timeout is assumed to be ~60s for testing. The reaper
+        runs every 60s, so worst case is ~120s before the VM is reaped.
+        We poll until the VM is gone rather than sleeping a fixed amount.
+        """
+        import time
+
         computer_id = await create_computer(client, uses=[])
 
         try:
@@ -389,19 +396,19 @@ class TestT58IdleTimeout:
             result = await exec_command(client, computer_id, "echo alive")
             assert result.stdout.strip() == "alive"
 
-            # Wait for the idle timeout (assumed ~60s for testing)
-            idle_timeout_s = 65
-            print(f"Waiting {idle_timeout_s}s for idle timeout...")
-            await asyncio.sleep(idle_timeout_s)
+            # Poll until the computer is destroyed (idle_timeout + reaper_interval + buffer)
+            deadline = time.time() + 150  # 2.5 minutes max
+            print("Waiting for idle timeout + reaper cycle...")
+            while time.time() < deadline:
+                await asyncio.sleep(10)
+                status_resp = await client.get(f"/computers/{computer_id}/status")
+                if status_resp.status_code == 404:
+                    computer_id = ""
+                    return  # Success — VM was auto-destroyed
 
-            # Check that the computer was auto-destroyed
-            status_resp = await client.get(f"/computers/{computer_id}/status")
-            assert status_resp.status_code in (404, 410), (
-                f"Expected computer to be auto-destroyed after idle timeout, "
-                f"but got status {status_resp.status_code}: {status_resp.text}"
+            pytest.fail(
+                f"Computer {computer_id} was not auto-destroyed after 150s idle"
             )
-            # If it was destroyed, no cleanup needed
-            computer_id = ""
         finally:
             if computer_id:
                 await destroy_computer(client, computer_id)
