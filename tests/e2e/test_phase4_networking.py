@@ -80,21 +80,20 @@ class TestT42MultiplePorts:
         async with managed_computer(client, uses=["python"]) as computer_id:
             ports = [3000, 5000, 8080]
             for port in ports:
-                # Write server script to file then execute — inline python -c
-                # with escaped newlines breaks over SSH
+                # Write server script to file then execute
                 script = (
-                    f"import http.server, socketserver\\n"
-                    f"class H(http.server.BaseHTTPRequestHandler):\\n"
-                    f"    def do_GET(self):\\n"
-                    f"        self.send_response(200)\\n"
-                    f"        self.end_headers()\\n"
-                    f"        self.wfile.write(b'port-{port}')\\n"
-                    f"    def log_message(self, *a): pass\\n"
-                    f"http.server.HTTPServer(('', {port}), H).serve_forever()"
+                    "import http.server\n"
+                    "class H(http.server.BaseHTTPRequestHandler):\n"
+                    "    def do_GET(self):\n"
+                    "        self.send_response(200)\n"
+                    "        self.end_headers()\n"
+                    f"        self.wfile.write(b'port-{port}')\n"
+                    "    def log_message(self, *a): pass\n"
+                    f"http.server.HTTPServer(('', {port}), H).serve_forever()\n"
                 )
                 await exec_command(
                     client, computer_id,
-                    f"printf '{script}' > /tmp/srv{port}.py",
+                    f"cat > /tmp/srv{port}.py << 'PYEOF'\n{script}PYEOF",
                     timeout=5.0,
                 )
                 await exec_command(
@@ -132,18 +131,18 @@ class TestT43WebSocket:
         ) as computer_id:
             # Write websocket echo server script
             ws_script = (
-                "import asyncio, websockets\\n"
-                "async def echo(ws):\\n"
-                "    async for msg in ws:\\n"
-                "        await ws.send(msg)\\n"
-                "async def main():\\n"
-                "    async with websockets.serve(echo, '0.0.0.0', 9000):\\n"
-                "        await asyncio.Future()\\n"
-                "asyncio.run(main())"
+                "import asyncio, websockets\n"
+                "async def echo(ws):\n"
+                "    async for msg in ws:\n"
+                "        await ws.send(msg)\n"
+                "async def main():\n"
+                "    async with websockets.serve(echo, '0.0.0.0', 9000):\n"
+                "        await asyncio.Future()\n"
+                "asyncio.run(main())\n"
             )
             await exec_command(
                 client, computer_id,
-                f"printf '{ws_script}' > /tmp/ws_echo.py",
+                f"cat > /tmp/ws_echo.py << 'PYEOF'\n{ws_script}PYEOF",
                 timeout=5.0,
             )
             await exec_command(
