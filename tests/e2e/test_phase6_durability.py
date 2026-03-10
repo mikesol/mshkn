@@ -7,6 +7,8 @@ the orchestrator, rebooting the host, blocking S3, etc.), so they will fail.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from .conftest import (
@@ -102,9 +104,50 @@ class TestT64CheckpointRetention:
 class TestT65LitestreamReplication:
     """SQLite should be continuously replicated via Litestream."""
 
-    async def test_litestream_replicating(self, client):
-        """Would verify Litestream is running and replicating to R2."""
-        pytest.fail("Litestream not yet configured on server")
+    async def test_litestream_service_active(self, client):
+        """Verify the Litestream systemd service is active and running."""
+        import subprocess
+
+        result = subprocess.run(
+            [
+                "ssh",
+                "-o", "IdentitiesOnly=yes",
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no",
+                "-i", os.path.expanduser("~/.ssh/id_ed25519"),
+                "root@135.181.6.215",
+                "systemctl is-active litestream",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert result.stdout.strip() == "active", (
+            f"Litestream service not active: {result.stdout.strip()} {result.stderr.strip()}"
+        )
+
+    async def test_litestream_has_generations(self, client):
+        """Verify Litestream has created at least one generation in R2."""
+        import subprocess
+
+        result = subprocess.run(
+            [
+                "ssh",
+                "-o", "IdentitiesOnly=yes",
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no",
+                "-i", os.path.expanduser("~/.ssh/id_ed25519"),
+                "root@135.181.6.215",
+                "litestream generations -config /etc/litestream.yml /opt/mshkn/mshkn.db",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        lines = [l for l in result.stdout.strip().splitlines() if l and not l.startswith("name")]
+        assert len(lines) >= 1, (
+            f"No Litestream generations found: {result.stdout} {result.stderr}"
+        )
 
 
 # ---------------------------------------------------------------------------
