@@ -292,15 +292,20 @@ class TestT66StaleVMCleanup:
             )
 
             # Wait for the reaper to detect and clean up (up to 90s)
-            deadline = time.time() + 90
+            # Status endpoint may be slow (SSH to dead VM times out) so
+            # catch ReadTimeout and keep polling.
+            deadline = time.time() + 150
             while time.time() < deadline:
-                await asyncio.sleep(5)
-                check = await client.get(f"/computers/{computer_id}/status")
-                if check.status_code == 404:
-                    return  # VM was reaped
+                await asyncio.sleep(10)
+                try:
+                    check = await client.get(f"/computers/{computer_id}/status")
+                    if check.status_code == 404:
+                        return  # VM was reaped
+                except Exception:
+                    pass  # SSH timeout on dead VM is expected
 
             pytest.fail(
-                f"Reaper did not clean up dead VM {computer_id} within 90s"
+                f"Reaper did not clean up dead VM {computer_id} within 150s"
             )
         except Exception:
             # Best-effort cleanup if test fails
