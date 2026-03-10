@@ -16,6 +16,7 @@ from mshkn.api.metrics import router as metrics_router
 from mshkn.config import Config
 from mshkn.db import run_migrations
 from mshkn.logging import JSONFormatter
+from mshkn.proxy.caddy import CaddyClient
 from mshkn.vm.manager import VMManager
 
 
@@ -48,10 +49,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await run_migrations(db, config.migrations_dir)
     app.state.db = db
     app.state.config = config
-    vm_manager = VMManager(config, db)
+    caddy = CaddyClient(admin_url=config.caddy_admin_url, domain=config.domain)
+    vm_manager = VMManager(config, db, caddy=caddy)
     await vm_manager.initialize()
     app.state.vm_manager = vm_manager
     yield
+    await caddy.close()
     await db.close()
 
 

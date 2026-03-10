@@ -210,12 +210,14 @@ async def computer_status(
     account: Account = _require_account,
 ) -> dict[str, object]:
     db: aiosqlite.Connection = request.app.state.db
+    config: Config = request.app.state.config
     computer = await get_computer(db, computer_id)
     if computer is None or computer.account_id != account.id or computer.status == "destroyed":
         raise HTTPException(status_code=404, detail="Computer not found")
     return {
         "computer_id": computer.id,
         "status": computer.status,
+        "url": f"https://{computer.id}.{config.domain}",
         "vm_ip": computer.vm_ip,
         "manifest_hash": computer.manifest_hash,
         "created_at": computer.created_at,

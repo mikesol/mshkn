@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     import aiosqlite
 
     from mshkn.config import Config
+    from mshkn.proxy.caddy import CaddyClient
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +61,12 @@ def parse_needs(needs: dict[str, object] | None) -> tuple[int, int]:
 
 
 class VMManager:
-    def __init__(self, config: Config, db: aiosqlite.Connection) -> None:
+    def __init__(
+        self, config: Config, db: aiosqlite.Connection, caddy: CaddyClient | None = None,
+    ) -> None:
         self.config = config
         self.db = db
+        self.caddy = caddy
         self._next_slot = 1  # slot 0 reserved; will be loaded from DB on startup
         self._free_slots: list[int] = []  # recycled slots from destroyed VMs
         self._next_volume_id = 100  # volume 0 is base; start high to avoid conflicts
@@ -298,6 +302,11 @@ class VMManager:
             last_exec_at=None,
         )
         await insert_computer(self.db, computer)
+
+        # 7. Register Caddy route
+        if self.caddy is not None:
+            await self.caddy.add_route(computer_id, vm_ip)
+
         logger.info("Created computer %s (slot=%d, ip=%s)", computer_id, slot, vm_ip)
         return computer
 
@@ -403,6 +412,11 @@ class VMManager:
             source_checkpoint_id=checkpoint.id,
         )
         await insert_computer(self.db, computer)
+
+        # 6. Register Caddy route
+        if self.caddy is not None:
+            await self.caddy.add_route(computer_id, vm_ip)
+
         logger.info(
             "Forked computer %s from checkpoint %s (slot=%d, ip=%s)",
             computer_id, checkpoint.id, slot, vm_ip,
@@ -413,6 +427,10 @@ class VMManager:
         computer = await get_computer(self.db, computer_id)
         if computer is None:
             raise ValueError(f"Computer {computer_id} not found")
+
+        # Remove Caddy route first (so traffic stops immediately)
+        if self.caddy is not None:
+            await self.caddy.remove_route(computer_id)
 
         # Kill Firecracker and wait for kernel to release the block device
         if computer.firecracker_pid is not None:
