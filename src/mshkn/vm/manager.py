@@ -637,17 +637,91 @@ class VMManager:
         await self.destroy(computer.id)
         logger.info("Destroyed idle VM %s", computer.id)
 
+    async def prune_checkpoints(self) -> int:
+        """Delete checkpoints that exceed the per-account retention count.
+
+        Pinned checkpoints are never deleted. Returns total pruned count.
+        """
+        from mshkn.checkpoint.r2 import delete_checkpoint_r2
+        from mshkn.db import (
+            delete_checkpoint,
+            list_account_ids_with_checkpoints,
+            list_prunable_checkpoints,
+        )
+        from mshkn.vm.storage import remove_volume
+
+        keep = self.config.checkpoint_retention_count
+        if keep <= 0:
+            return 0
+
+        account_ids = await list_account_ids_with_checkpoints(self.db)
+        pruned = 0
+
+        for account_id in account_ids:
+            excess = await list_prunable_checkpoints(self.db, account_id, keep)
+            for ckpt in excess:
+                logger.info(
+                    "Pruning checkpoint %s (account=%s, created=%s)",
+                    ckpt.id, account_id, ckpt.created_at,
+                )
+                try:
+                    # Remove dm-thin volume
+                    if ckpt.thin_volume_id is not None:
+                        vol_name = f"mshkn-ckpt-{ckpt.id}"
+                        try:
+                            await remove_volume(
+                                self.config.thin_pool_name,
+                                vol_name,
+                                ckpt.thin_volume_id,
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Volume removal failed for ckpt %s (may be gone)",
+                                ckpt.id,
+                            )
+
+                    # Remove local snapshot files
+                    import shutil
+
+                    local_dir = self.config.checkpoint_local_dir / ckpt.id
+                    if local_dir.exists():
+                        shutil.rmtree(local_dir)
+
+                    # Remove from R2
+                    try:
+                        await delete_checkpoint_r2(
+                            ckpt.r2_prefix, self.config.r2_bucket,
+                        )
+                    except Exception:
+                        logger.debug("R2 cleanup failed for ckpt %s", ckpt.id)
+
+                    # Delete DB record
+                    await delete_checkpoint(self.db, ckpt.id)
+                    pruned += 1
+                except Exception:
+                    logger.exception("Failed to prune checkpoint %s", ckpt.id)
+
+        return pruned
+
     async def run_reaper_loop(self, interval: float = 60.0) -> None:
-        """Background loop that periodically reaps dead and idle VMs."""
+        """Background loop that reaps dead VMs, idle VMs, and excess checkpoints."""
         idle_timeout = self.config.idle_timeout_seconds
-        logger.info("Reaper started (interval=%.0fs, idle_timeout=%ds)", interval, idle_timeout)
+        retention = self.config.checkpoint_retention_count
+        logger.info(
+            "Reaper started (interval=%.0fs, idle_timeout=%ds, retention=%d)",
+            interval, idle_timeout, retention,
+        )
         while True:
             await asyncio.sleep(interval)
             try:
                 dead = await self.reap_dead_vms()
                 idle = await self.reap_idle_vms()
-                if dead or idle:
-                    logger.info("Reaper cycle: %d dead, %d idle VM(s) cleaned up", dead, idle)
+                pruned = await self.prune_checkpoints()
+                if dead or idle or pruned:
+                    logger.info(
+                        "Reaper cycle: %d dead, %d idle VM(s), %d checkpoint(s) pruned",
+                        dead, idle, pruned,
+                    )
             except Exception:
                 logger.exception("Reaper cycle failed")
 

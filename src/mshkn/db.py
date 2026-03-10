@@ -328,3 +328,51 @@ async def get_max_checkpoint_volume_id(db: aiosqlite.Connection) -> int | None:
 async def delete_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> None:
     await db.execute("DELETE FROM checkpoints WHERE id = ?", (checkpoint_id,))
     await db.commit()
+
+
+async def list_prunable_checkpoints(
+    db: aiosqlite.Connection, account_id: str, keep_count: int
+) -> list[Checkpoint]:
+    """Return unpinned checkpoints beyond the keep_count newest, oldest first.
+
+    Pinned checkpoints are never returned. The keep_count newest unpinned
+    checkpoints are preserved; everything older is returned for pruning.
+    """
+    cursor = await db.execute(
+        "SELECT id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, "
+        "manifest_json, r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, "
+        "pinned, created_at "
+        "FROM checkpoints WHERE account_id = ? AND pinned = 0 "
+        "ORDER BY created_at DESC",
+        (account_id,),
+    )
+    rows = list(await cursor.fetchall())
+    # Skip the first keep_count (newest), return the rest
+    excess = rows[keep_count:]
+    return [
+        Checkpoint(
+            id=r[0],
+            account_id=r[1],
+            parent_id=r[2],
+            computer_id=r[3],
+            thin_volume_id=r[4],
+            manifest_hash=r[5],
+            manifest_json=r[6],
+            r2_prefix=r[7],
+            disk_delta_size_bytes=r[8],
+            memory_size_bytes=r[9],
+            label=r[10],
+            pinned=bool(r[11]),
+            created_at=r[12],
+        )
+        for r in excess
+    ]
+
+
+async def list_account_ids_with_checkpoints(db: aiosqlite.Connection) -> list[str]:
+    """Return distinct account IDs that have at least one checkpoint."""
+    cursor = await db.execute(
+        "SELECT DISTINCT account_id FROM checkpoints",
+    )
+    rows = await cursor.fetchall()
+    return [r[0] for r in rows]

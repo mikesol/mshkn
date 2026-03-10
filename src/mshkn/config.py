@@ -36,8 +36,9 @@ class Config:
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
 
-    # Idle timeout
+    # Idle timeout and retention
     idle_timeout_seconds: int = 1800  # 30 minutes
+    checkpoint_retention_count: int = 20  # per account, keep last N
 
     # Networking
     domain: str = "mshkn.dev"
@@ -56,11 +57,12 @@ class Config:
             "R2_BUCKET": "r2_bucket",
             "MSHKN_DOMAIN": "domain",
             "MSHKN_IDLE_TIMEOUT": "idle_timeout_seconds",
+            "MSHKN_CHECKPOINT_RETENTION": "checkpoint_retention_count",
         }
         for env_var, attr in env_map.items():
             val = os.environ.get(env_var)
             if val is not None:
-                if attr in ("port", "idle_timeout_seconds"):
+                if attr in ("port", "idle_timeout_seconds", "checkpoint_retention_count"):
                     kwargs[attr] = int(val)
                 elif attr in ("db_path", "migrations_dir", "base_rootfs_path", "kernel_path"):
                     kwargs[attr] = Path(val)

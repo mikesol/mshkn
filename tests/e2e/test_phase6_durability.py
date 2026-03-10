@@ -90,11 +90,118 @@ class TestT63S3Unavailable:
 
 
 class TestT64CheckpointRetention:
-    """Old checkpoints should be garbage-collected per retention policy."""
+    """Old checkpoints should be garbage-collected per retention policy.
 
-    async def test_old_checkpoints_cleaned_up(self, client):
-        """Would verify that checkpoints older than retention window are pruned."""
-        pytest.fail("Retention policy not yet implemented")
+    These tests assume MSHKN_CHECKPOINT_RETENTION is set to 5 on the server
+    for testing purposes.
+    """
+
+    async def test_excess_checkpoints_pruned(self, client):
+        """Create more checkpoints than the retention limit; oldest should be pruned.
+
+        Creates 8 checkpoints (retention=5), waits for the reaper to prune,
+        then verifies only 5 remain.
+        """
+        import time
+
+        computer_id = await create_computer(client, uses=[])
+        checkpoint_ids: list[str] = []
+
+        try:
+            # Create 8 checkpoints
+            for i in range(8):
+                resp = await client.post(
+                    f"/computers/{computer_id}/checkpoint",
+                    json={"label": f"retention-test-{i}"},
+                )
+                resp.raise_for_status()
+                checkpoint_ids.append(resp.json()["checkpoint_id"])
+                await asyncio.sleep(0.5)  # ensure distinct created_at
+
+            # Wait for reaper to prune (up to 90s)
+            deadline = time.time() + 90
+            while time.time() < deadline:
+                await asyncio.sleep(10)
+                # Check how many of our checkpoints still exist
+                alive = 0
+                for cid in checkpoint_ids:
+                    resp = await client.get(f"/checkpoints/{cid}")
+                    if resp.status_code == 200:
+                        alive += 1
+                if alive <= 5:
+                    assert alive == 5, f"Expected 5 checkpoints, got {alive}"
+                    return
+
+            # Final check
+            alive = 0
+            for cid in checkpoint_ids:
+                resp = await client.get(f"/checkpoints/{cid}")
+                if resp.status_code == 200:
+                    alive += 1
+            assert alive <= 5, (
+                f"Expected at most 5 checkpoints after pruning, got {alive}"
+            )
+        finally:
+            await destroy_computer(client, computer_id)
+            # Clean up remaining checkpoints
+            for cid in checkpoint_ids:
+                try:
+                    await client.delete(f"/checkpoints/{cid}")
+                except Exception:
+                    pass
+
+    async def test_pinned_checkpoint_retained(self, client):
+        """Pinned checkpoints should survive retention pruning.
+
+        Creates 8 checkpoints, pins the 3rd one, waits for pruning.
+        The pinned one should survive even though it's old.
+        """
+        import time
+
+        computer_id = await create_computer(client, uses=[])
+        checkpoint_ids: list[str] = []
+
+        try:
+            # Create 8 checkpoints, pin #2 (0-indexed)
+            for i in range(8):
+                resp = await client.post(
+                    f"/computers/{computer_id}/checkpoint",
+                    json={"label": f"pin-test-{i}", "pin": (i == 2)},
+                )
+                resp.raise_for_status()
+                checkpoint_ids.append(resp.json()["checkpoint_id"])
+                await asyncio.sleep(0.5)
+
+            pinned_id = checkpoint_ids[2]
+
+            # Wait for reaper to prune
+            deadline = time.time() + 90
+            while time.time() < deadline:
+                await asyncio.sleep(10)
+                resp = await client.get(f"/checkpoints/{pinned_id}")
+                if resp.status_code != 200:
+                    continue
+                # Check total alive
+                alive = sum(
+                    1 for cid in checkpoint_ids
+                    if (await client.get(f"/checkpoints/{cid}")).status_code == 200
+                )
+                # 5 unpinned kept + 1 pinned = 6 max
+                if alive <= 6:
+                    # Pinned must still exist
+                    assert resp.status_code == 200, "Pinned checkpoint was deleted!"
+                    return
+
+            # Final verification: pinned checkpoint must exist
+            resp = await client.get(f"/checkpoints/{pinned_id}")
+            assert resp.status_code == 200, "Pinned checkpoint was deleted!"
+        finally:
+            await destroy_computer(client, computer_id)
+            for cid in checkpoint_ids:
+                try:
+                    await client.delete(f"/checkpoints/{cid}")
+                except Exception:
+                    pass
 
 
 # ---------------------------------------------------------------------------
