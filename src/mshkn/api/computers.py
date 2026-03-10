@@ -323,6 +323,11 @@ async def checkpoint_computer(
     # Pause/snapshot/resume (sub-1s for the agent)
     await create_vm_snapshot(computer.socket_path, snapshot_dir)
 
+    # Evict SSH pool connection — pause/resume disrupts the TCP session
+    pool = _get_pool(request)
+    if pool is not None:
+        await pool.remove(computer.vm_ip)
+
     # Freeze disk state: create a dm-thin CoW snapshot so fork gets the disk
     # as it was at checkpoint time, not the computer's evolving state.
     ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(

@@ -459,10 +459,9 @@ class VMManager:
         if self.caddy is not None:
             await self.caddy.remove_route(computer_id)
 
-        # Kill Firecracker and wait for kernel to release the block device
+        # Kill Firecracker (kill_firecracker_process waits for exit)
         if computer.firecracker_pid is not None:
             await kill_firecracker_process(computer.firecracker_pid)
-            await asyncio.sleep(0.5)
 
         # Remove dm-thin volume
         volume_name = f"mshkn-{computer_id}"
@@ -628,6 +627,10 @@ class VMManager:
 
             # Pause/snapshot/resume
             await create_vm_snapshot(computer.socket_path, snapshot_dir)
+
+            # Evict SSH pool connection — pause/resume disrupts TCP session
+            if self.ssh_pool is not None and computer.vm_ip:
+                await self.ssh_pool.remove(computer.vm_ip)
 
             # Freeze disk
             ckpt_volume_id = await self.snapshot_disk_for_checkpoint(

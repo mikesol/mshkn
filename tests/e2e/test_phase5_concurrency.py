@@ -397,8 +397,8 @@ class TestT58IdleTimeout:
             assert result.stdout.strip() == "alive"
 
             # Poll until the computer is destroyed (idle_timeout + reaper_interval + buffer)
-            # Worst case: 60s idle + 60s reaper interval + checkpoint time
-            deadline = time.time() + 200
+            # Worst case: 120s idle + 60s reaper interval + checkpoint time
+            deadline = time.time() + 300
             print("Waiting for idle timeout + reaper cycle...")
             while time.time() < deadline:
                 await asyncio.sleep(10)
@@ -408,7 +408,7 @@ class TestT58IdleTimeout:
                     return  # Success — VM was auto-destroyed
 
             pytest.fail(
-                f"Computer {computer_id} was not auto-destroyed after 200s idle"
+                f"Computer {computer_id} was not auto-destroyed after 300s idle"
             )
         finally:
             if computer_id:

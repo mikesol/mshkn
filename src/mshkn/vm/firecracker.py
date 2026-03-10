@@ -124,9 +124,19 @@ async def start_firecracker_process(socket_path: str) -> int:
 
 
 async def kill_firecracker_process(pid: int) -> None:
-    """Kill a Firecracker process by PID."""
+    """Kill a Firecracker process by PID and wait for it to exit."""
     try:
         os.kill(pid, signal.SIGKILL)
         logger.info("Killed Firecracker PID=%d", pid)
     except ProcessLookupError:
         logger.warning("Firecracker PID=%d already dead", pid)
+        return
+
+    # Wait for process to actually exit so it releases tap device fds
+    for _ in range(20):  # up to 2s
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        await asyncio.sleep(0.1)
+    logger.warning("Firecracker PID=%d still alive after 2s", pid)
