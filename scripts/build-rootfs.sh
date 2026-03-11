@@ -32,12 +32,14 @@ echo "==> Configure networking (Firecracker MAC-based IP)"
 # before systemd starts — no udev needed.
 cat > "$ROOTFS_DIR/usr/local/bin/fcnet-setup.sh" <<'FCNET'
 #!/bin/bash
-# Wait up to 1s for any non-loopback interface to appear (should be instant)
-for i in $(seq 1 20); do
+# Wait up to 1s for any non-loopback interface to appear.
+# virtio_net may probe asynchronously after PID 1 starts; use 5ms granularity
+# (vs 50ms before) so we don't add 13x50ms=650ms of latency on slow-probe boots.
+for i in $(seq 1 200); do
     if [ "$(ls /sys/class/net | grep -v lo | wc -l)" -gt 0 ]; then
         break
     fi
-    sleep 0.05
+    sleep 0.005
 done
 for dev in $(ls /sys/class/net | grep -v lo); do
     mac_ip=$(ip link show dev "$dev" | grep link/ether | grep -oP "(?<=06:00:)[0-9a-f:]{11}")
