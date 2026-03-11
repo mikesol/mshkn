@@ -306,9 +306,19 @@ class VMManager:
             await fc_client.close()
 
         # 5. Wait for SSH readiness and warm connection pool
+        import time as _time
+        _t0 = _time.monotonic()
         await self._wait_for_ssh(vm_ip)
+        _t_ssh = _time.monotonic()
         if self.ssh_pool is not None:
             await self.ssh_pool.get(vm_ip)
+        _t_pool = _time.monotonic()
+        logger.info(
+            "create timing %s: wait_for_ssh=%.0fms pool_warmup=%.0fms",
+            computer_id,
+            (_t_ssh - _t0) * 1000,
+            (_t_pool - _t_ssh) * 1000,
+        )
 
         # 6. Record in DB
         now = datetime.now(UTC).isoformat()
