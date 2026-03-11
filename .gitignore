@@ -10,5 +10,6 @@ telegram/.env
 telegram/offset.txt
 .agents/
 .claude/
+.worktrees/
 telegram/outgoing.jsonl
 telegram/incoming.jsonl
