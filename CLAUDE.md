@@ -2,6 +2,33 @@
 
 Disposable cloud computers for AI agents. See `docs/plans/2026-03-07-disposable-cloud-computers-design.md` for architecture and `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` for the definition-of-done test plan that encodes the full spec as 115 E2E tests.
 
+## Telegram Bridge
+
+Mike communicates with Claude via Telegram through `@StronglyNormalBot`. The token is in `telegram/.env`.
+
+### Starting the bridge
+
+At conversation start, launch the bridge in watch mode:
+
+```
+TELEGRAM_BOT_TOKEN=$(grep TELEGRAM_BOT_TOKEN telegram/.env | cut -d= -f2) .venv/bin/python telegram/bridge.py watch
+```
+
+Run this via `run_in_background`. The process exits when messages arrive and you get notified. After handling, always relaunch watch immediately.
+
+### Commands
+
+- **Watch:** `TELEGRAM_BOT_TOKEN=$(grep TELEGRAM_BOT_TOKEN telegram/.env | cut -d= -f2) .venv/bin/python telegram/bridge.py watch` (background — exits on new messages)
+- **Send:** write JSON to `telegram/outgoing.jsonl` — `python3 -c "import json; print(json.dumps({'chat_id': 6522858700, 'text': 'your message'}))" >> telegram/outgoing.jsonl` — then the daemon picks it up. Or use send mode directly: `TELEGRAM_BOT_TOKEN=... .venv/bin/python telegram/bridge.py send 6522858700 "message"`
+- **Daemon:** rarely needed; watch mode is preferred
+
+### Responding
+
+- Incoming messages land in `telegram/incoming.jsonl`
+- Send replies by writing to `telegram/outgoing.jsonl` (use `python3 -c "import json; ..."` to avoid shell escaping issues) or via `bridge.py send`
+- Mike's chat ID is `6522858700`
+- Always relaunch watch after handling messages
+
 ## How to find work
 
 ```
