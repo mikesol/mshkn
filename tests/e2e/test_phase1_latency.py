@@ -18,6 +18,21 @@ from .conftest import (
     managed_computer,
 )
 
+BARE_CREATE_SAMPLES = 20
+BARE_CREATE_P95_MS = 950
+WARM_CACHE_CREATE_SAMPLES = 10
+WARM_CACHE_CREATE_P95_MS = 1150
+EMPTY_CHECKPOINT_SAMPLES = 10
+EMPTY_CHECKPOINT_P95_MS = 1150
+SMALL_STATE_CHECKPOINT_SAMPLES = 10
+SMALL_STATE_CHECKPOINT_P95_MS = 1000
+MANY_SMALL_FILES_CHECKPOINT_SAMPLES = 10
+MANY_SMALL_FILES_CHECKPOINT_P95_MS = 1550
+RESUME_SAMPLES = 10
+RESUME_P95_MS = 850
+FORK_MINIMAL_SAMPLES = 10
+FORK_MINIMAL_P95_MS = 850
+
 # ---------------------------------------------------------------------------
 # T1.1 — Create Latency (Target: <= 2s)
 # ---------------------------------------------------------------------------
@@ -27,49 +42,55 @@ class TestT11CreateLatency:
     """computer_create(uses: []) latency — target p95 <= 2000ms."""
 
     async def test_bare_create_latency(self, client):
-        """Create 10 bare computers, measure each, assert p95 <= 2000ms."""
+        """Create bare computers repeatedly, assert a tight p95 latency target."""
         timings: list[float] = []
-        created_ids: list[str] = []
 
-        try:
-            for i in range(10):
+        for i in range(BARE_CREATE_SAMPLES):
+            computer_id: str | None = None
+            try:
                 start = time.perf_counter()
                 computer_id = await create_computer(client, uses=[])
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
-                created_ids.append(computer_id)
                 print(f"  create #{i+1}: {elapsed_ms:.0f}ms")
-        finally:
-            for cid in created_ids:
-                await destroy_computer(client, cid)
+            finally:
+                if computer_id is not None:
+                    await destroy_computer(client, computer_id)
 
         stats = LatencyStats(values_ms=timings)
-        print(stats.report("T1.1 Bare Create", target_ms=2000))
-        assert stats.p95 <= 2000, (
-            f"p95 create latency {stats.p95:.0f}ms exceeds 2000ms target"
+        print(stats.report("T1.1 Bare Create", target_ms=BARE_CREATE_P95_MS))
+        assert stats.p95 <= BARE_CREATE_P95_MS, (
+            f"p95 create latency {stats.p95:.0f}ms exceeds {BARE_CREATE_P95_MS}ms target"
         )
 
     async def test_warm_cache_capability_create_latency(self, client):
-        """Create with capabilities (warm cache) — not yet implemented."""
+        """Create with warm capability cache, assert a tight p95 target."""
         timings: list[float] = []
-        created_ids: list[str] = []
 
-        try:
-            for _i in range(5):
+        for _i in range(WARM_CACHE_CREATE_SAMPLES):
+            computer_id: str | None = None
+            try:
                 start = time.perf_counter()
                 computer_id = await create_computer(
                     client, uses=["python-3.12(numpy)"]
                 )
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
-                created_ids.append(computer_id)
-        finally:
-            for cid in created_ids:
-                await destroy_computer(client, cid)
+            finally:
+                if computer_id is not None:
+                    await destroy_computer(client, computer_id)
 
         stats = LatencyStats(values_ms=timings)
-        print(stats.report("T1.1 Warm Cache Capability Create", target_ms=2000))
-        assert stats.p95 <= 2000
+        print(
+            stats.report(
+                "T1.1 Warm Cache Capability Create",
+                target_ms=WARM_CACHE_CREATE_P95_MS,
+            )
+        )
+        assert stats.p95 <= WARM_CACHE_CREATE_P95_MS, (
+            f"p95 warm cache create latency {stats.p95:.0f}ms exceeds "
+            f"{WARM_CACHE_CREATE_P95_MS}ms target"
+        )
 
     async def test_cold_cache_capability_create_latency(self, client):
         """Create with capabilities (cold cache) — not yet implemented."""
@@ -102,11 +123,11 @@ class TestT12CheckpointLatency:
     """Checkpoint latency under various state sizes — target p95 <= 1000ms."""
 
     async def test_empty_state_checkpoint(self, long_client):
-        """Checkpoint immediately after create (empty state) x5."""
+        """Checkpoint immediately after create, assert a tight p95 target."""
         async with managed_computer(long_client, uses=[]) as computer_id:
             timings: list[float] = []
 
-            for i in range(5):
+            for i in range(EMPTY_CHECKPOINT_SAMPLES):
                 start = time.perf_counter()
                 await checkpoint_computer(
                     long_client, computer_id, label=f"empty-{i}"
@@ -116,30 +137,47 @@ class TestT12CheckpointLatency:
                 print(f"  empty checkpoint #{i+1}: {elapsed_ms:.0f}ms")
 
             stats = LatencyStats(values_ms=timings)
-            print(stats.report("T1.2 Empty State Checkpoint", target_ms=1000))
-            assert stats.p95 <= 1000, (
-                f"p95 empty checkpoint latency {stats.p95:.0f}ms exceeds 1000ms"
+            print(
+                stats.report(
+                    "T1.2 Empty State Checkpoint",
+                    target_ms=EMPTY_CHECKPOINT_P95_MS,
+                )
+            )
+            assert stats.p95 <= EMPTY_CHECKPOINT_P95_MS, (
+                f"p95 empty checkpoint latency {stats.p95:.0f}ms exceeds "
+                f"{EMPTY_CHECKPOINT_P95_MS}ms"
             )
 
     async def test_small_state_checkpoint(self, long_client):
-        """Write 1MB file, then checkpoint. Measure latency."""
+        """Write 1MB file, then checkpoint repeatedly with a p95 target."""
         async with managed_computer(long_client, uses=[]) as computer_id:
-            # Write 1MB of data
-            await exec_command(
-                long_client,
-                computer_id,
-                "dd if=/dev/urandom of=/tmp/data_1mb bs=1M count=1 2>/dev/null",
-            )
+            timings: list[float] = []
+            for i in range(SMALL_STATE_CHECKPOINT_SAMPLES):
+                await exec_command(
+                    long_client,
+                    computer_id,
+                    f"dd if=/dev/urandom of=/tmp/data_1mb_{i} bs=1M count=1 2>/dev/null",
+                )
 
-            start = time.perf_counter()
-            await checkpoint_computer(
-                long_client, computer_id, label="small-1mb"
-            )
-            elapsed_ms = (time.perf_counter() - start) * 1000
+                start = time.perf_counter()
+                await checkpoint_computer(
+                    long_client, computer_id, label=f"small-1mb-{i}"
+                )
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                timings.append(elapsed_ms)
+                print(f"  small checkpoint #{i+1}: {elapsed_ms:.0f}ms")
 
-            print(f"T1.2 Small State (1MB) Checkpoint: {elapsed_ms:.0f}ms")
-            stats = LatencyStats(values_ms=[elapsed_ms])
-            print(stats.report("T1.2 Small State Checkpoint", target_ms=1000))
+            stats = LatencyStats(values_ms=timings)
+            print(
+                stats.report(
+                    "T1.2 Small State Checkpoint",
+                    target_ms=SMALL_STATE_CHECKPOINT_P95_MS,
+                )
+            )
+            assert stats.p95 <= SMALL_STATE_CHECKPOINT_P95_MS, (
+                f"p95 small-state checkpoint latency {stats.p95:.0f}ms exceeds "
+                f"{SMALL_STATE_CHECKPOINT_P95_MS}ms"
+            )
 
     async def test_large_state_checkpoint(self, long_client):
         """Write 100MB file, then checkpoint. Measure honestly (may exceed 1s)."""
@@ -163,30 +201,42 @@ class TestT12CheckpointLatency:
             print(stats.report("T1.2 Large State Checkpoint", target_ms=1000))
 
     async def test_many_small_files_checkpoint(self, long_client):
-        """Write 1000 x 1KB files, then checkpoint. Measure."""
+        """Write many small files, then checkpoint repeatedly with a p95 target."""
         async with managed_computer(long_client, uses=[]) as computer_id:
-            # Create 1000 small files
-            await exec_command(
-                long_client,
-                computer_id,
-                (
-                    "mkdir -p /tmp/small_files && "
-                    "for i in $(seq 1 1000); do "
-                    "  dd if=/dev/urandom of=/tmp/small_files/file_$i bs=1K count=1 2>/dev/null; "
-                    "done"
-                ),
-                timeout=60.0,
-            )
+            timings: list[float] = []
+            for i in range(MANY_SMALL_FILES_CHECKPOINT_SAMPLES):
+                await exec_command(
+                    long_client,
+                    computer_id,
+                    (
+                        f"mkdir -p /tmp/small_files_{i} && "
+                        "for j in $(seq 1 1000); do "
+                        f"  dd if=/dev/urandom of=/tmp/small_files_{i}/file_$j "
+                        "bs=1K count=1 2>/dev/null; "
+                        "done"
+                    ),
+                    timeout=60.0,
+                )
 
-            start = time.perf_counter()
-            await checkpoint_computer(
-                long_client, computer_id, label="many-small"
-            )
-            elapsed_ms = (time.perf_counter() - start) * 1000
+                start = time.perf_counter()
+                await checkpoint_computer(
+                    long_client, computer_id, label=f"many-small-{i}"
+                )
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                timings.append(elapsed_ms)
+                print(f"  many-small checkpoint #{i+1}: {elapsed_ms:.0f}ms")
 
-            print(f"T1.2 Many Small Files (1000x1KB) Checkpoint: {elapsed_ms:.0f}ms")
-            stats = LatencyStats(values_ms=[elapsed_ms])
-            print(stats.report("T1.2 Many Small Files Checkpoint", target_ms=1000))
+            stats = LatencyStats(values_ms=timings)
+            print(
+                stats.report(
+                    "T1.2 Many Small Files Checkpoint",
+                    target_ms=MANY_SMALL_FILES_CHECKPOINT_P95_MS,
+                )
+            )
+            assert stats.p95 <= MANY_SMALL_FILES_CHECKPOINT_P95_MS, (
+                f"p95 many-small-files checkpoint latency {stats.p95:.0f}ms exceeds "
+                f"{MANY_SMALL_FILES_CHECKPOINT_P95_MS}ms"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -198,24 +248,31 @@ class TestT13ResumeLatency:
     """Resume/restore latency — currently uses cold boot, not snapshot restore."""
 
     async def test_resume_latency(self, long_client):
-        """Resume from a checkpoint — not yet a distinct operation."""
+        """Resume via fork repeatedly and assert a tight p95 target."""
         async with managed_computer(long_client, uses=[]) as computer_id:
             checkpoint_id = await checkpoint_computer(
                 long_client, computer_id, label="resume-test"
             )
 
-            start = time.perf_counter()
-            # If a resume endpoint existed, we'd call it here.
-            # For now, fork is the closest thing.
-            forked_id = await fork_checkpoint(long_client, checkpoint_id)
-            elapsed_ms = (time.perf_counter() - start) * 1000
+            timings: list[float] = []
+            forked_ids: list[str] = []
+            try:
+                for i in range(RESUME_SAMPLES):
+                    start = time.perf_counter()
+                    forked_id = await fork_checkpoint(long_client, checkpoint_id)
+                    elapsed_ms = (time.perf_counter() - start) * 1000
+                    timings.append(elapsed_ms)
+                    forked_ids.append(forked_id)
+                    print(f"  resume #{i+1}: {elapsed_ms:.0f}ms")
+            finally:
+                for fid in forked_ids:
+                    await destroy_computer(long_client, fid)
 
-            await destroy_computer(long_client, forked_id)
-
-            print(f"T1.3 Resume (via fork): {elapsed_ms:.0f}ms")
-            stats = LatencyStats(values_ms=[elapsed_ms])
-            print(stats.report("T1.3 Resume Latency", target_ms=2000))
-            assert stats.p95 <= 2000
+            stats = LatencyStats(values_ms=timings)
+            print(stats.report("T1.3 Resume Latency", target_ms=RESUME_P95_MS))
+            assert stats.p95 <= RESUME_P95_MS, (
+                f"p95 resume latency {stats.p95:.0f}ms exceeds {RESUME_P95_MS}ms"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +284,7 @@ class TestT14ForkLatency:
     """Fork latency — target p95 <= 2000ms, should be O(1) w.r.t. state size."""
 
     async def test_fork_minimal_state(self, long_client):
-        """Fork from checkpoint with minimal state x5, assert p95 <= 2000ms."""
+        """Fork from checkpoint repeatedly and assert a tight p95 target."""
         forked_ids: list[str] = []
 
         async with managed_computer(long_client, uses=[]) as computer_id:
@@ -237,7 +294,7 @@ class TestT14ForkLatency:
 
             timings: list[float] = []
             try:
-                for i in range(5):
+                for i in range(FORK_MINIMAL_SAMPLES):
                     start = time.perf_counter()
                     forked_id = await fork_checkpoint(long_client, checkpoint_id)
                     elapsed_ms = (time.perf_counter() - start) * 1000
@@ -249,9 +306,9 @@ class TestT14ForkLatency:
                     await destroy_computer(long_client, fid)
 
             stats = LatencyStats(values_ms=timings)
-            print(stats.report("T1.4 Fork Minimal State", target_ms=2000))
-            assert stats.p95 <= 2000, (
-                f"p95 fork latency {stats.p95:.0f}ms exceeds 2000ms target"
+            print(stats.report("T1.4 Fork Minimal State", target_ms=FORK_MINIMAL_P95_MS))
+            assert stats.p95 <= FORK_MINIMAL_P95_MS, (
+                f"p95 fork latency {stats.p95:.0f}ms exceeds {FORK_MINIMAL_P95_MS}ms target"
             )
 
     async def test_fork_o1_comparison(self, long_client):
