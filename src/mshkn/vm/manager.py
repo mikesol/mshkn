@@ -845,7 +845,7 @@ class VMManager:
             try:
                 _, writer = await asyncio.wait_for(
                     asyncio.open_connection(vm_ip, 22),
-                    timeout=1.0,
+                    timeout=0.05,
                 )
                 writer.close()
                 await writer.wait_closed()
