@@ -71,6 +71,7 @@ class CreateRequest(BaseModel):
     self_destruct: bool = False
     callback_url: str | None = None
     label: str | None = None
+    meta_exec: str | None = None
 
 
 class CreateResponse(BaseModel):
@@ -193,6 +194,25 @@ async def _self_destruct(
         "Self-destruct: computer %s checkpointed as %s and destroyed",
         computer.id, checkpoint_id,
     )
+
+    # Drain deferred queue for this label
+    if label:
+        deferred = await list_deferred_by_label(db, label)
+        if deferred:
+            await delete_deferred_by_label(db, label)
+            task = asyncio.create_task(
+                _process_deferred(
+                    label=label,
+                    deferred_items=deferred,
+                    db=db,
+                    config=config,
+                    vm_mgr=vm_mgr,
+                    account=account,
+                )
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+
     return checkpoint_id
 
 
@@ -531,14 +551,15 @@ async def _process_deferred(
     label: str,
     deferred_items: list[dict[str, str]],
     db: aiosqlite.Connection,
+    config: Config,
     vm_mgr: VMManager,
     account: Account,
 ) -> None:
     """Boot a new computer from the latest checkpoint for a label and process deferred forks.
 
-    Each deferred item is a fork request that was queued because a computer was already
-    running on this checkpoint chain. We take the LAST deferred request (most recent)
-    and fork from it. The others are effectively superseded.
+    Writes each deferred exec to /tmp/exec/0.txt, /tmp/exec/1.txt, etc.
+    If meta_exec is set on any deferred request, uses that as the exec command.
+    Otherwise, concatenates all exec commands with newlines.
     """
     import json
 
@@ -546,26 +567,75 @@ async def _process_deferred(
 
     try:
         # Find the latest checkpoint with this label
-        all_ckpts = await list_checkpoints_by_account(db, account.id)
-        matching = [c for c in all_ckpts if c.label == label]
-        if not matching:
+        all_ckpts = await list_checkpoints_by_account(db, account.id, label=label)
+        if not all_ckpts:
             logger.warning("No checkpoints found with label %s for deferred processing", label)
             return
 
-        # Use the most recent checkpoint with this label
-        latest_ckpt = matching[0]  # already sorted by created_at DESC
+        latest_ckpt = all_ckpts[0]  # sorted by created_at DESC
 
-        # Take the last deferred request (most recent)
-        last_payload = json.loads(deferred_items[-1]["request_payload"])
-        checkpoint_id = last_payload.get("checkpoint_id", latest_ckpt.id)
+        # Parse all deferred payloads
+        payloads = [json.loads(d["request_payload"]) for d in deferred_items]
 
-        # Resolve the actual checkpoint to fork from
-        target_ckpt = await get_checkpoint(db, checkpoint_id)
-        if target_ckpt is None:
-            target_ckpt = latest_ckpt
+        # Fork from latest checkpoint
+        fork_manifest = Manifest.from_json(latest_ckpt.manifest_json)
+        computer = await vm_mgr.fork_from_checkpoint(account.id, latest_ckpt, fork_manifest)
 
-        fork_manifest = Manifest.from_json(target_ckpt.manifest_json)
-        computer = await vm_mgr.fork_from_checkpoint(account.id, target_ckpt, fork_manifest)
+        # Write each deferred exec to /tmp/exec/N.txt
+        exec_commands = [p.get("exec", "") or "" for p in payloads]
+        mkdir_cmd = "mkdir -p /tmp/exec"
+        write_cmds = [mkdir_cmd]
+        for i, cmd in enumerate(exec_commands):
+            # Escape single quotes for shell
+            escaped = cmd.replace("'", "'\\''")
+            write_cmds.append(f"printf '%s' '{escaped}' > /tmp/exec/{i}.txt")
+        await ssh_exec(
+            computer.vm_ip, " && ".join(write_cmds), config.ssh_key_path, pool=None,
+        )
+
+        # Determine exec command: meta_exec from last request, or concatenate
+        meta_exec = None
+        for p in reversed(payloads):
+            if p.get("meta_exec"):
+                meta_exec = p["meta_exec"]
+                break
+
+        exec_cmd = meta_exec or "\n".join(c for c in exec_commands if c)
+
+        # Run the exec
+        if exec_cmd:
+            result = await ssh_exec(
+                computer.vm_ip, exec_cmd, config.ssh_key_path, pool=None,
+            )
+            logger.info(
+                "Deferred exec for label %s: exit_code=%d",
+                label, result.exit_code,
+            )
+
+            # Self-destruct if any deferred request wanted it
+            should_self_destruct = any(p.get("self_destruct") for p in payloads)
+            last_callback = None
+            for p in reversed(payloads):
+                if p.get("callback_url"):
+                    last_callback = p["callback_url"]
+                    break
+
+            if should_self_destruct:
+                await _self_destruct(
+                    computer=computer,
+                    account=account,
+                    label=label,
+                    source_checkpoint_id=latest_ckpt.id,
+                    exec_exit_code=result.exit_code,
+                    exec_stdout=result.stdout,
+                    exec_stderr=result.stderr,
+                    callback_url=last_callback,
+                    db=db,
+                    config=config,
+                    vm_mgr=vm_mgr,
+                    pool=None,
+                )
+
         logger.info(
             "Processed %d deferred request(s) for label %s -> computer %s",
             len(deferred_items), label, computer.id,
@@ -592,6 +662,7 @@ async def destroy_computer(
 
     # Drain deferred queue: if this computer was serving a labeled checkpoint chain,
     # process any queued fork requests.
+    config: Config = request.app.state.config
     if computer.source_checkpoint_id:
         source_ckpt = await get_checkpoint(db, computer.source_checkpoint_id)
         if source_ckpt and source_ckpt.label:
@@ -604,6 +675,7 @@ async def destroy_computer(
                         label=source_ckpt.label,
                         deferred_items=deferred,
                         db=db,
+                        config=config,
                         vm_mgr=vm_mgr,
                         account=account,
                     )

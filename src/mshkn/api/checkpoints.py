@@ -39,6 +39,7 @@ class ForkRequest(BaseModel):
     self_destruct: bool = False
     callback_url: str | None = None
     exclusive: Literal["error_on_conflict", "defer_on_conflict"] | None = None
+    meta_exec: str | None = None
 
 
 class ForkResponse(BaseModel):
@@ -105,6 +106,10 @@ async def fork_checkpoint(
                     "checkpoint_id": checkpoint_id,
                     "manifest": body.manifest,
                     "skip_manifest_check": body.skip_manifest_check,
+                    "exec": body.exec,
+                    "self_destruct": body.self_destruct,
+                    "callback_url": body.callback_url,
+                    "meta_exec": body.meta_exec,
                 }
                 now = datetime.now(UTC).isoformat()
                 await insert_deferred(
