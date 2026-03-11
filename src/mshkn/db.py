@@ -381,3 +381,82 @@ async def list_account_ids_with_checkpoints(db: aiosqlite.Connection) -> list[st
     )
     rows = await cursor.fetchall()
     return [r[0] for r in rows]
+
+
+async def get_active_computer_for_label(
+    db: aiosqlite.Connection, account_id: str, label: str
+) -> Computer | None:
+    """Return a running computer whose source checkpoint has the given label, or None."""
+    cursor = await db.execute(
+        "SELECT c.id, c.account_id, c.thin_volume_id, c.tap_device, c.vm_ip, "
+        "c.socket_path, c.firecracker_pid, c.manifest_hash, c.manifest_json, "
+        "c.status, c.created_at, c.last_exec_at, c.source_checkpoint_id "
+        "FROM computers c "
+        "INNER JOIN checkpoints ck ON c.source_checkpoint_id = ck.id "
+        "WHERE c.account_id = ? AND c.status = 'running' AND ck.label = ? "
+        "LIMIT 1",
+        (account_id, label),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return Computer(
+        id=row[0],
+        account_id=row[1],
+        thin_volume_id=row[2],
+        tap_device=row[3],
+        vm_ip=row[4],
+        socket_path=row[5],
+        firecracker_pid=row[6],
+        manifest_hash=row[7],
+        manifest_json=row[8],
+        status=row[9],
+        created_at=row[10],
+        last_exec_at=row[11],
+        source_checkpoint_id=row[12],
+    )
+
+
+async def insert_deferred(
+    db: aiosqlite.Connection,
+    deferred_id: str,
+    label: str,
+    account_id: str,
+    payload_json: str,
+    created_at: str,
+) -> None:
+    """Insert a deferred request into the queue."""
+    await db.execute(
+        "INSERT INTO deferred_queue (id, label, account_id, request_payload, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (deferred_id, label, account_id, payload_json, created_at),
+    )
+    await db.commit()
+
+
+async def list_deferred_by_label(
+    db: aiosqlite.Connection, label: str
+) -> list[dict[str, str]]:
+    """Return all deferred requests for a label, ordered by created_at ASC."""
+    cursor = await db.execute(
+        "SELECT id, label, account_id, request_payload, created_at "
+        "FROM deferred_queue WHERE label = ? ORDER BY created_at ASC",
+        (label,),
+    )
+    rows = await cursor.fetchall()
+    return [
+        {
+            "id": r[0],
+            "label": r[1],
+            "account_id": r[2],
+            "request_payload": r[3],
+            "created_at": r[4],
+        }
+        for r in rows
+    ]
+
+
+async def delete_deferred_by_label(db: aiosqlite.Connection, label: str) -> None:
+    """Delete all deferred requests for a label."""
+    await db.execute("DELETE FROM deferred_queue WHERE label = ?", (label,))
+    await db.commit()

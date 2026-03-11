@@ -22,9 +22,12 @@ from mshkn.checkpoint.r2 import upload_checkpoint
 from mshkn.checkpoint.snapshot import create_vm_snapshot
 from mshkn.db import (
     count_active_computers_by_account,
+    delete_deferred_by_label,
+    get_checkpoint,
     get_computer,
     get_latest_checkpoint_for_computer,
     insert_checkpoint,
+    list_deferred_by_label,
     update_last_exec_at,
 )
 from mshkn.models import Checkpoint, Manifest
@@ -524,6 +527,53 @@ async def checkpoint_computer(
     )
 
 
+async def _process_deferred(
+    label: str,
+    deferred_items: list[dict[str, str]],
+    db: aiosqlite.Connection,
+    vm_mgr: VMManager,
+    account: Account,
+) -> None:
+    """Boot a new computer from the latest checkpoint for a label and process deferred forks.
+
+    Each deferred item is a fork request that was queued because a computer was already
+    running on this checkpoint chain. We take the LAST deferred request (most recent)
+    and fork from it. The others are effectively superseded.
+    """
+    import json
+
+    from mshkn.db import list_checkpoints_by_account
+
+    try:
+        # Find the latest checkpoint with this label
+        all_ckpts = await list_checkpoints_by_account(db, account.id)
+        matching = [c for c in all_ckpts if c.label == label]
+        if not matching:
+            logger.warning("No checkpoints found with label %s for deferred processing", label)
+            return
+
+        # Use the most recent checkpoint with this label
+        latest_ckpt = matching[0]  # already sorted by created_at DESC
+
+        # Take the last deferred request (most recent)
+        last_payload = json.loads(deferred_items[-1]["request_payload"])
+        checkpoint_id = last_payload.get("checkpoint_id", latest_ckpt.id)
+
+        # Resolve the actual checkpoint to fork from
+        target_ckpt = await get_checkpoint(db, checkpoint_id)
+        if target_ckpt is None:
+            target_ckpt = latest_ckpt
+
+        fork_manifest = Manifest.from_json(target_ckpt.manifest_json)
+        computer = await vm_mgr.fork_from_checkpoint(account.id, target_ckpt, fork_manifest)
+        logger.info(
+            "Processed %d deferred request(s) for label %s -> computer %s",
+            len(deferred_items), label, computer.id,
+        )
+    except Exception:
+        logger.exception("Failed to process deferred queue for label %s", label)
+
+
 @router.delete("/{computer_id}")
 async def destroy_computer(
     request: Request,
@@ -539,4 +589,26 @@ async def destroy_computer(
     vm_mgr: VMManager = request.app.state.vm_manager
     await vm_mgr.destroy(computer_id)
     computers_active.dec()
+
+    # Drain deferred queue: if this computer was serving a labeled checkpoint chain,
+    # process any queued fork requests.
+    if computer.source_checkpoint_id:
+        source_ckpt = await get_checkpoint(db, computer.source_checkpoint_id)
+        if source_ckpt and source_ckpt.label:
+            deferred = await list_deferred_by_label(db, source_ckpt.label)
+            if deferred:
+                await delete_deferred_by_label(db, source_ckpt.label)
+                # Process deferred requests in background
+                task = asyncio.create_task(
+                    _process_deferred(
+                        label=source_ckpt.label,
+                        deferred_items=deferred,
+                        db=db,
+                        vm_mgr=vm_mgr,
+                        account=account,
+                    )
+                )
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
+
     return {"status": "destroyed"}
