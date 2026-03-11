@@ -440,8 +440,8 @@ async def test_deferred_batch_with_callback(long_client: httpx.AsyncClient) -> N
             "exclusive": "defer_on_conflict",
             "exec": f"task-{i}",
             "meta_exec": (
-                "cat /tmp/exec/*.txt > /tmp/batch_result.txt && "
-                "cat /tmp/batch_result.txt"
+                "cat /tmp/exec/*.txt > /var/batch_result.txt && "
+                "cat /var/batch_result.txt"
             ),
             "self_destruct": True,
         })
@@ -462,10 +462,10 @@ async def test_deferred_batch_with_callback(long_client: httpx.AsyncClient) -> N
         f"Expected at least 2 checkpoints in chain, got {len(ckpts)}"
     )
 
-    # Fork from the latest checkpoint and verify /tmp/batch_result.txt
+    # Fork from the latest checkpoint and verify /var/batch_result.txt
     latest_ckpt = ckpts[0]["id"]
     fork_resp = await long_client.post(f"/checkpoints/{latest_ckpt}/fork", json={
-        "exec": "cat /tmp/batch_result.txt 2>/dev/null || echo 'not found'",
+        "exec": "cat /var/batch_result.txt 2>/dev/null || echo 'not found'",
     })
     fork_resp.raise_for_status()
     fork_data = fork_resp.json()
