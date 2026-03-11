@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -184,6 +185,38 @@ class VMManager:
         self._next_volume_id += 1
         return vol_id
 
+    async def _start_firecracker_with_snapshot(
+        self,
+        source_volume_id: int,
+        volume_id: int,
+        volume_name: str,
+        socket_path: str,
+    ) -> int:
+        snapshot_task = asyncio.create_task(
+            create_snapshot(
+                pool_name=self.config.thin_pool_name,
+                source_volume_id=source_volume_id,
+                new_volume_id=volume_id,
+                new_volume_name=volume_name,
+                sectors=self.config.thin_volume_sectors,
+            )
+        )
+        try:
+            pid = await start_firecracker_process(socket_path)
+        except Exception:
+            snapshot_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await snapshot_task
+            raise
+
+        try:
+            await snapshot_task
+        except Exception:
+            await kill_firecracker_process(pid)
+            raise
+
+        return pid
+
     async def _get_or_build_capability_volume(self, manifest: Manifest) -> int:
         """Return the volume_id of a capability base volume for this manifest.
 
@@ -276,17 +309,13 @@ class VMManager:
         # 1. Create tap device
         await create_tap(slot)
 
-        # 2. Create dm-thin snapshot from capability base
-        await create_snapshot(
-            pool_name=self.config.thin_pool_name,
+        # 2-3. Create dm-thin snapshot and start Firecracker in parallel
+        pid = await self._start_firecracker_with_snapshot(
             source_volume_id=source_volume_id,
-            new_volume_id=volume_id,
-            new_volume_name=volume_name,
-            sectors=self.config.thin_volume_sectors,
+            volume_id=volume_id,
+            volume_name=volume_name,
+            socket_path=socket_path,
         )
-
-        # 3. Start Firecracker
-        pid = await start_firecracker_process(socket_path)
 
         # 4. Configure and boot
         fc_client = FirecrackerClient(socket_path)
@@ -386,17 +415,13 @@ class VMManager:
         # 1. Create tap device
         await create_tap(slot)
 
-        # 2. Create dm-thin snapshot from the checkpoint's frozen disk (O(1) CoW)
-        await create_snapshot(
-            pool_name=self.config.thin_pool_name,
+        # 2-3. Create checkpoint disk snapshot and start Firecracker in parallel
+        pid = await self._start_firecracker_with_snapshot(
             source_volume_id=checkpoint.thin_volume_id,
-            new_volume_id=volume_id,
-            new_volume_name=volume_name,
-            sectors=self.config.thin_volume_sectors,
+            volume_id=volume_id,
+            volume_name=volume_name,
+            socket_path=socket_path,
         )
-
-        # 3. Start Firecracker and cold-boot from the snapshot disk
-        pid = await start_firecracker_process(socket_path)
         fc_client = FirecrackerClient(socket_path)
         try:
             await fc_client.configure_and_boot(
