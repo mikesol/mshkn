@@ -1,6 +1,7 @@
 [Unit]
 Description=mshkn orchestrator
 After=network.target
+Wants=litestream.service
 
 [Service]
 Type=simple

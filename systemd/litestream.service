@@ -1,0 +1,14 @@
+[Unit]
+Description=Litestream SQLite replication
+After=network.target mshkn.service
+Requires=mshkn.service
+PartOf=mshkn.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/litestream replicate -config /etc/litestream.yml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

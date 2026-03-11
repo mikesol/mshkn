@@ -39,6 +39,12 @@ async def create_tap(slot: int) -> None:
             await run(f"ip link del {tap}", check=False)
     await run(f"ip addr add {host_ip}/30 dev {tap}")
     await run(f"ip link set {tap} up")
+    # Pre-populate ARP so _wait_for_ssh doesn't block on ARP probe timeout.
+    # Without this, the first TCP connect triggers an ARP probe that goes
+    # unanswered for 1000ms (kernel retrans_time_ms) because the VM hasn't
+    # configured its IP yet, causing bimodal create latency.
+    vm_mac = slot_to_mac(slot)
+    await run(f"ip neigh replace {vm_ip} lladdr {vm_mac} dev {tap} nud permanent")
     # Allow VM → internet (non-172.16.0.0/12 destinations) but block VM → VM
     await run(
         f"iptables -I FORWARD -i {tap} -s {vm_ip} "

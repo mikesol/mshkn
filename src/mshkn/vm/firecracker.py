@@ -24,7 +24,7 @@ class FirecrackerConfig:
     tap_device: str
     guest_mac: str
     vcpu_count: int = 2
-    mem_size_mib: int = 512
+    mem_size_mib: int = 256
     boot_args: str = field(default=BOOT_ARGS)
 
 

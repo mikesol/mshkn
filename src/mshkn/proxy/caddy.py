@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -42,16 +43,24 @@ class CaddyClient:
                 },
             ],
         }
-        resp = await self._client.post(
-            "/config/apps/http/servers/main/routes",
-            json=route,
-        )
-        if resp.status_code >= 400:
-            logger.error(
-                "Failed to add Caddy route for %s: %s %s",
-                computer_id, resp.status_code, resp.text,
-            )
-            raise RuntimeError(f"Caddy add_route failed: {resp.status_code} {resp.text}")
+        for attempt in range(3):
+            try:
+                resp = await self._client.post(
+                    "/config/apps/http/servers/main/routes",
+                    json=route,
+                )
+                if resp.status_code >= 400:
+                    logger.error(
+                        "Failed to add Caddy route for %s: %s %s",
+                        computer_id, resp.status_code, resp.text,
+                    )
+                    raise RuntimeError(f"Caddy add_route failed: {resp.status_code} {resp.text}")
+                break
+            except (httpx.RemoteProtocolError, httpx.ConnectError) as exc:
+                if attempt < 2:
+                    await asyncio.sleep(0.1 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"Caddy add_route failed after retries: {exc}") from exc
         logger.info("Added Caddy route: *-%s.%s -> %s", computer_id, self.domain, vm_ip)
 
     async def remove_route(self, computer_id: str) -> None:

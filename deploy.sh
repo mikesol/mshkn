@@ -13,6 +13,6 @@ $SSH "cd /opt/mshkn && git pull"
 $SSH "cd /opt/mshkn && .venv/bin/uv sync"
 
 # Restart
-$SSH "systemctl restart mshkn"
+$SSH "systemctl restart mshkn litestream"
 
 echo "Deployed. Check: $SSH 'systemctl status mshkn'"

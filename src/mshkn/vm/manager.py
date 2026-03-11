@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MEM_MIB = 512
+_DEFAULT_MEM_MIB = 256
 _ALERT_HISTORY_SIZE = 100
 
 
@@ -407,7 +407,7 @@ class VMManager:
                     tap_device=tap,
                     guest_mac=mac,
                     vcpu_count=2,
-                    mem_size_mib=512,
+                    mem_size_mib=_DEFAULT_MEM_MIB,
                 )
             )
         finally:
@@ -835,12 +835,12 @@ class VMManager:
             try:
                 _, writer = await asyncio.wait_for(
                     asyncio.open_connection(vm_ip, 22),
-                    timeout=1.0,
+                    timeout=0.05,
                 )
                 writer.close()
                 await writer.wait_closed()
                 return
             except (OSError, TimeoutError):
                 pass
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.025)
         raise TimeoutError(f"VM at {vm_ip} did not become reachable on port 22")
