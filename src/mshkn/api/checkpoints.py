@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from mshkn.api.auth import require_account
 from mshkn.db import delete_checkpoint as db_delete_checkpoint
-from mshkn.db import get_checkpoint, insert_checkpoint, list_checkpoints_by_account
+from mshkn.db import (
+    get_active_computer_for_label,
+    get_checkpoint,
+    insert_checkpoint,
+    insert_deferred,
+    list_checkpoints_by_account,
+)
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -27,6 +35,7 @@ _require_account = Depends(require_account)
 class ForkRequest(BaseModel):
     manifest: dict[str, object] | None = None
     skip_manifest_check: bool = False
+    exclusive: Literal["error_on_conflict", "defer_on_conflict"] | None = None
 
 
 class ForkResponse(BaseModel):
@@ -39,13 +48,13 @@ def _is_manifest_additive(parent_uses: list[str], new_uses: list[str]) -> bool:
     return set(parent_uses).issubset(set(new_uses))
 
 
-@router.post("/{checkpoint_id}/fork", response_model=ForkResponse)
+@router.post("/{checkpoint_id}/fork", response_model=None)
 async def fork_checkpoint(
     checkpoint_id: str,
     request: Request,
     body: ForkRequest | None = None,
     account: Account = _require_account,
-) -> ForkResponse:
+) -> ForkResponse | JSONResponse:
     from mshkn.models import Manifest
 
     db: aiosqlite.Connection = request.app.state.db
@@ -73,6 +82,32 @@ async def fork_checkpoint(
         fork_manifest = Manifest(uses=new_uses)
     else:
         fork_manifest = Manifest.from_json(ckpt.manifest_json)
+
+    # Exclusive restore: prevent concurrent computers on the same checkpoint chain
+    if body and body.exclusive and ckpt.label:
+        active = await get_active_computer_for_label(db, account.id, ckpt.label)
+        if active is not None:
+            if body.exclusive == "error_on_conflict":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Checkpoint chain has active computer",
+                )
+            if body.exclusive == "defer_on_conflict":
+                deferred_id = f"def-{uuid.uuid4().hex[:12]}"
+                payload = {
+                    "checkpoint_id": checkpoint_id,
+                    "manifest": body.manifest,
+                    "skip_manifest_check": body.skip_manifest_check,
+                }
+                now = datetime.now(UTC).isoformat()
+                await insert_deferred(
+                    db, deferred_id, ckpt.label, account.id,
+                    json.dumps(payload), now,
+                )
+                return JSONResponse(
+                    status_code=202,
+                    content={"deferred_id": deferred_id, "status": "queued"},
+                )
 
     vm_mgr = request.app.state.vm_manager
     computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, fork_manifest)
