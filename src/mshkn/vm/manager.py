@@ -384,26 +384,15 @@ class VMManager:
         manifest: Manifest,
         needs: dict[str, object] | None = None,
     ) -> Computer:
-        _mem_size_mib, _vcpu_count = parse_needs(needs)
+        mem_size_mib, vcpu_count = parse_needs(needs)
+        custom_resources = (
+            mem_size_mib != _DEFAULT_MEM_MIB or vcpu_count != _DEFAULT_VCPU
+        )
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
 
         # Get capability base volume (L1/L2 cache, builds if miss)
         source_volume_id = await self._get_or_build_capability_volume(manifest)
         manifest_hash = manifest.content_hash() if manifest.uses else "bare"
-
-        # Check L3 cache
-        from mshkn.capability.template_cache import get_cached_template
-
-        template = await get_cached_template(self.db, manifest_hash)
-        if template is None:
-            # L3 miss — two-phase boot: build template, then restore
-            logger.info("L3 cache miss for %s, building template...", manifest_hash)
-            await self._build_l3_template(manifest_hash, source_volume_id)
-            template = await get_cached_template(self.db, manifest_hash)
-            if template is None:
-                raise RuntimeError(f"L3 template build failed for {manifest_hash}")
-
-        vmstate_path, memory_path = template
 
         # Allocate slot + volume
         async with self._alloc_lock:
@@ -417,18 +406,51 @@ class VMManager:
             f"'create_snap {volume_id} {source_volume_id}'"
         )
 
-        # Restore from snapshot via staging slot
-        from mshkn.vm.staging import restore_from_snapshot
+        if custom_resources:
+            # Custom RAM/vCPU: cold-boot directly (L3 templates bake in default config)
+            from mshkn.vm.staging import cold_boot_from_disk
 
-        result = await restore_from_snapshot(
-            vmstate_path=vmstate_path,
-            memory_path=memory_path,
-            disk_volume_id=volume_id,
-            final_slot=slot,
-            pool_name=self.config.thin_pool_name,
-            thin_volume_sectors=self.config.thin_volume_sectors,
-            final_volume_name=volume_name,
-        )
+            logger.info(
+                "Cold-booting with custom resources: mem=%dMiB, vcpu=%d",
+                mem_size_mib, vcpu_count,
+            )
+            result = await cold_boot_from_disk(
+                disk_volume_id=volume_id,
+                final_slot=slot,
+                pool_name=self.config.thin_pool_name,
+                thin_volume_sectors=self.config.thin_volume_sectors,
+                final_volume_name=volume_name,
+                kernel_path=str(self.config.kernel_path),
+                mem_size_mib=mem_size_mib,
+                vcpu_count=vcpu_count,
+                socket_path=f"/tmp/fc-{computer_id}.socket",
+            )
+        else:
+            # Default resources: use L3 template cache for fast restore
+            from mshkn.capability.template_cache import get_cached_template
+
+            template = await get_cached_template(self.db, manifest_hash)
+            if template is None:
+                logger.info("L3 cache miss for %s, building template...", manifest_hash)
+                await self._build_l3_template(manifest_hash, source_volume_id)
+                template = await get_cached_template(self.db, manifest_hash)
+                if template is None:
+                    raise RuntimeError(f"L3 template build failed for {manifest_hash}")
+
+            vmstate_path, memory_path = template
+
+            from mshkn.vm.staging import restore_from_snapshot
+
+            result = await restore_from_snapshot(
+                vmstate_path=vmstate_path,
+                memory_path=memory_path,
+                disk_volume_id=volume_id,
+                final_slot=slot,
+                pool_name=self.config.thin_pool_name,
+                thin_volume_sectors=self.config.thin_volume_sectors,
+                final_volume_name=volume_name,
+                socket_path=f"/tmp/fc-{computer_id}.socket",
+            )
 
         # Warm SSH pool
         _host_ip, vm_ip = slot_to_ip(slot)
@@ -503,33 +525,59 @@ class VMManager:
             volume_id = self._allocate_volume_id()
         volume_name = f"mshkn-{computer_id}"
 
-        # Get checkpoint's vmstate + memory paths
-        ckpt_dir = self.config.checkpoint_local_dir / checkpoint.id
-        vmstate_path = str(ckpt_dir / "vmstate")
-        memory_path = str(ckpt_dir / "memory")
-
-        # If files not local, download from R2
-        if not Path(vmstate_path).exists() or not Path(memory_path).exists():
-            await self._download_checkpoint_snapshot(checkpoint)
-
         # Create dm-thin snapshot of checkpoint's disk (pool only, no device activation)
         await run(
             f"dmsetup message {self.config.thin_pool_name} 0 "
             f"'create_snap {volume_id} {checkpoint.thin_volume_id}'"
         )
 
-        # Restore from snapshot via staging slot
-        from mshkn.vm.staging import restore_from_snapshot
+        # Check if checkpoint has vmstate/memory (merge checkpoints don't)
+        ckpt_dir = self.config.checkpoint_local_dir / checkpoint.id
+        vmstate_path = str(ckpt_dir / "vmstate")
+        memory_path = str(ckpt_dir / "memory")
+        has_snapshot = Path(vmstate_path).exists() and Path(memory_path).exists()
 
-        result = await restore_from_snapshot(
-            vmstate_path=vmstate_path,
-            memory_path=memory_path,
-            disk_volume_id=volume_id,
-            final_slot=slot,
-            pool_name=self.config.thin_pool_name,
-            thin_volume_sectors=self.config.thin_volume_sectors,
-            final_volume_name=volume_name,
-        )
+        if not has_snapshot:
+            # Try downloading from R2
+            try:
+                await self._download_checkpoint_snapshot(checkpoint)
+                has_snapshot = Path(vmstate_path).exists() and Path(memory_path).exists()
+            except Exception:
+                logger.info(
+                    "No snapshot files for checkpoint %s, will cold-boot",
+                    checkpoint.id,
+                )
+
+        if has_snapshot:
+            # Standard path: restore from snapshot via staging slot
+            from mshkn.vm.staging import restore_from_snapshot
+
+            result = await restore_from_snapshot(
+                vmstate_path=vmstate_path,
+                memory_path=memory_path,
+                disk_volume_id=volume_id,
+                final_slot=slot,
+                pool_name=self.config.thin_pool_name,
+                thin_volume_sectors=self.config.thin_volume_sectors,
+                final_volume_name=volume_name,
+                socket_path=f"/tmp/fc-{computer_id}.socket",
+            )
+        else:
+            # Merge checkpoint (no vmstate/memory): cold-boot from disk
+            from mshkn.vm.staging import cold_boot_from_disk
+
+            logger.info(
+                "Cold-booting fork from merge checkpoint %s", checkpoint.id,
+            )
+            result = await cold_boot_from_disk(
+                disk_volume_id=volume_id,
+                final_slot=slot,
+                pool_name=self.config.thin_pool_name,
+                thin_volume_sectors=self.config.thin_volume_sectors,
+                final_volume_name=volume_name,
+                kernel_path=str(self.config.kernel_path),
+                socket_path=f"/tmp/fc-{computer_id}.socket",
+            )
 
         # Warm SSH pool
         if self.ssh_pool is not None:

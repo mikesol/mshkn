@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from mshkn.shell import run
 from mshkn.vm.firecracker import (
     FirecrackerClient,
+    FirecrackerConfig,
     kill_firecracker_process,
     start_firecracker_process,
 )
@@ -51,6 +52,7 @@ async def restore_from_snapshot(
     pool_name: str,
     thin_volume_sectors: int,
     final_volume_name: str,
+    socket_path: str | None = None,
 ) -> RestoreResult:
     """Restore a VM from a Firecracker snapshot via the staging slot.
 
@@ -73,11 +75,15 @@ async def restore_from_snapshot(
     """
     final_host_ip, final_vm_ip = slot_to_ip(final_slot)
     final_tap = slot_to_tap(final_slot)
-    socket_path = f"/tmp/fc-staging-{final_slot}.socket"
+    if socket_path is None:
+        socket_path = f"/tmp/fc-staging-{final_slot}.socket"
     pid: int | None = None
 
     async with _restore_lock:
         try:
+            # Pre-cleanup: remove stale staging resources from a previous failed restore
+            await _ensure_staging_clean()
+
             # 1. Map disk volume as staging drive name
             await run(
                 f"dmsetup create {STAGING_DRIVE_NAME} "
@@ -134,6 +140,105 @@ async def restore_from_snapshot(
     )
 
 
+async def cold_boot_from_disk(
+    disk_volume_id: int,
+    final_slot: int,
+    pool_name: str,
+    thin_volume_sectors: int,
+    final_volume_name: str,
+    kernel_path: str,
+    mem_size_mib: int = 256,
+    vcpu_count: int = 2,
+    socket_path: str | None = None,
+) -> RestoreResult:
+    """Cold-boot a VM from a disk volume via the staging slot.
+
+    Used for merge checkpoints (no vmstate/memory) and custom resource needs.
+    Same staging flow as restore_from_snapshot but uses configure_and_boot
+    instead of load_snapshot.
+    """
+    final_host_ip, final_vm_ip = slot_to_ip(final_slot)
+    final_tap = slot_to_tap(final_slot)
+    if socket_path is None:
+        socket_path = f"/tmp/fc-staging-{final_slot}.socket"
+    pid: int | None = None
+
+    async with _restore_lock:
+        try:
+            # Pre-cleanup: remove stale staging resources from a previous failed restore
+            await _ensure_staging_clean()
+
+            # 1. Map disk volume as staging drive name
+            await run(
+                f"dmsetup create {STAGING_DRIVE_NAME} "
+                f"--table '0 {thin_volume_sectors} thin /dev/mapper/{pool_name} {disk_volume_id}'"
+            )
+
+            # 2. Create staging tap
+            await create_tap(STAGING_SLOT)
+
+            # 3. Start FC + cold boot
+            pid = await start_firecracker_process(socket_path)
+            fc_client = FirecrackerClient(socket_path)
+            try:
+                await fc_client.configure_and_boot(
+                    FirecrackerConfig(
+                        socket_path=socket_path,
+                        kernel_path=kernel_path,
+                        rootfs_path=f"/dev/mapper/{STAGING_DRIVE_NAME}",
+                        tap_device=STAGING_TAP,
+                        guest_mac=STAGING_MAC,
+                        mem_size_mib=mem_size_mib,
+                        vcpu_count=vcpu_count,
+                    )
+                )
+            finally:
+                await fc_client.close()
+
+            # 4. Wait for SSH at staging IP (longer timeout for cold boot)
+            await _wait_for_ssh_staging(STAGING_VM_IP, timeout=30.0)
+
+            # 5. Add final IP + update default route via SSH
+            await _ssh_add_ip(STAGING_VM_IP, final_vm_ip, final_host_ip)
+
+            # 6. Rename tap + reconfigure host side + rename drive
+            await run(f"ip link del {final_tap}", check=False)
+            await run(
+                f"ip link set {STAGING_TAP} name {final_tap} && "
+                f"ip addr flush dev {final_tap} && "
+                f"ip addr add {final_host_ip}/30 dev {final_tap} && "
+                f"ip neigh replace {final_vm_ip} lladdr {STAGING_MAC} "
+                f"dev {final_tap} nud permanent && "
+                f"iptables -I FORWARD -i {final_tap} -s {final_vm_ip} "
+                f"! -d 172.16.0.0/12 -j ACCEPT && "
+                f"iptables -I FORWARD -i {final_tap} -s {final_vm_ip} "
+                f"-d 172.16.0.0/12 -j DROP && "
+                f"dmsetup rename {STAGING_DRIVE_NAME} {final_volume_name}"
+            )
+
+            # 7. Verify VM is reachable at final IP
+            await _wait_for_ssh_staging(final_vm_ip)
+
+        except Exception:
+            await _cleanup_staging(pid=pid)
+            raise
+
+    return RestoreResult(
+        pid=pid,
+        socket_path=socket_path,
+        vm_ip=final_vm_ip,
+        tap_device=final_tap,
+    )
+
+
+async def _ensure_staging_clean() -> None:
+    """Pre-cleanup: remove any stale staging resources from a previous failed restore."""
+    with contextlib.suppress(Exception):
+        await destroy_tap(STAGING_SLOT)
+    with contextlib.suppress(Exception):
+        await run(f"dmsetup remove {STAGING_DRIVE_NAME}", check=False)
+
+
 async def _cleanup_staging(pid: int | None = None) -> None:
     """Best-effort cleanup of staging resources after a failed restore."""
     if pid is not None:
@@ -142,11 +247,7 @@ async def _cleanup_staging(pid: int | None = None) -> None:
         except Exception:
             logger.warning("Failed to kill staging FC process PID=%s", pid)
 
-    with contextlib.suppress(Exception):
-        await destroy_tap(STAGING_SLOT)
-
-    with contextlib.suppress(Exception):
-        await run(f"dmsetup remove {STAGING_DRIVE_NAME}", check=False)
+    await _ensure_staging_clean()
 
 
 async def _wait_for_ssh_staging(vm_ip: str, timeout: float = 5.0) -> None:

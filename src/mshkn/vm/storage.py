@@ -61,10 +61,24 @@ async def create_snapshot(
 ) -> None:
     """Create a dm-thin snapshot (CoW copy of source)."""
     await run(f"dmsetup message {pool_name} 0 'create_snap {new_volume_id} {source_volume_id}'")
-    await run(
-        f"dmsetup create {new_volume_name} "
-        f"--table '0 {sectors} thin /dev/mapper/{pool_name} {new_volume_id}'"
-    )
+    # Activate the device — remove stale mapping first if it exists
+    try:
+        await run(
+            f"dmsetup create {new_volume_name} "
+            f"--table '0 {sectors} thin /dev/mapper/{pool_name} {new_volume_id}'"
+        )
+    except ShellError as e:
+        if "File exists" in e.stderr or "already exists" in e.stderr:
+            logger.warning(
+                "Stale device %s exists, removing and retrying", new_volume_name,
+            )
+            await run(f"dmsetup remove {new_volume_name}", check=False)
+            await run(
+                f"dmsetup create {new_volume_name} "
+                f"--table '0 {sectors} thin /dev/mapper/{pool_name} {new_volume_id}'"
+            )
+        else:
+            raise
     logger.info(
         "Created snapshot %s (vol %d from %d)", new_volume_name, new_volume_id, source_volume_id
     )
