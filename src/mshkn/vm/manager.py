@@ -497,17 +497,6 @@ class VMManager:
             msg = f"Checkpoint {checkpoint.id} has no disk snapshot (created before this fix)"
             raise ValueError(msg)
 
-        # Look up the source computer's VM IP — needed for SSH after LOAD_SNAPSHOT.
-        # The checkpoint's vmstate has the VM configured with its FINAL IP (not staging),
-        # so we need to reach it at that IP through the staging tap.
-        source_vm_ip: str | None = None
-        if checkpoint.computer_id is not None:
-            from mshkn.db import get_computer as db_get_computer
-
-            source_computer = await db_get_computer(self.db, checkpoint.computer_id)
-            if source_computer is not None:
-                source_vm_ip = source_computer.vm_ip
-
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
         async with self._alloc_lock:
             slot = self._allocate_slot()
@@ -540,7 +529,6 @@ class VMManager:
             pool_name=self.config.thin_pool_name,
             thin_volume_sectors=self.config.thin_volume_sectors,
             final_volume_name=volume_name,
-            source_vm_ip=source_vm_ip,
         )
 
         # Warm SSH pool

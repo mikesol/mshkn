@@ -51,7 +51,6 @@ async def restore_from_snapshot(
     pool_name: str,
     thin_volume_sectors: int,
     final_volume_name: str,
-    source_vm_ip: str | None = None,  # Deprecated, unused — kept for caller compat
 ) -> RestoreResult:
     """Restore a VM from a Firecracker snapshot via the staging slot.
 
