@@ -638,6 +638,95 @@ The design doc now promises structured logging, Prometheus metrics, Grafana dash
 
 ---
 
+## Phase 13: "Can It Take a Punch?" (Ingress Mapping)
+
+The ingress mapping layer lets external webhooks trigger disposable computers via user-defined Starlark transformation rules. If this layer is fragile, every integration built on it is fragile. So we test the full pipeline: rule CRUD, Starlark execution, and actual VM creation through the ingress endpoint.
+
+### T13.1 — Rule CRUD Lifecycle
+
+- Create a rule with valid Starlark. Does it return an `id` starting with `ir_` and an `ingress_url`?
+- List rules. Is the newly created rule in the list?
+- Get rule by ID. Does it include `starlark_source`?
+- Update the rule's name. Does the change persist?
+- Delete the rule. Does the ingress URL stop working (404)?
+
+### T13.2 — Rule Validation
+
+- Create a rule with invalid Starlark (syntax error). Does it return 400?
+- Create a rule with valid Starlark but no `transform` function. 400?
+- Update a rule with invalid Starlark. 400, and the old rule is unchanged?
+
+### T13.3 — Dry-Run Test Endpoint
+
+- Create a rule that transforms `body_json.message` into a fork action.
+- Call the `/test` endpoint with a mock request containing `{"message": "hello"}`.
+- Does it return the expected Starlark result with `action: fork`?
+- Does `validation_errors` come back empty?
+- Call `/test` with a mock request that triggers a Starlark runtime error. Does it return the error in `validation_errors`?
+
+### T13.4 — Ingress Trigger (Async Fork)
+
+- Create a computer, checkpoint it, destroy it.
+- Create an ingress rule that forks from that checkpoint with `exec: "echo ingress-works"` and `self_destruct: true`.
+- POST to the ingress URL with a JSON body. Does it return 202?
+- Wait for the fork to complete (poll checkpoint list or use callback_url).
+- Does a new checkpoint exist with the exec output containing "ingress-works"?
+
+### T13.5 — Ingress Trigger (Sync Fork)
+
+- Same setup as T13.4, but with `response_mode: "sync"`.
+- POST to the ingress URL. Does it return 200 with `exec_stdout` containing "ingress-works"?
+- Does the response include `computer_id` and `created_checkpoint_id`?
+
+### T13.6 — Ingress Trigger (Create)
+
+- Create an ingress rule that creates a computer with `exec: "echo hello"` and `self_destruct: true`, `response_mode: "sync"`.
+- POST to the ingress URL. Does it return 200 with exec output?
+
+### T13.7 — Starlark Transform Correctness
+
+- Create a rule that extracts different fields from the body: `body_json`, `query_params`, `headers`.
+- Verify the transform correctly maps each input field to the expected output.
+- Verify that `body_json` is None when sending non-JSON content.
+
+### T13.8 — Ingress Returns None (204)
+
+- Create a rule where `transform` returns `None` for certain inputs.
+- POST a request that triggers the None path. Does it return 204?
+
+### T13.9 — Ingress Error Cases
+
+- POST to a non-existent rule ID. 404?
+- POST to a disabled rule. 404?
+- POST with a body exceeding `max_body_bytes`. 413?
+- Rule with Starlark that errors at runtime. 502?
+- Rule that returns an invalid action. 502?
+
+### T13.10 — Rate Limiting
+
+- Create a rule with `rate_limit_rpm: 5`.
+- Fire 10 requests in quick succession. Do the first ~5 succeed and the rest return 429?
+
+### T13.11 — Rule Rotation
+
+- Create a rule. Note the ingress URL.
+- Rotate the rule ID. Does the old URL return 404?
+- Does the new URL work?
+
+### T13.12 — Ingress Logs
+
+- Trigger a rule several times (success, error, None).
+- Query `/logs`. Are all invocations recorded with correct statuses?
+
+### T13.13 — Exclusive Restore via Ingress
+
+- Create a rule with `exclusive: "defer_on_conflict"`.
+- Fork from a labeled checkpoint. While the computer is running, trigger the ingress again.
+- Does the second request get deferred (202)?
+- After the first computer self-destructs, does the deferred request execute?
+
+---
+
 ## Pass/Fail Criteria
 
 | Category | Pass | Fail |
@@ -654,6 +743,7 @@ The design doc now promises structured logging, Prometheus metrics, Grafana dash
 | Economics (Phase 9) | Actual costs within 2x of projections | Costs >3x projections |
 | Integration (Phase 10) | Real agent workflows complete end-to-end | Any workflow that can't complete |
 | Observability (Phase 11) | Metrics accurate within 10% of reality, alerts fire within 1 min, status tool matches shell output, DAG fully reconstructible | Metrics lie, alerts don't fire, status is decorative, or DAG has broken parent pointers |
+| Ingress (Phase 13) | Rule CRUD works, Starlark transforms execute correctly, ingress triggers fork/create, rate limiting enforced, logs recorded | Any CRUD failure, Starlark escape, or silent ingress failure |
 
 ---
 
