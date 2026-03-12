@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -43,6 +44,7 @@ from mshkn.vm.ssh import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     import aiosqlite
 
@@ -60,6 +62,34 @@ def _get_pool(request: Request) -> SSHPool | None:
 
 # Hold references to background tasks to prevent GC
 _background_tasks: set[asyncio.Task[None]] = set()
+
+# Track upload tasks per checkpoint ID so deletion can cancel/await them
+_upload_tasks: dict[str, asyncio.Task[None]] = {}
+
+def _start_upload_task(
+    checkpoint_id: str, snapshot_dir: Path, r2_prefix: str, r2_bucket: str,
+) -> None:
+    """Start a background R2 upload and track it by checkpoint ID."""
+    task = asyncio.create_task(upload_checkpoint(snapshot_dir, r2_prefix, r2_bucket))
+    _background_tasks.add(task)
+    _upload_tasks[checkpoint_id] = task
+
+    def _on_done(t: asyncio.Task[None]) -> None:
+        _background_tasks.discard(t)
+        _upload_tasks.pop(checkpoint_id, None)
+
+    task.add_done_callback(_on_done)
+
+
+async def cancel_upload_task(checkpoint_id: str) -> None:
+    """Cancel and await any in-flight upload for a checkpoint."""
+    task = _upload_tasks.pop(checkpoint_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        _background_tasks.discard(task)
+
 
 _require_account = Depends(require_account)
 
@@ -168,9 +198,7 @@ async def _self_destruct(
     checkpoints_total.inc()
 
     # Background R2 upload
-    task = asyncio.create_task(upload_checkpoint(snapshot_dir, r2_prefix, config.r2_bucket))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _start_upload_task(checkpoint_id, snapshot_dir, r2_prefix, config.r2_bucket)
 
     # Destroy the computer
     await vm_mgr.destroy(computer.id)
@@ -537,9 +565,7 @@ async def checkpoint_computer(
     checkpoints_total.inc()
 
     # Async background upload to R2
-    task = asyncio.create_task(upload_checkpoint(snapshot_dir, r2_prefix, config.r2_bucket))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _start_upload_task(checkpoint_id, snapshot_dir, r2_prefix, config.r2_bucket)
 
     return CheckpointResponse(
         checkpoint_id=checkpoint_id,

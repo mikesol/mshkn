@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -8,8 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
-
-from mshkn.shell import run
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +102,9 @@ class FirecrackerClient:
 
 async def start_firecracker_process(socket_path: str) -> int:
     """Start a Firecracker process and return its PID."""
-    # Remove stale socket
-    await run(f"rm -f {socket_path}", check=False)
+    # Remove stale socket (in-process, avoids subprocess overhead)
+    with contextlib.suppress(FileNotFoundError):
+        Path(socket_path).unlink()
 
     proc = await asyncio.create_subprocess_exec(
         "firecracker", "--api-sock", socket_path,

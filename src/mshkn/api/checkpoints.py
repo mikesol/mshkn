@@ -386,6 +386,7 @@ async def delete_checkpoint(
 ) -> dict[str, str]:
     import shutil
 
+    from mshkn.api.computers import cancel_upload_task
     from mshkn.checkpoint.r2 import delete_checkpoint_r2
     from mshkn.vm.storage import remove_volume
 
@@ -394,6 +395,9 @@ async def delete_checkpoint(
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account.id:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
+
+    # Cancel any in-flight R2 upload before deleting local files
+    await cancel_upload_task(checkpoint_id)
 
     # Clean up dm-thin volume if one was allocated
     if ckpt.thin_volume_id is not None:
