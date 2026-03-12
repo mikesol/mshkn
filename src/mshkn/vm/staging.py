@@ -84,18 +84,28 @@ async def restore_from_snapshot(
             # Pre-cleanup: remove stale staging resources from a previous failed restore
             await _ensure_staging_clean()
 
-            # 1+2: Map disk and create staging tap in parallel
-            await asyncio.gather(
-                run(
-                    f"dmsetup create {STAGING_DRIVE_NAME} "
-                    f"--table '0 {thin_volume_sectors} thin "
-                    f"/dev/mapper/{pool_name} {disk_volume_id}'"
-                ),
-                create_tap(STAGING_SLOT),
+            # 1+2+3: Map disk, create tap, and start FC in parallel
+            # FC doesn't need disk/tap until load_snapshot is called
+            fc_task = asyncio.create_task(
+                start_firecracker_process(socket_path),
             )
+            try:
+                await asyncio.gather(
+                    run(
+                        f"dmsetup create {STAGING_DRIVE_NAME} "
+                        f"--table '0 {thin_volume_sectors} thin "
+                        f"/dev/mapper/{pool_name} {disk_volume_id}'"
+                    ),
+                    create_tap(STAGING_SLOT),
+                )
+            except Exception:
+                fc_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await fc_task
+                raise
+            pid = await fc_task
 
-            # 3. Start FC + LOAD_SNAPSHOT
-            pid = await start_firecracker_process(socket_path)
+            # LOAD_SNAPSHOT (needs disk, tap, and FC process ready)
             fc_client = FirecrackerClient(socket_path)
             try:
                 await fc_client.load_snapshot(
@@ -168,18 +178,27 @@ async def cold_boot_from_disk(
             # Pre-cleanup: remove stale staging resources from a previous failed restore
             await _ensure_staging_clean()
 
-            # 1+2: Map disk and create staging tap in parallel
-            await asyncio.gather(
-                run(
-                    f"dmsetup create {STAGING_DRIVE_NAME} "
-                    f"--table '0 {thin_volume_sectors} thin "
-                    f"/dev/mapper/{pool_name} {disk_volume_id}'"
-                ),
-                create_tap(STAGING_SLOT),
+            # 1+2+3: Map disk, create tap, and start FC in parallel
+            fc_task = asyncio.create_task(
+                start_firecracker_process(socket_path),
             )
+            try:
+                await asyncio.gather(
+                    run(
+                        f"dmsetup create {STAGING_DRIVE_NAME} "
+                        f"--table '0 {thin_volume_sectors} thin "
+                        f"/dev/mapper/{pool_name} {disk_volume_id}'"
+                    ),
+                    create_tap(STAGING_SLOT),
+                )
+            except Exception:
+                fc_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await fc_task
+                raise
+            pid = await fc_task
 
-            # 3. Start FC + cold boot
-            pid = await start_firecracker_process(socket_path)
+            # Cold boot (needs disk, tap, and FC process ready)
             fc_client = FirecrackerClient(socket_path)
             try:
                 await fc_client.configure_and_boot(
