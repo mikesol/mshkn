@@ -52,6 +52,27 @@ async def create_base_volume(
     logger.info("Created base volume %s (vol %d) from %s", volume_name, volume_id, source_image)
 
 
+async def pool_create_snap(
+    pool_name: str, new_volume_id: int, source_volume_id: int,
+) -> None:
+    """Issue create_snap in the dm-thin pool, retrying on orphaned volume ID."""
+    try:
+        await run(f"dmsetup message {pool_name} 0 'create_snap {new_volume_id} {source_volume_id}'")
+    except ShellError as e:
+        if "File exists" in e.stderr or "already exists" in e.stderr:
+            logger.warning(
+                "Orphaned thin volume %d in pool, deleting and retrying create_snap",
+                new_volume_id,
+            )
+            await run(f"dmsetup message {pool_name} 0 'delete {new_volume_id}'")
+            await run(
+                f"dmsetup message {pool_name} 0 "
+                f"'create_snap {new_volume_id} {source_volume_id}'"
+            )
+        else:
+            raise
+
+
 async def create_snapshot(
     pool_name: str,
     source_volume_id: int,
@@ -60,7 +81,7 @@ async def create_snapshot(
     sectors: int,
 ) -> None:
     """Create a dm-thin snapshot (CoW copy of source)."""
-    await run(f"dmsetup message {pool_name} 0 'create_snap {new_volume_id} {source_volume_id}'")
+    await pool_create_snap(pool_name, new_volume_id, source_volume_id)
     # Activate the device — remove stale mapping first if it exists
     try:
         await run(

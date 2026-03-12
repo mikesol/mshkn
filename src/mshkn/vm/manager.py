@@ -28,7 +28,7 @@ from mshkn.vm.firecracker import (
     start_firecracker_process,
 )
 from mshkn.vm.network import create_tap, destroy_tap, slot_to_ip
-from mshkn.vm.storage import create_snapshot, remove_volume
+from mshkn.vm.storage import create_snapshot, pool_create_snap, remove_volume
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -401,10 +401,7 @@ class VMManager:
         volume_name = f"mshkn-{computer_id}"
 
         # Create dm-thin snapshot in pool (no device activation — staging will activate it)
-        await run(
-            f"dmsetup message {self.config.thin_pool_name} 0 "
-            f"'create_snap {volume_id} {source_volume_id}'"
-        )
+        await pool_create_snap(self.config.thin_pool_name, volume_id, source_volume_id)
 
         if custom_resources:
             # Custom RAM/vCPU: cold-boot directly (L3 templates bake in default config)
@@ -526,10 +523,7 @@ class VMManager:
         volume_name = f"mshkn-{computer_id}"
 
         # Create dm-thin snapshot of checkpoint's disk (pool only, no device activation)
-        await run(
-            f"dmsetup message {self.config.thin_pool_name} 0 "
-            f"'create_snap {volume_id} {checkpoint.thin_volume_id}'"
-        )
+        await pool_create_snap(self.config.thin_pool_name, volume_id, checkpoint.thin_volume_id)
 
         # Check if checkpoint has vmstate/memory (merge checkpoints don't)
         ckpt_dir = self.config.checkpoint_local_dir / checkpoint.id
