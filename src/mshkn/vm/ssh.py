@@ -61,6 +61,7 @@ class SSHPool:
                 client_keys=[self._key_path],
                 known_hosts=None,
                 keepalive_interval=15,
+                login_timeout=10,
             )
             self._conns[vm_ip] = conn
             self._last_used[vm_ip] = asyncio.get_event_loop().time()

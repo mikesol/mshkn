@@ -19,9 +19,9 @@ from .conftest import (
 )
 
 BARE_CREATE_SAMPLES = 20
-BARE_CREATE_P95_MS = 950
+BARE_CREATE_P95_MS = 1600  # L3 miss = two-phase boot (~1500ms)
 WARM_CACHE_CREATE_SAMPLES = 10
-WARM_CACHE_CREATE_P95_MS = 1150
+WARM_CACHE_CREATE_P95_MS = 1600  # L3 miss with capability build
 EMPTY_CHECKPOINT_SAMPLES = 10
 EMPTY_CHECKPOINT_P95_MS = 1150
 SMALL_STATE_CHECKPOINT_SAMPLES = 10
@@ -29,9 +29,9 @@ SMALL_STATE_CHECKPOINT_P95_MS = 1000
 MANY_SMALL_FILES_CHECKPOINT_SAMPLES = 10
 MANY_SMALL_FILES_CHECKPOINT_P95_MS = 1550
 RESUME_SAMPLES = 10
-RESUME_P95_MS = 850
+RESUME_P95_MS = 650  # LOAD_SNAPSHOT path: tap+FC+SSH+reconfig
 FORK_MINIMAL_SAMPLES = 10
-FORK_MINIMAL_P95_MS = 850
+FORK_MINIMAL_P95_MS = 650  # LOAD_SNAPSHOT path: tap+FC+SSH+reconfig
 
 # ---------------------------------------------------------------------------
 # T1.1 — Create Latency (Target: <= 2s)
@@ -112,6 +112,44 @@ class TestT11CreateLatency:
 
         stats = LatencyStats(values_ms=timings)
         print(stats.report("T1.1 Cold Cache Capability Create"))
+
+
+# ---------------------------------------------------------------------------
+# T1.6 — Warm L3 Cache Create Latency
+# ---------------------------------------------------------------------------
+
+WARM_L3_CREATE_SAMPLES = 10
+WARM_L3_CREATE_P95_MS = 650  # LOAD_SNAPSHOT path: tap+FC+SSH+reconfig+caddy
+
+
+class TestT16WarmL3CreateLatency:
+    """Create with warm L3 cache — should be LOAD_SNAPSHOT fast."""
+
+    async def test_warm_l3_cache_create_latency(self, client):
+        """First create warms L3 cache, subsequent creates should be fast."""
+        # Warm the L3 cache with a throwaway create
+        warmup_id = await create_computer(client, uses=[])
+        await destroy_computer(client, warmup_id)
+
+        # Now measure with warm L3 cache
+        timings: list[float] = []
+        for i in range(WARM_L3_CREATE_SAMPLES):
+            computer_id: str | None = None
+            try:
+                start = time.perf_counter()
+                computer_id = await create_computer(client, uses=[])
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                timings.append(elapsed_ms)
+                print(f"  warm L3 create #{i+1}: {elapsed_ms:.0f}ms")
+            finally:
+                if computer_id is not None:
+                    await destroy_computer(client, computer_id)
+
+        stats = LatencyStats(values_ms=timings)
+        print(stats.report("T1.6 Warm L3 Cache Create", target_ms=WARM_L3_CREATE_P95_MS))
+        assert stats.p95 <= WARM_L3_CREATE_P95_MS, (
+            f"p95 warm L3 create latency {stats.p95:.0f}ms exceeds {WARM_L3_CREATE_P95_MS}ms"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +419,59 @@ class TestT14ForkLatency:
             if small_stats.mean > 0
             else "  O(1) check: small_mean=0ms (too fast to measure)"
         )
+
+
+# ---------------------------------------------------------------------------
+# T1.7 — Fork Snapshot Restore Latency
+# ---------------------------------------------------------------------------
+
+FORK_RESTORE_SAMPLES = 10
+FORK_RESTORE_P95_MS = 650  # LOAD_SNAPSHOT fork: tap+FC+SSH+reconfig+caddy
+
+
+class TestT17ForkRestoreLatency:
+    """Fork via LOAD_SNAPSHOT — verify state preservation + latency."""
+
+    async def test_fork_snapshot_restore_latency(self, long_client):
+        """Fork from checkpoint, verify state is preserved, assert latency."""
+        async with managed_computer(long_client, uses=[]) as computer_id:
+            # Write a marker file
+            await exec_command(
+                long_client, computer_id,
+                "echo 'snapshot-restore-test' > /tmp/marker.txt"
+            )
+
+            checkpoint_id = await checkpoint_computer(
+                long_client, computer_id, label="restore-test"
+            )
+
+            timings: list[float] = []
+            forked_ids: list[str] = []
+            try:
+                for i in range(FORK_RESTORE_SAMPLES):
+                    start = time.perf_counter()
+                    forked_id = await fork_checkpoint(long_client, checkpoint_id)
+                    elapsed_ms = (time.perf_counter() - start) * 1000
+                    timings.append(elapsed_ms)
+                    forked_ids.append(forked_id)
+                    print(f"  fork restore #{i+1}: {elapsed_ms:.0f}ms")
+
+                # Verify state on last forked VM
+                result = await exec_command(
+                    long_client, forked_ids[-1], "cat /tmp/marker.txt"
+                )
+                assert result.stdout.strip() == "snapshot-restore-test", (
+                    f"State not preserved: got {result.stdout.strip()!r}"
+                )
+            finally:
+                for fid in forked_ids:
+                    await destroy_computer(long_client, fid)
+
+            stats = LatencyStats(values_ms=timings)
+            print(stats.report("T1.7 Fork Restore Latency", target_ms=FORK_RESTORE_P95_MS))
+            assert stats.p95 <= FORK_RESTORE_P95_MS, (
+                f"p95 fork restore latency {stats.p95:.0f}ms exceeds {FORK_RESTORE_P95_MS}ms"
+            )
 
 
 # ---------------------------------------------------------------------------
