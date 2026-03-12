@@ -96,6 +96,7 @@ class VMManager:
         self._next_volume_id = 100  # volume 0 is base; start high to avoid conflicts
         self._alloc_lock = asyncio.Lock()
         self.alerts: deque[Alert] = deque(maxlen=_ALERT_HISTORY_SIZE)
+        self._bg_tasks: set[asyncio.Task[None]] = set()
 
     async def initialize(self) -> None:
         """Load state from DB and actual pool to set counters correctly."""
@@ -844,15 +845,15 @@ class VMManager:
             )
             await insert_checkpoint(self.db, ckpt)
 
-            # Upload to R2 (best-effort)
-            try:
-                await upload_checkpoint(
-                    snapshot_dir,
-                    r2_prefix,
-                    self.config.r2_bucket,
+            # Upload to R2 in background (best-effort, don't block reaper)
+            task = asyncio.create_task(
+                self._upload_checkpoint_bg(
+                    upload_checkpoint, snapshot_dir, r2_prefix,
+                    self.config.r2_bucket, checkpoint_id,
                 )
-            except Exception:
-                logger.warning("R2 upload failed for auto-checkpoint %s", checkpoint_id)
+            )
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
 
             logger.info("Auto-checkpoint %s created for idle VM %s", checkpoint_id, computer.id)
         except Exception:
@@ -861,6 +862,22 @@ class VMManager:
         # Destroy the VM
         await self.destroy(computer.id)
         logger.info("Destroyed idle VM %s", computer.id)
+
+    @staticmethod
+    async def _upload_checkpoint_bg(
+        upload_fn: object,
+        snapshot_dir: Path,
+        r2_prefix: str,
+        bucket: str,
+        checkpoint_id: str,
+    ) -> None:
+        """Background R2 upload for auto-checkpoints."""
+        try:
+            await upload_fn(snapshot_dir, r2_prefix, bucket)  # type: ignore[operator]
+        except Exception:
+            logger.warning(
+                "R2 upload failed for auto-checkpoint %s", checkpoint_id,
+            )
 
     async def prune_checkpoints(self) -> int:
         """Delete checkpoints that exceed the per-account retention count.
