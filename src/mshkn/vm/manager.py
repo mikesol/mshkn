@@ -20,13 +20,14 @@ from mshkn.db import (
     update_computer_status,
 )
 from mshkn.models import Checkpoint, Computer, Manifest
+from mshkn.shell import run
 from mshkn.vm.firecracker import (
     FirecrackerClient,
     FirecrackerConfig,
     kill_firecracker_process,
     start_firecracker_process,
 )
-from mshkn.vm.network import create_tap, destroy_tap, slot_to_ip, slot_to_mac, slot_to_tap
+from mshkn.vm.network import create_tap, destroy_tap, slot_to_ip
 from mshkn.vm.storage import create_snapshot, remove_volume
 
 if TYPE_CHECKING:
@@ -170,8 +171,14 @@ class VMManager:
 
     def _allocate_slot(self) -> int:
         if self._free_slots:
-            return self._free_slots.pop()
+            slot = self._free_slots.pop()
+            if slot == 254:  # staging slot, skip
+                return self._allocate_slot()
+            return slot
         slot = self._next_slot
+        if slot == 254:  # skip staging slot
+            self._next_slot = 255
+            slot = 255
         if slot > 255:
             raise RuntimeError("No free VM slots (all 255 in use)")
         self._next_slot += 1
@@ -285,70 +292,159 @@ class VMManager:
         )
         return cap_volume_id
 
+    async def _build_l3_template(
+        self, manifest_hash: str, source_volume_id: int
+    ) -> None:
+        """Build an L3 template: cold-boot on staging slot, snapshot, cache."""
+        from mshkn.capability.template_cache import cache_template
+        from mshkn.vm.staging import (
+            STAGING_DRIVE_NAME,
+            STAGING_MAC,
+            STAGING_SLOT,
+            STAGING_TAP,
+            STAGING_VM_IP,
+            _restore_lock,
+        )
+
+        template_dir = self.config.checkpoint_local_dir / "templates" / manifest_hash
+        template_dir.mkdir(parents=True, exist_ok=True)
+        vmstate_path = template_dir / "vmstate"
+        memory_path = template_dir / "memory"
+
+        socket_path = f"/tmp/fc-template-{manifest_hash}.socket"
+        pid: int | None = None
+
+        async with _restore_lock:
+            try:
+                # Map capability volume as staging drive
+                await run(
+                    f"dmsetup create {STAGING_DRIVE_NAME} "
+                    f"--table '0 {self.config.thin_volume_sectors} thin "
+                    f"/dev/mapper/{self.config.thin_pool_name} {source_volume_id}'"
+                )
+
+                # Create staging tap
+                await create_tap(STAGING_SLOT)
+
+                # Start FC and cold-boot on staging slot
+                pid = await start_firecracker_process(socket_path)
+                fc_client = FirecrackerClient(socket_path)
+                try:
+                    await fc_client.configure_and_boot(
+                        FirecrackerConfig(
+                            socket_path=socket_path,
+                            kernel_path=str(self.config.kernel_path),
+                            rootfs_path=f"/dev/mapper/{STAGING_DRIVE_NAME}",
+                            tap_device=STAGING_TAP,
+                            guest_mac=STAGING_MAC,
+                        )
+                    )
+                finally:
+                    await fc_client.close()
+
+                # Wait for SSH
+                await self._wait_for_ssh(STAGING_VM_IP)
+
+                # Pause and snapshot
+                fc_client = FirecrackerClient(socket_path)
+                try:
+                    await fc_client.pause()
+                    await fc_client.create_snapshot(str(vmstate_path), str(memory_path))
+                finally:
+                    await fc_client.close()
+
+                # Kill template VM
+                await kill_firecracker_process(pid)
+                pid = None
+
+                # Destroy staging tap
+                await destroy_tap(STAGING_SLOT)
+
+                # Remove staging drive mapping
+                await run(f"dmsetup remove {STAGING_DRIVE_NAME}")
+
+                # Cache the template
+                await cache_template(
+                    self.db, manifest_hash, str(vmstate_path), str(memory_path)
+                )
+                logger.info("Built L3 template for %s", manifest_hash)
+
+            except Exception:
+                logger.exception("Failed to build L3 template for %s", manifest_hash)
+                # Cleanup
+                if pid is not None:
+                    await kill_firecracker_process(pid)
+                await destroy_tap(STAGING_SLOT)
+                await run(f"dmsetup remove {STAGING_DRIVE_NAME}", check=False)
+                raise
+
     async def create(
         self,
         account_id: str,
         manifest: Manifest,
         needs: dict[str, object] | None = None,
     ) -> Computer:
-        mem_size_mib, vcpu_count = parse_needs(needs)
+        _mem_size_mib, _vcpu_count = parse_needs(needs)
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
 
-        # Get capability base volume (builds if cache miss)
+        # Get capability base volume (L1/L2 cache, builds if miss)
         source_volume_id = await self._get_or_build_capability_volume(manifest)
+        manifest_hash = manifest.content_hash() if manifest.uses else "bare"
 
+        # Check L3 cache
+        from mshkn.capability.template_cache import get_cached_template
+
+        template = await get_cached_template(self.db, manifest_hash)
+        if template is None:
+            # L3 miss — two-phase boot: build template, then restore
+            logger.info("L3 cache miss for %s, building template...", manifest_hash)
+            await self._build_l3_template(manifest_hash, source_volume_id)
+            template = await get_cached_template(self.db, manifest_hash)
+            if template is None:
+                raise RuntimeError(f"L3 template build failed for {manifest_hash}")
+
+        vmstate_path, memory_path = template
+
+        # Allocate slot + volume
         async with self._alloc_lock:
             slot = self._allocate_slot()
             volume_id = self._allocate_volume_id()
-        _host_ip, vm_ip = slot_to_ip(slot)
-        mac = slot_to_mac(slot)
-        tap = slot_to_tap(slot)
-        socket_path = f"/tmp/fc-{computer_id}.socket"
         volume_name = f"mshkn-{computer_id}"
 
-        # 1. Create tap device
-        await create_tap(slot)
-
-        # 2-3. Create dm-thin snapshot and start Firecracker in parallel
-        pid = await self._start_firecracker_with_snapshot(
-            source_volume_id=source_volume_id,
-            volume_id=volume_id,
-            volume_name=volume_name,
-            socket_path=socket_path,
+        # Create dm-thin snapshot in pool (no device activation — staging will activate it)
+        await run(
+            f"dmsetup message {self.config.thin_pool_name} 0 "
+            f"'create_snap {volume_id} {source_volume_id}'"
         )
 
-        # 4. Configure and boot
-        fc_client = FirecrackerClient(socket_path)
-        try:
-            await fc_client.configure_and_boot(
-                FirecrackerConfig(
-                    socket_path=socket_path,
-                    kernel_path=str(self.config.kernel_path),
-                    rootfs_path=f"/dev/mapper/{volume_name}",
-                    tap_device=tap,
-                    guest_mac=mac,
-                    vcpu_count=vcpu_count,
-                    mem_size_mib=mem_size_mib,
-                )
-            )
-        finally:
-            await fc_client.close()
+        # Restore from snapshot via staging slot
+        from mshkn.vm.staging import restore_from_snapshot
 
-        # 5. Wait for SSH readiness and warm connection pool
-        await self._wait_for_ssh(vm_ip)
+        result = await restore_from_snapshot(
+            vmstate_path=vmstate_path,
+            memory_path=memory_path,
+            disk_volume_id=volume_id,
+            final_slot=slot,
+            pool_name=self.config.thin_pool_name,
+            thin_volume_sectors=self.config.thin_volume_sectors,
+            final_volume_name=volume_name,
+        )
+
+        # Warm SSH pool
+        _host_ip, vm_ip = slot_to_ip(slot)
         if self.ssh_pool is not None:
             await self.ssh_pool.get(vm_ip)
 
-        # 6. Record in DB
+        # Record in DB
         now = datetime.now(UTC).isoformat()
         computer = Computer(
             id=computer_id,
             account_id=account_id,
             thin_volume_id=volume_id,
-            tap_device=tap,
-            vm_ip=vm_ip,
-            socket_path=socket_path,
-            firecracker_pid=pid,
+            tap_device=result.tap_device,
+            vm_ip=result.vm_ip,
+            socket_path=result.socket_path,
+            firecracker_pid=result.pid,
             manifest_hash=manifest.content_hash(),
             manifest_json=manifest.to_json(),
             status="running",
@@ -357,7 +453,7 @@ class VMManager:
         )
         await insert_computer(self.db, computer)
 
-        # 7. Register Caddy route
+        # Register Caddy route
         if self.caddy is not None:
             await self.caddy.add_route(computer_id, vm_ip)
 
@@ -392,11 +488,10 @@ class VMManager:
     async def fork_from_checkpoint(
         self, account_id: str, checkpoint: Checkpoint, manifest: Manifest | None = None,
     ) -> Computer:
-        """Fork a new computer from a checkpoint.
+        """Fork a new computer from a checkpoint via LOAD_SNAPSHOT.
 
-        Creates a dm-thin CoW snapshot of the checkpoint's frozen disk (O(1)) and
-        cold-boots a new VM from it. The checkpoint's thin_volume_id holds the disk
-        state at checkpoint time, so forks always see the correct state.
+        All checkpoints are staging-compatible because all VMs are created
+        via the staging slot (two-phase boot ensures this).
         """
         if checkpoint.thin_volume_id is None:
             msg = f"Checkpoint {checkpoint.id} has no disk snapshot (created before this fix)"
@@ -406,44 +501,41 @@ class VMManager:
         async with self._alloc_lock:
             slot = self._allocate_slot()
             volume_id = self._allocate_volume_id()
-        _host_ip, vm_ip = slot_to_ip(slot)
-        mac = slot_to_mac(slot)
-        tap = slot_to_tap(slot)
-        socket_path = f"/tmp/fc-{computer_id}.socket"
         volume_name = f"mshkn-{computer_id}"
 
-        # 1. Create tap device
-        await create_tap(slot)
+        # Get checkpoint's vmstate + memory paths
+        ckpt_dir = self.config.checkpoint_local_dir / checkpoint.id
+        vmstate_path = str(ckpt_dir / "vmstate")
+        memory_path = str(ckpt_dir / "memory")
 
-        # 2-3. Create checkpoint disk snapshot and start Firecracker in parallel
-        pid = await self._start_firecracker_with_snapshot(
-            source_volume_id=checkpoint.thin_volume_id,
-            volume_id=volume_id,
-            volume_name=volume_name,
-            socket_path=socket_path,
+        # If files not local, download from R2
+        if not Path(vmstate_path).exists() or not Path(memory_path).exists():
+            await self._download_checkpoint_snapshot(checkpoint)
+
+        # Create dm-thin snapshot of checkpoint's disk (pool only, no device activation)
+        await run(
+            f"dmsetup message {self.config.thin_pool_name} 0 "
+            f"'create_snap {volume_id} {checkpoint.thin_volume_id}'"
         )
-        fc_client = FirecrackerClient(socket_path)
-        try:
-            await fc_client.configure_and_boot(
-                FirecrackerConfig(
-                    socket_path=socket_path,
-                    kernel_path=str(self.config.kernel_path),
-                    rootfs_path=f"/dev/mapper/{volume_name}",
-                    tap_device=tap,
-                    guest_mac=mac,
-                    vcpu_count=2,
-                    mem_size_mib=_DEFAULT_MEM_MIB,
-                )
-            )
-        finally:
-            await fc_client.close()
 
-        # 4. Wait for SSH readiness and warm connection pool
-        await self._wait_for_ssh(vm_ip)
+        # Restore from snapshot via staging slot
+        from mshkn.vm.staging import restore_from_snapshot
+
+        result = await restore_from_snapshot(
+            vmstate_path=vmstate_path,
+            memory_path=memory_path,
+            disk_volume_id=volume_id,
+            final_slot=slot,
+            pool_name=self.config.thin_pool_name,
+            thin_volume_sectors=self.config.thin_volume_sectors,
+            final_volume_name=volume_name,
+        )
+
+        # Warm SSH pool
         if self.ssh_pool is not None:
-            await self.ssh_pool.get(vm_ip)
+            await self.ssh_pool.get(result.vm_ip)
 
-        # 5. Record in DB
+        # Record in DB
         now = datetime.now(UTC).isoformat()
         effective_manifest = manifest if manifest is not None else Manifest.from_json(
             checkpoint.manifest_json,
@@ -452,10 +544,10 @@ class VMManager:
             id=computer_id,
             account_id=account_id,
             thin_volume_id=volume_id,
-            tap_device=tap,
-            vm_ip=vm_ip,
-            socket_path=socket_path,
-            firecracker_pid=pid,
+            tap_device=result.tap_device,
+            vm_ip=result.vm_ip,
+            socket_path=result.socket_path,
+            firecracker_pid=result.pid,
             manifest_hash=effective_manifest.content_hash(),
             manifest_json=effective_manifest.to_json(),
             status="running",
@@ -465,15 +557,30 @@ class VMManager:
         )
         await insert_computer(self.db, computer)
 
-        # 6. Register Caddy route
+        # Register Caddy route
         if self.caddy is not None:
-            await self.caddy.add_route(computer_id, vm_ip)
+            await self.caddy.add_route(computer_id, result.vm_ip)
 
         logger.info(
             "Forked computer %s from checkpoint %s (slot=%d, ip=%s)",
-            computer_id, checkpoint.id, slot, vm_ip,
+            computer_id, checkpoint.id, slot, result.vm_ip,
         )
         return computer
+
+    async def _download_checkpoint_snapshot(self, checkpoint: Checkpoint) -> None:
+        """Download vmstate + memory files from R2 if not cached locally."""
+        ckpt_dir = self.config.checkpoint_local_dir / checkpoint.id
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+        if not checkpoint.r2_prefix:
+            raise ValueError(f"Checkpoint {checkpoint.id} has no R2 prefix")
+
+        for filename in ("vmstate", "memory"):
+            local_path = ckpt_dir / filename
+            if not local_path.exists():
+                r2_path = f"{self.config.r2_bucket}:{checkpoint.r2_prefix}/{filename}"
+                await run(f"rclone copyto r2:{r2_path} {local_path}")
+                logger.info("Downloaded %s for checkpoint %s", filename, checkpoint.id)
 
     async def destroy(self, computer_id: str) -> None:
         computer = await get_computer(self.db, computer_id)

@@ -61,6 +61,11 @@ async def evict_lru_capabilities(
             (manifest_hash,),
         )
         await db.commit()
+
+        # Also evict L3 template if present
+        from mshkn.capability.template_cache import evict_template
+        await evict_template(db, manifest_hash)
+
         evicted += 1
 
     return evicted

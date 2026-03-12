@@ -37,20 +37,17 @@ async def create_tap(slot: int) -> None:
                 raise
             await asyncio.sleep(0.5)
             await run(f"ip link del {tap}", check=False)
-    await run(f"ip addr add {host_ip}/30 dev {tap}")
-    await run(f"ip link set {tap} up")
-    # Pre-populate ARP so _wait_for_ssh doesn't block on ARP probe timeout.
-    # Without this, the first TCP connect triggers an ARP probe that goes
-    # unanswered for 1000ms (kernel retrans_time_ms) because the VM hasn't
-    # configured its IP yet, causing bimodal create latency.
+    # Configure address, bring up, pre-populate ARP, and add iptables rules.
+    # Combined into one shell call to reduce subprocess overhead (~5ms each).
     vm_mac = slot_to_mac(slot)
-    await run(f"ip neigh replace {vm_ip} lladdr {vm_mac} dev {tap} nud permanent")
-    # Allow VM → internet (non-172.16.0.0/12 destinations) but block VM → VM
     await run(
+        f"ip addr add {host_ip}/30 dev {tap} && "
+        f"ip link set {tap} up && "
+        f"ip neigh replace {vm_ip} lladdr {vm_mac} dev {tap} nud permanent && "
         f"iptables -I FORWARD -i {tap} -s {vm_ip} "
-        f"! -d 172.16.0.0/12 -j ACCEPT"
+        f"! -d 172.16.0.0/12 -j ACCEPT && "
+        f"iptables -I FORWARD -i {tap} -s {vm_ip} -d 172.16.0.0/12 -j DROP"
     )
-    await run(f"iptables -I FORWARD -i {tap} -s {vm_ip} -d 172.16.0.0/12 -j DROP")
     logger.info("Created tap device %s at %s/30", tap, host_ip)
 
 

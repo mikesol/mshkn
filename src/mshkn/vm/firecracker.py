@@ -84,6 +84,7 @@ class FirecrackerClient:
             "resume_vm": resume_vm,
         })
 
+
     async def close(self) -> None:
         await self._client.aclose()
 
