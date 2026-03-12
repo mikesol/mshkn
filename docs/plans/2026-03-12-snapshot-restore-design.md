@@ -92,9 +92,15 @@ Extends the capability cache from two levels to three:
 2. Create dm-thin snapshot of capability base volume
 3. Run restore pipeline (LOAD_SNAPSHOT → SSH reconfig → ~50ms)
 
-**Create with L3 miss**:
-1. Cold boot as today (~950ms)
-2. Trigger background L3 template build for the manifest
+**Create with L3 miss (two-phase boot)**:
+1. Acquire staging lock
+2. Cold-boot a template VM on the staging slot from the capability volume (~1000ms)
+3. Wait for SSH, take FC snapshot (vmstate + memory), destroy template (~500ms)
+4. Cache the snapshot as L3 entry
+5. Restore from the fresh cache via the normal restore pipeline (~50ms)
+6. Total: ~1500ms for first create with a new manifest
+
+This ensures ALL VMs are created via LOAD_SNAPSHOT, making every checkpoint staging-compatible and forkable. The ~500ms penalty on L3 miss (vs serving the cold-booted VM directly) is amortized over all future creates and forks with that manifest.
 
 **Storage**: One snapshot per cached manifest. ~256MB per snapshot (mem_size_mib default). With 3-5 common manifests, ~0.75-1.25GB NVMe.
 
@@ -102,22 +108,14 @@ Extends the capability cache from two levels to three:
 
 ### Snapshot Restore for Fork (#38)
 
-Checkpoints already have vmstate + memory files from `create_vm_snapshot`. Fork can use LOAD_SNAPSHOT instead of cold boot — but only if the checkpoint's vmstate references the staging slot's drive/tap names.
+Checkpoints already have vmstate + memory files from `create_vm_snapshot`. Fork uses LOAD_SNAPSHOT instead of cold boot.
 
-**When does a checkpoint have staging-compatible vmstate?**
-- VMs created via L3 cache (LOAD_SNAPSHOT) have staging config in their vmstate
-- FC doesn't know about the tap rename or drive remap — it still has the original staging names
-- Checkpoints from these VMs inherit the staging names → forkable via LOAD_SNAPSHOT
-
-**When is a checkpoint NOT staging-compatible?**
-- VMs created via cold boot (L3 miss) have VM-specific drive/tap names
-- Checkpoints from cold-booted VMs → must fork via cold boot (current behavior)
+**Why ALL checkpoints are staging-compatible**: The two-phase boot approach (L3 miss section above) ensures every VM is created via LOAD_SNAPSHOT through the staging slot. FC doesn't know about the tap rename or drive remap — it retains the original staging names in its vmstate. Checkpoints from these VMs inherit the staging names. Therefore, ALL checkpoints are forkable via LOAD_SNAPSHOT with no tracking needed.
 
 **Implementation**:
-- Add `staging_compatible: bool` column to checkpoints table
-- Set `True` when checkpoint is from a staging-restored VM
-- On fork: if `staging_compatible`, use restore pipeline; else cold boot
-- Over time, as L3 warms, most forks benefit from snapshot restore
+- `fork_from_checkpoint()` always uses the restore pipeline
+- No `staging_compatible` column needed — two-phase boot guarantees it
+- Fork creates a dm-thin snapshot of the checkpoint's disk, then runs the restore pipeline with the checkpoint's vmstate + memory files
 
 ### Network Reconfiguration
 
@@ -135,8 +133,8 @@ This avoids rootfs changes, MMDS setup, or network namespace complexity.
 
 **manager.py**:
 - New `_restore_from_snapshot()` method (the restore pipeline above)
-- `create()`: check L3 cache before cold boot, use `_restore_from_snapshot()` on hit
-- `fork_from_checkpoint()`: check `staging_compatible`, use `_restore_from_snapshot()` if True
+- `create()`: check L3 cache; on hit, restore from cache; on miss, two-phase boot (cold-boot template → snapshot → cache → restore)
+- `fork_from_checkpoint()`: always use `_restore_from_snapshot()` (all checkpoints are staging-compatible)
 - `_get_or_build_capability_volume()`: trigger background L3 template build after L2 build
 
 **network.py**: No changes to existing functions. The tap rename and IP reconfig are done inline in the restore pipeline.
@@ -145,20 +143,23 @@ This avoids rootfs changes, MMDS setup, or network namespace complexity.
 
 **New**: `capability/template_cache.py` — L3 cache management (template build, lookup, eviction).
 
-**DB**: New `snapshot_templates` table for L3 cache. New `staging_compatible` column on `checkpoints`.
+**DB**: New `snapshot_templates` table for L3 cache. No changes to `checkpoints` table (two-phase boot makes all checkpoints staging-compatible by construction).
 
 ### E2E Test Changes
 
 **New tests**:
 - `test_warm_l3_cache_create_latency` — create with L3 hit, assert p95 well below current threshold
-- `test_fork_from_staging_compatible_checkpoint` — fork via LOAD_SNAPSHOT, verify state + latency
+- `test_fork_snapshot_restore_latency` — fork via LOAD_SNAPSHOT, verify state + latency
 
-**Existing tests**: If p95 improves, tighten thresholds to cement gains. Only merge if p95 is lower than main.
+**Threshold adjustments**:
+- **Loosen**: `BARE_CREATE_P95_MS` and `WARM_CACHE_CREATE_P95_MS` — first create with a new manifest now pays the two-phase boot penalty (~1500ms). These thresholds must accommodate the L3 miss path.
+- **Tighten**: Fork p95 and warm-cache (L3 hit) create p95 — these now go through LOAD_SNAPSHOT (~50ms) instead of cold boot (~1000ms). Cement gains by lowering thresholds.
+- **Gate**: Only merge if overall p95 profile improves vs main. New thresholds must reflect measured performance, not aspirational targets.
 
 ## What This Does NOT Change
 
 - Checkpoint flow (pause → snapshot → resume → disk snapshot) — unchanged
-- Cold boot path — still works, used as fallback for L3 miss
+- Cold boot path — still works, used in template build phase of two-phase boot (L3 miss)
 - Capability build (L1/L2 cache) — unchanged, L3 is an addition
 - Network model for cold-booted VMs — unchanged (MAC-derived IP via fcnet-setup.sh)
 
