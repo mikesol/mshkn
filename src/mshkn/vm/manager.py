@@ -799,10 +799,13 @@ class VMManager:
         snapshot_dir = self.config.checkpoint_local_dir / checkpoint_id
 
         try:
-            # Flush guest filesystem
-            await ssh_exec(
-                computer.vm_ip, "sync", self.config.ssh_key_path,
-                timeout=10.0, pool=self.ssh_pool,
+            # Flush guest filesystem (total timeout covers connect + exec)
+            await asyncio.wait_for(
+                ssh_exec(
+                    computer.vm_ip, "sync", self.config.ssh_key_path,
+                    timeout=10.0, pool=self.ssh_pool,
+                ),
+                timeout=15.0,
             )
 
             # Pause/snapshot/resume
