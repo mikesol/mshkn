@@ -1296,6 +1296,47 @@ granian = ["granian (>=2.3.1)"]
 uvicorn = ["uvicorn (>=0.34.0)"]
 
 [[package]]
+name = "starlark-go"
+version = "1.0.1"
+description = "Python bindings for the Go implementation of Starlark"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "starlark_go-1.0.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:ed633f5a2ccb3385c8d71422f68950d85e1fca2f2eb96c83f73b4a11e279dd01"},
+    {file = "starlark_go-1.0.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:fae245e1294857b6e44faab03d07f52d17bbac987c875163041e05ac773be6f2"},
+    {file = "starlark_go-1.0.1-cp310-cp310-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:1a2f03e18c930d9a9c905b365d0e2745c68cfd5f02ee149f8a9a8c8698bd6c9e"},
+    {file = "starlark_go-1.0.1-cp310-cp310-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:b218d66d5727ec57badba554e7ff82cc4d7e60608ab20b6fe679d24cbaf27fd1"},
+    {file = "starlark_go-1.0.1-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d4cdd8f6cb379b73403227877e245bb8e8bcfbdd33ca4a597b48767d761e3e2e"},
+    {file = "starlark_go-1.0.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:5c663094ac0c8225e77b66ca91eac02bf9ff61f257fb1239dafdbd193e95f72e"},
+    {file = "starlark_go-1.0.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:45326f09564b6dc6bfdbab1baea323cdd208ef9475b4de0b7fe287cb0763d792"},
+    {file = "starlark_go-1.0.1-cp311-cp311-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:3806942e6818cc13d0ed2495aaaf948a4394244f125a1b597dc48d07f15f759c"},
+    {file = "starlark_go-1.0.1-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:a0efaf176795ba320ea0a62590f6c39294432244c2b4a259a91c139f15a7f165"},
+    {file = "starlark_go-1.0.1-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1324a3ab8b6532b0903ab44eb432ce7b731d297c7528a69f1812a081d31ead32"},
+    {file = "starlark_go-1.0.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:ac15e89992a41f2d3e3cd983811ceafb950e2effcc09556e3824b969ab421ec9"},
+    {file = "starlark_go-1.0.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:42f334bc851b758ef96f638cd5cd9310497e0e235ac8e789a745bd3059eb3e8f"},
+    {file = "starlark_go-1.0.1-cp312-cp312-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:34ca221c0314ca3eee5a427f1ae0c79ed83d17a7f672792fe81f219695602b58"},
+    {file = "starlark_go-1.0.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:265e855b17173d221adc3e7caccefaf927ec9e7debed6d937e7051415ad8eb8e"},
+    {file = "starlark_go-1.0.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ca154cfedb803926a828907b7ce1ee03f9571c61f961da3044215d071ada857b"},
+    {file = "starlark_go-1.0.1-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:6ba76ec8f3fa8dd7864ab711e08358591cd7718455512f99fd72e906c17f158a"},
+    {file = "starlark_go-1.0.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:bcf790476480e634f3de26a76b2b3ac6c3d7f50962e0f3dc22246307e7451a8a"},
+    {file = "starlark_go-1.0.1-cp313-cp313-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:01029c725787ee0615cea48b207195da67fe6366796c6c1acac565c778f17f5a"},
+    {file = "starlark_go-1.0.1-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:36e5ad96d6be21295aaf471044c30ed58439f4e0790c243288c94d2e1b49547f"},
+    {file = "starlark_go-1.0.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e5d74958f84c5458ea61fee6f6237a13e823757936528d752dc92cffb7b5e319"},
+    {file = "starlark_go-1.0.1-cp38-cp38-macosx_10_9_x86_64.whl", hash = "sha256:de43f6c39b6302fb7d226d382d733bee7f0db4dced4977aa214b947b783f4b87"},
+    {file = "starlark_go-1.0.1-cp38-cp38-macosx_11_0_arm64.whl", hash = "sha256:b684e56d5f4a4ba5c4b84e436d61b4bbc34bbe4fc20e5fc27034e85f5c871871"},
+    {file = "starlark_go-1.0.1-cp38-cp38-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:d9bb36f92a5ab3134dab27ccd22341d7e891f51111a709a1dd2da7b8df0a7170"},
+    {file = "starlark_go-1.0.1-cp38-cp38-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:91729c64189cbc148ee70d4a0797229f37c601f2348ae54ed8c9b3363ba75ad4"},
+    {file = "starlark_go-1.0.1-cp38-cp38-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f0c858e62ec76c5ebec1476eba869dcd56b03364d188980ef15eb7cc38f6449d"},
+    {file = "starlark_go-1.0.1-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:7bd7cfe9b50a5c3d33c253ab530b2778e1d1468590dd4b469d443248017f9923"},
+    {file = "starlark_go-1.0.1-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:068d21c285812f4e1540db7bf984887b2e9ba26d565cad6076b0df6c0228b97e"},
+    {file = "starlark_go-1.0.1-cp39-cp39-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:add187b3d2fc487c724d61d9cd786c33ac55cb80f3a9faf6eeb7f22f615f33eb"},
+    {file = "starlark_go-1.0.1-cp39-cp39-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:ba6c4b41add477b5ac8fa72fd74249e26a83ab75ec11ba9654074d0dde19a228"},
+    {file = "starlark_go-1.0.1-cp39-cp39-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cc0d8f549087ee85795e299ba54da8de192168f3439ce3df50da1e46ce067c0a"},
+    {file = "starlark_go-1.0.1.tar.gz", hash = "sha256:c46911421e395971b2bf84e49a55475aee7e25a4de4963afbf6137db91509adc"},
+]
+
+[[package]]
 name = "starlette"
 version = "0.52.1"
 description = "The little ASGI library that shines."
@@ -1649,4 +1690,4 @@ dev = ["httpx", "mypy", "pytest", "pytest-asyncio", "ruff"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "2b4773c60327d9302683d30409f30f2a834ac684f8b7a6cf54a10a589e30428e"
+content-hash = "7140d4532f4cbcf07d27301c00850117504c49c4887267cbc3f509a75e56c4fe"
