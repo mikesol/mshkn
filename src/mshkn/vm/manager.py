@@ -316,15 +316,20 @@ class VMManager:
 
         async with _restore_lock:
             try:
-                # Map capability volume as staging drive
-                await run(
-                    f"dmsetup create {STAGING_DRIVE_NAME} "
-                    f"--table '0 {self.config.thin_volume_sectors} thin "
-                    f"/dev/mapper/{self.config.thin_pool_name} {source_volume_id}'"
-                )
+                from mshkn.vm.staging import _ensure_staging_clean
 
-                # Create staging tap
-                await create_tap(STAGING_SLOT)
+                await _ensure_staging_clean()
+
+                # Map capability volume as staging drive + create tap in parallel
+                await asyncio.gather(
+                    run(
+                        f"dmsetup create {STAGING_DRIVE_NAME} "
+                        f"--table '0 {self.config.thin_volume_sectors} thin "
+                        f"/dev/mapper/{self.config.thin_pool_name} "
+                        f"{source_volume_id}'"
+                    ),
+                    create_tap(STAGING_SLOT),
+                )
 
                 # Start FC and cold-boot on staging slot
                 pid = await start_firecracker_process(socket_path)

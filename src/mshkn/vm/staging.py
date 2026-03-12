@@ -84,33 +84,36 @@ async def restore_from_snapshot(
             # Pre-cleanup: remove stale staging resources from a previous failed restore
             await _ensure_staging_clean()
 
-            # 1. Map disk volume as staging drive name
-            await run(
-                f"dmsetup create {STAGING_DRIVE_NAME} "
-                f"--table '0 {thin_volume_sectors} thin /dev/mapper/{pool_name} {disk_volume_id}'"
+            # 1+2: Map disk and create staging tap in parallel
+            await asyncio.gather(
+                run(
+                    f"dmsetup create {STAGING_DRIVE_NAME} "
+                    f"--table '0 {thin_volume_sectors} thin "
+                    f"/dev/mapper/{pool_name} {disk_volume_id}'"
+                ),
+                create_tap(STAGING_SLOT),
             )
-
-            # 2. Create staging tap (tap254 with 172.16.254.x)
-            await create_tap(STAGING_SLOT)
 
             # 3. Start FC + LOAD_SNAPSHOT
             pid = await start_firecracker_process(socket_path)
             fc_client = FirecrackerClient(socket_path)
             try:
-                await fc_client.load_snapshot(vmstate_path, memory_path, resume_vm=True)
+                await fc_client.load_snapshot(
+                    vmstate_path, memory_path, resume_vm=True,
+                )
             finally:
                 await fc_client.close()
 
             # 4. Wait for SSH at staging IP
             await _wait_for_ssh_staging(STAGING_VM_IP)
 
-            # 5. Add final IP + update default route via SSH
-            await _ssh_add_ip(STAGING_VM_IP, final_vm_ip, final_host_ip)
+            # 5+6a: Add final IP via SSH and delete stale final tap in parallel
+            await asyncio.gather(
+                _ssh_add_ip(STAGING_VM_IP, final_vm_ip, final_host_ip),
+                run(f"ip link del {final_tap}", check=False),
+            )
 
-            # 6. Rename tap + reconfigure host side + rename drive
-            # Delete stale final tap if it exists (from a previous failed restore),
-            # then rename staging tap to final name.
-            await run(f"ip link del {final_tap}", check=False)
+            # 6b. Rename tap + reconfigure host side + rename drive
             await run(
                 f"ip link set {STAGING_TAP} name {final_tap} && "
                 f"ip addr flush dev {final_tap} && "
@@ -123,9 +126,6 @@ async def restore_from_snapshot(
                 f"-d 172.16.0.0/12 -j DROP && "
                 f"dmsetup rename {STAGING_DRIVE_NAME} {final_volume_name}"
             )
-
-            # 7. Verify VM is reachable at final IP before returning
-            await _wait_for_ssh_staging(final_vm_ip)
 
         except Exception:
             # Cleanup on failure
@@ -168,14 +168,15 @@ async def cold_boot_from_disk(
             # Pre-cleanup: remove stale staging resources from a previous failed restore
             await _ensure_staging_clean()
 
-            # 1. Map disk volume as staging drive name
-            await run(
-                f"dmsetup create {STAGING_DRIVE_NAME} "
-                f"--table '0 {thin_volume_sectors} thin /dev/mapper/{pool_name} {disk_volume_id}'"
+            # 1+2: Map disk and create staging tap in parallel
+            await asyncio.gather(
+                run(
+                    f"dmsetup create {STAGING_DRIVE_NAME} "
+                    f"--table '0 {thin_volume_sectors} thin "
+                    f"/dev/mapper/{pool_name} {disk_volume_id}'"
+                ),
+                create_tap(STAGING_SLOT),
             )
-
-            # 2. Create staging tap
-            await create_tap(STAGING_SLOT)
 
             # 3. Start FC + cold boot
             pid = await start_firecracker_process(socket_path)
@@ -198,11 +199,13 @@ async def cold_boot_from_disk(
             # 4. Wait for SSH at staging IP (longer timeout for cold boot)
             await _wait_for_ssh_staging(STAGING_VM_IP, timeout=30.0)
 
-            # 5. Add final IP + update default route via SSH
-            await _ssh_add_ip(STAGING_VM_IP, final_vm_ip, final_host_ip)
+            # 5+6a: Add final IP via SSH and delete stale final tap in parallel
+            await asyncio.gather(
+                _ssh_add_ip(STAGING_VM_IP, final_vm_ip, final_host_ip),
+                run(f"ip link del {final_tap}", check=False),
+            )
 
-            # 6. Rename tap + reconfigure host side + rename drive
-            await run(f"ip link del {final_tap}", check=False)
+            # 6b. Rename tap + reconfigure host side + rename drive
             await run(
                 f"ip link set {STAGING_TAP} name {final_tap} && "
                 f"ip addr flush dev {final_tap} && "
@@ -215,9 +218,6 @@ async def cold_boot_from_disk(
                 f"-d 172.16.0.0/12 -j DROP && "
                 f"dmsetup rename {STAGING_DRIVE_NAME} {final_volume_name}"
             )
-
-            # 7. Verify VM is reachable at final IP
-            await _wait_for_ssh_staging(final_vm_ip)
 
         except Exception:
             await _cleanup_staging(pid=pid)
