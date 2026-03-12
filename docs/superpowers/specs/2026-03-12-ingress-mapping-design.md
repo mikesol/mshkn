@@ -32,13 +32,23 @@ External service → POST /ingress/{rule_id}
                    Return result (sync) or 202 (async)
 ```
 
+## Dependencies
+
+Starlark execution uses the `starlark-go` Python package, which wraps Google's reference Go implementation via CGo. This provides:
+- Deterministic execution with guaranteed termination (Starlark language property)
+- CPU timeout enforcement at the interpreter level
+- Battle-tested sandbox (used by Bazel, Buck2)
+
+If `starlark-go` proves problematic to build, fallback to `pystarlark` with a thread-based timeout wrapper.
+
 ## Data Model
 
 ### Table: `ingress_rules`
 
 | Column | Type | Description |
 |--------|------|-------------|
-| id | TEXT PK | Opaque token, e.g. `ir_` + 20 random chars. Doubles as capability URL token. |
+| internal_id | TEXT PK | Stable UUID, never exposed. Used as FK target for logs. |
+| id | TEXT UNIQUE | Rotatable capability token, e.g. `ir_` + 20 random chars. |
 | account_id | TEXT FK | Owner account |
 | name | TEXT | Human-friendly label (e.g. "telegram-bot") |
 | starlark_source | TEXT | Starlark source code containing a `transform` function |
@@ -56,7 +66,7 @@ Index on `account_id` for listing.
 | Column | Type | Description |
 |--------|------|-------------|
 | id | TEXT PK | UUID per invocation |
-| rule_id | TEXT FK | Which rule was triggered |
+| rule_internal_id | TEXT FK | References ingress_rules.internal_id (stable across rotations) |
 | status | TEXT | `accepted`, `completed`, `failed`, `rejected` |
 | starlark_result | TEXT | JSON of what the transform returned |
 | error_message | TEXT | Null on success |
@@ -151,13 +161,13 @@ Query recent invocation logs (last 24h).
 
 ### `POST /ingress/{rule_id}`
 
-Also accepts PUT and PATCH.
+Also accepts PUT, PATCH, and GET. GET requests pass `None` for all body fields — useful for webhook verification / health checks.
 
 **Flow:**
 
 1. Look up rule by `rule_id` → 404 if not found or disabled
 2. Check rate limit → 429 if exceeded
-3. Check `Content-Length` against `max_body_bytes` → 413 if exceeded
+3. Check `Content-Length` against `max_body_bytes` → 413 if exceeded. For chunked transfers without `Content-Length`, read up to `max_body_bytes + 1` bytes and return 413 if the limit is exceeded.
 4. Parse body based on `Content-Type`:
    - `application/json` → `body_json` (parsed dict)
    - `multipart/form-data` → `body_form` (parsed fields, files rejected with 413)
@@ -182,8 +192,8 @@ Also accepts PUT and PATCH.
    - Dict with `action` field → validate against allowed fields for that action
 8. Execute the action using internal code paths (same as create/fork endpoints)
 9. Return based on `response_mode`:
-   - **async** → `202 {"request_id": "...", "status": "accepted"}`
-   - **sync** → `200 {"computer_id": "...", "exec_stdout": "...", "exec_exit_code": 0, "checkpoint_id": "..."}`
+   - **async** → `202 {"request_id": "...", "status": "accepted"}` (request_id is for log correlation by the rule owner via `/logs`; async results are delivered via `callback_url` if set)
+   - **sync** → `200 {"computer_id": "...", "exec_stdout": "...", "exec_stderr": "...", "exec_exit_code": 0, "created_checkpoint_id": "..."}` (mirrors the full ForkResponse/CreateResponse)
 
 ## Starlark Contract
 
@@ -202,10 +212,11 @@ Must return `None` (to ignore) or a dict with an `action` field:
   "checkpoint_id": "cp_abc123",     # required
   "exec": "echo hello",             # optional
   "self_destruct": True,            # optional
-  "exclusive": "defer_on_conflict", # optional
+  "exclusive": "defer_on_conflict", # optional: "error_on_conflict" or "defer_on_conflict"
   "callback_url": "https://...",    # optional
-  "label": "my-chain"               # optional
 }
+# Note: label is inherited from the source checkpoint, not set on fork.
+
 ```
 
 **Create action:**
@@ -245,7 +256,6 @@ def transform(req):
         "exec": "python handle_message.py " + chat_id + " " + repr(text),
         "self_destruct": True,
         "exclusive": "defer_on_conflict",
-        "label": "telegram-" + chat_id,
     }
 ```
 
@@ -255,7 +265,7 @@ def transform(req):
 - **Ingress URL** is unauthenticated — the `rule_id` is the shared secret (capability URL pattern, same as Stripe webhooks)
 - Rule IDs are opaque, randomly generated — cannot be guessed or squatted
 - Users can rotate rule IDs via `/rotate` if one leaks
-- Per-rule rate limiting prevents abuse (default 60 req/min)
+- Per-rule rate limiting prevents abuse (default 60 req/min, in-memory sliding window counters consistent with existing per-key rate limiter; counters reset on server restart)
 - Starlark sandbox prevents rule code from accessing server internals
 - 10MB body limit prevents memory exhaustion
 
