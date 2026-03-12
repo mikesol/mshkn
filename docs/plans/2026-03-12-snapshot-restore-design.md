@@ -70,6 +70,8 @@ async def restore_from_snapshot(vmstate_path, memory_path, disk_volume_id, final
 
 After restore, the VM is running on its final slot with the correct IP. The staging resources are released for the next restore.
 
+**Input sources**: For L3 cache restores, vmstate/memory come from `{checkpoint_local_dir}/templates/{manifest_hash}/`. For fork, they come from the checkpoint's local directory (`{checkpoint_local_dir}/{checkpoint_id}/`), downloading from R2 if not cached locally. The `disk_volume_id` is a fresh dm-thin snapshot of the capability base volume (create) or checkpoint volume (fork).
+
 ### L3 Capability Memory Cache (#36)
 
 Extends the capability cache from two levels to three:
@@ -155,6 +157,7 @@ This avoids rootfs changes, MMDS setup, or network namespace complexity.
 - **Loosen**: `BARE_CREATE_P95_MS` and `WARM_CACHE_CREATE_P95_MS` — first create with a new manifest now pays the two-phase boot penalty (~1500ms). These thresholds must accommodate the L3 miss path.
 - **Tighten**: Fork p95 and warm-cache (L3 hit) create p95 — these now go through LOAD_SNAPSHOT (~50ms) instead of cold boot (~1000ms). Cement gains by lowering thresholds.
 - **Gate**: Only merge if overall p95 profile improves vs main. New thresholds must reflect measured performance, not aspirational targets.
+- **Expected ranges**: BARE_CREATE_P95_MS ~1500ms (up from 950ms, two-phase penalty on L3 miss), WARM_CACHE_CREATE_P95_MS ~150ms (down from 1150ms, L3 hit), FORK_MINIMAL_P95_MS ~150ms (down from 850ms, LOAD_SNAPSHOT). Exact values set from measured results.
 
 ## What This Does NOT Change
 
