@@ -44,6 +44,17 @@ async def insert_account(db: aiosqlite.Connection, account: Account) -> None:
     await db.commit()
 
 
+async def get_account_by_id(db: aiosqlite.Connection, account_id: str) -> Account | None:
+    cursor = await db.execute(
+        "SELECT id, api_key, vm_limit, created_at FROM accounts WHERE id = ?",
+        (account_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return Account(id=row[0], api_key=row[1], vm_limit=row[2], created_at=row[3])
+
+
 async def get_account_by_key(db: aiosqlite.Connection, api_key: str) -> Account | None:
     cursor = await db.execute(
         "SELECT id, api_key, vm_limit, created_at FROM accounts WHERE api_key = ?",
