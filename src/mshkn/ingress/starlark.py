@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from starlark_go import Starlark
 
 
@@ -50,8 +52,8 @@ def validate_starlark(source: str) -> list[str]:
 
 
 def execute_transform(
-    source: str, request_dict: dict, timeout_ms: int = 1000
-) -> dict | None:
+    source: str, request_dict: dict[str, Any]
+) -> dict[str, Any] | None:
     """Execute a Starlark transform function against a request dict.
 
     Returns the transform result (dict or None).
@@ -61,7 +63,7 @@ def execute_transform(
         s = Starlark()
         s.exec(source)
         literal = _to_starlark_literal(request_dict)
-        result = s.eval("transform(" + literal + ")")
-        return result  # type: ignore[return-value]
+        result: dict[str, Any] | None = s.eval("transform(" + literal + ")")
+        return result
     except Exception as exc:
         raise StarlarkError(str(exc)) from exc
