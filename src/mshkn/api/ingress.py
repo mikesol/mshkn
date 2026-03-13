@@ -421,7 +421,6 @@ async def _do_create(
     vm_manager: VMManager,
     config: Config,
     account_id: str,
-    uses: list[str],
     exec_cmd: str | None = None,
     self_destruct: bool = False,
     callback_url: str | None = None,
@@ -431,7 +430,6 @@ async def _do_create(
     """Core create-computer logic, shared by API endpoint and ingress trigger."""
     from mshkn.api.computers import _self_destruct
     from mshkn.db import count_active_computers_by_account, get_account_by_id
-    from mshkn.models import Manifest
     from mshkn.vm.ssh import ssh_exec
 
     account = await get_account_by_id(db, account_id)
@@ -442,8 +440,7 @@ async def _do_create(
     if active_count >= account.vm_limit:
         raise HTTPException(status_code=429, detail="VM limit reached")
 
-    manifest = Manifest(uses=uses)
-    computer = await vm_manager.create(account_id, manifest)
+    computer = await vm_manager.create(account_id)
 
     exec_exit_code: int | None = None
     exec_stdout: str | None = None
@@ -475,7 +472,7 @@ async def _do_create(
     return {
         "computer_id": computer.id,
         "url": f"https://{computer.id}.{config.domain}",
-        "manifest_hash": computer.manifest_hash,
+        "recipe_id": computer.recipe_id,
         "exec_exit_code": exec_exit_code,
         "exec_stdout": exec_stdout,
         "exec_stderr": exec_stderr,
@@ -498,14 +495,11 @@ async def _do_fork(
     """Core fork-from-checkpoint logic, shared by API endpoint and ingress trigger."""
     from mshkn.api.computers import _self_destruct
     from mshkn.db import get_active_computer_for_label, get_checkpoint, insert_deferred
-    from mshkn.models import Manifest
     from mshkn.vm.ssh import ssh_exec
 
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account_id:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
-
-    fork_manifest = Manifest.from_json(ckpt.manifest_json)
 
     # Exclusive restore
     if exclusive and ckpt.label:
@@ -535,7 +529,7 @@ async def _do_fork(
                 return {"deferred_id": deferred_id, "status": "queued"}
 
     account_obj = await _get_account(db, account_id)
-    computer = await vm_manager.fork_from_checkpoint(account_id, ckpt, fork_manifest)
+    computer = await vm_manager.fork_from_checkpoint(account_id, ckpt, recipe_id=ckpt.recipe_id)
 
     exec_exit_code: int | None = None
     exec_stdout: str | None = None
@@ -748,13 +742,11 @@ async def _execute_action(
             meta_exec=result.get("meta_exec"),
         )
     if action == "create":
-        uses = result.get("uses") or result.get("capabilities") or []
         return await _do_create(
             db=db,
             vm_manager=vm_mgr,
             config=config,
             account_id=account_id,
-            uses=uses,
             exec_cmd=result.get("exec"),
             self_destruct=result.get("self_destruct", False),
             callback_url=result.get("callback_url"),
