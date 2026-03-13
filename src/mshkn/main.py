@@ -17,6 +17,7 @@ from mshkn.api.checkpoints import router as checkpoints_router
 from mshkn.api.computers import router as computers_router
 from mshkn.api.ingress import router as ingress_router
 from mshkn.api.metrics import router as metrics_router
+from mshkn.api.recipes import router as recipes_router
 from mshkn.config import Config
 from mshkn.db import run_migrations
 from mshkn.logging import JSONFormatter
@@ -79,6 +80,7 @@ app.include_router(computers_router)
 app.include_router(checkpoints_router)
 app.include_router(ingress_router)
 app.include_router(metrics_router)
+app.include_router(recipes_router)
 
 
 @app.middleware("http")
