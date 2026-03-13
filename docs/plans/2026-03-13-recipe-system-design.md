@@ -57,7 +57,7 @@ Response (202 Accepted):
 If a recipe with the same content_hash already exists for this account:
 - If `ready`: return 200 with the existing recipe_id
 - If `building`: return 200 with the existing recipe_id and status
-- If `failed`: create a new recipe (retry the build)
+- If `failed`: delete the failed row, then create a new recipe (retry the build)
 
 **GET /recipes/{id}** — Recipe details including status, build_log.
 
@@ -89,7 +89,7 @@ When POST /recipes triggers a build:
 ### Phase 1: Docker Build
 
 1. Write Dockerfile to a temp directory (`/tmp/mshkn-build-{content_hash}/`)
-2. `docker build -t mshkn-recipe-{content_hash} --memory=4g --cpu-quota=200000 /tmp/mshkn-build-{content_hash}/`
+2. `docker build -t mshkn-recipe-{content_hash} --memory=4g --cpuset-cpus=0-1 /tmp/mshkn-build-{content_hash}/`
 3. Build timeout: 10 minutes (enforced via `asyncio.wait_for`)
 4. On success, proceed to Phase 2. On failure, set status=failed with build_log.
 5. Cleanup on any failure: remove temp dir, `docker rmi` if image was created.
@@ -170,12 +170,20 @@ RUN ln -sf /lib/systemd/systemd /sbin/init
 
 This image is built once and stored locally. It does NOT need to be published to a registry — `FROM mshkn-base` resolves locally.
 
+Build command: `docker build -t mshkn-base -f Dockerfile.mshkn-base .` from the repo root, where `mshkn_key.pub` is the public half of the SSH key at `config.ssh_key_path`.
+
+### Server Dependency
+
+Docker Engine (daemon + CLI) must be installed on the host. Add to the server setup alongside Firecracker/rclone/Caddy.
+
 ## What Gets Removed
 
 ### Files
 - `src/mshkn/capability/resolver.py`
 - `src/mshkn/capability/builder.py`
 - `src/mshkn/capability/template_cache.py`
+- `src/mshkn/capability/cache.py`
+- `src/mshkn/capability/eviction.py`
 - `src/mshkn/capability/__init__.py`
 - Related test files
 
@@ -188,11 +196,14 @@ This image is built once and stored locally. It does NOT need to be published to
 - Nix store paths — can be cleaned up
 
 ### Code in Remaining Files
-- `manager.py`: Remove `_get_or_build_capability_volume`, `_build_l3_template`, all Nix-related imports
+- `manager.py`: Remove `_get_or_build_capability_volume`, `_build_l3_template`, all Nix/capability imports
 - `manager.py`: `create()` uses recipe's base_volume_id instead of capability volume
-- `computers.py`: Remove `uses`/`manifest` parameters from create endpoint
-- `checkpoints.py`: Remove manifest handling from fork endpoint
-- `models.py`: Remove `Manifest` dataclass, update `Computer` and `Checkpoint` models
+- `manager.py`: `initialize()` must scan `recipes.base_volume_id` to set `_next_volume_id` (replaces `get_max_capability_volume_id`)
+- `manager.py`: L3 template build logic stays here (reads/writes `recipes` table instead of `snapshot_templates`)
+- `computers.py`: Remove `uses`/`manifest` parameters from create endpoint; `CreateRequest` gets `recipe_id` field
+- `checkpoints.py`: Remove `manifest`/`skip_manifest_check` from `ForkRequest`; add optional `recipe_id` field
+- `models.py`: Remove `Manifest` dataclass. `Computer` and `Checkpoint` keep `manifest_hash`/`manifest_json` as vestigial fields (always sentinel values), add `recipe_id: str | None`
+- `db.py`: All INSERT statements for computers/checkpoints use sentinel values for manifest columns
 
 ## What Stays
 
@@ -207,7 +218,7 @@ This image is built once and stored locally. It does NOT need to be published to
 
 ## Migration
 
-Sequential DB migration:
+Migration assumes a clean deployment — existing computers and checkpoints are destroyed before migration (pre-alpha, zero users). Sequential DB migration:
 
 ```sql
 -- Add recipes table
