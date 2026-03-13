@@ -19,7 +19,6 @@ class Config:
         default_factory=lambda: Path("/opt/firecracker/rootfs.ext4"),
     )
     kernel_path: Path = field(default_factory=lambda: Path("/opt/firecracker/vmlinux.bin"))
-    capability_cache_dir: Path = field(default_factory=lambda: Path("/opt/mshkn/capability-cache"))
     checkpoint_local_dir: Path = field(default_factory=lambda: Path("/opt/mshkn/checkpoints"))
     ssh_key_path: Path = field(default_factory=lambda: Path("/root/.ssh/id_ed25519"))
 
