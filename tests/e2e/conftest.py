@@ -135,12 +135,12 @@ async def create_recipe(
 
 async def create_computer(
     client: httpx.AsyncClient,
-    _uses: list[str] | None = None,
+    uses: list[str] | None = None,  # noqa: ARG001
     recipe_id: str | None = None,
 ) -> str:
     """Create a computer, return computer_id.
 
-    The `_uses` parameter is deprecated (ignored) — kept for backward compatibility.
+    The `uses` parameter is deprecated (ignored) — kept for backward compatibility.
     Use `recipe_id` instead.
     """
     body: dict[str, object] = {}
@@ -189,12 +189,12 @@ async def delete_checkpoint(client: httpx.AsyncClient, checkpoint_id: str) -> No
 @asynccontextmanager
 async def managed_computer(
     client: httpx.AsyncClient,
-    _uses: list[str] | None = None,
+    uses: list[str] | None = None,  # noqa: ARG001
     recipe_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Context manager that creates and destroys a computer.
 
-    The `_uses` parameter is deprecated (ignored) — kept for backward compatibility.
+    The `uses` parameter is deprecated (ignored) — kept for backward compatibility.
     Use `recipe_id` instead.
     """
     comp_id = await create_computer(client, recipe_id=recipe_id)
