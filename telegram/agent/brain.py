@@ -114,7 +114,7 @@ def create_box_b(tool_commands):
          "-H", "Authorization: Bearer mk-test-key-2026",
          "-H", "Content-Type: application/json",
          "-d", json.dumps({
-             "uses": ["node"],
+             "recipe_id": config.get("recipe_id"),
              "exec": full_script,
              "self_destruct": True,
              "label": "box-b-tools",

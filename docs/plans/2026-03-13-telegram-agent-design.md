@@ -97,7 +97,7 @@ Stored in `.env`:
 8. Telegram webhook: set webhook URL on test bot, receive POST on message
 9. Pistachio turn: fork-from-label + exec + self_destruct + callback lifecycle
 10. exec/bg: background process on computer, stays alive, queryable
-11. Capability bootstrap: computer with node manifest, npx/npm work
+11. Recipe bootstrap: create recipe with node Dockerfile, create computer with recipe_id, verify npx/npm work
 12. Upload state: upload JSON to computer, readable inside VM
 13. Deferred queue: defer_on_conflict queues, destroy drains
 14. Caddy webhook route: public URL routes to mshkn API
@@ -114,7 +114,7 @@ Stored in `.env`:
 7. bg exec + status: Box B running bg process, Box A queries status on same Box B
 8. State persistence: upload JSON → checkpoint → fork → JSON survives
 9. Deferred batching: multiple messages → all batch into meta_exec
-10. Capability + build: computer with node, run create-react-app
+10. Recipe + build: computer with node recipe, run create-react-app
 
 ### Cells (~5, complete sub-workflows)
 

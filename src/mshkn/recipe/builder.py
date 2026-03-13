@@ -280,6 +280,9 @@ async def _post_process_rootfs(mount_point: str, config: Config) -> None:
         'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'
     )
 
+    # Write /etc/resolv.conf (Docker export strips it)
+    (etc / "resolv.conf").write_text("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+
     # Remove .dockerenv so systemd doesn't detect Docker virtualization
     dockerenv = mp / ".dockerenv"
     if dockerenv.exists():
