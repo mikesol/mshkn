@@ -19,7 +19,7 @@ from mshkn.db import (
     list_all_computers,
     update_computer_status,
 )
-from mshkn.models import Checkpoint, Computer, Manifest
+from mshkn.models import Checkpoint, Computer, Recipe
 from mshkn.shell import run
 from mshkn.vm.firecracker import (
     FirecrackerClient,
@@ -118,12 +118,12 @@ class VMManager:
         ckpt_max = await get_max_checkpoint_volume_id(self.db)
         if ckpt_max is not None:
             max_vol = max(max_vol, ckpt_max)
-        # Also check capability cache volumes
-        from mshkn.capability.cache import get_max_capability_volume_id
+        # Also check recipe base volumes
+        from mshkn.db import get_max_recipe_volume_id
 
-        cap_max = await get_max_capability_volume_id(self.db)
-        if cap_max is not None:
-            max_vol = max(max_vol, cap_max)
+        recipe_max = await get_max_recipe_volume_id(self.db)
+        if recipe_max is not None:
+            max_vol = max(max_vol, recipe_max)
         # Scan actual dm-thin pool for orphaned volumes the DB doesn't know about
         pool_max = await self._scan_pool_max_volume_id()
         if pool_max is not None:
@@ -223,7 +223,7 @@ class VMManager:
 
         return pid
 
-    async def _get_or_build_capability_volume(self, manifest: Manifest) -> int:
+    async def _get_or_build_capability_volume(self, manifest: object) -> int:
         """Return the volume_id of a capability base volume for this manifest.
 
         Checks cache first. On miss, builds the Nix closure and creates
@@ -382,10 +382,99 @@ class VMManager:
                 await run(f"dmsetup remove {STAGING_DRIVE_NAME}", check=False)
                 raise
 
+    async def _build_l3_template_for_recipe(self, recipe: Recipe) -> None:
+        """Build an L3 template for a recipe: cold-boot on staging slot, snapshot, cache."""
+        from mshkn.db import update_recipe_template
+        from mshkn.vm.staging import (
+            STAGING_DRIVE_NAME,
+            STAGING_MAC,
+            STAGING_SLOT,
+            STAGING_TAP,
+            STAGING_VM_IP,
+            _restore_lock,
+        )
+
+        template_dir = self.config.checkpoint_local_dir / "templates" / recipe.id
+        template_dir.mkdir(parents=True, exist_ok=True)
+        vmstate_path = template_dir / "vmstate"
+        memory_path = template_dir / "memory"
+
+        socket_path = f"/tmp/fc-template-{recipe.id}.socket"
+        pid: int | None = None
+
+        async with _restore_lock:
+            try:
+                from mshkn.vm.staging import _ensure_staging_clean
+
+                await _ensure_staging_clean()
+
+                # Map recipe volume as staging drive + create tap in parallel
+                await asyncio.gather(
+                    run(
+                        f"dmsetup create {STAGING_DRIVE_NAME} "
+                        f"--table '0 {self.config.thin_volume_sectors} thin "
+                        f"/dev/mapper/{self.config.thin_pool_name} "
+                        f"{recipe.base_volume_id}'"
+                    ),
+                    create_tap(STAGING_SLOT),
+                )
+
+                # Start FC and cold-boot on staging slot
+                pid = await start_firecracker_process(socket_path)
+                fc_client = FirecrackerClient(socket_path)
+                try:
+                    await fc_client.configure_and_boot(
+                        FirecrackerConfig(
+                            socket_path=socket_path,
+                            kernel_path=str(self.config.kernel_path),
+                            rootfs_path=f"/dev/mapper/{STAGING_DRIVE_NAME}",
+                            tap_device=STAGING_TAP,
+                            guest_mac=STAGING_MAC,
+                        )
+                    )
+                finally:
+                    await fc_client.close()
+
+                # Wait for SSH
+                await self._wait_for_ssh(STAGING_VM_IP)
+
+                # Pause and snapshot
+                fc_client = FirecrackerClient(socket_path)
+                try:
+                    await fc_client.pause()
+                    await fc_client.create_snapshot(str(vmstate_path), str(memory_path))
+                finally:
+                    await fc_client.close()
+
+                # Kill template VM
+                await kill_firecracker_process(pid)
+                pid = None
+
+                # Destroy staging tap
+                await destroy_tap(STAGING_SLOT)
+
+                # Remove staging drive mapping
+                await run(f"dmsetup remove {STAGING_DRIVE_NAME}")
+
+                # Cache the template on the recipe
+                await update_recipe_template(
+                    self.db, recipe.id, str(vmstate_path), str(memory_path)
+                )
+                logger.info("Built L3 template for recipe %s", recipe.id)
+
+            except Exception:
+                logger.exception("Failed to build L3 template for recipe %s", recipe.id)
+                # Cleanup
+                if pid is not None:
+                    await kill_firecracker_process(pid)
+                await destroy_tap(STAGING_SLOT)
+                await run(f"dmsetup remove {STAGING_DRIVE_NAME}", check=False)
+                raise
+
     async def create(
         self,
         account_id: str,
-        manifest: Manifest,
+        recipe_id: str | None = None,
         needs: dict[str, object] | None = None,
     ) -> Computer:
         mem_size_mib, vcpu_count = parse_needs(needs)
@@ -394,9 +483,20 @@ class VMManager:
         )
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
 
-        # Get capability base volume (L1/L2 cache, builds if miss)
-        source_volume_id = await self._get_or_build_capability_volume(manifest)
-        manifest_hash = manifest.content_hash() if manifest.uses else "bare"
+        # Resolve recipe to source volume
+        if recipe_id is not None:
+            from mshkn.db import get_recipe
+            recipe = await get_recipe(self.db, recipe_id)
+            if recipe is None:
+                raise ValueError(f"Recipe {recipe_id} not found")
+            if recipe.status != "ready":
+                raise ValueError(f"Recipe {recipe_id} is not ready (status={recipe.status})")
+            if recipe.base_volume_id is None:
+                raise ValueError(f"Recipe {recipe_id} has no base volume")
+            source_volume_id = recipe.base_volume_id
+        else:
+            recipe = None
+            source_volume_id = 0  # bare base image
 
         # Allocate slot + volume
         async with self._alloc_lock:
@@ -428,30 +528,51 @@ class VMManager:
             )
         else:
             # Default resources: use L3 template cache for fast restore
-            from mshkn.capability.template_cache import get_cached_template
+            vmstate_path = None
+            memory_path = None
 
-            template = await get_cached_template(self.db, manifest_hash)
-            if template is None:
-                logger.info("L3 cache miss for %s, building template...", manifest_hash)
-                await self._build_l3_template(manifest_hash, source_volume_id)
-                template = await get_cached_template(self.db, manifest_hash)
-                if template is None:
-                    raise RuntimeError(f"L3 template build failed for {manifest_hash}")
+            if recipe is not None and recipe.template_vmstate and recipe.template_memory:
+                vmstate_path = recipe.template_vmstate
+                memory_path = recipe.template_memory
+            elif recipe is not None:
+                # Build L3 template on first use (lazy)
+                try:
+                    await self._build_l3_template_for_recipe(recipe)
+                    from mshkn.db import get_recipe as _get_recipe
+                    recipe = await _get_recipe(self.db, recipe.id)
+                    if recipe and recipe.template_vmstate and recipe.template_memory:
+                        vmstate_path = recipe.template_vmstate
+                        memory_path = recipe.template_memory
+                except Exception:
+                    logger.warning(
+                        "L3 template build failed for recipe %s, will cold-boot",
+                        recipe_id,
+                    )
 
-            vmstate_path, memory_path = template
-
-            from mshkn.vm.staging import restore_from_snapshot
-
-            result = await restore_from_snapshot(
-                vmstate_path=vmstate_path,
-                memory_path=memory_path,
-                disk_volume_id=volume_id,
-                final_slot=slot,
-                pool_name=self.config.thin_pool_name,
-                thin_volume_sectors=self.config.thin_volume_sectors,
-                final_volume_name=volume_name,
-                socket_path=f"/tmp/fc-{computer_id}.socket",
-            )
+            if vmstate_path is not None and memory_path is not None:
+                from mshkn.vm.staging import restore_from_snapshot
+                result = await restore_from_snapshot(
+                    vmstate_path=vmstate_path,
+                    memory_path=memory_path,
+                    disk_volume_id=volume_id,
+                    final_slot=slot,
+                    pool_name=self.config.thin_pool_name,
+                    thin_volume_sectors=self.config.thin_volume_sectors,
+                    final_volume_name=volume_name,
+                    socket_path=f"/tmp/fc-{computer_id}.socket",
+                )
+            else:
+                # No template: cold-boot from disk
+                from mshkn.vm.staging import cold_boot_from_disk
+                result = await cold_boot_from_disk(
+                    disk_volume_id=volume_id,
+                    final_slot=slot,
+                    pool_name=self.config.thin_pool_name,
+                    thin_volume_sectors=self.config.thin_volume_sectors,
+                    final_volume_name=volume_name,
+                    kernel_path=str(self.config.kernel_path),
+                    socket_path=f"/tmp/fc-{computer_id}.socket",
+                )
 
         # Warm SSH pool
         _host_ip, vm_ip = slot_to_ip(slot)
@@ -468,11 +589,12 @@ class VMManager:
             vm_ip=result.vm_ip,
             socket_path=result.socket_path,
             firecracker_pid=result.pid,
-            manifest_hash=manifest.content_hash(),
-            manifest_json=manifest.to_json(),
+            manifest_hash="none",
+            manifest_json="{}",
             status="running",
             created_at=now,
             last_exec_at=None,
+            recipe_id=recipe_id,
         )
         await insert_computer(self.db, computer)
 
@@ -509,7 +631,7 @@ class VMManager:
         return volume_id
 
     async def fork_from_checkpoint(
-        self, account_id: str, checkpoint: Checkpoint, manifest: Manifest | None = None,
+        self, account_id: str, checkpoint: Checkpoint, recipe_id: str | None = None,
     ) -> Computer:
         """Fork a new computer from a checkpoint via LOAD_SNAPSHOT.
 
@@ -583,9 +705,7 @@ class VMManager:
 
         # Record in DB
         now = datetime.now(UTC).isoformat()
-        effective_manifest = manifest if manifest is not None else Manifest.from_json(
-            checkpoint.manifest_json,
-        )
+        effective_recipe_id = recipe_id if recipe_id is not None else checkpoint.recipe_id
         computer = Computer(
             id=computer_id,
             account_id=account_id,
@@ -594,12 +714,13 @@ class VMManager:
             vm_ip=result.vm_ip,
             socket_path=result.socket_path,
             firecracker_pid=result.pid,
-            manifest_hash=effective_manifest.content_hash(),
-            manifest_json=effective_manifest.to_json(),
+            manifest_hash="none",
+            manifest_json="{}",
             status="running",
             created_at=now,
             last_exec_at=None,
             source_checkpoint_id=checkpoint.id,
+            recipe_id=effective_recipe_id,
         )
         await insert_computer(self.db, computer)
 
