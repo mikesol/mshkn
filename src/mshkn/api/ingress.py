@@ -71,7 +71,7 @@ def _get_rule_rate_limiter(rule_id: str, rate_limit_rpm: int) -> RateLimiter:
 # --- Validation helpers ---
 
 VALID_FORK_FIELDS = {
-    "action", "checkpoint_id", "exec", "self_destruct", "exclusive",
+    "action", "checkpoint_id", "label", "exec", "self_destruct", "exclusive",
     "callback_url", "meta_exec",
 }
 VALID_CREATE_FIELDS = {
@@ -97,8 +97,8 @@ def _validate_transform_result(result: dict[str, Any] | None) -> list[str]:
         return errors
 
     if action == "fork":
-        if "checkpoint_id" not in result:
-            errors.append("fork action requires 'checkpoint_id'")
+        if "checkpoint_id" not in result and "label" not in result:
+            errors.append("fork action requires 'checkpoint_id' or 'label'")
         unknown = set(result.keys()) - VALID_FORK_FIELDS
         if unknown:
             errors.append(f"unknown fields for fork action: {unknown}")
@@ -717,12 +717,30 @@ async def _execute_action(
 ) -> dict[str, object]:
     """Execute a fork or create action from a Starlark transform result."""
     if action == "fork":
+        # Resolve label to checkpoint_id if needed
+        checkpoint_id = result.get("checkpoint_id")
+        if checkpoint_id is None:
+            label = result.get("label")
+            if label is None:
+                raise HTTPException(
+                    status_code=502, detail="fork needs checkpoint_id or label",
+                )
+            from mshkn.db import list_checkpoints_by_account
+
+            ckpts = await list_checkpoints_by_account(db, account_id, label=label)
+            if not ckpts:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No checkpoint with label '{label}'",
+                )
+            checkpoint_id = ckpts[0].id  # Most recent with this label
+
         return await _do_fork(
             db=db,
             vm_manager=vm_mgr,
             config=config,
             account_id=account_id,
-            checkpoint_id=result["checkpoint_id"],
+            checkpoint_id=checkpoint_id,
             exec_cmd=result.get("exec"),
             self_destruct=result.get("self_destruct", False),
             callback_url=result.get("callback_url"),
