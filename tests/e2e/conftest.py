@@ -109,9 +109,44 @@ async def exec_command(
     )
 
 
-async def create_computer(client: httpx.AsyncClient, uses: list[str] | None = None) -> str:
-    """Create a computer, return computer_id."""
-    resp = await client.post("/computers", json={"uses": uses or []})
+async def create_recipe(
+    client: httpx.AsyncClient, dockerfile: str, timeout: float = 300.0
+) -> str:
+    """Create a recipe, wait for it to be ready, return recipe_id."""
+    resp = await client.post("/recipes", json={"dockerfile": dockerfile})
+    resp.raise_for_status()
+    data = resp.json()
+    recipe_id = data["recipe_id"]
+    if data["status"] == "ready":
+        return recipe_id
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        await asyncio.sleep(3)
+        r = await client.get(f"/recipes/{recipe_id}")
+        r.raise_for_status()
+        info = r.json()
+        if info["status"] == "ready":
+            return recipe_id
+        if info["status"] == "failed":
+            raise RuntimeError(f"Recipe build failed: {info.get('build_log', '')[:500]}")
+    raise TimeoutError(f"Recipe {recipe_id} did not complete in {timeout}s")
+
+
+async def create_computer(
+    client: httpx.AsyncClient,
+    _uses: list[str] | None = None,
+    recipe_id: str | None = None,
+) -> str:
+    """Create a computer, return computer_id.
+
+    The `_uses` parameter is deprecated (ignored) — kept for backward compatibility.
+    Use `recipe_id` instead.
+    """
+    body: dict[str, object] = {}
+    if recipe_id:
+        body["recipe_id"] = recipe_id
+    resp = await client.post("/computers", json=body)
     resp.raise_for_status()
     return resp.json()["computer_id"]
 
@@ -153,10 +188,16 @@ async def delete_checkpoint(client: httpx.AsyncClient, checkpoint_id: str) -> No
 
 @asynccontextmanager
 async def managed_computer(
-    client: httpx.AsyncClient, uses: list[str] | None = None
+    client: httpx.AsyncClient,
+    _uses: list[str] | None = None,
+    recipe_id: str | None = None,
 ) -> AsyncIterator[str]:
-    """Context manager that creates and destroys a computer."""
-    comp_id = await create_computer(client, uses)
+    """Context manager that creates and destroys a computer.
+
+    The `_uses` parameter is deprecated (ignored) — kept for backward compatibility.
+    Use `recipe_id` instead.
+    """
+    comp_id = await create_computer(client, recipe_id=recipe_id)
     try:
         yield comp_id
     finally:
