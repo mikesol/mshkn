@@ -14,10 +14,19 @@ import pytest
 from .conftest import (
     checkpoint_computer,
     create_computer,
+    create_recipe,
     destroy_computer,
     exec_command,
     fork_checkpoint,
     managed_computer,
+)
+
+# Shared Python recipe Dockerfile for networking tests
+_PYTHON_DOCKERFILE = "FROM mshkn-base\nRUN apt-get update && apt-get install -y python3"
+_PYTHON_WS_DOCKERFILE = (
+    "FROM mshkn-base\n"
+    "RUN apt-get update && apt-get install -y python3 python3-pip\n"
+    "RUN pip3 install websockets --break-system-packages\n"
 )
 
 
@@ -39,9 +48,10 @@ def port_url(base_url: str, port: int) -> str:
 class TestT41AutoHttps:
     """A simple HTTP server in the VM should be reachable at the computer's public URL."""
 
-    async def test_http_server_reachable_via_public_url(self, client):
+    async def test_http_server_reachable_via_public_url(self, client, long_client):
         """Start an HTTP server inside the VM and verify the public URL serves it."""
-        async with managed_computer(client, uses=["python"]) as computer_id:
+        recipe_id = await create_recipe(long_client, _PYTHON_DOCKERFILE)
+        async with managed_computer(client, recipe_id=recipe_id) as computer_id:
             # Start a simple HTTP server on port 8080 in the background
             await exec_command(
                 client,
@@ -75,9 +85,10 @@ class TestT41AutoHttps:
 class TestT42MultiplePorts:
     """Multiple servers on different ports should all be reachable."""
 
-    async def test_three_ports_reachable(self, client):
+    async def test_three_ports_reachable(self, client, long_client):
         """Start servers on ports 3000, 5000, and 8080; all should respond."""
-        async with managed_computer(client, uses=["python"]) as computer_id:
+        recipe_id = await create_recipe(long_client, _PYTHON_DOCKERFILE)
+        async with managed_computer(client, recipe_id=recipe_id) as computer_id:
             ports = [3000, 5000, 8080]
             for port in ports:
                 # Write server script to file then execute
@@ -126,8 +137,9 @@ class TestT43WebSocket:
 
     async def test_websocket_echo(self, client, long_client):
         """Start a WS echo server in the VM and verify a round trip."""
+        recipe_id = await create_recipe(long_client, _PYTHON_WS_DOCKERFILE)
         async with managed_computer(
-            long_client, uses=["python-3.12(websockets)"],
+            long_client, recipe_id=recipe_id,
         ) as computer_id:
             # Write websocket echo server script
             ws_script = (

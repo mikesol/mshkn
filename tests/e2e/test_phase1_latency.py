@@ -12,6 +12,7 @@ from .conftest import (
     LatencyStats,
     checkpoint_computer,
     create_computer,
+    create_recipe,
     destroy_computer,
     exec_command,
     fork_checkpoint,
@@ -20,8 +21,8 @@ from .conftest import (
 
 BARE_CREATE_SAMPLES = 20
 BARE_CREATE_P95_MS = 1600  # L3 miss = two-phase boot (~1500ms)
-WARM_CACHE_CREATE_SAMPLES = 10
-WARM_CACHE_CREATE_P95_MS = 1600  # L3 miss with capability build
+RECIPE_CREATE_SAMPLES = 10
+RECIPE_CREATE_P95_MS = 1600  # L3 miss with recipe base volume
 EMPTY_CHECKPOINT_SAMPLES = 10
 EMPTY_CHECKPOINT_P95_MS = 1150
 SMALL_STATE_CHECKPOINT_SAMPLES = 10
@@ -63,55 +64,39 @@ class TestT11CreateLatency:
             f"p95 create latency {stats.p95:.0f}ms exceeds {BARE_CREATE_P95_MS}ms target"
         )
 
-    async def test_warm_cache_capability_create_latency(self, client):
-        """Create with warm capability cache, assert a tight p95 target."""
-        timings: list[float] = []
+    async def test_recipe_create_latency(self, long_client):
+        """Create computers from a pre-built recipe, assert a tight p95 target."""
+        # Build recipe first (not timed)
+        recipe_id = await create_recipe(
+            long_client,
+            "FROM mshkn-base\nRUN apt-get update && apt-get install -y python3",
+        )
 
-        for _i in range(WARM_CACHE_CREATE_SAMPLES):
+        timings: list[float] = []
+        for _i in range(RECIPE_CREATE_SAMPLES):
             computer_id: str | None = None
             try:
                 start = time.perf_counter()
                 computer_id = await create_computer(
-                    client, uses=["python-3.12(numpy)"]
+                    long_client, recipe_id=recipe_id
                 )
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
             finally:
                 if computer_id is not None:
-                    await destroy_computer(client, computer_id)
+                    await destroy_computer(long_client, computer_id)
 
         stats = LatencyStats(values_ms=timings)
         print(
             stats.report(
-                "T1.1 Warm Cache Capability Create",
-                target_ms=WARM_CACHE_CREATE_P95_MS,
+                "T1.1 Recipe Create",
+                target_ms=RECIPE_CREATE_P95_MS,
             )
         )
-        assert stats.p95 <= WARM_CACHE_CREATE_P95_MS, (
-            f"p95 warm cache create latency {stats.p95:.0f}ms exceeds "
-            f"{WARM_CACHE_CREATE_P95_MS}ms target"
+        assert stats.p95 <= RECIPE_CREATE_P95_MS, (
+            f"p95 recipe create latency {stats.p95:.0f}ms exceeds "
+            f"{RECIPE_CREATE_P95_MS}ms target"
         )
-
-    async def test_cold_cache_capability_create_latency(self, client):
-        """Create with capabilities (cold cache) — not yet implemented."""
-        timings: list[float] = []
-        created_ids: list[str] = []
-
-        try:
-            for _i in range(5):
-                start = time.perf_counter()
-                computer_id = await create_computer(
-                    client, uses=["python-3.12(numpy)"]
-                )
-                elapsed_ms = (time.perf_counter() - start) * 1000
-                timings.append(elapsed_ms)
-                created_ids.append(computer_id)
-        finally:
-            for cid in created_ids:
-                await destroy_computer(client, cid)
-
-        stats = LatencyStats(values_ms=timings)
-        print(stats.report("T1.1 Cold Cache Capability Create"))
 
 
 # ---------------------------------------------------------------------------

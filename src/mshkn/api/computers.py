@@ -31,7 +31,7 @@ from mshkn.db import (
     list_deferred_by_label,
     update_last_exec_at,
 )
-from mshkn.models import Checkpoint, Manifest
+from mshkn.models import Checkpoint
 from mshkn.vm.ssh import (
     SSHPool,
     ssh_download,
@@ -95,7 +95,7 @@ _require_account = Depends(require_account)
 
 
 class CreateRequest(BaseModel):
-    uses: list[str] = []
+    recipe_id: str | None = None
     needs: dict[str, object] | None = None
     exec: str | None = None
     self_destruct: bool = False
@@ -107,7 +107,7 @@ class CreateRequest(BaseModel):
 class CreateResponse(BaseModel):
     computer_id: str
     url: str
-    manifest_hash: str
+    recipe_id: str | None = None
     exec_exit_code: int | None = None
     exec_stdout: str | None = None
     exec_stderr: str | None = None
@@ -193,6 +193,7 @@ async def _self_destruct(
         label=label,
         pinned=False,
         created_at=now,
+        recipe_id=computer.recipe_id,
     )
     await insert_checkpoint(db, ckpt)
     checkpoints_total.inc()
@@ -270,8 +271,7 @@ async def create_computer(
     if active_count >= account.vm_limit:
         raise HTTPException(status_code=429, detail="VM limit reached")
 
-    manifest = Manifest(uses=body.uses)
-    computer = await vm_mgr.create(account.id, manifest, needs=body.needs)
+    computer = await vm_mgr.create(account.id, recipe_id=body.recipe_id, needs=body.needs)
     computers_created_total.inc()
     computers_active.inc()
 
@@ -311,7 +311,7 @@ async def create_computer(
     return CreateResponse(
         computer_id=computer.id,
         url=f"https://{computer.id}.{config.domain}",
-        manifest_hash=computer.manifest_hash,
+        recipe_id=computer.recipe_id,
         exec_exit_code=exec_exit_code,
         exec_stdout=exec_stdout,
         exec_stderr=exec_stderr,
@@ -491,7 +491,7 @@ class CheckpointRequest(BaseModel):
 
 class CheckpointResponse(BaseModel):
     checkpoint_id: str
-    manifest_hash: str
+    recipe_id: str | None = None
 
 
 @router.post("/{computer_id}/checkpoint", response_model=CheckpointResponse)
@@ -560,6 +560,7 @@ async def checkpoint_computer(
         label=body.label if body else None,
         pinned=body.pin if body else False,
         created_at=now,
+        recipe_id=computer.recipe_id,
     )
     await insert_checkpoint(db, ckpt)
     checkpoints_total.inc()
@@ -569,7 +570,7 @@ async def checkpoint_computer(
 
     return CheckpointResponse(
         checkpoint_id=checkpoint_id,
-        manifest_hash=computer.manifest_hash,
+        recipe_id=computer.recipe_id,
     )
 
 
@@ -604,8 +605,9 @@ async def _process_deferred(
         payloads = [json.loads(d["request_payload"]) for d in deferred_items]
 
         # Fork from latest checkpoint
-        fork_manifest = Manifest.from_json(latest_ckpt.manifest_json)
-        computer = await vm_mgr.fork_from_checkpoint(account.id, latest_ckpt, fork_manifest)
+        computer = await vm_mgr.fork_from_checkpoint(
+            account.id, latest_ckpt, recipe_id=latest_ckpt.recipe_id,
+        )
 
         # Write each deferred exec to /tmp/exec/N.txt
         exec_commands = [p.get("exec", "") or "" for p in payloads]

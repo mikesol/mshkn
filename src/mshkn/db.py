@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mshkn.models import Account, Checkpoint, Computer
+from mshkn.models import Account, Checkpoint, Computer, Recipe
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -71,8 +71,8 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
         "INSERT INTO computers "
         "(id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
         "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
-        "source_checkpoint_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "source_checkpoint_id, recipe_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             computer.id,
             computer.account_id,
@@ -87,6 +87,7 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
             computer.created_at,
             computer.last_exec_at,
             computer.source_checkpoint_id,
+            computer.recipe_id,
         ),
     )
     await db.commit()
@@ -96,7 +97,7 @@ async def get_computer(db: aiosqlite.Connection, computer_id: str) -> Computer |
     cursor = await db.execute(
         "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
         "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
-        "source_checkpoint_id "
+        "source_checkpoint_id, recipe_id "
         "FROM computers WHERE id = ?",
         (computer_id,),
     )
@@ -117,6 +118,7 @@ async def get_computer(db: aiosqlite.Connection, computer_id: str) -> Computer |
         created_at=row[10],
         last_exec_at=row[11],
         source_checkpoint_id=row[12],
+        recipe_id=row[13],
     )
 
 
@@ -125,7 +127,7 @@ async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
     cursor = await db.execute(
         "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
         "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
-        "source_checkpoint_id "
+        "source_checkpoint_id, recipe_id "
         "FROM computers WHERE status != 'destroyed'",
     )
     rows = await cursor.fetchall()
@@ -144,6 +146,7 @@ async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
             created_at=r[10],
             last_exec_at=r[11],
             source_checkpoint_id=r[12],
+            recipe_id=r[13],
         )
         for r in rows
     ]
@@ -167,7 +170,7 @@ async def list_computers_by_account(
     cursor = await db.execute(
         "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
         "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
-        "source_checkpoint_id "
+        "source_checkpoint_id, recipe_id "
         "FROM computers WHERE account_id = ? AND status != 'destroyed'",
         (account_id,),
     )
@@ -187,6 +190,7 @@ async def list_computers_by_account(
             created_at=r[10],
             last_exec_at=r[11],
             source_checkpoint_id=r[12],
+            recipe_id=r[13],
         )
         for r in rows
     ]
@@ -216,8 +220,9 @@ async def insert_checkpoint(db: aiosqlite.Connection, checkpoint: Checkpoint) ->
     await db.execute(
         "INSERT INTO checkpoints "
         "(id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, manifest_json, "
-        "r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, pinned, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, pinned, created_at, "
+        "recipe_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             checkpoint.id,
             checkpoint.account_id,
@@ -232,6 +237,7 @@ async def insert_checkpoint(db: aiosqlite.Connection, checkpoint: Checkpoint) ->
             checkpoint.label,
             int(checkpoint.pinned),
             checkpoint.created_at,
+            checkpoint.recipe_id,
         ),
     )
     await db.commit()
@@ -241,7 +247,7 @@ async def get_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> Checkp
     cursor = await db.execute(
         "SELECT id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, "
         "manifest_json, r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, "
-        "pinned, created_at "
+        "pinned, created_at, recipe_id "
         "FROM checkpoints WHERE id = ?",
         (checkpoint_id,),
     )
@@ -262,6 +268,7 @@ async def get_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> Checkp
         label=row[10],
         pinned=bool(row[11]),
         created_at=row[12],
+        recipe_id=row[13],
     )
 
 
@@ -271,7 +278,7 @@ async def list_checkpoints_by_account(
     query = (
         "SELECT id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, "
         "manifest_json, r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, "
-        "pinned, created_at "
+        "pinned, created_at, recipe_id "
         "FROM checkpoints WHERE account_id = ?"
     )
     params: list[str] = [account_id]
@@ -296,6 +303,7 @@ async def list_checkpoints_by_account(
             label=r[10],
             pinned=bool(r[11]),
             created_at=r[12],
+            recipe_id=r[13],
         )
         for r in rows
     ]
@@ -308,7 +316,7 @@ async def get_latest_checkpoint_for_computer(
     cursor = await db.execute(
         "SELECT id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, "
         "manifest_json, r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, "
-        "pinned, created_at "
+        "pinned, created_at, recipe_id "
         "FROM checkpoints WHERE computer_id = ? ORDER BY created_at DESC LIMIT 1",
         (computer_id,),
     )
@@ -329,6 +337,7 @@ async def get_latest_checkpoint_for_computer(
         label=row[10],
         pinned=bool(row[11]),
         created_at=row[12],
+        recipe_id=row[13],
     )
 
 
@@ -357,7 +366,7 @@ async def list_prunable_checkpoints(
     cursor = await db.execute(
         "SELECT id, account_id, parent_id, computer_id, thin_volume_id, manifest_hash, "
         "manifest_json, r2_prefix, disk_delta_size_bytes, memory_size_bytes, label, "
-        "pinned, created_at "
+        "pinned, created_at, recipe_id "
         "FROM checkpoints WHERE account_id = ? AND pinned = 0 "
         "ORDER BY created_at DESC",
         (account_id,),
@@ -380,6 +389,7 @@ async def list_prunable_checkpoints(
             label=r[10],
             pinned=bool(r[11]),
             created_at=r[12],
+            recipe_id=r[13],
         )
         for r in excess
     ]
@@ -401,7 +411,7 @@ async def get_active_computer_for_label(
     cursor = await db.execute(
         "SELECT c.id, c.account_id, c.thin_volume_id, c.tap_device, c.vm_ip, "
         "c.socket_path, c.firecracker_pid, c.manifest_hash, c.manifest_json, "
-        "c.status, c.created_at, c.last_exec_at, c.source_checkpoint_id "
+        "c.status, c.created_at, c.last_exec_at, c.source_checkpoint_id, c.recipe_id "
         "FROM computers c "
         "INNER JOIN checkpoints ck ON c.source_checkpoint_id = ck.id "
         "WHERE c.account_id = ? AND c.status = 'running' AND ck.label = ? "
@@ -425,6 +435,7 @@ async def get_active_computer_for_label(
         created_at=row[10],
         last_exec_at=row[11],
         source_checkpoint_id=row[12],
+        recipe_id=row[13],
     )
 
 
@@ -471,3 +482,212 @@ async def delete_deferred_by_label(db: aiosqlite.Connection, label: str) -> None
     """Delete all deferred requests for a label."""
     await db.execute("DELETE FROM deferred_queue WHERE label = ?", (label,))
     await db.commit()
+
+
+async def insert_recipe(db: aiosqlite.Connection, recipe: Recipe) -> None:
+    await db.execute(
+        "INSERT INTO recipes "
+        "(id, account_id, dockerfile, content_hash, status, build_log, base_volume_id, "
+        "template_vmstate, template_memory, created_at, built_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            recipe.id,
+            recipe.account_id,
+            recipe.dockerfile,
+            recipe.content_hash,
+            recipe.status,
+            recipe.build_log,
+            recipe.base_volume_id,
+            recipe.template_vmstate,
+            recipe.template_memory,
+            recipe.created_at,
+            recipe.built_at,
+        ),
+    )
+    await db.commit()
+
+
+async def get_recipe(db: aiosqlite.Connection, recipe_id: str) -> Recipe | None:
+    cursor = await db.execute(
+        "SELECT id, account_id, dockerfile, content_hash, status, build_log, base_volume_id, "
+        "template_vmstate, template_memory, created_at, built_at "
+        "FROM recipes WHERE id = ?",
+        (recipe_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return Recipe(
+        id=row[0],
+        account_id=row[1],
+        dockerfile=row[2],
+        content_hash=row[3],
+        status=row[4],
+        build_log=row[5],
+        base_volume_id=row[6],
+        template_vmstate=row[7],
+        template_memory=row[8],
+        created_at=row[9],
+        built_at=row[10],
+    )
+
+
+async def get_recipe_by_content_hash(
+    db: aiosqlite.Connection, account_id: str, content_hash: str
+) -> Recipe | None:
+    """Find a non-failed recipe by account and content hash."""
+    cursor = await db.execute(
+        "SELECT id, account_id, dockerfile, content_hash, status, build_log, base_volume_id, "
+        "template_vmstate, template_memory, created_at, built_at "
+        "FROM recipes WHERE account_id = ? AND content_hash = ? AND status != 'failed' LIMIT 1",
+        (account_id, content_hash),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return Recipe(
+        id=row[0],
+        account_id=row[1],
+        dockerfile=row[2],
+        content_hash=row[3],
+        status=row[4],
+        build_log=row[5],
+        base_volume_id=row[6],
+        template_vmstate=row[7],
+        template_memory=row[8],
+        created_at=row[9],
+        built_at=row[10],
+    )
+
+
+async def list_recipes_by_account(
+    db: aiosqlite.Connection, account_id: str
+) -> list[Recipe]:
+    cursor = await db.execute(
+        "SELECT id, account_id, dockerfile, content_hash, status, build_log, base_volume_id, "
+        "template_vmstate, template_memory, created_at, built_at "
+        "FROM recipes WHERE account_id = ? ORDER BY created_at DESC",
+        (account_id,),
+    )
+    rows = await cursor.fetchall()
+    return [
+        Recipe(
+            id=r[0],
+            account_id=r[1],
+            dockerfile=r[2],
+            content_hash=r[3],
+            status=r[4],
+            build_log=r[5],
+            base_volume_id=r[6],
+            template_vmstate=r[7],
+            template_memory=r[8],
+            created_at=r[9],
+            built_at=r[10],
+        )
+        for r in rows
+    ]
+
+
+async def update_recipe_status(
+    db: aiosqlite.Connection, recipe_id: str, status: str
+) -> None:
+    await db.execute(
+        "UPDATE recipes SET status = ? WHERE id = ?",
+        (status, recipe_id),
+    )
+    await db.commit()
+
+
+async def update_recipe_build_result(
+    db: aiosqlite.Connection,
+    recipe_id: str,
+    *,
+    status: str,
+    build_log: str | None = None,
+    base_volume_id: int | None = None,
+    built_at: str | None = None,
+) -> None:
+    await db.execute(
+        "UPDATE recipes SET status = ?, build_log = ?, base_volume_id = ?, built_at = ? "
+        "WHERE id = ?",
+        (status, build_log, base_volume_id, built_at, recipe_id),
+    )
+    await db.commit()
+
+
+async def update_recipe_template(
+    db: aiosqlite.Connection,
+    recipe_id: str,
+    template_vmstate: str,
+    template_memory: str,
+) -> None:
+    await db.execute(
+        "UPDATE recipes SET template_vmstate = ?, template_memory = ? WHERE id = ?",
+        (template_vmstate, template_memory, recipe_id),
+    )
+    await db.commit()
+
+
+async def get_bare_template(
+    db: aiosqlite.Connection,
+) -> tuple[str, str] | None:
+    """Get cached bare (no-recipe) L3 template paths."""
+    cursor = await db.execute(
+        "SELECT vmstate_path, memory_path FROM snapshot_templates "
+        "WHERE manifest_hash = 'bare'"
+    )
+    row = await cursor.fetchone()
+    if row:
+        return (row[0], row[1])
+    return None
+
+
+async def cache_bare_template(
+    db: aiosqlite.Connection,
+    vmstate_path: str,
+    memory_path: str,
+) -> None:
+    """Cache the bare (no-recipe) L3 template."""
+    await db.execute(
+        "INSERT OR REPLACE INTO snapshot_templates (manifest_hash, vmstate_path, memory_path) "
+        "VALUES ('bare', ?, ?)",
+        (vmstate_path, memory_path),
+    )
+    await db.commit()
+
+
+async def delete_recipe(db: aiosqlite.Connection, recipe_id: str) -> None:
+    await db.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+    await db.commit()
+
+
+async def delete_failed_recipes_by_hash(
+    db: aiosqlite.Connection, account_id: str, content_hash: str
+) -> None:
+    """Delete all failed recipes for the given account and content hash."""
+    await db.execute(
+        "DELETE FROM recipes WHERE account_id = ? AND content_hash = ? AND status = 'failed'",
+        (account_id, content_hash),
+    )
+    await db.commit()
+
+
+async def get_max_recipe_volume_id(db: aiosqlite.Connection) -> int | None:
+    """Return the highest base_volume_id across all recipes, or None."""
+    cursor = await db.execute(
+        "SELECT MAX(base_volume_id) FROM recipes WHERE base_volume_id IS NOT NULL"
+    )
+    row = await cursor.fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+async def count_recipe_references(db: aiosqlite.Connection, recipe_id: str) -> int:
+    """Count non-destroyed computers + all checkpoints referencing this recipe."""
+    cursor = await db.execute(
+        "SELECT "
+        "(SELECT COUNT(*) FROM computers WHERE recipe_id = ? AND status != 'destroyed') + "
+        "(SELECT COUNT(*) FROM checkpoints WHERE recipe_id = ?)",
+        (recipe_id, recipe_id),
+    )
+    row = await cursor.fetchone()
+    return row[0] if row else 0

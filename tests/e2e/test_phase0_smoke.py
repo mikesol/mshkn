@@ -11,6 +11,7 @@ import pytest
 from .conftest import (
     ExecResult,
     create_computer,
+    create_recipe,
     destroy_computer,
     exec_command,
     managed_computer,
@@ -62,25 +63,30 @@ class TestT01ColdCreateNoCapabilities:
 # ---------------------------------------------------------------------------
 
 
-class TestT02CreateWithCapability:
-    """computer_create(uses: ['python-3.12()']) — capabilities not yet implemented."""
+class TestT02CreateWithRecipe:
+    """computer_create(recipe_id=...) — Docker-based recipe system."""
 
-    async def test_python_capability(self, client):
-        """Create with python-3.12(), exec python3 --version returns 3.12.x."""
-        async with managed_computer(client, uses=["python-3.12()"]) as computer_id:
-            result = await exec_command(client, computer_id, "python3 --version")
+    async def test_python_recipe(self, long_client):
+        """Create recipe with python3, boot computer, verify python3 works."""
+        recipe_id = await create_recipe(
+            long_client,
+            "FROM mshkn-base\nRUN apt-get update && apt-get install -y python3",
+        )
+        async with managed_computer(long_client, recipe_id=recipe_id) as computer_id:
+            result = await exec_command(long_client, computer_id, "python3 --version")
             version_line = result.stdout.strip()
-            assert version_line.startswith("Python 3.12"), (
-                f"Expected Python 3.12.x, got: {version_line}"
+            assert version_line.startswith("Python 3"), (
+                f"Expected Python 3.x, got: {version_line}"
             )
 
-    async def test_python_capability_destroy_clean(self, client):
-        """Destroy after capability-based create is clean."""
-        resp = await client.post("/computers", json={"uses": ["python-3.12()"]})
-        resp.raise_for_status()
-        computer_id = resp.json()["computer_id"]
-
-        destroy_resp = await client.delete(f"/computers/{computer_id}")
+    async def test_recipe_destroy_clean(self, long_client):
+        """Destroy after recipe-based create is clean."""
+        recipe_id = await create_recipe(
+            long_client,
+            "FROM mshkn-base\nRUN echo destroy-smoke-test",
+        )
+        comp_id = await create_computer(long_client, recipe_id=recipe_id)
+        destroy_resp = await long_client.delete(f"/computers/{comp_id}")
         destroy_resp.raise_for_status()
         assert destroy_resp.json().get("status") == "destroyed"
 

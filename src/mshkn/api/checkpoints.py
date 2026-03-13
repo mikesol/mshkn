@@ -33,8 +33,7 @@ _require_account = Depends(require_account)
 
 
 class ForkRequest(BaseModel):
-    manifest: dict[str, object] | None = None
-    skip_manifest_check: bool = False
+    recipe_id: str | None = None
     exec: str | None = None
     self_destruct: bool = False
     callback_url: str | None = None
@@ -51,11 +50,6 @@ class ForkResponse(BaseModel):
     created_checkpoint_id: str | None = None
 
 
-def _is_manifest_additive(parent_uses: list[str], new_uses: list[str]) -> bool:
-    """Check if new manifest is a superset of parent (additive change)."""
-    return set(parent_uses).issubset(set(new_uses))
-
-
 @router.post("/{checkpoint_id}/fork", response_model=None)
 async def fork_checkpoint(
     checkpoint_id: str,
@@ -63,33 +57,13 @@ async def fork_checkpoint(
     body: ForkRequest | None = None,
     account: Account = _require_account,
 ) -> ForkResponse | JSONResponse:
-    from mshkn.models import Manifest
-
     db: aiosqlite.Connection = request.app.state.db
 
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account.id:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
 
-    # Determine manifest for fork
-    if body and body.manifest and "uses" in body.manifest:
-        raw_uses = body.manifest["uses"]
-        if not isinstance(raw_uses, list):
-            raise HTTPException(status_code=422, detail="uses must be a list")
-        new_uses = [str(u) for u in raw_uses]
-        parent_manifest = Manifest.from_json(ckpt.manifest_json)
-
-        is_breaking = not _is_manifest_additive(parent_manifest.uses, new_uses)
-        if is_breaking and not body.skip_manifest_check:
-            raise HTTPException(
-                status_code=409,
-                detail="Breaking manifest change (removal or version change). "
-                       "Set skip_manifest_check: true to proceed anyway.",
-            )
-
-        fork_manifest = Manifest(uses=new_uses)
-    else:
-        fork_manifest = Manifest.from_json(ckpt.manifest_json)
+    fork_recipe_id = body.recipe_id if body and body.recipe_id else None
 
     # Exclusive restore: prevent concurrent computers on the same checkpoint chain
     if body and body.exclusive and ckpt.label:
@@ -104,8 +78,7 @@ async def fork_checkpoint(
                 deferred_id = f"def-{uuid.uuid4().hex[:12]}"
                 payload = {
                     "checkpoint_id": checkpoint_id,
-                    "manifest": body.manifest,
-                    "skip_manifest_check": body.skip_manifest_check,
+                    "recipe_id": body.recipe_id if body else None,
                     "exec": body.exec,
                     "self_destruct": body.self_destruct,
                     "callback_url": body.callback_url,
@@ -122,7 +95,7 @@ async def fork_checkpoint(
                 )
 
     vm_mgr = request.app.state.vm_manager
-    computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, fork_manifest)
+    computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, recipe_id=fork_recipe_id)
 
     exec_exit_code: int | None = None
     exec_stdout: str | None = None
@@ -189,7 +162,7 @@ async def merge_checkpoints(
     from pathlib import Path
 
     from mshkn.checkpoint.merge import three_way_merge
-    from mshkn.models import Checkpoint, Manifest
+    from mshkn.models import Checkpoint
     from mshkn.vm.storage import create_snapshot, mount_volume, umount_volume
 
     db: aiosqlite.Connection = request.app.state.db
@@ -318,15 +291,14 @@ async def merge_checkpoints(
     # Create checkpoint record
     now = datetime.now(UTC).isoformat()
     r2_prefix = f"{account.id}/{checkpoint_id}"
-    # Merged checkpoint inherits parent's manifest
-    parent_manifest = Manifest.from_json(ckpt_parent.manifest_json)
+    # Merged checkpoint inherits parent's manifest and recipe
     ckpt = Checkpoint(
         id=checkpoint_id,
         account_id=account.id,
         parent_id=parent_id,
         computer_id=None,  # merge has no source computer
         thin_volume_id=merged_volume_id,
-        manifest_hash=parent_manifest.content_hash(),
+        manifest_hash=ckpt_parent.manifest_hash,
         manifest_json=ckpt_parent.manifest_json,
         r2_prefix=r2_prefix,
         disk_delta_size_bytes=None,
@@ -334,6 +306,7 @@ async def merge_checkpoints(
         label="merge",
         pinned=False,
         created_at=now,
+        recipe_id=ckpt_parent.recipe_id,
     )
     await insert_checkpoint(db, ckpt)
 
