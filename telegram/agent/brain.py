@@ -129,15 +129,30 @@ def handle_claude_response():
         print("No response text")
         return
 
+    state = load_state()
+    chat_id = state.get("chat_id", "6522858700")
+
+    # Check if this is a tool result (starts with "Tool t")
+    if response_text.startswith("Tool t") and " result: " in response_text:
+        # This is a tool result from Box B, not a Claude response
+        state["tools_received"] = state.get("tools_received", 0) + 1
+        state["messages"].append({
+            "role": "user",
+            "content": f"[Tool result]: {response_text}",
+        })
+        save_state(state)
+        print(f"Received tool result ({state['tools_received']}/{state.get('tools_emitted', '?')})")
+
+        # Call Claude with the tool result
+        call_claude(state["messages"])
+        return
+
     # Parse actions - Claude continues from our "[" prefill
     raw = response_text if response_text.startswith("[") else "[" + response_text
     try:
         actions = json.loads(raw)
     except json.JSONDecodeError:
         actions = [{"type": "telegram", "text": response_text[:500]}]
-
-    state = load_state()
-    chat_id = state.get("chat_id", "6522858700")
 
     tool_commands = []
     for action in actions:

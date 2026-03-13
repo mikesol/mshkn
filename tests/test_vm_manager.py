@@ -17,7 +17,7 @@ def test_slot_allocation() -> None:
     manager = VMManager.__new__(VMManager)
     manager.config = config
     manager._next_slot = 1
-    manager._free_slots = []
+    manager._free_slots = set()
     manager._next_volume_id = 100
     manager._alloc_lock = asyncio.Lock()
 

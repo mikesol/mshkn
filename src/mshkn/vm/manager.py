@@ -92,7 +92,7 @@ class VMManager:
         self.caddy = caddy
         self.ssh_pool = ssh_pool
         self._next_slot = 1  # slot 0 reserved; will be loaded from DB on startup
-        self._free_slots: list[int] = []  # recycled slots from destroyed VMs
+        self._free_slots: set[int] = set()  # recycled slots from destroyed VMs
         self._next_volume_id = 100  # volume 0 is base; start high to avoid conflicts
         self._alloc_lock = asyncio.Lock()
         self.alerts: deque[Alert] = deque(maxlen=_ALERT_HISTORY_SIZE)
@@ -111,7 +111,7 @@ class VMManager:
                 # Recycle any gaps in the slot range
                 for s in range(1, self._next_slot):
                     if s not in active_slots:
-                        self._free_slots.append(s)
+                        self._free_slots.add(s)
             else:
                 self._next_slot = 1
         # Also check checkpoint volumes (frozen disk snapshots)
@@ -171,11 +171,9 @@ class VMManager:
         return max_id
 
     def _allocate_slot(self) -> int:
+        self._free_slots.discard(254)  # staging slot, never allocate
         if self._free_slots:
-            slot = self._free_slots.pop()
-            if slot == 254:  # staging slot, skip
-                return self._allocate_slot()
-            return slot
+            return self._free_slots.pop()
         slot = self._next_slot
         if slot == 254:  # skip staging slot
             self._next_slot = 255
@@ -186,7 +184,7 @@ class VMManager:
         return slot
 
     def _release_slot(self, slot: int) -> None:
-        self._free_slots.append(slot)
+        self._free_slots.add(slot)
 
     def _allocate_volume_id(self) -> int:
         vol_id = self._next_volume_id
@@ -634,6 +632,9 @@ class VMManager:
         computer = await get_computer(self.db, computer_id)
         if computer is None:
             raise ValueError(f"Computer {computer_id} not found")
+        if computer.status == "destroyed":
+            logger.warning("Computer %s already destroyed, skipping", computer_id)
+            return
 
         # Remove Caddy route first (so traffic stops immediately)
         if self.caddy is not None:
@@ -783,17 +784,32 @@ class VMManager:
         return sum(1 for r in results if r)
 
     async def _auto_checkpoint_and_destroy(self, computer: Computer) -> None:
-        """Auto-checkpoint a VM and then destroy it."""
+        """Auto-checkpoint a VM and then destroy it.
+
+        Also drains the deferred queue for the computer's label so that
+        queued forks are not permanently stuck.
+        """
         import uuid as _uuid
 
         from mshkn.checkpoint.r2 import upload_checkpoint
         from mshkn.checkpoint.snapshot import create_vm_snapshot
         from mshkn.db import (
+            delete_deferred_by_label,
+            get_checkpoint,
             get_latest_checkpoint_for_computer,
             insert_checkpoint,
+            list_deferred_by_label,
         )
         from mshkn.models import Checkpoint
         from mshkn.vm.ssh import ssh_exec
+
+        # Resolve the original label from the source checkpoint so we can
+        # preserve it on the auto-checkpoint and drain the deferred queue.
+        original_label: str | None = None
+        if computer.source_checkpoint_id:
+            source_ckpt = await get_checkpoint(self.db, computer.source_checkpoint_id)
+            if source_ckpt is not None:
+                original_label = source_ckpt.label
 
         checkpoint_id = f"ckpt-{_uuid.uuid4().hex[:12]}"
         snapshot_dir = self.config.checkpoint_local_dir / checkpoint_id
@@ -842,7 +858,7 @@ class VMManager:
                 r2_prefix=r2_prefix,
                 disk_delta_size_bytes=0,
                 memory_size_bytes=0,
-                label="auto-idle-timeout",
+                label=original_label or "auto-idle-timeout",
                 pinned=False,
                 created_at=now,
             )
@@ -865,6 +881,34 @@ class VMManager:
         # Destroy the VM
         await self.destroy(computer.id)
         logger.info("Destroyed idle VM %s", computer.id)
+
+        # Drain deferred queue for the original label (must happen AFTER
+        # destroy so the new fork doesn't conflict with this computer).
+        effective_label = original_label or "auto-idle-timeout"
+        deferred = await list_deferred_by_label(self.db, effective_label)
+        if deferred:
+            await delete_deferred_by_label(self.db, effective_label)
+            from mshkn.api.computers import _process_deferred
+            from mshkn.db import get_account_by_id
+
+            account = await get_account_by_id(self.db, computer.account_id)
+            if account is not None:
+                task = asyncio.create_task(
+                    _process_deferred(
+                        label=effective_label,
+                        deferred_items=deferred,
+                        db=self.db,
+                        config=self.config,
+                        vm_mgr=self,
+                        account=account,
+                    )
+                )
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
+                logger.info(
+                    "Draining %d deferred item(s) for label '%s' after idle reap",
+                    len(deferred), effective_label,
+                )
 
     @staticmethod
     async def _upload_checkpoint_bg(
