@@ -280,6 +280,62 @@ async def _post_process_rootfs(mount_point: str, config: Config) -> None:
         'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'
     )
 
+    # Remove .dockerenv so systemd doesn't detect Docker virtualization
+    dockerenv = mp / ".dockerenv"
+    if dockerenv.exists():
+        dockerenv.unlink()
+
+    # Install fcnet network setup (derives IP from MAC address — required for Firecracker)
+    fcnet_script = mp / "usr" / "local" / "bin" / "fcnet-setup.sh"
+    fcnet_script.parent.mkdir(parents=True, exist_ok=True)
+    fcnet_script.write_text(
+        '#!/bin/bash\n'
+        '# Wait up to 1s for any non-loopback interface to appear.\n'
+        'for i in $(seq 1 200); do\n'
+        '    if [ "$(ls /sys/class/net | grep -v lo | wc -l)" -gt 0 ]; then\n'
+        '        break\n'
+        '    fi\n'
+        '    sleep 0.005\n'
+        'done\n'
+        'for dev in $(ls /sys/class/net | grep -v lo); do\n'
+        '    mac_ip=$(ip link show dev "$dev" | grep link/ether | '
+        'grep -oP "(?<=06:00:)[0-9a-f:]{11}")\n'
+        '    if [ -n "$mac_ip" ]; then\n'
+        '        ip=$(printf "%d.%d.%d.%d" $(echo "0x${mac_ip}" | '
+        'sed "s/:/ 0x/g"))\n'
+        '        ip addr add "$ip/30" dev "$dev"\n'
+        '        ip link set "$dev" up\n'
+        '        gw=$(echo "$ip" | awk -F. \'{printf "%d.%d.%d.%d", '
+        "$1, $2, $3, $4-1}')\n"
+        '        ip route add default via "$gw"\n'
+        '    fi\n'
+        'done\n'
+    )
+    fcnet_script.chmod(0o755)
+
+    # Install fcnet systemd service
+    fcnet_unit = mp / "etc" / "systemd" / "system" / "fcnet.service"
+    fcnet_unit.parent.mkdir(parents=True, exist_ok=True)
+    fcnet_unit.write_text(
+        "[Unit]\n"
+        "Description=Firecracker network setup\n"
+        "DefaultDependencies=no\n"
+        "Before=network.target network-pre.target\n"
+        "Wants=ssh.service\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        "ExecStart=/usr/local/bin/fcnet-setup.sh\n"
+        "RemainAfterExit=true\n"
+    )
+
+    # Enable fcnet.service in sysinit.target
+    sysinit_wants = mp / "etc" / "systemd" / "system" / "sysinit.target.wants"
+    sysinit_wants.mkdir(parents=True, exist_ok=True)
+    fcnet_link = sysinit_wants / "fcnet.service"
+    if not fcnet_link.exists():
+        fcnet_link.symlink_to("/etc/systemd/system/fcnet.service")
+
 
 async def ensure_base_image(config: Config) -> None:
     """Build the mshkn-base Docker image if it doesn't exist locally."""
