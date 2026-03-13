@@ -32,6 +32,21 @@ class Account:
 
 
 @dataclass
+class Recipe:
+    id: str
+    account_id: str
+    dockerfile: str
+    content_hash: str
+    status: str  # pending | building | ready | failed
+    build_log: str | None
+    base_volume_id: int | None
+    template_vmstate: str | None
+    template_memory: str | None
+    created_at: str
+    built_at: str | None
+
+
+@dataclass
 class Computer:
     id: str
     account_id: str
@@ -46,6 +61,7 @@ class Computer:
     created_at: str
     last_exec_at: str | None
     source_checkpoint_id: str | None = None
+    recipe_id: str | None = None
 
 
 @dataclass
@@ -63,6 +79,7 @@ class Checkpoint:
     label: str | None
     pinned: bool
     created_at: str
+    recipe_id: str | None = None
 
 
 @dataclass
