@@ -312,6 +312,85 @@ class VMManager:
                 await run(f"dmsetup remove {STAGING_DRIVE_NAME}", check=False)
                 raise
 
+    async def _build_bare_l3_template(self) -> tuple[str, str]:
+        """Build an L3 template for bare (no-recipe) creates using volume 0."""
+        from mshkn.db import cache_bare_template
+        from mshkn.vm.staging import (
+            STAGING_DRIVE_NAME,
+            STAGING_MAC,
+            STAGING_SLOT,
+            STAGING_TAP,
+            STAGING_VM_IP,
+            _restore_lock,
+        )
+
+        template_dir = self.config.checkpoint_local_dir / "templates" / "bare"
+        template_dir.mkdir(parents=True, exist_ok=True)
+        vmstate_path = template_dir / "vmstate"
+        memory_path = template_dir / "memory"
+
+        socket_path = "/tmp/fc-template-bare.socket"
+        pid: int | None = None
+
+        async with _restore_lock:
+            try:
+                from mshkn.vm.staging import _ensure_staging_clean
+
+                await _ensure_staging_clean()
+
+                await asyncio.gather(
+                    run(
+                        f"dmsetup create {STAGING_DRIVE_NAME} "
+                        f"--table '0 {self.config.thin_volume_sectors} thin "
+                        f"/dev/mapper/{self.config.thin_pool_name} 0'"
+                    ),
+                    create_tap(STAGING_SLOT),
+                )
+
+                pid = await start_firecracker_process(socket_path)
+                fc_client = FirecrackerClient(socket_path)
+                try:
+                    await fc_client.configure_and_boot(
+                        FirecrackerConfig(
+                            socket_path=socket_path,
+                            kernel_path=str(self.config.kernel_path),
+                            rootfs_path=f"/dev/mapper/{STAGING_DRIVE_NAME}",
+                            tap_device=STAGING_TAP,
+                            guest_mac=STAGING_MAC,
+                        )
+                    )
+                finally:
+                    await fc_client.close()
+
+                await self._wait_for_ssh(STAGING_VM_IP)
+
+                fc_client = FirecrackerClient(socket_path)
+                try:
+                    await fc_client.pause()
+                    await fc_client.create_snapshot(str(vmstate_path), str(memory_path))
+                finally:
+                    await fc_client.close()
+
+                await kill_firecracker_process(pid)
+                pid = None
+
+                await destroy_tap(STAGING_SLOT)
+                await run(f"dmsetup remove {STAGING_DRIVE_NAME}")
+
+                await cache_bare_template(
+                    self.db, str(vmstate_path), str(memory_path)
+                )
+                logger.info("Built bare L3 template")
+                return (str(vmstate_path), str(memory_path))
+
+            except Exception:
+                logger.exception("Failed to build bare L3 template")
+                if pid is not None:
+                    await kill_firecracker_process(pid)
+                await destroy_tap(STAGING_SLOT)
+                await run(f"dmsetup remove {STAGING_DRIVE_NAME}", check=False)
+                raise
+
     async def create(
         self,
         account_id: str,
@@ -389,6 +468,17 @@ class VMManager:
                         "L3 template build failed for recipe %s, will cold-boot",
                         recipe_id,
                     )
+            else:
+                # Bare create (no recipe): use cached bare template
+                from mshkn.db import get_bare_template
+                bare = await get_bare_template(self.db)
+                if bare is not None:
+                    vmstate_path, memory_path = bare
+                else:
+                    try:
+                        vmstate_path, memory_path = await self._build_bare_l3_template()
+                    except Exception:
+                        logger.warning("Bare L3 template build failed, will cold-boot")
 
             if vmstate_path is not None and memory_path is not None:
                 from mshkn.vm.staging import restore_from_snapshot
