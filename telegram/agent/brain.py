@@ -10,6 +10,43 @@ STATE_FILE = "/agent/state.json"
 CONFIG_FILE = "/agent/config.json"
 RESPONSE_FILE = "/tmp/response.txt"
 
+import re
+
+def fix_json_newlines(text):
+    """Fix unescaped newlines inside JSON string values.
+    Claude sometimes produces JSON with literal newlines in strings
+    instead of \\n escape sequences."""
+    # Strategy: find all string values and escape newlines within them
+    result = []
+    i = 0
+    in_string = False
+    while i < len(text):
+        ch = text[i]
+        if not in_string:
+            result.append(ch)
+            if ch == '"':
+                in_string = True
+        else:
+            if ch == '\\' and i + 1 < len(text):
+                # Escaped character — keep as-is
+                result.append(ch)
+                result.append(text[i + 1])
+                i += 2
+                continue
+            elif ch == '"':
+                result.append(ch)
+                in_string = False
+            elif ch == '\n':
+                result.append('\\n')
+            elif ch == '\r':
+                result.append('\\r')
+            elif ch == '\t':
+                result.append('\\t')
+            else:
+                result.append(ch)
+        i += 1
+    return ''.join(result)
+
 def load_config():
     return json.load(open(CONFIG_FILE))
 
@@ -47,7 +84,7 @@ def call_claude(messages):
         "callbacks": [{"url": callback_url}],
         "body": {
             "model": "claude-sonnet-4-6",
-            "max_tokens": 8192,
+            "max_tokens": 16384,
             "system": (
                 "You are a coding assistant running on a disposable Linux VM (Ubuntu 24.04). "
                 "You have node, npm, npx, jq, file, and curl available. "
@@ -63,7 +100,10 @@ def call_claude(messages):
                 "Respond with ONLY the raw JSON array, no markdown fences. "
                 "Use tools to build, run, install, and deploy code on the VM. "
                 "When writing files, use heredoc syntax (cat > file << 'EOF'). "
-                "For multi-step tasks, chain commands with && or use a single script."
+                "IMPORTANT: Keep each tool command under 6000 characters. "
+                "If a file is large, split it across multiple tool calls "
+                "(e.g., write part 1 to a temp file, then append part 2). "
+                "For multi-step tasks, use multiple tool actions rather than one massive command."
             ),
             "messages": messages,
         },
@@ -188,26 +228,49 @@ def handle_claude_response():
     # Parse actions from Claude's JSON response
     raw = response_text.strip()
     actions = None
-    try:
-        actions = json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"JSON parse failed: {e}")
+    # Try direct parse, then with newline fix, then bracket extraction
+    for attempt_raw in [raw, fix_json_newlines(raw)]:
+        try:
+            actions = json.loads(attempt_raw)
+            break
+        except json.JSONDecodeError:
+            pass
+    if actions is None:
         # Try to extract JSON array from surrounding text
-        start = raw.find("[")
+        fixed = fix_json_newlines(raw)
+        start = fixed.find("[")
         if start >= 0:
             depth = 0
-            for i in range(start, len(raw)):
-                if raw[i] == "[":
+            for i in range(start, len(fixed)):
+                if fixed[i] == "[":
                     depth += 1
-                elif raw[i] == "]":
+                elif fixed[i] == "]":
                     depth -= 1
                     if depth == 0:
                         try:
-                            actions = json.loads(raw[start:i+1])
-                        except json.JSONDecodeError:
-                            pass
+                            actions = json.loads(fixed[start:i+1])
+                        except json.JSONDecodeError as e:
+                            print(f"JSON parse failed after fix: {e}")
                         break
     if actions is None:
+        # Detect truncated response: starts with [ but never closes
+        stripped = raw.strip()
+        if stripped.startswith("[") and not stripped.endswith("]"):
+            print(f"Detected truncated response ({len(raw)} chars), asking Claude to continue")
+            state["messages"].append({"role": "assistant", "content": raw})
+            state["messages"].append({
+                "role": "user",
+                "content": (
+                    "[System]: Your previous response was truncated (output too long). "
+                    "Please split the work into smaller steps. Instead of writing an entire "
+                    "large file in one command, break it into multiple smaller tool calls "
+                    "(e.g., write sections to temp files, then combine them). "
+                    "Resume from where you left off."
+                ),
+            })
+            save_state(state)
+            call_claude(state["messages"])
+            return
         print(f"Could not parse actions, sending raw text as telegram. First 200 chars: {response_text[:200]}")
         actions = [{"type": "telegram", "text": response_text[:500]}]
 
