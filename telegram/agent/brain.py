@@ -103,7 +103,9 @@ def call_claude(messages):
                 "IMPORTANT: Keep each tool command under 6000 characters. "
                 "If a file is large, split it across multiple tool calls "
                 "(e.g., write part 1 to a temp file, then append part 2). "
-                "For multi-step tasks, use multiple tool actions rather than one massive command."
+                "For multi-step tasks, use multiple tool actions rather than one massive command. "
+                "Files and installed packages persist between tool batches — "
+                "you can npm install in one response and use the packages in the next."
             ),
             "messages": messages,
         },
@@ -135,8 +137,32 @@ def handle_telegram():
     print(f"Turn {state['turn']}: user said '{text}'")
     call_claude(state["messages"])
 
+def find_latest_checkpoint(label):
+    """Find the most recent checkpoint with the given label."""
+    base = "http://135.181.6.215:8000"
+    r = subprocess.run(
+        ["curl", "-s", f"{base}/checkpoints",
+         "-H", "Authorization: Bearer mk-test-key-2026"],
+        capture_output=True, text=True,
+    )
+    try:
+        ckpts = json.loads(r.stdout)
+        matching = [c for c in ckpts if c.get("label") == label]
+        if matching:
+            # Sort by created_at descending, return most recent
+            matching.sort(key=lambda c: c["created_at"], reverse=True)
+            return matching[0]["checkpoint_id"]
+    except (json.JSONDecodeError, KeyError):
+        pass
+    return None
+
 def create_box_b(tool_commands):
-    """Create Box B (the hands) and dispatch tool commands as bg processes."""
+    """Create Box B (the hands) and dispatch tool commands as bg processes.
+
+    Forks from the latest box-b-tools checkpoint if one exists (preserving
+    installed packages and files from previous tool runs). Otherwise creates
+    a fresh VM from the recipe.
+    """
     config = load_config()
     base = "http://135.181.6.215:8000"
     callback_rule = config["callback_rule"]
@@ -168,24 +194,41 @@ def create_box_b(tool_commands):
     script_parts.append("wait")
     full_script = "\n".join(script_parts)
 
-    # Write JSON body to file to avoid massive command-line args
-    payload = json.dumps({
-        "recipe_id": config.get("recipe_id"),
-        "exec": full_script,
-        "self_destruct": True,
-        "label": "box-b-tools",
-    })
-    with open("/tmp/boxb_payload.json", "w") as f:
-        f.write(payload)
-
-    r = subprocess.run(
-        ["curl", "-s", "-X", "POST", f"{base}/computers",
-         "-H", "Authorization: Bearer mk-test-key-2026",
-         "-H", "Content-Type: application/json",
-         "-d", "@/tmp/boxb_payload.json"],
-        capture_output=True, text=True,
-    )
-    print(f"Created Box B: stdout={r.stdout[:200]} stderr={r.stderr[:200]}")
+    # Try to fork from the latest box-b-tools checkpoint (preserves state)
+    existing_ckpt = find_latest_checkpoint("box-b-tools")
+    if existing_ckpt:
+        print(f"Forking Box B from checkpoint {existing_ckpt}")
+        payload = json.dumps({
+            "exec": full_script,
+            "self_destruct": True,
+        })
+        with open("/tmp/boxb_payload.json", "w") as f:
+            f.write(payload)
+        r = subprocess.run(
+            ["curl", "-s", "-X", "POST", f"{base}/checkpoints/{existing_ckpt}/fork",
+             "-H", "Authorization: Bearer mk-test-key-2026",
+             "-H", "Content-Type: application/json",
+             "-d", "@/tmp/boxb_payload.json"],
+            capture_output=True, text=True,
+        )
+    else:
+        print("No existing box-b-tools checkpoint, creating fresh Box B")
+        payload = json.dumps({
+            "recipe_id": config.get("recipe_id"),
+            "exec": full_script,
+            "self_destruct": True,
+            "label": "box-b-tools",
+        })
+        with open("/tmp/boxb_payload.json", "w") as f:
+            f.write(payload)
+        r = subprocess.run(
+            ["curl", "-s", "-X", "POST", f"{base}/computers",
+             "-H", "Authorization: Bearer mk-test-key-2026",
+             "-H", "Content-Type: application/json",
+             "-d", "@/tmp/boxb_payload.json"],
+            capture_output=True, text=True,
+        )
+    print(f"Box B: stdout={r.stdout[:200]} stderr={r.stderr[:200]}")
 
 def handle_claude_response():
     # Read response from file (preferred) or env var (fallback)
