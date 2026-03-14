@@ -163,9 +163,28 @@ def handle_claude_response():
 
     # Parse actions from Claude's JSON response
     raw = response_text.strip()
+    actions = None
+    # Try direct parse first
     try:
         actions = json.loads(raw)
     except json.JSONDecodeError:
+        # Try to extract JSON array from surrounding text
+        start = raw.find("[")
+        if start >= 0:
+            # Find matching closing bracket
+            depth = 0
+            for i in range(start, len(raw)):
+                if raw[i] == "[":
+                    depth += 1
+                elif raw[i] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            actions = json.loads(raw[start:i+1])
+                        except json.JSONDecodeError:
+                            pass
+                        break
+    if actions is None:
         actions = [{"type": "telegram", "text": response_text[:500]}]
 
     tool_commands = []
