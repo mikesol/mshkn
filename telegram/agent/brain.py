@@ -4,9 +4,11 @@ import json
 import os
 import subprocess
 import sys
+import traceback
 
 STATE_FILE = "/agent/state.json"
 CONFIG_FILE = "/agent/config.json"
+RESPONSE_FILE = "/tmp/response.txt"
 
 def load_config():
     return json.load(open(CONFIG_FILE))
@@ -67,9 +69,12 @@ def call_claude(messages):
         },
         "timeout_ms": 120000,
     })
+    # Write body to file to avoid massive command-line args
+    with open("/tmp/lampas_body.json", "w") as f:
+        f.write(body)
     r = subprocess.run(
         ["curl", "-s", "-X", "POST", "https://lampas.dev/forward",
-         "-H", "Content-Type: application/json", "-d", body],
+         "-H", "Content-Type: application/json", "-d", "@/tmp/lampas_body.json"],
         capture_output=True, text=True,
     )
     print(f"Called lampas: {r.stdout[:100]}")
@@ -80,13 +85,13 @@ def handle_telegram():
     if not text:
         print("No message text")
         return
-    
+
     state = load_state()
     state["messages"].append({"role": "user", "content": text})
     state["turn"] += 1
     state["chat_id"] = str(chat_id)
     save_state(state)
-    
+
     print(f"Turn {state['turn']}: user said '{text}'")
     call_claude(state["messages"])
 
@@ -94,11 +99,9 @@ def create_box_b(tool_commands):
     """Create Box B (the hands) and dispatch tool commands as bg processes."""
     config = load_config()
     base = "http://135.181.6.215:8000"
-    headers = {"Authorization": f"Bearer {config.get('api_key_mshkn', 'mk-test-key-2026')}"}
     callback_rule = config["callback_rule"]
 
     # Build a script that runs all tools and callbacks results
-    # Download publish.sh for here.now deployment capability
     script_parts = [
         "#!/bin/bash",
         "set -e",
@@ -109,40 +112,50 @@ def create_box_b(tool_commands):
         tid = tool["id"]
         cmd = tool["command"]
         callback_url = f"https://api.mshkn.dev/ingress/{callback_rule}"
-        # Run each tool, capture output, and callback with jq-escaped result
         script_parts.append(f"""
 # Tool {tid}
 (
   RESULT=$({cmd} 2>&1) || RESULT="ERROR: $?"
   # Truncate to 4000 chars and use jq for safe JSON encoding
   RESULT=$(echo "$RESULT" | head -c 4000)
-  PAYLOAD=$(jq -n --arg text "Tool {tid} result: $RESULT" \\
+  PAYLOAD=$(jq -n --arg text "Tool {tid} result: $RESULT" \
     '{{"response_body": {{"content": [{{"type": "text", "text": $text}}]}}}}')
-  curl -s -X POST {callback_url} \\
-    -H 'Content-Type: application/json' \\
+  curl -s -X POST {callback_url} \
+    -H 'Content-Type: application/json' \
     -d "$PAYLOAD"
 ) &
 """)
     script_parts.append("wait")
     full_script = "\n".join(script_parts)
 
-    # Create Box B computer with the script
+    # Write JSON body to file to avoid massive command-line args
+    payload = json.dumps({
+        "recipe_id": config.get("recipe_id"),
+        "exec": full_script,
+        "self_destruct": True,
+        "label": "box-b-tools",
+    })
+    with open("/tmp/boxb_payload.json", "w") as f:
+        f.write(payload)
+
     r = subprocess.run(
         ["curl", "-s", "-X", "POST", f"{base}/computers",
          "-H", "Authorization: Bearer mk-test-key-2026",
          "-H", "Content-Type: application/json",
-         "-d", json.dumps({
-             "recipe_id": config.get("recipe_id"),
-             "exec": full_script,
-             "self_destruct": True,
-             "label": "box-b-tools",
-         })],
+         "-d", "@/tmp/boxb_payload.json"],
         capture_output=True, text=True,
     )
-    print(f"Created Box B: {r.stdout[:200]}")
+    print(f"Created Box B: stdout={r.stdout[:200]} stderr={r.stderr[:200]}")
 
 def handle_claude_response():
-    response_text = os.environ.get("RESPONSE", "")
+    # Read response from file (preferred) or env var (fallback)
+    response_text = ""
+    if os.path.exists(RESPONSE_FILE):
+        response_text = open(RESPONSE_FILE).read()
+        print(f"Read response from file ({len(response_text)} bytes)")
+    if not response_text:
+        response_text = os.environ.get("RESPONSE", "")
+        print(f"Read response from env ({len(response_text)} bytes)")
     if not response_text:
         print("No response text")
         return
@@ -155,7 +168,6 @@ def handle_claude_response():
         envelope = json.loads(response_text)
         if isinstance(envelope, dict) and envelope.get("lampas_status") == "failed":
             print(f"Lampas call failed: {envelope}")
-            # Retry the Claude call
             call_claude(state["messages"])
             return
     except (json.JSONDecodeError, ValueError):
@@ -163,7 +175,6 @@ def handle_claude_response():
 
     # Check if this is a tool result (starts with "Tool t")
     if response_text.startswith("Tool t") and " result: " in response_text:
-        # This is a tool result from Box B, not a Claude response
         state["tools_received"] = state.get("tools_received", 0) + 1
         state["messages"].append({
             "role": "user",
@@ -171,22 +182,19 @@ def handle_claude_response():
         })
         save_state(state)
         print(f"Received tool result ({state['tools_received']}/{state.get('tools_emitted', '?')})")
-
-        # Call Claude with the tool result
         call_claude(state["messages"])
         return
 
     # Parse actions from Claude's JSON response
     raw = response_text.strip()
     actions = None
-    # Try direct parse first
     try:
         actions = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        print(f"JSON parse failed: {e}")
         # Try to extract JSON array from surrounding text
         start = raw.find("[")
         if start >= 0:
-            # Find matching closing bracket
             depth = 0
             for i in range(start, len(raw)):
                 if raw[i] == "[":
@@ -200,6 +208,7 @@ def handle_claude_response():
                             pass
                         break
     if actions is None:
+        print(f"Could not parse actions, sending raw text as telegram. First 200 chars: {response_text[:200]}")
         actions = [{"type": "telegram", "text": response_text[:500]}]
 
     tool_commands = []
@@ -214,6 +223,7 @@ def handle_claude_response():
 
     # Dispatch tools to Box B if any
     if tool_commands:
+        print(f"Dispatching {len(tool_commands)} tool(s) to Box B")
         state["tools_emitted"] = state.get("tools_emitted", 0) + len(tool_commands)
         save_state(state)
         create_box_b(tool_commands)
@@ -225,9 +235,13 @@ def handle_claude_response():
 
 if __name__ == "__main__":
     trigger = sys.argv[1] if len(sys.argv) > 1 else ""
-    if trigger == "telegram":
-        handle_telegram()
-    elif trigger == "claude_response":
-        handle_claude_response()
-    else:
-        print(f"Unknown trigger: {trigger}")
+    try:
+        if trigger == "telegram":
+            handle_telegram()
+        elif trigger == "claude_response":
+            handle_claude_response()
+        else:
+            print(f"Unknown trigger: {trigger}")
+    except Exception:
+        traceback.print_exc()
+        sys.exit(1)
