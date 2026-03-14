@@ -109,14 +109,18 @@ def create_box_b(tool_commands):
         tid = tool["id"]
         cmd = tool["command"]
         callback_url = f"https://api.mshkn.dev/ingress/{callback_rule}"
-        # Run each tool, capture output, and callback result
+        # Run each tool, capture output, and callback with jq-escaped result
         script_parts.append(f"""
 # Tool {tid}
 (
   RESULT=$({cmd} 2>&1) || RESULT="ERROR: $?"
+  # Truncate to 4000 chars and use jq for safe JSON encoding
+  RESULT=$(echo "$RESULT" | head -c 4000)
+  PAYLOAD=$(jq -n --arg text "Tool {tid} result: $RESULT" \\
+    '{{"response_body": {{"content": [{{"type": "text", "text": $text}}]}}}}')
   curl -s -X POST {callback_url} \\
     -H 'Content-Type: application/json' \\
-    -d '{{"lampas_job_id": "tool-{tid}", "lampas_status": "completed", "response_status": 200, "response_headers": {{}}, "response_body": {{"content": [{{"type": "text", "text": "Tool {tid} result: '"$RESULT"'"}}]}}}}'
+    -d "$PAYLOAD"
 ) &
 """)
     script_parts.append("wait")
