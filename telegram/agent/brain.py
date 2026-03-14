@@ -65,7 +65,7 @@ def call_claude(messages):
             ),
             "messages": messages,
         },
-        "timeout_ms": 60000,
+        "timeout_ms": 120000,
     })
     r = subprocess.run(
         ["curl", "-s", "-X", "POST", "https://lampas.dev/forward",
@@ -145,6 +145,17 @@ def handle_claude_response():
 
     state = load_state()
     chat_id = state.get("chat_id", "6522858700")
+
+    # Check if this is a lampas failure envelope
+    try:
+        envelope = json.loads(response_text)
+        if isinstance(envelope, dict) and envelope.get("lampas_status") == "failed":
+            print(f"Lampas call failed: {envelope}")
+            # Retry the Claude call
+            call_claude(state["messages"])
+            return
+    except (json.JSONDecodeError, ValueError):
+        pass
 
     # Check if this is a tool result (starts with "Tool t")
     if response_text.startswith("Tool t") and " result: " in response_text:
