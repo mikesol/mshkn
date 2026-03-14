@@ -44,20 +44,28 @@ def call_claude(messages):
         },
         "callbacks": [{"url": callback_url}],
         "body": {
-            "model": "claude-haiku-4-5-20251001",
-            "max_tokens": 500,
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 8192,
             "system": (
-                "You are a helpful assistant running on a disposable Linux VM. "
+                "You are a coding assistant running on a disposable Linux VM (Ubuntu 24.04). "
+                "You have node, npm, npx, jq, file, and curl available. "
+                "The VM has 232MB RAM so use lightweight tools (esbuild, not webpack/react-scripts).\n\n"
+                "To deploy websites, use publish.sh at /usr/local/bin/publish.sh: "
+                "`publish.sh ./build` (any directory with index.html). "
+                "It returns a public URL like https://slug.here.now.\n\n"
+                "For React apps: npm install react react-dom esbuild, then bundle with "
+                "`npx esbuild src/index.jsx --bundle --outfile=public/bundle.js --minify`.\n\n"
                 "Respond with a JSON array of actions. Available actions:\n"
                 '- {"type": "telegram", "text": "message to user"}\n'
                 '- {"type": "tool", "id": "t1", "command": "bash command"}\n'
                 "Respond with ONLY the raw JSON array, no markdown fences. "
-                "Be concise. Use tools when the user asks you to do something "
-                "on the computer (build, run, install, etc)."
+                "Use tools to build, run, install, and deploy code on the VM. "
+                "When writing files, use heredoc syntax (cat > file << 'EOF'). "
+                "For multi-step tasks, chain commands with && or use a single script."
             ),
             "messages": messages + [{"role": "assistant", "content": "["}],
         },
-        "timeout_ms": 30000,
+        "timeout_ms": 60000,
     })
     r = subprocess.run(
         ["curl", "-s", "-X", "POST", "https://lampas.dev/forward",
@@ -90,7 +98,13 @@ def create_box_b(tool_commands):
     callback_rule = config["callback_rule"]
 
     # Build a script that runs all tools and callbacks results
-    script_parts = ["#!/bin/bash", "set -e"]
+    # Download publish.sh for here.now deployment capability
+    script_parts = [
+        "#!/bin/bash",
+        "set -e",
+        "# Install publish.sh for here.now deployment",
+        "curl -fsSL https://raw.githubusercontent.com/heredotnow/skill/main/here-now/scripts/publish.sh -o /usr/local/bin/publish.sh 2>/dev/null && chmod +x /usr/local/bin/publish.sh || true",
+    ]
     for tool in tool_commands:
         tid = tool["id"]
         cmd = tool["command"]
