@@ -63,7 +63,7 @@ def call_claude(messages):
                 "When writing files, use heredoc syntax (cat > file << 'EOF'). "
                 "For multi-step tasks, chain commands with && or use a single script."
             ),
-            "messages": messages + [{"role": "assistant", "content": "["}],
+            "messages": messages,
         },
         "timeout_ms": 60000,
     })
@@ -161,8 +161,8 @@ def handle_claude_response():
         call_claude(state["messages"])
         return
 
-    # Parse actions - Claude continues from our "[" prefill
-    raw = response_text if response_text.startswith("[") else "[" + response_text
+    # Parse actions from Claude's JSON response
+    raw = response_text.strip()
     try:
         actions = json.loads(raw)
     except json.JSONDecodeError:
