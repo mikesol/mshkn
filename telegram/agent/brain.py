@@ -246,12 +246,21 @@ def handle_claude_response():
     state = load_state()
     chat_id = state.get("chat_id", "6522858700")
 
-    # Clean up: strip any lampas failures from end of conversation history
-    while (state["messages"] and state["messages"][-1]["role"] == "assistant"
-           and "lampas_status" in state["messages"][-1].get("content", "")):
-        print("Removing stale lampas failure from conversation history")
-        state["messages"].pop()
-        save_state(state)
+    # Clean up: strip any error responses from end of conversation history
+    while state["messages"] and state["messages"][-1]["role"] == "assistant":
+        last_content = state["messages"][-1].get("content", "")
+        is_error = (
+            "lampas_status" in last_content or
+            last_content.strip().lower().startswith("error code:") or
+            last_content.strip().lower().startswith("<!doctype") or
+            last_content.strip().lower().startswith("<html")
+        )
+        if is_error:
+            print(f"Removing stale error from conversation: {last_content[:60]}")
+            state["messages"].pop()
+            save_state(state)
+        else:
+            break
 
     # Check if this is a lampas failure envelope
     try:
@@ -266,6 +275,17 @@ def handle_claude_response():
     # Also check for lampas failure in case it wasn't caught above
     if '"lampas_status"' in response_text and '"failed"' in response_text:
         print(f"Lampas failure detected (fallback check), retrying")
+        call_claude(state["messages"])
+        return
+
+    # Check for HTTP/proxy errors (e.g., Cloudflare 524 timeout)
+    stripped_lower = response_text.strip().lower()
+    if (stripped_lower.startswith("error code:") or
+        stripped_lower.startswith("<!doctype") or
+        stripped_lower.startswith("<html") or
+        "cloudflare" in stripped_lower or
+        (len(response_text.strip()) < 50 and "error" in stripped_lower)):
+        print(f"HTTP/proxy error detected: {response_text.strip()[:100]}, retrying")
         call_claude(state["messages"])
         return
 
