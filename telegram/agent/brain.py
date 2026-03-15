@@ -109,7 +109,7 @@ def call_claude(messages):
             ),
             "messages": messages,
         },
-        "timeout_ms": 120000,
+        "timeout_ms": 180000,
     })
     # Write body to file to avoid massive command-line args
     with open("/tmp/lampas_body.json", "w") as f:
@@ -246,6 +246,13 @@ def handle_claude_response():
     state = load_state()
     chat_id = state.get("chat_id", "6522858700")
 
+    # Clean up: strip any lampas failures from end of conversation history
+    while (state["messages"] and state["messages"][-1]["role"] == "assistant"
+           and "lampas_status" in state["messages"][-1].get("content", "")):
+        print("Removing stale lampas failure from conversation history")
+        state["messages"].pop()
+        save_state(state)
+
     # Check if this is a lampas failure envelope
     try:
         envelope = json.loads(response_text)
@@ -255,6 +262,12 @@ def handle_claude_response():
             return
     except (json.JSONDecodeError, ValueError):
         pass
+
+    # Also check for lampas failure in case it wasn't caught above
+    if '"lampas_status"' in response_text and '"failed"' in response_text:
+        print(f"Lampas failure detected (fallback check), retrying")
+        call_claude(state["messages"])
+        return
 
     # Check if this is a tool result (starts with "Tool t")
     if response_text.startswith("Tool t") and " result: " in response_text:
