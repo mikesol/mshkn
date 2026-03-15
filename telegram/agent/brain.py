@@ -70,137 +70,56 @@ def send_telegram(chat_id, text):
     ], capture_output=True, text=True)
     print(f"Sent telegram to {chat_id}: {text[:80]}")
 
-SYSTEM_PROMPT = (
-    "You are a coding assistant running on a disposable Linux VM (Ubuntu 24.04). "
-    "You have node, npm, npx, jq, file, and curl available. "
-    "The VM has 232MB RAM so use lightweight tools (esbuild, not webpack/react-scripts).\n\n"
-    "To deploy websites, use publish.sh at /usr/local/bin/publish.sh: "
-    "`publish.sh ./build` (any directory with index.html). "
-    "It returns a public URL like https://slug.here.now.\n\n"
-    "For React apps: npm install react react-dom esbuild, then bundle with "
-    "`npx esbuild src/index.jsx --bundle --outfile=public/bundle.js --minify`.\n\n"
-    "Respond with a JSON array of actions. Available actions:\n"
-    '- {"type": "telegram", "text": "message to user"}\n'
-    '- {"type": "tool", "id": "t1", "command": "bash command"}\n'
-    "Respond with ONLY the raw JSON array, no markdown fences. "
-    "Use tools to build, run, install, and deploy code on the VM. "
-    "When writing files, use heredoc syntax (cat > file << 'EOF'). "
-    "IMPORTANT: Keep each tool command under 6000 characters. "
-    "If a file is large, split it across multiple tool calls "
-    "(e.g., write part 1 to a temp file, then append part 2). "
-    "For multi-step tasks, use multiple tool actions rather than one massive command. "
-    "Files and installed packages persist between tool batches — "
-    "you can npm install in one response and use the packages in the next."
-)
-
 def call_claude(messages):
-    """Call Claude API directly (synchronous) and return the response text."""
     config = load_config()
+    callback_url = f"https://api.mshkn.dev/ingress/{config['callback_rule']}"
     body = json.dumps({
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 16384,
-        "system": SYSTEM_PROMPT,
-        "messages": messages,
+        "target": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "forward_headers": {
+            "x-api-key": config["api_key"],
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        "callbacks": [{"url": callback_url}],
+        "body": {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 16384,
+            "system": (
+                "You are a coding assistant running on a disposable Linux VM (Ubuntu 24.04). "
+                "You have node, npm, npx, jq, file, and curl available. "
+                "The VM has 232MB RAM so use lightweight tools (esbuild, not webpack/react-scripts).\n\n"
+                "To deploy websites, use publish.sh at /usr/local/bin/publish.sh: "
+                "`publish.sh ./build` (any directory with index.html). "
+                "It returns a public URL like https://slug.here.now.\n\n"
+                "For React apps: npm install react react-dom esbuild, then bundle with "
+                "`npx esbuild src/index.jsx --bundle --outfile=public/bundle.js --minify`.\n\n"
+                "Respond with a JSON array of actions. Available actions:\n"
+                '- {"type": "telegram", "text": "message to user"}\n'
+                '- {"type": "tool", "id": "t1", "command": "bash command"}\n'
+                "Respond with ONLY the raw JSON array, no markdown fences. "
+                "Use tools to build, run, install, and deploy code on the VM. "
+                "When writing files, use heredoc syntax (cat > file << 'EOF'). "
+                "IMPORTANT: Keep each tool command under 6000 characters. "
+                "If a file is large, split it across multiple tool calls "
+                "(e.g., write part 1 to a temp file, then append part 2). "
+                "For multi-step tasks, use multiple tool actions rather than one massive command. "
+                "Files and installed packages persist between tool batches — "
+                "you can npm install in one response and use the packages in the next."
+            ),
+            "messages": messages,
+        },
+        "timeout_ms": 180000,
     })
-    with open("/tmp/claude_body.json", "w") as f:
+    # Write body to file to avoid massive command-line args
+    with open("/tmp/lampas_body.json", "w") as f:
         f.write(body)
     r = subprocess.run(
-        ["curl", "-s", "-X", "POST", "https://api.anthropic.com/v1/messages",
-         "-H", f"x-api-key: {config['api_key']}",
-         "-H", "anthropic-version: 2023-06-01",
-         "-H", "content-type: application/json",
-         "-d", "@/tmp/claude_body.json",
-         "--max-time", "180"],
+        ["curl", "-s", "-X", "POST", "https://lampas.dev/forward",
+         "-H", "Content-Type: application/json", "-d", "@/tmp/lampas_body.json"],
         capture_output=True, text=True,
     )
-    if r.returncode != 0:
-        print(f"Claude API call failed: returncode={r.returncode} stderr={r.stderr[:200]}")
-        return None
-    try:
-        resp = json.loads(r.stdout)
-        if resp.get("type") == "error":
-            print(f"Claude API error: {resp}")
-            return None
-        # Extract text from content blocks
-        content = resp.get("content", [])
-        text_parts = [block.get("text", "") for block in content if block.get("type") == "text"]
-        result = "\n".join(text_parts)
-        print(f"Claude response: {len(result)} chars, stop={resp.get('stop_reason')}")
-        return result
-    except (json.JSONDecodeError, KeyError) as e:
-        print(f"Failed to parse Claude response: {e}, raw={r.stdout[:200]}")
-        return None
-
-def process_response(response_text, state):
-    """Process Claude's response: parse actions, send telegrams, dispatch tools."""
-    chat_id = state.get("chat_id", "6522858700")
-    raw = response_text.strip()
-
-    actions = None
-    # Try direct parse, then with newline fix, then bracket extraction
-    for attempt_raw in [raw, fix_json_newlines(raw)]:
-        try:
-            actions = json.loads(attempt_raw)
-            break
-        except json.JSONDecodeError:
-            pass
-    if actions is None:
-        fixed = fix_json_newlines(raw)
-        start = fixed.find("[")
-        if start >= 0:
-            depth = 0
-            for i in range(start, len(fixed)):
-                if fixed[i] == "[":
-                    depth += 1
-                elif fixed[i] == "]":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            actions = json.loads(fixed[start:i+1])
-                        except json.JSONDecodeError as e:
-                            print(f"JSON parse failed after fix: {e}")
-                        break
-    if actions is None:
-        # Detect truncated response
-        stripped = raw.strip()
-        if stripped.startswith("[") and not stripped.endswith("]"):
-            print(f"Detected truncated response ({len(raw)} chars), asking Claude to continue")
-            state["messages"].append({"role": "assistant", "content": raw})
-            state["messages"].append({
-                "role": "user",
-                "content": (
-                    "[System]: Your previous response was truncated (output too long). "
-                    "Please split the work into smaller steps. Instead of writing an entire "
-                    "large file in one command, break it into multiple smaller tool calls "
-                    "(e.g., write sections to temp files, then combine them). "
-                    "Resume from where you left off."
-                ),
-            })
-            save_state(state)
-            return "truncated"
-        print(f"Could not parse actions, sending raw text as telegram. First 200 chars: {raw[:200]}")
-        actions = [{"type": "telegram", "text": raw[:500]}]
-
-    tool_commands = []
-    for action in actions:
-        if action.get("type") == "telegram":
-            send_telegram(chat_id, action.get("text", ""))
-        elif action.get("type") == "tool":
-            tool_commands.append({
-                "id": action.get("id", "t0"),
-                "command": action.get("command", "echo no-command"),
-            })
-
-    if tool_commands:
-        print(f"Dispatching {len(tool_commands)} tool(s) to Box B")
-        state["tools_emitted"] = state.get("tools_emitted", 0) + len(tool_commands)
-        save_state(state)
-        create_box_b(tool_commands)
-
-    state["messages"].append({"role": "assistant", "content": raw})
-    save_state(state)
-    print(f"Processed {len(actions)} actions ({len(tool_commands)} tools)")
-    return "ok"
+    print(f"Called lampas: {r.stdout[:100]}")
 
 def handle_telegram():
     chat_id = os.environ.get("CHAT_ID", "")
@@ -216,17 +135,7 @@ def handle_telegram():
     save_state(state)
 
     print(f"Turn {state['turn']}: user said '{text}'")
-
-    # Synchronous loop: call Claude, process response, repeat if truncated
-    for attempt in range(5):
-        response = call_claude(state["messages"])
-        if response is None:
-            print(f"Claude call failed on attempt {attempt+1}, retrying...")
-            continue
-        result = process_response(response, state)
-        if result == "truncated":
-            continue  # Claude will be called again with the truncation message
-        break
+    call_claude(state["messages"])
 
 def find_latest_checkpoint(label):
     """Find the most recent checkpoint with the given label."""
@@ -322,11 +231,7 @@ def create_box_b(tool_commands):
     print(f"Box B: stdout={r.stdout[:200]} stderr={r.stderr[:200]}")
 
 def handle_claude_response():
-    """Handle callbacks from tool results (Box B).
-
-    Tool results arrive via the ingress callback and are processed here.
-    We call Claude synchronously with the tool result added to the conversation.
-    """
+    # Read response from file (preferred) or env var (fallback)
     response_text = ""
     if os.path.exists(RESPONSE_FILE):
         response_text = open(RESPONSE_FILE).read()
@@ -339,8 +244,52 @@ def handle_claude_response():
         return
 
     state = load_state()
+    chat_id = state.get("chat_id", "6522858700")
 
-    # Only handle tool results now (Claude responses are handled synchronously)
+    # Clean up: strip any error responses from end of conversation history
+    while state["messages"] and state["messages"][-1]["role"] == "assistant":
+        last_content = state["messages"][-1].get("content", "")
+        is_error = (
+            "lampas_status" in last_content or
+            last_content.strip().lower().startswith("error code:") or
+            last_content.strip().lower().startswith("<!doctype") or
+            last_content.strip().lower().startswith("<html")
+        )
+        if is_error:
+            print(f"Removing stale error from conversation: {last_content[:60]}")
+            state["messages"].pop()
+            save_state(state)
+        else:
+            break
+
+    # Check if this is a lampas failure envelope
+    try:
+        envelope = json.loads(response_text)
+        if isinstance(envelope, dict) and envelope.get("lampas_status") == "failed":
+            print(f"Lampas call failed: {envelope}")
+            call_claude(state["messages"])
+            return
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Also check for lampas failure in case it wasn't caught above
+    if '"lampas_status"' in response_text and '"failed"' in response_text:
+        print(f"Lampas failure detected (fallback check), retrying")
+        call_claude(state["messages"])
+        return
+
+    # Check for HTTP/proxy errors (e.g., Cloudflare 524 timeout)
+    stripped_lower = response_text.strip().lower()
+    if (stripped_lower.startswith("error code:") or
+        stripped_lower.startswith("<!doctype") or
+        stripped_lower.startswith("<html") or
+        "cloudflare" in stripped_lower or
+        (len(response_text.strip()) < 50 and "error" in stripped_lower)):
+        print(f"HTTP/proxy error detected: {response_text.strip()[:100]}, retrying")
+        call_claude(state["messages"])
+        return
+
+    # Check if this is a tool result (starts with "Tool t")
     if response_text.startswith("Tool t") and " result: " in response_text:
         state["tools_received"] = state.get("tools_received", 0) + 1
         state["messages"].append({
@@ -349,21 +298,79 @@ def handle_claude_response():
         })
         save_state(state)
         print(f"Received tool result ({state['tools_received']}/{state.get('tools_emitted', '?')})")
-
-        # Call Claude synchronously with the tool result
-        for attempt in range(3):
-            response = call_claude(state["messages"])
-            if response is None:
-                print(f"Claude call failed on attempt {attempt+1}, retrying...")
-                continue
-            result = process_response(response, state)
-            if result == "truncated":
-                continue
-            break
+        call_claude(state["messages"])
         return
 
-    # Ignore non-tool callbacks (legacy lampas responses, errors, etc.)
-    print(f"Ignoring non-tool callback: {response_text[:100]}")
+    # Parse actions from Claude's JSON response
+    raw = response_text.strip()
+    actions = None
+    # Try direct parse, then with newline fix, then bracket extraction
+    for attempt_raw in [raw, fix_json_newlines(raw)]:
+        try:
+            actions = json.loads(attempt_raw)
+            break
+        except json.JSONDecodeError:
+            pass
+    if actions is None:
+        # Try to extract JSON array from surrounding text
+        fixed = fix_json_newlines(raw)
+        start = fixed.find("[")
+        if start >= 0:
+            depth = 0
+            for i in range(start, len(fixed)):
+                if fixed[i] == "[":
+                    depth += 1
+                elif fixed[i] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            actions = json.loads(fixed[start:i+1])
+                        except json.JSONDecodeError as e:
+                            print(f"JSON parse failed after fix: {e}")
+                        break
+    if actions is None:
+        # Detect truncated response: starts with [ but never closes
+        stripped = raw.strip()
+        if stripped.startswith("[") and not stripped.endswith("]"):
+            print(f"Detected truncated response ({len(raw)} chars), asking Claude to continue")
+            state["messages"].append({"role": "assistant", "content": raw})
+            state["messages"].append({
+                "role": "user",
+                "content": (
+                    "[System]: Your previous response was truncated (output too long). "
+                    "Please split the work into smaller steps. Instead of writing an entire "
+                    "large file in one command, break it into multiple smaller tool calls "
+                    "(e.g., write sections to temp files, then combine them). "
+                    "Resume from where you left off."
+                ),
+            })
+            save_state(state)
+            call_claude(state["messages"])
+            return
+        print(f"Could not parse actions, sending raw text as telegram. First 200 chars: {response_text[:200]}")
+        actions = [{"type": "telegram", "text": response_text[:500]}]
+
+    tool_commands = []
+    for action in actions:
+        if action.get("type") == "telegram":
+            send_telegram(chat_id, action.get("text", ""))
+        elif action.get("type") == "tool":
+            tool_commands.append({
+                "id": action.get("id", "t0"),
+                "command": action.get("command", "echo no-command"),
+            })
+
+    # Dispatch tools to Box B if any
+    if tool_commands:
+        print(f"Dispatching {len(tool_commands)} tool(s) to Box B")
+        state["tools_emitted"] = state.get("tools_emitted", 0) + len(tool_commands)
+        save_state(state)
+        create_box_b(tool_commands)
+
+    # Save assistant response to conversation
+    state["messages"].append({"role": "assistant", "content": raw})
+    save_state(state)
+    print(f"Processed {len(actions)} actions ({len(tool_commands)} tools)")
 
 if __name__ == "__main__":
     trigger = sys.argv[1] if len(sys.argv) > 1 else ""
