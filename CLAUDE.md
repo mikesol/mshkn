@@ -108,6 +108,10 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thre
 - **Wait for CI before merging.** After creating a PR, use `gh pr checks <N> --watch` to confirm all checks pass before requesting merge authorization. Never merge a red PR.
 - **No backwards compatibility or versioning.** This is a pre-alpha research project with zero users. Don't version APIs, don't keep fallback images, don't maintain backwards-compatible code paths. Just replace things directly. The only exception is DB migrations, which must be sequential and additive. If something needs to change, change it — don't create a "v2" alongside the old thing.
 
+## Deployment
+
+See `DEPLOY.md` for full fresh-server setup instructions (Firecracker, dm-thin pool, Caddy, R2, Litestream, etc).
+
 ## Server reference
 
 - **Host**: Hetzner AX41-NVMe at `135.181.6.215`, AMD Ryzen 5 3600, 64GB RAM, 2x512GB NVMe
