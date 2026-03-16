@@ -85,6 +85,7 @@ def call_claude(messages):
         "body": {
             "model": "claude-sonnet-4-6",
             "max_tokens": 16384,
+            "stream": True,
             "system": (
                 "You are a coding assistant running on a disposable Linux VM (Ubuntu 24.04). "
                 "You have node, npm, npx, jq, file, and curl available. "
