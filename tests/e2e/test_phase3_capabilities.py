@@ -74,9 +74,7 @@ class TestRecipeCRUD:
         resp2 = await long_client.get(f"/recipes/{recipe_id}")
         assert resp2.status_code == 404
 
-    async def test_delete_referenced_recipe_blocked(
-        self, long_client: httpx.AsyncClient
-    ) -> None:
+    async def test_delete_referenced_recipe_blocked(self, long_client: httpx.AsyncClient) -> None:
         """DELETE /recipes/{id} returns 409 if a computer references it."""
         recipe_id = await create_recipe(
             long_client,
@@ -98,9 +96,7 @@ class TestRecipeCRUD:
 class TestContentHashDedup:
     """Same Dockerfile text should return the same recipe_id."""
 
-    async def test_dedup_same_dockerfile(
-        self, long_client: httpx.AsyncClient
-    ) -> None:
+    async def test_dedup_same_dockerfile(self, long_client: httpx.AsyncClient) -> None:
         dockerfile = "FROM mshkn-base\nRUN echo dedup-test-unique-e2e"
         id1 = await create_recipe(long_client, dockerfile)
         # Second post with identical Dockerfile
@@ -117,9 +113,7 @@ class TestContentHashDedup:
 class TestBuildFailure:
     """Bad Dockerfile produces status=failed with build_log."""
 
-    async def test_bad_dockerfile_fails(
-        self, long_client: httpx.AsyncClient
-    ) -> None:
+    async def test_bad_dockerfile_fails(self, long_client: httpx.AsyncClient) -> None:
         resp = await long_client.post(
             "/recipes",
             json={"dockerfile": "FROM nonexistent-image-that-does-not-exist-12345"},
@@ -153,9 +147,7 @@ class TestBuildFailure:
 class TestComputerFromRecipe:
     """Computer created with recipe_id boots with the recipe's tools."""
 
-    async def test_boot_with_recipe_and_verify_tool(
-        self, long_client: httpx.AsyncClient
-    ) -> None:
+    async def test_boot_with_recipe_and_verify_tool(self, long_client: httpx.AsyncClient) -> None:
         """Create recipe with jq, boot computer, verify jq is available."""
         recipe_id = await create_recipe(
             long_client,
@@ -168,9 +160,7 @@ class TestComputerFromRecipe:
         finally:
             await destroy_computer(long_client, comp_id)
 
-    async def test_boot_bare_no_recipe(
-        self, long_client: httpx.AsyncClient
-    ) -> None:
+    async def test_boot_bare_no_recipe(self, long_client: httpx.AsyncClient) -> None:
         """Computer without recipe_id boots from bare rootfs."""
         async with managed_computer(long_client) as comp_id:
             result = await exec_command(long_client, comp_id, "uname -a")

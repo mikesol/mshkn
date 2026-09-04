@@ -152,9 +152,7 @@ async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
     ]
 
 
-async def count_active_computers_by_account(
-    db: aiosqlite.Connection, account_id: str
-) -> int:
+async def count_active_computers_by_account(db: aiosqlite.Connection, account_id: str) -> int:
     """Count non-destroyed computers for the given account."""
     cursor = await db.execute(
         "SELECT COUNT(*) FROM computers WHERE account_id = ? AND status != 'destroyed'",
@@ -164,41 +162,7 @@ async def count_active_computers_by_account(
     return row[0] if row else 0
 
 
-async def list_computers_by_account(
-    db: aiosqlite.Connection, account_id: str
-) -> list[Computer]:
-    cursor = await db.execute(
-        "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
-        "source_checkpoint_id, recipe_id "
-        "FROM computers WHERE account_id = ? AND status != 'destroyed'",
-        (account_id,),
-    )
-    rows = await cursor.fetchall()
-    return [
-        Computer(
-            id=r[0],
-            account_id=r[1],
-            thin_volume_id=r[2],
-            tap_device=r[3],
-            vm_ip=r[4],
-            socket_path=r[5],
-            firecracker_pid=r[6],
-            manifest_hash=r[7],
-            manifest_json=r[8],
-            status=r[9],
-            created_at=r[10],
-            last_exec_at=r[11],
-            source_checkpoint_id=r[12],
-            recipe_id=r[13],
-        )
-        for r in rows
-    ]
-
-
-async def update_computer_status(
-    db: aiosqlite.Connection, computer_id: str, status: str
-) -> None:
+async def update_computer_status(db: aiosqlite.Connection, computer_id: str, status: str) -> None:
     await db.execute(
         "UPDATE computers SET status = ? WHERE id = ?",
         (status, computer_id),
@@ -206,9 +170,7 @@ async def update_computer_status(
     await db.commit()
 
 
-async def update_last_exec_at(
-    db: aiosqlite.Connection, computer_id: str, timestamp: str
-) -> None:
+async def update_last_exec_at(db: aiosqlite.Connection, computer_id: str, timestamp: str) -> None:
     await db.execute(
         "UPDATE computers SET last_exec_at = ? WHERE id = ?",
         (timestamp, computer_id),
@@ -456,9 +418,7 @@ async def insert_deferred(
     await db.commit()
 
 
-async def list_deferred_by_label(
-    db: aiosqlite.Connection, label: str
-) -> list[dict[str, str]]:
+async def list_deferred_by_label(db: aiosqlite.Connection, label: str) -> list[dict[str, str]]:
     """Return all deferred requests for a label, ordered by created_at ASC."""
     cursor = await db.execute(
         "SELECT id, label, account_id, request_payload, created_at "
@@ -560,9 +520,7 @@ async def get_recipe_by_content_hash(
     )
 
 
-async def list_recipes_by_account(
-    db: aiosqlite.Connection, account_id: str
-) -> list[Recipe]:
+async def list_recipes_by_account(db: aiosqlite.Connection, account_id: str) -> list[Recipe]:
     cursor = await db.execute(
         "SELECT id, account_id, dockerfile, content_hash, status, build_log, base_volume_id, "
         "template_vmstate, template_memory, created_at, built_at "
@@ -588,9 +546,7 @@ async def list_recipes_by_account(
     ]
 
 
-async def update_recipe_status(
-    db: aiosqlite.Connection, recipe_id: str, status: str
-) -> None:
+async def update_recipe_status(db: aiosqlite.Connection, recipe_id: str, status: str) -> None:
     await db.execute(
         "UPDATE recipes SET status = ? WHERE id = ?",
         (status, recipe_id),
@@ -633,8 +589,7 @@ async def get_bare_template(
 ) -> tuple[str, str] | None:
     """Get cached bare (no-recipe) L3 template paths."""
     cursor = await db.execute(
-        "SELECT vmstate_path, memory_path FROM snapshot_templates "
-        "WHERE manifest_hash = 'bare'"
+        "SELECT vmstate_path, memory_path FROM snapshot_templates WHERE manifest_hash = 'bare'"
     )
     row = await cursor.fetchone()
     if row:

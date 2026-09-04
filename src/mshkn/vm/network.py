@@ -56,8 +56,7 @@ async def destroy_tap(slot: int) -> None:
     _, vm_ip = slot_to_ip(slot)
     # Remove iptables rules (best-effort)
     await run(
-        f"iptables -D FORWARD -i {tap} -s {vm_ip} "
-        f"! -d 172.16.0.0/12 -j ACCEPT",
+        f"iptables -D FORWARD -i {tap} -s {vm_ip} ! -d 172.16.0.0/12 -j ACCEPT",
         check=False,
     )
     await run(
@@ -70,16 +69,3 @@ async def destroy_tap(slot: int) -> None:
         logger.warning("Failed to delete tap %s: %s", tap, e.stderr.strip())
     else:
         logger.info("Destroyed tap device %s", tap)
-
-
-async def ensure_nat(interface: str = "enp35s0") -> None:
-    result = await run(
-        f"iptables -t nat -C POSTROUTING -o {interface} -j MASQUERADE",
-        check=False,
-    )
-    if "No chain" in result or result == "":
-        pass
-    await run(
-        f"iptables -t nat -A POSTROUTING -o {interface} -j MASQUERADE",
-        check=False,
-    )

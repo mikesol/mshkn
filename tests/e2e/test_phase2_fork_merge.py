@@ -6,7 +6,7 @@ Every computer costs real resources — clean up in finally blocks.
 
 from __future__ import annotations
 
-import httpx
+from typing import TYPE_CHECKING
 
 from .conftest import (
     checkpoint_computer,
@@ -15,9 +15,12 @@ from .conftest import (
     destroy_computer,
     exec_command,
     fork_checkpoint,
-    managed_computer,
 )
 
+if TYPE_CHECKING:
+    from typing import Any
+
+    import httpx
 
 # ---------------------------------------------------------------------------
 # T2.1 — Fork Isolation
@@ -34,9 +37,7 @@ async def test_fork_isolation(long_client: httpx.AsyncClient) -> None:
         comp_origin = await create_computer(long_client)
         computers.append(comp_origin)
 
-        await exec_command(
-            long_client, comp_origin, 'echo -n "A" > /root/original.txt'
-        )
+        await exec_command(long_client, comp_origin, 'echo -n "A" > /root/original.txt')
 
         # Checkpoint
         ckpt_base = await checkpoint_computer(long_client, comp_origin, label="base")
@@ -240,9 +241,7 @@ async def test_merge_deletion_in_one_fork(long_client: httpx.AsyncClient) -> Non
         comp_origin = await create_computer(long_client)
         computers.append(comp_origin)
         await exec_command(long_client, comp_origin, "mkdir -p /data")
-        await exec_command(
-            long_client, comp_origin, 'echo -n "to_be_deleted" > /data/target.txt'
-        )
+        await exec_command(long_client, comp_origin, 'echo -n "to_be_deleted" > /data/target.txt')
 
         ckpt_base = await checkpoint_computer(long_client, comp_origin, label="base")
         checkpoints.append(ckpt_base)
@@ -300,9 +299,7 @@ async def test_merge_deletion_vs_modification(long_client: httpx.AsyncClient) ->
         comp_origin = await create_computer(long_client)
         computers.append(comp_origin)
         await exec_command(long_client, comp_origin, "mkdir -p /data")
-        await exec_command(
-            long_client, comp_origin, 'echo -n "original" > /data/contested.txt'
-        )
+        await exec_command(long_client, comp_origin, 'echo -n "original" > /data/contested.txt')
 
         ckpt_base = await checkpoint_computer(long_client, comp_origin, label="base")
         checkpoints.append(ckpt_base)
@@ -389,9 +386,7 @@ async def test_merge_no_process_state(long_client: httpx.AsyncClient) -> None:
         computers.append(comp_merged)
 
         # The old background sleep process should NOT be running
-        result = await exec_command(
-            long_client, comp_merged, "pgrep -c 'sleep 9999' || true"
-        )
+        result = await exec_command(long_client, comp_merged, "pgrep -c 'sleep 9999' || true")
         assert result.stdout.strip() == "0", (
             "Merged checkpoint should have no process state from parent forks"
         )
@@ -486,9 +481,7 @@ async def test_diamond_merge(long_client: httpx.AsyncClient) -> None:
         comp_origin = await create_computer(long_client)
         computers.append(comp_origin)
         await exec_command(long_client, comp_origin, "mkdir -p /data")
-        await exec_command(
-            long_client, comp_origin, 'echo -n "base_content" > /data/base.txt'
-        )
+        await exec_command(long_client, comp_origin, 'echo -n "base_content" > /data/base.txt')
 
         ckpt_base = await checkpoint_computer(long_client, comp_origin, label="diamond_base")
         checkpoints.append(ckpt_base)
@@ -559,12 +552,10 @@ async def test_concurrent_merges_shared_parent(long_client: httpx.AsyncClient) -
 
         # Create 4 forks (A, B, C, D) — we'll merge (A,B) and (C,D) concurrently
         fork_ids: list[str] = []
-        for i, name in enumerate(["a", "b", "c", "d"]):
+        for _i, name in enumerate(["a", "b", "c", "d"]):
             comp = await fork_checkpoint(long_client, ckpt_base)
             computers.append(comp)
-            await exec_command(
-                long_client, comp, f'echo -n "{name}_data" > /data/{name}.txt'
-            )
+            await exec_command(long_client, comp, f'echo -n "{name}_data" > /data/{name}.txt')
             ckpt = await checkpoint_computer(long_client, comp, label=f"conc_{name}")
             checkpoints.append(ckpt)
             fork_ids.append(ckpt)
@@ -572,13 +563,14 @@ async def test_concurrent_merges_shared_parent(long_client: httpx.AsyncClient) -
         ckpt_a, ckpt_b, ckpt_c, ckpt_d = fork_ids
 
         # Issue two merges concurrently
-        async def do_merge(ca: str, cb: str) -> dict:
+        async def do_merge(ca: str, cb: str) -> dict[str, Any]:
             resp = await long_client.post(
                 f"/checkpoints/{ckpt_base}/merge",
                 json={"checkpoint_a": ca, "checkpoint_b": cb},
             )
             resp.raise_for_status()
-            return resp.json()
+            result: dict[str, Any] = resp.json()
+            return result
 
         merge_ab, merge_cd = await asyncio.gather(
             do_merge(ckpt_a, ckpt_b),

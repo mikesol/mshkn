@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Assemble the mshkn dm-thin pool, activate the base volume, and set up VM egress.
+# Idempotent. Installed to /usr/local/sbin and run by mshkn-pool.service before
+# mshkn.service at every boot (loop devices and dm tables do not survive reboots).
+set -euo pipefail
+
+POOL=mshkn-pool
+DATA=/opt/mshkn/thin-pool-data
+META=/opt/mshkn/thin-pool-meta
+SECTORS=16777216  # 8 GiB thin volumes (must match Config.thin_volume_sectors)
+IFACE=$(ip route show default | awk '{print $5; exit}')
+
+[ -f "$DATA" ] || truncate -s 100G "$DATA"
+[ -f "$META" ] || truncate -s 256M "$META"
+
+DL=$(losetup -j "$DATA" | cut -d: -f1); [ -n "$DL" ] || DL=$(losetup --find --show "$DATA")
+ML=$(losetup -j "$META" | cut -d: -f1); [ -n "$ML" ] || ML=$(losetup --find --show "$META")
+
+if ! dmsetup info "$POOL" >/dev/null 2>&1; then
+  dmsetup create "$POOL" --table "0 $(blockdev --getsz "$DL") thin-pool $ML $DL 512 0"
+fi
+
+if ! dmsetup info mshkn-base >/dev/null 2>&1; then
+  dmsetup message "$POOL" 0 "create_thin 0" 2>/dev/null || true
+  dmsetup create mshkn-base --table "0 $SECTORS thin /dev/mapper/$POOL 0"
+fi
+
+# VM egress: NAT the VM subnet out of the default interface.
+iptables -t nat -C POSTROUTING -s 172.16.0.0/12 -o "$IFACE" -j MASQUERADE 2>/dev/null || \
+  iptables -t nat -A POSTROUTING -s 172.16.0.0/12 -o "$IFACE" -j MASQUERADE
+# Docker sets the FORWARD policy to DROP; allow return traffic to VM tap devices.
+iptables -C FORWARD -o tap+ -d 172.16.0.0/12 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+  iptables -I FORWARD -o tap+ -d 172.16.0.0/12 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+sysctl -qw net.ipv4.ip_forward=1
+
+echo "pool up: $(dmsetup status "$POOL" | cut -c1-60) nat via $IFACE"

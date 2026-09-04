@@ -36,25 +36,37 @@ class FirecrackerClient:
         self._client = httpx.AsyncClient(transport=transport, base_url="http://localhost")
 
     async def configure_and_boot(self, config: FirecrackerConfig) -> None:
-        await self._put("/machine-config", {
-            "vcpu_count": config.vcpu_count,
-            "mem_size_mib": config.mem_size_mib,
-        })
-        await self._put("/boot-source", {
-            "kernel_image_path": config.kernel_path,
-            "boot_args": config.boot_args,
-        })
-        await self._put("/drives/rootfs", {
-            "drive_id": "rootfs",
-            "path_on_host": config.rootfs_path,
-            "is_root_device": True,
-            "is_read_only": False,
-        })
-        await self._put("/network-interfaces/eth0", {
-            "iface_id": "eth0",
-            "guest_mac": config.guest_mac,
-            "host_dev_name": config.tap_device,
-        })
+        await self._put(
+            "/machine-config",
+            {
+                "vcpu_count": config.vcpu_count,
+                "mem_size_mib": config.mem_size_mib,
+            },
+        )
+        await self._put(
+            "/boot-source",
+            {
+                "kernel_image_path": config.kernel_path,
+                "boot_args": config.boot_args,
+            },
+        )
+        await self._put(
+            "/drives/rootfs",
+            {
+                "drive_id": "rootfs",
+                "path_on_host": config.rootfs_path,
+                "is_root_device": True,
+                "is_read_only": False,
+            },
+        )
+        await self._put(
+            "/network-interfaces/eth0",
+            {
+                "iface_id": "eth0",
+                "guest_mac": config.guest_mac,
+                "host_dev_name": config.tap_device,
+            },
+        )
         await self._put("/actions", {"action_type": "InstanceStart"})
         logger.info("Firecracker VM configured and started via %s", self.socket_path)
 
@@ -65,24 +77,29 @@ class FirecrackerClient:
         await self._patch("/vm", {"state": "Resumed"})
 
     async def create_snapshot(self, snapshot_path: str, memory_path: str) -> None:
-        await self._put("/snapshot/create", {
-            "snapshot_type": "Full",
-            "snapshot_path": snapshot_path,
-            "mem_file_path": memory_path,
-        })
+        await self._put(
+            "/snapshot/create",
+            {
+                "snapshot_type": "Full",
+                "snapshot_path": snapshot_path,
+                "mem_file_path": memory_path,
+            },
+        )
 
     async def load_snapshot(
         self, snapshot_path: str, memory_path: str, resume_vm: bool = True
     ) -> None:
-        await self._put("/snapshot/load", {
-            "snapshot_path": snapshot_path,
-            "mem_backend": {
-                "backend_type": "File",
-                "backend_path": memory_path,
+        await self._put(
+            "/snapshot/load",
+            {
+                "snapshot_path": snapshot_path,
+                "mem_backend": {
+                    "backend_type": "File",
+                    "backend_path": memory_path,
+                },
+                "resume_vm": resume_vm,
             },
-            "resume_vm": resume_vm,
-        })
-
+        )
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -107,7 +124,9 @@ async def start_firecracker_process(socket_path: str) -> int:
         Path(socket_path).unlink()
 
     proc = await asyncio.create_subprocess_exec(
-        "firecracker", "--api-sock", socket_path,
+        "firecracker",
+        "--api-sock",
+        socket_path,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )

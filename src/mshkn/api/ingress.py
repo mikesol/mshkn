@@ -71,12 +71,24 @@ def _get_rule_rate_limiter(rule_id: str, rate_limit_rpm: int) -> RateLimiter:
 # --- Validation helpers ---
 
 VALID_FORK_FIELDS = {
-    "action", "checkpoint_id", "label", "exec", "self_destruct", "exclusive",
-    "callback_url", "meta_exec",
+    "action",
+    "checkpoint_id",
+    "label",
+    "exec",
+    "self_destruct",
+    "exclusive",
+    "callback_url",
+    "meta_exec",
 }
 VALID_CREATE_FIELDS = {
-    "action", "capabilities", "uses", "exec", "self_destruct",
-    "callback_url", "label", "meta_exec",
+    "action",
+    "capabilities",
+    "uses",
+    "exec",
+    "self_destruct",
+    "callback_url",
+    "label",
+    "meta_exec",
 }
 VALID_EXCLUSIVE_VALUES = {"error_on_conflict", "defer_on_conflict"}
 
@@ -109,9 +121,7 @@ def _validate_transform_result(result: dict[str, Any] | None) -> list[str]:
 
     exclusive = result.get("exclusive")
     if exclusive is not None and exclusive not in VALID_EXCLUSIVE_VALUES:
-        errors.append(
-            f"exclusive must be one of {VALID_EXCLUSIVE_VALUES}, got {exclusive!r}"
-        )
+        errors.append(f"exclusive must be one of {VALID_EXCLUSIVE_VALUES}, got {exclusive!r}")
 
     return errors
 
@@ -333,9 +343,7 @@ async def get_rule_logs(
         IngressLogResponse(
             id=log.id,
             status=log.status,
-            starlark_result=(
-                json.loads(log.starlark_result) if log.starlark_result else None
-            ),
+            starlark_result=(json.loads(log.starlark_result) if log.starlark_result else None),
             error_message=log.error_message,
             created_at=log.created_at,
         )
@@ -523,8 +531,12 @@ async def _do_fork(
                 }
                 now = datetime.now(UTC).isoformat()
                 await insert_deferred(
-                    db, deferred_id, ckpt.label, account_id,
-                    json.dumps(payload), now,
+                    db,
+                    deferred_id,
+                    ckpt.label,
+                    account_id,
+                    json.dumps(payload),
+                    now,
                 )
                 return {"deferred_id": deferred_id, "status": "queued"}
 
@@ -606,7 +618,8 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
     except Exception as exc:
         logger.warning("Failed to parse ingress body for %s: %s", rule_id, exc)
         raise HTTPException(
-            status_code=400, detail="Failed to parse request body",
+            status_code=400,
+            detail="Failed to parse request body",
         ) from None
 
     # 4. Execute Starlark transform
@@ -616,7 +629,8 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         # Log the failure
         await _log_invocation(db, rule.internal_id, "failed", None, str(exc))
         raise HTTPException(
-            status_code=502, detail=f"Starlark execution error: {exc}",
+            status_code=502,
+            detail=f"Starlark execution error: {exc}",
         ) from None
 
     # 5. Validate result
@@ -627,8 +641,11 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
     validation_errors = _validate_transform_result(result)
     if validation_errors:
         await _log_invocation(
-            db, rule.internal_id, "failed",
-            json.dumps(result), "; ".join(validation_errors),
+            db,
+            rule.internal_id,
+            "failed",
+            json.dumps(result),
+            "; ".join(validation_errors),
         )
         raise HTTPException(
             status_code=502,
@@ -643,38 +660,60 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         # Fire-and-forget
         task = asyncio.create_task(
             _execute_action_and_log(
-                db=db, vm_mgr=vm_mgr, config=config,
-                rule=rule, action=action, result=result,
+                db=db,
+                vm_mgr=vm_mgr,
+                config=config,
+                rule=rule,
+                action=action,
+                result=result,
             )
         )
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
 
         await _log_invocation(
-            db, rule.internal_id, "accepted", json.dumps(result), None,
+            db,
+            rule.internal_id,
+            "accepted",
+            json.dumps(result),
+            None,
         )
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
     # Sync: wait and return
     try:
         action_result = await _execute_action(
-            db=db, vm_mgr=vm_mgr, config=config,
-            account_id=rule.account_id, action=action, result=result,
+            db=db,
+            vm_mgr=vm_mgr,
+            config=config,
+            account_id=rule.account_id,
+            action=action,
+            result=result,
         )
         await _log_invocation(
-            db, rule.internal_id, "completed", json.dumps(result), None,
+            db,
+            rule.internal_id,
+            "completed",
+            json.dumps(result),
+            None,
         )
         return JSONResponse(status_code=200, content=action_result)
     except HTTPException as exc:
         await _log_invocation(
-            db, rule.internal_id, "failed",
-            json.dumps(result), str(exc.detail),
+            db,
+            rule.internal_id,
+            "failed",
+            json.dumps(result),
+            str(exc.detail),
         )
         raise
     except Exception as exc:
         await _log_invocation(
-            db, rule.internal_id, "failed",
-            json.dumps(result), str(exc),
+            db,
+            rule.internal_id,
+            "failed",
+            json.dumps(result),
+            str(exc),
         )
         raise HTTPException(status_code=502, detail=str(exc)) from None
 
@@ -717,7 +756,8 @@ async def _execute_action(
             label = result.get("label")
             if label is None:
                 raise HTTPException(
-                    status_code=502, detail="fork needs checkpoint_id or label",
+                    status_code=502,
+                    detail="fork needs checkpoint_id or label",
                 )
             from mshkn.db import list_checkpoints_by_account
 
@@ -767,10 +807,16 @@ async def _execute_action_and_log(
     """Execute action in background and log the outcome."""
     try:
         await _execute_action(
-            db=db, vm_mgr=vm_mgr, config=config,
-            account_id=rule.account_id, action=action, result=result,
+            db=db,
+            vm_mgr=vm_mgr,
+            config=config,
+            account_id=rule.account_id,
+            action=action,
+            result=result,
         )
     except Exception as exc:
         logger.warning(
-            "Async ingress action failed for rule %s: %s", rule.id, exc,
+            "Async ingress action failed for rule %s: %s",
+            rule.id,
+            exc,
         )

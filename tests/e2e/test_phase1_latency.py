@@ -7,6 +7,7 @@ Every latency claim in the design doc, measured properly.
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 from .conftest import (
     LatencyStats,
@@ -18,6 +19,9 @@ from .conftest import (
     fork_checkpoint,
     managed_computer,
 )
+
+if TYPE_CHECKING:
+    import httpx
 
 BARE_CREATE_SAMPLES = 20
 BARE_CREATE_P95_MS = 1600  # L3 miss = two-phase boot (~1500ms)
@@ -42,7 +46,7 @@ FORK_MINIMAL_P95_MS = 650  # LOAD_SNAPSHOT path: tap+FC+SSH+reconfig
 class TestT11CreateLatency:
     """computer_create(uses: []) latency — target p95 <= 2000ms."""
 
-    async def test_bare_create_latency(self, client):
+    async def test_bare_create_latency(self, client: httpx.AsyncClient) -> None:
         """Create bare computers repeatedly, assert a tight p95 latency target."""
         timings: list[float] = []
 
@@ -50,10 +54,10 @@ class TestT11CreateLatency:
             computer_id: str | None = None
             try:
                 start = time.perf_counter()
-                computer_id = await create_computer(client, uses=[])
+                computer_id = await create_computer(client)
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
-                print(f"  create #{i+1}: {elapsed_ms:.0f}ms")
+                print(f"  create #{i + 1}: {elapsed_ms:.0f}ms")
             finally:
                 if computer_id is not None:
                     await destroy_computer(client, computer_id)
@@ -64,7 +68,7 @@ class TestT11CreateLatency:
             f"p95 create latency {stats.p95:.0f}ms exceeds {BARE_CREATE_P95_MS}ms target"
         )
 
-    async def test_recipe_create_latency(self, long_client):
+    async def test_recipe_create_latency(self, long_client: httpx.AsyncClient) -> None:
         """Create computers from a pre-built recipe, assert a tight p95 target."""
         # Build recipe first (not timed)
         recipe_id = await create_recipe(
@@ -77,9 +81,7 @@ class TestT11CreateLatency:
             computer_id: str | None = None
             try:
                 start = time.perf_counter()
-                computer_id = await create_computer(
-                    long_client, recipe_id=recipe_id
-                )
+                computer_id = await create_computer(long_client, recipe_id=recipe_id)
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
             finally:
@@ -94,8 +96,7 @@ class TestT11CreateLatency:
             )
         )
         assert stats.p95 <= RECIPE_CREATE_P95_MS, (
-            f"p95 recipe create latency {stats.p95:.0f}ms exceeds "
-            f"{RECIPE_CREATE_P95_MS}ms target"
+            f"p95 recipe create latency {stats.p95:.0f}ms exceeds {RECIPE_CREATE_P95_MS}ms target"
         )
 
 
@@ -110,10 +111,10 @@ WARM_L3_CREATE_P95_MS = 650  # LOAD_SNAPSHOT path: tap+FC+SSH+reconfig+caddy
 class TestT16WarmL3CreateLatency:
     """Create with warm L3 cache — should be LOAD_SNAPSHOT fast."""
 
-    async def test_warm_l3_cache_create_latency(self, client):
+    async def test_warm_l3_cache_create_latency(self, client: httpx.AsyncClient) -> None:
         """First create warms L3 cache, subsequent creates should be fast."""
         # Warm the L3 cache with a throwaway create
-        warmup_id = await create_computer(client, uses=[])
+        warmup_id = await create_computer(client)
         await destroy_computer(client, warmup_id)
 
         # Now measure with warm L3 cache
@@ -122,10 +123,10 @@ class TestT16WarmL3CreateLatency:
             computer_id: str | None = None
             try:
                 start = time.perf_counter()
-                computer_id = await create_computer(client, uses=[])
+                computer_id = await create_computer(client)
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
-                print(f"  warm L3 create #{i+1}: {elapsed_ms:.0f}ms")
+                print(f"  warm L3 create #{i + 1}: {elapsed_ms:.0f}ms")
             finally:
                 if computer_id is not None:
                     await destroy_computer(client, computer_id)
@@ -145,19 +146,17 @@ class TestT16WarmL3CreateLatency:
 class TestT12CheckpointLatency:
     """Checkpoint latency under various state sizes — target p95 <= 1000ms."""
 
-    async def test_empty_state_checkpoint(self, long_client):
+    async def test_empty_state_checkpoint(self, long_client: httpx.AsyncClient) -> None:
         """Checkpoint immediately after create, assert a tight p95 target."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             timings: list[float] = []
 
             for i in range(EMPTY_CHECKPOINT_SAMPLES):
                 start = time.perf_counter()
-                await checkpoint_computer(
-                    long_client, computer_id, label=f"empty-{i}"
-                )
+                await checkpoint_computer(long_client, computer_id, label=f"empty-{i}")
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
-                print(f"  empty checkpoint #{i+1}: {elapsed_ms:.0f}ms")
+                print(f"  empty checkpoint #{i + 1}: {elapsed_ms:.0f}ms")
 
             stats = LatencyStats(values_ms=timings)
             print(
@@ -171,9 +170,9 @@ class TestT12CheckpointLatency:
                 f"{EMPTY_CHECKPOINT_P95_MS}ms"
             )
 
-    async def test_small_state_checkpoint(self, long_client):
+    async def test_small_state_checkpoint(self, long_client: httpx.AsyncClient) -> None:
         """Write 1MB file, then checkpoint repeatedly with a p95 target."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             timings: list[float] = []
             for i in range(SMALL_STATE_CHECKPOINT_SAMPLES):
                 await exec_command(
@@ -183,12 +182,10 @@ class TestT12CheckpointLatency:
                 )
 
                 start = time.perf_counter()
-                await checkpoint_computer(
-                    long_client, computer_id, label=f"small-1mb-{i}"
-                )
+                await checkpoint_computer(long_client, computer_id, label=f"small-1mb-{i}")
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
-                print(f"  small checkpoint #{i+1}: {elapsed_ms:.0f}ms")
+                print(f"  small checkpoint #{i + 1}: {elapsed_ms:.0f}ms")
 
             stats = LatencyStats(values_ms=timings)
             print(
@@ -202,9 +199,9 @@ class TestT12CheckpointLatency:
                 f"{SMALL_STATE_CHECKPOINT_P95_MS}ms"
             )
 
-    async def test_large_state_checkpoint(self, long_client):
+    async def test_large_state_checkpoint(self, long_client: httpx.AsyncClient) -> None:
         """Write 100MB file, then checkpoint. Measure honestly (may exceed 1s)."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             # Write 100MB of data
             await exec_command(
                 long_client,
@@ -214,18 +211,16 @@ class TestT12CheckpointLatency:
             )
 
             start = time.perf_counter()
-            await checkpoint_computer(
-                long_client, computer_id, label="large-100mb"
-            )
+            await checkpoint_computer(long_client, computer_id, label="large-100mb")
             elapsed_ms = (time.perf_counter() - start) * 1000
 
             print(f"T1.2 Large State (100MB) Checkpoint: {elapsed_ms:.0f}ms")
             stats = LatencyStats(values_ms=[elapsed_ms])
             print(stats.report("T1.2 Large State Checkpoint", target_ms=1000))
 
-    async def test_many_small_files_checkpoint(self, long_client):
+    async def test_many_small_files_checkpoint(self, long_client: httpx.AsyncClient) -> None:
         """Write many small files, then checkpoint repeatedly with a p95 target."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             timings: list[float] = []
             for i in range(MANY_SMALL_FILES_CHECKPOINT_SAMPLES):
                 await exec_command(
@@ -242,12 +237,10 @@ class TestT12CheckpointLatency:
                 )
 
                 start = time.perf_counter()
-                await checkpoint_computer(
-                    long_client, computer_id, label=f"many-small-{i}"
-                )
+                await checkpoint_computer(long_client, computer_id, label=f"many-small-{i}")
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
-                print(f"  many-small checkpoint #{i+1}: {elapsed_ms:.0f}ms")
+                print(f"  many-small checkpoint #{i + 1}: {elapsed_ms:.0f}ms")
 
             stats = LatencyStats(values_ms=timings)
             print(
@@ -270,12 +263,10 @@ class TestT12CheckpointLatency:
 class TestT13ResumeLatency:
     """Resume/restore latency — currently uses cold boot, not snapshot restore."""
 
-    async def test_resume_latency(self, long_client):
+    async def test_resume_latency(self, long_client: httpx.AsyncClient) -> None:
         """Resume via fork repeatedly and assert a tight p95 target."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
-            checkpoint_id = await checkpoint_computer(
-                long_client, computer_id, label="resume-test"
-            )
+        async with managed_computer(long_client) as computer_id:
+            checkpoint_id = await checkpoint_computer(long_client, computer_id, label="resume-test")
 
             timings: list[float] = []
             forked_ids: list[str] = []
@@ -286,7 +277,7 @@ class TestT13ResumeLatency:
                     elapsed_ms = (time.perf_counter() - start) * 1000
                     timings.append(elapsed_ms)
                     forked_ids.append(forked_id)
-                    print(f"  resume #{i+1}: {elapsed_ms:.0f}ms")
+                    print(f"  resume #{i + 1}: {elapsed_ms:.0f}ms")
             finally:
                 for fid in forked_ids:
                     await destroy_computer(long_client, fid)
@@ -306,11 +297,11 @@ class TestT13ResumeLatency:
 class TestT14ForkLatency:
     """Fork latency — target p95 <= 2000ms, should be O(1) w.r.t. state size."""
 
-    async def test_fork_minimal_state(self, long_client):
+    async def test_fork_minimal_state(self, long_client: httpx.AsyncClient) -> None:
         """Fork from checkpoint repeatedly and assert a tight p95 target."""
         forked_ids: list[str] = []
 
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             checkpoint_id = await checkpoint_computer(
                 long_client, computer_id, label="fork-minimal"
             )
@@ -323,7 +314,7 @@ class TestT14ForkLatency:
                     elapsed_ms = (time.perf_counter() - start) * 1000
                     timings.append(elapsed_ms)
                     forked_ids.append(forked_id)
-                    print(f"  fork #{i+1}: {elapsed_ms:.0f}ms")
+                    print(f"  fork #{i + 1}: {elapsed_ms:.0f}ms")
             finally:
                 for fid in forked_ids:
                     await destroy_computer(long_client, fid)
@@ -334,7 +325,7 @@ class TestT14ForkLatency:
                 f"p95 fork latency {stats.p95:.0f}ms exceeds {FORK_MINIMAL_P95_MS}ms target"
             )
 
-    async def test_fork_o1_comparison(self, long_client):
+    async def test_fork_o1_comparison(self, long_client: httpx.AsyncClient) -> None:
         """Fork from 1MB state vs 50MB state — compare times to check O(1) claim.
 
         We don't assert statistical indistinguishability (too few samples),
@@ -346,7 +337,7 @@ class TestT14ForkLatency:
 
         try:
             # --- Small state (1MB) ---
-            small_comp = await create_computer(long_client, uses=[])
+            small_comp = await create_computer(long_client)
             cleanup_ids.append(small_comp)
 
             await exec_command(
@@ -354,9 +345,7 @@ class TestT14ForkLatency:
                 small_comp,
                 "dd if=/dev/urandom of=/tmp/data_1mb bs=1M count=1 2>/dev/null",
             )
-            small_ckpt = await checkpoint_computer(
-                long_client, small_comp, label="fork-small"
-            )
+            small_ckpt = await checkpoint_computer(long_client, small_comp, label="fork-small")
 
             for i in range(3):
                 start = time.perf_counter()
@@ -364,10 +353,10 @@ class TestT14ForkLatency:
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 small_timings.append(elapsed_ms)
                 cleanup_ids.append(fid)
-                print(f"  fork small #{i+1}: {elapsed_ms:.0f}ms")
+                print(f"  fork small #{i + 1}: {elapsed_ms:.0f}ms")
 
             # --- Large state (50MB) ---
-            large_comp = await create_computer(long_client, uses=[])
+            large_comp = await create_computer(long_client)
             cleanup_ids.append(large_comp)
 
             await exec_command(
@@ -376,9 +365,7 @@ class TestT14ForkLatency:
                 "dd if=/dev/urandom of=/tmp/data_50mb bs=1M count=50 2>/dev/null",
                 timeout=60.0,
             )
-            large_ckpt = await checkpoint_computer(
-                long_client, large_comp, label="fork-large"
-            )
+            large_ckpt = await checkpoint_computer(long_client, large_comp, label="fork-large")
 
             for i in range(3):
                 start = time.perf_counter()
@@ -386,7 +373,7 @@ class TestT14ForkLatency:
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 large_timings.append(elapsed_ms)
                 cleanup_ids.append(fid)
-                print(f"  fork large #{i+1}: {elapsed_ms:.0f}ms")
+                print(f"  fork large #{i + 1}: {elapsed_ms:.0f}ms")
 
         finally:
             for cid in cleanup_ids:
@@ -417,13 +404,12 @@ FORK_RESTORE_P95_MS = 650  # LOAD_SNAPSHOT fork: tap+FC+SSH+reconfig+caddy
 class TestT17ForkRestoreLatency:
     """Fork via LOAD_SNAPSHOT — verify state preservation + latency."""
 
-    async def test_fork_snapshot_restore_latency(self, long_client):
+    async def test_fork_snapshot_restore_latency(self, long_client: httpx.AsyncClient) -> None:
         """Fork from checkpoint, verify state is preserved, assert latency."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             # Write a marker file
             await exec_command(
-                long_client, computer_id,
-                "echo 'snapshot-restore-test' > /tmp/marker.txt"
+                long_client, computer_id, "echo 'snapshot-restore-test' > /tmp/marker.txt"
             )
 
             checkpoint_id = await checkpoint_computer(
@@ -439,12 +425,10 @@ class TestT17ForkRestoreLatency:
                     elapsed_ms = (time.perf_counter() - start) * 1000
                     timings.append(elapsed_ms)
                     forked_ids.append(forked_id)
-                    print(f"  fork restore #{i+1}: {elapsed_ms:.0f}ms")
+                    print(f"  fork restore #{i + 1}: {elapsed_ms:.0f}ms")
 
                 # Verify state on last forked VM
-                result = await exec_command(
-                    long_client, forked_ids[-1], "cat /tmp/marker.txt"
-                )
+                result = await exec_command(long_client, forked_ids[-1], "cat /tmp/marker.txt")
                 assert result.stdout.strip() == "snapshot-restore-test", (
                     f"State not preserved: got {result.stdout.strip()!r}"
                 )
@@ -467,22 +451,16 @@ class TestT17ForkRestoreLatency:
 class TestT15MergeLatency:
     """Merge latency — not yet implemented."""
 
-    async def test_merge_latency(self, long_client):
+    async def test_merge_latency(self, long_client: httpx.AsyncClient) -> None:
         """Merge two forks — not yet implemented."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
-            ckpt = await checkpoint_computer(
-                long_client, computer_id, label="merge-base"
-            )
+        async with managed_computer(long_client) as computer_id:
+            ckpt = await checkpoint_computer(long_client, computer_id, label="merge-base")
             fork_a = await fork_checkpoint(long_client, ckpt)
             fork_b = await fork_checkpoint(long_client, ckpt)
 
             try:
-                ckpt_a = await checkpoint_computer(
-                    long_client, fork_a, label="merge-a"
-                )
-                ckpt_b = await checkpoint_computer(
-                    long_client, fork_b, label="merge-b"
-                )
+                ckpt_a = await checkpoint_computer(long_client, fork_a, label="merge-a")
+                ckpt_b = await checkpoint_computer(long_client, fork_b, label="merge-b")
 
                 start = time.perf_counter()
                 resp = await long_client.post(

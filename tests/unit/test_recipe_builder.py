@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 
-def test_dockerfile_content_hash():
+def test_dockerfile_content_hash() -> None:
     from mshkn.recipe.builder import dockerfile_content_hash
 
     h1 = dockerfile_content_hash("FROM mshkn-base\nRUN echo hello")
@@ -15,7 +15,7 @@ def test_dockerfile_content_hash():
 
 
 @pytest.mark.asyncio
-async def test_ensure_base_image_already_exists():
+async def test_ensure_base_image_already_exists() -> None:
     from unittest.mock import AsyncMock, patch
 
     from mshkn.config import Config

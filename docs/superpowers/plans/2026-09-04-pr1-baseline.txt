@@ -1,0 +1,6 @@
+Baseline before PR 1 (main @ 741cb80, 2026-09-04; venv from 'uv sync --extra dev' — plain 'uv sync' omits dev tools, which is fixed by PR 1)
+ruff check src/: All checks passed!
+ruff check tests/: Found 60 errors
+ruff format --check .: 46 files would be reformatted, 32 files already formatted
+mypy src/: Success: no issues found in 36 source files
+pytest (unit): 109 passed in 33.38s

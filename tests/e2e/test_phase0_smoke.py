@@ -6,10 +6,9 @@ If T0.1 fails, nothing else matters.
 
 from __future__ import annotations
 
-import pytest
+from typing import TYPE_CHECKING
 
 from .conftest import (
-    ExecResult,
     create_computer,
     create_recipe,
     destroy_computer,
@@ -17,6 +16,8 @@ from .conftest import (
     managed_computer,
 )
 
+if TYPE_CHECKING:
+    import httpx
 
 # ---------------------------------------------------------------------------
 # T0.1 — Cold Create, No Capabilities
@@ -26,9 +27,9 @@ from .conftest import (
 class TestT01ColdCreateNoCapabilities:
     """computer_create(uses: []) — the absolute bare minimum."""
 
-    async def test_create_returns_computer_id_and_url(self, client):
+    async def test_create_returns_computer_id_and_url(self, client: httpx.AsyncClient) -> None:
         """Create returns a computer_id and url."""
-        resp = await client.post("/computers", json={"uses": []})
+        resp = await client.post("/computers", json={})
         resp.raise_for_status()
         body = resp.json()
 
@@ -43,15 +44,15 @@ class TestT01ColdCreateNoCapabilities:
         finally:
             await destroy_computer(client, computer_id)
 
-    async def test_exec_echo_hello(self, client):
+    async def test_exec_echo_hello(self, client: httpx.AsyncClient) -> None:
         """computer_exec(id, 'echo hello') returns 'hello'."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "echo hello")
             assert result.stdout.strip() == "hello"
 
-    async def test_destroy_without_error(self, client):
+    async def test_destroy_without_error(self, client: httpx.AsyncClient) -> None:
         """computer_destroy(id) completes without error."""
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
         resp = await client.delete(f"/computers/{computer_id}")
         resp.raise_for_status()
         body = resp.json()
@@ -66,7 +67,7 @@ class TestT01ColdCreateNoCapabilities:
 class TestT02CreateWithRecipe:
     """computer_create(recipe_id=...) — Docker-based recipe system."""
 
-    async def test_python_recipe(self, long_client):
+    async def test_python_recipe(self, long_client: httpx.AsyncClient) -> None:
         """Create recipe with python3, boot computer, verify python3 works."""
         recipe_id = await create_recipe(
             long_client,
@@ -75,11 +76,9 @@ class TestT02CreateWithRecipe:
         async with managed_computer(long_client, recipe_id=recipe_id) as computer_id:
             result = await exec_command(long_client, computer_id, "python3 --version")
             version_line = result.stdout.strip()
-            assert version_line.startswith("Python 3"), (
-                f"Expected Python 3.x, got: {version_line}"
-            )
+            assert version_line.startswith("Python 3"), f"Expected Python 3.x, got: {version_line}"
 
-    async def test_recipe_destroy_clean(self, long_client):
+    async def test_recipe_destroy_clean(self, long_client: httpx.AsyncClient) -> None:
         """Destroy after recipe-based create is clean."""
         recipe_id = await create_recipe(
             long_client,
@@ -99,32 +98,30 @@ class TestT02CreateWithRecipe:
 class TestT03ExecBasics:
     """Streaming, stderr, and exit code behavior."""
 
-    async def test_streaming_sequential_output(self, client):
+    async def test_streaming_sequential_output(self, client: httpx.AsyncClient) -> None:
         """Run a loop that emits lines 1-5 with sleeps; verify all lines arrive."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
                 "for i in $(seq 1 5); do echo $i; sleep 0.1; done",
                 timeout=30.0,
             )
-            lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
-            assert lines == ["1", "2", "3", "4", "5"], (
-                f"Expected lines 1-5, got: {lines}"
-            )
+            lines = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
+            assert lines == ["1", "2", "3", "4", "5"], f"Expected lines 1-5, got: {lines}"
 
-    async def test_stderr_comes_through(self, client):
+    async def test_stderr_comes_through(self, client: httpx.AsyncClient) -> None:
         """echo to stderr arrives as stderr events."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "echo err >&2")
             assert "err" in result.stderr, (
                 f"Expected 'err' in stderr, got stdout={result.stdout!r}, "
                 f"stderr={result.stderr!r}, events={result.events}"
             )
 
-    async def test_stdout_and_stderr_separated(self, client):
+    async def test_stdout_and_stderr_separated(self, client: httpx.AsyncClient) -> None:
         """stdout and stderr are delivered on separate event channels."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
@@ -133,14 +130,14 @@ class TestT03ExecBasics:
             assert "out_line" in result.stdout
             assert "err_line" in result.stderr
 
-    async def test_exit_code_nonzero(self, client):
+    async def test_exit_code_nonzero(self, client: httpx.AsyncClient) -> None:
         """A command that exits non-zero should indicate failure somehow.
 
         The SSE stream may or may not include exit code information.
         We check for any indication: an 'exit' event, an 'error' event,
         or an HTTP-level error.
         """
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "exit 42")
 
             # Look for any exit code indication in the events
@@ -152,25 +149,22 @@ class TestT03ExecBasics:
 
             # If there are exit-type events, check that exit code is non-zero
             if exit_events:
-                for evt, data in exit_events:
+                for _evt, data in exit_events:
                     if data.isdigit() or (data.startswith("-") and data[1:].isdigit()):
                         assert int(data) != 0, "Expected non-zero exit code"
                         return
 
             # If no explicit exit event, the test still passes — we document
             # that exit codes may not be surfaced yet
-            print(
-                f"NOTE: No explicit exit code event found. "
-                f"Events were: {result.events}"
-            )
+            print(f"NOTE: No explicit exit code event found. Events were: {result.events}")
 
-    async def test_multiline_stdout(self, client):
+    async def test_multiline_stdout(self, client: httpx.AsyncClient) -> None:
         """Multiple lines of stdout are all captured."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
                 'echo "line1" && echo "line2" && echo "line3"',
             )
-            lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+            lines = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
             assert lines == ["line1", "line2", "line3"]

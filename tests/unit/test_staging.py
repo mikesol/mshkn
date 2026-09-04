@@ -1,7 +1,14 @@
-from mshkn.vm.staging import STAGING_SLOT, STAGING_TAP, STAGING_HOST_IP, STAGING_VM_IP, STAGING_MAC, STAGING_DRIVE_NAME
+from mshkn.vm.staging import (
+    STAGING_DRIVE_NAME,
+    STAGING_HOST_IP,
+    STAGING_MAC,
+    STAGING_SLOT,
+    STAGING_TAP,
+    STAGING_VM_IP,
+)
 
 
-def test_staging_constants():
+def test_staging_constants() -> None:
     assert STAGING_SLOT == 254
     assert STAGING_TAP == "tap254"
     assert STAGING_HOST_IP == "172.16.254.1"

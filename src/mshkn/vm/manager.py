@@ -51,6 +51,8 @@ class Alert:
     value: float  # the metric value that triggered it
     threshold: float  # the threshold that was exceeded
     timestamp: str  # ISO 8601
+
+
 _DEFAULT_VCPU = 2
 
 
@@ -131,7 +133,8 @@ class VMManager:
         self._next_volume_id = max_vol + 1
         logger.info(
             "Initialized: next_volume_id=%d, next_slot=%d",
-            self._next_volume_id, self._next_slot,
+            self._next_volume_id,
+            self._next_slot,
         )
 
     async def _scan_pool_max_volume_id(self) -> int | None:
@@ -377,9 +380,7 @@ class VMManager:
                 await destroy_tap(STAGING_SLOT)
                 await run(f"dmsetup remove {STAGING_DRIVE_NAME}")
 
-                await cache_bare_template(
-                    self.db, str(vmstate_path), str(memory_path)
-                )
+                await cache_bare_template(self.db, str(vmstate_path), str(memory_path))
                 logger.info("Built bare L3 template")
                 return (str(vmstate_path), str(memory_path))
 
@@ -398,14 +399,13 @@ class VMManager:
         needs: dict[str, object] | None = None,
     ) -> Computer:
         mem_size_mib, vcpu_count = parse_needs(needs)
-        custom_resources = (
-            mem_size_mib != _DEFAULT_MEM_MIB or vcpu_count != _DEFAULT_VCPU
-        )
+        custom_resources = mem_size_mib != _DEFAULT_MEM_MIB or vcpu_count != _DEFAULT_VCPU
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
 
         # Resolve recipe to source volume
         if recipe_id is not None:
             from mshkn.db import get_recipe
+
             recipe = await get_recipe(self.db, recipe_id)
             if recipe is None:
                 raise ValueError(f"Recipe {recipe_id} not found")
@@ -433,7 +433,8 @@ class VMManager:
 
             logger.info(
                 "Cold-booting with custom resources: mem=%dMiB, vcpu=%d",
-                mem_size_mib, vcpu_count,
+                mem_size_mib,
+                vcpu_count,
             )
             result = await cold_boot_from_disk(
                 disk_volume_id=volume_id,
@@ -459,6 +460,7 @@ class VMManager:
                 try:
                     await self._build_l3_template_for_recipe(recipe)
                     from mshkn.db import get_recipe as _get_recipe
+
                     recipe = await _get_recipe(self.db, recipe.id)
                     if recipe and recipe.template_vmstate and recipe.template_memory:
                         vmstate_path = recipe.template_vmstate
@@ -471,6 +473,7 @@ class VMManager:
             else:
                 # Bare create (no recipe): use cached bare template
                 from mshkn.db import get_bare_template
+
                 bare = await get_bare_template(self.db)
                 if bare is not None:
                     vmstate_path, memory_path = bare
@@ -482,6 +485,7 @@ class VMManager:
 
             if vmstate_path is not None and memory_path is not None:
                 from mshkn.vm.staging import restore_from_snapshot
+
                 result = await restore_from_snapshot(
                     vmstate_path=vmstate_path,
                     memory_path=memory_path,
@@ -495,6 +499,7 @@ class VMManager:
             else:
                 # No template: cold-boot from disk
                 from mshkn.vm.staging import cold_boot_from_disk
+
                 result = await cold_boot_from_disk(
                     disk_volume_id=volume_id,
                     final_slot=slot,
@@ -537,7 +542,9 @@ class VMManager:
         return computer
 
     async def snapshot_disk_for_checkpoint(
-        self, computer: Computer, checkpoint_id: str,
+        self,
+        computer: Computer,
+        checkpoint_id: str,
     ) -> int:
         """Create a dm-thin CoW snapshot of a computer's disk for checkpoint.
 
@@ -557,12 +564,17 @@ class VMManager:
         )
         logger.info(
             "Snapshot disk for checkpoint %s (vol %d from %d)",
-            checkpoint_id, volume_id, computer.thin_volume_id,
+            checkpoint_id,
+            volume_id,
+            computer.thin_volume_id,
         )
         return volume_id
 
     async def fork_from_checkpoint(
-        self, account_id: str, checkpoint: Checkpoint, recipe_id: str | None = None,
+        self,
+        account_id: str,
+        checkpoint: Checkpoint,
+        recipe_id: str | None = None,
     ) -> Computer:
         """Fork a new computer from a checkpoint via LOAD_SNAPSHOT.
 
@@ -618,7 +630,8 @@ class VMManager:
             from mshkn.vm.staging import cold_boot_from_disk
 
             logger.info(
-                "Cold-booting fork from merge checkpoint %s", checkpoint.id,
+                "Cold-booting fork from merge checkpoint %s",
+                checkpoint.id,
             )
             result = await cold_boot_from_disk(
                 disk_volume_id=volume_id,
@@ -661,7 +674,10 @@ class VMManager:
 
         logger.info(
             "Forked computer %s from checkpoint %s (slot=%d, ip=%s)",
-            computer_id, checkpoint.id, slot, result.vm_ip,
+            computer_id,
+            checkpoint.id,
+            slot,
+            result.vm_ip,
         )
         return computer
 
@@ -699,7 +715,9 @@ class VMManager:
         # Remove dm-thin volume
         volume_name = f"mshkn-{computer_id}"
         await remove_volume(
-            self.config.thin_pool_name, volume_name, computer.thin_volume_id,
+            self.config.thin_pool_name,
+            volume_name,
+            computer.thin_volume_id,
         )
 
         # Remove tap device and recycle slot
@@ -745,7 +763,8 @@ class VMManager:
 
             logger.warning(
                 "Reaping dead VM %s (PID %d no longer running)",
-                computer.id, computer.firecracker_pid,
+                computer.id,
+                computer.firecracker_pid,
             )
             try:
                 await self._cleanup_dead_vm(computer)
@@ -768,7 +787,9 @@ class VMManager:
         volume_name = f"mshkn-{computer.id}"
         try:
             await remove_volume(
-                self.config.thin_pool_name, volume_name, computer.thin_volume_id,
+                self.config.thin_pool_name,
+                volume_name,
+                computer.thin_volume_id,
             )
         except Exception:
             logger.debug("Volume removal failed for %s (may already be gone)", computer.id)
@@ -813,7 +834,9 @@ class VMManager:
             if idle_seconds >= self.config.idle_timeout_seconds:
                 logger.info(
                     "Auto-checkpointing idle VM %s (idle %.0fs, timeout %ds)",
-                    computer.id, idle_seconds, self.config.idle_timeout_seconds,
+                    computer.id,
+                    idle_seconds,
+                    self.config.idle_timeout_seconds,
                 )
                 idle_vms.append(computer)
 
@@ -870,8 +893,11 @@ class VMManager:
             # Flush guest filesystem (total timeout covers connect + exec)
             await asyncio.wait_for(
                 ssh_exec(
-                    computer.vm_ip, "sync", self.config.ssh_key_path,
-                    timeout=10.0, pool=self.ssh_pool,
+                    computer.vm_ip,
+                    "sync",
+                    self.config.ssh_key_path,
+                    timeout=10.0,
+                    pool=self.ssh_pool,
                 ),
                 timeout=15.0,
             )
@@ -885,7 +911,8 @@ class VMManager:
 
             # Freeze disk
             ckpt_volume_id = await self.snapshot_disk_for_checkpoint(
-                computer, checkpoint_id,
+                computer,
+                checkpoint_id,
             )
 
             # Determine parent
@@ -919,8 +946,11 @@ class VMManager:
             # Upload to R2 in background (best-effort, don't block reaper)
             task = asyncio.create_task(
                 self._upload_checkpoint_bg(
-                    upload_checkpoint, snapshot_dir, r2_prefix,
-                    self.config.r2_bucket, checkpoint_id,
+                    upload_checkpoint,
+                    snapshot_dir,
+                    r2_prefix,
+                    self.config.r2_bucket,
+                    checkpoint_id,
                 )
             )
             self._bg_tasks.add(task)
@@ -959,7 +989,8 @@ class VMManager:
                 task.add_done_callback(self._bg_tasks.discard)
                 logger.info(
                     "Draining %d deferred item(s) for label '%s' after idle reap",
-                    len(deferred), effective_label,
+                    len(deferred),
+                    effective_label,
                 )
 
     @staticmethod
@@ -975,7 +1006,8 @@ class VMManager:
             await upload_fn(snapshot_dir, r2_prefix, bucket)  # type: ignore[operator]
         except Exception:
             logger.warning(
-                "R2 upload failed for auto-checkpoint %s", checkpoint_id,
+                "R2 upload failed for auto-checkpoint %s",
+                checkpoint_id,
             )
 
     async def prune_checkpoints(self) -> int:
@@ -1003,7 +1035,9 @@ class VMManager:
             for ckpt in excess:
                 logger.info(
                     "Pruning checkpoint %s (account=%s, created=%s)",
-                    ckpt.id, account_id, ckpt.created_at,
+                    ckpt.id,
+                    account_id,
+                    ckpt.created_at,
                 )
                 try:
                     # Remove dm-thin volume
@@ -1031,7 +1065,8 @@ class VMManager:
                     # Remove from R2
                     try:
                         await delete_checkpoint_r2(
-                            ckpt.r2_prefix, self.config.r2_bucket,
+                            ckpt.r2_prefix,
+                            self.config.r2_bucket,
                         )
                     except Exception:
                         logger.debug("R2 cleanup failed for ckpt %s", ckpt.id)
@@ -1105,7 +1140,9 @@ class VMManager:
         retention = self.config.checkpoint_retention_count
         logger.info(
             "Reaper started (interval=%.0fs, idle_timeout=%ds, retention=%d)",
-            interval, idle_timeout, retention,
+            interval,
+            idle_timeout,
+            retention,
         )
         while True:
             await asyncio.sleep(interval)
@@ -1118,7 +1155,10 @@ class VMManager:
                     logger.info(
                         "Reaper cycle: %d dead, %d idle VM(s), "
                         "%d checkpoint(s) pruned, %d alert(s)",
-                        dead, idle, pruned, len(host_alerts),
+                        dead,
+                        idle,
+                        pruned,
+                        len(host_alerts),
                     )
             except Exception:
                 logger.exception("Reaper cycle failed")

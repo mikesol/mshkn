@@ -1,38 +1,42 @@
 [project]
 name = "mshkn"
 version = "0.1.0"
-description = "Computers that fork — disposable cloud computers for AI agents"
+description = "Computers that fork: disposable cloud computers for AI agents"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "aiosqlite>=0.21",
     "asyncssh>=2.18",
-    "lz4>=4.3",
     "httpx>=0.28",
     "sse-starlette>=2.1",
     "pydantic>=2.10",
     "prometheus-client>=0.21",
-    "requests (>=2.32.5,<3.0.0)",
-    "starlark-go (>=1.0.1,<2.0.0)",
+    "starlark-go>=1.0.1,<2",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
     "mypy>=1.13",
     "ruff>=0.8",
-    "httpx>=0.28",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/mshkn"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+extend-exclude = [".worktrees", "docs"]
 
 [tool.ruff.lint]
 select = [
@@ -53,7 +57,12 @@ select = [
     "ERA",   # eradicate (commented-out code)
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# pytest fixtures are frequently requested only for their side effects
+"tests/**" = ["ARG001", "ARG002"]
+
 [tool.mypy]
+files = ["src", "tests"]
 python_version = "3.12"
 strict = true
 warn_return_any = true
@@ -65,10 +74,24 @@ disallow_any_generics = true
 no_implicit_reexport = true
 
 [[tool.mypy.overrides]]
-module = ["asyncssh.*", "lz4.*", "sse_starlette.*"]
+module = ["asyncssh.*", "sse_starlette.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-addopts = "--ignore=tests/integration"
+addopts = "-m 'not e2e' --strict-markers"
+markers = [
+    "unit: pure tests with no I/O beyond temp files",
+    "flow: full ASGI app against the in-memory fake host and a temp SQLite database",
+    "e2e: live server with real Firecracker VMs; requires MSHKN_API_URL",
+]
+
+[tool.coverage.run]
+source = ["mshkn"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

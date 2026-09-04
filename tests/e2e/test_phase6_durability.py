@@ -8,7 +8,10 @@ the orchestrator, rebooting the host, blocking S3, etc.), so they will fail.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -18,6 +21,10 @@ from .conftest import (
     managed_computer,
 )
 
+if TYPE_CHECKING:
+    import httpx
+
+MSHKN_SERVER = os.environ.get("MSHKN_SERVER")
 
 # ---------------------------------------------------------------------------
 # T6.1 — Orchestrator Crash Recovery
@@ -32,7 +39,7 @@ class TestT61OrchestratorCrashRecovery:
     survives a round-trip exec.
     """
 
-    async def test_computer_survives_in_status(self, client):
+    async def test_computer_survives_in_status(self, client: httpx.AsyncClient) -> None:
         """Create a computer, verify /status returns it with correct fields.
 
         In a real crash-recovery test we would:
@@ -65,7 +72,7 @@ class TestT61OrchestratorCrashRecovery:
 class TestT62HostReboot:
     """After a full host reboot, checkpoints should be restorable."""
 
-    async def test_checkpoint_survives_host_reboot(self, client):
+    async def test_checkpoint_survives_host_reboot(self, client: httpx.AsyncClient) -> None:
         """Would require rebooting the Hetzner server mid-test."""
         pytest.skip("Not implementable as an automated E2E test")
 
@@ -78,7 +85,7 @@ class TestT62HostReboot:
 class TestT63S3Unavailable:
     """Checkpoint should handle S3/R2 being unreachable gracefully."""
 
-    async def test_checkpoint_when_s3_down(self, client):
+    async def test_checkpoint_when_s3_down(self, client: httpx.AsyncClient) -> None:
         """Would require injecting a network partition to R2."""
         pytest.skip("Not implementable without network fault injection")
 
@@ -95,13 +102,13 @@ class TestT64CheckpointRetention:
     for testing purposes.
     """
 
-    async def _list_checkpoint_ids(self, client) -> set[str]:
+    async def _list_checkpoint_ids(self, client: httpx.AsyncClient) -> set[str]:
         """Helper: return set of all checkpoint IDs for the current account."""
         resp = await client.get("/checkpoints")
         resp.raise_for_status()
         return {c["checkpoint_id"] for c in resp.json()}
 
-    async def test_excess_checkpoints_pruned(self, client):
+    async def test_excess_checkpoints_pruned(self, client: httpx.AsyncClient) -> None:
         """Create more checkpoints than the retention limit; oldest should be pruned.
 
         Cleans up existing checkpoints first, then creates 8 (retention=5),
@@ -112,12 +119,10 @@ class TestT64CheckpointRetention:
         # Clean up pre-existing checkpoints so we start from a known state
         existing = await self._list_checkpoint_ids(client)
         for cid in existing:
-            try:
+            with contextlib.suppress(Exception):
                 await client.delete(f"/checkpoints/{cid}")
-            except Exception:
-                pass
 
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
         checkpoint_ids: list[str] = []
 
         try:
@@ -146,12 +151,10 @@ class TestT64CheckpointRetention:
         finally:
             await destroy_computer(client, computer_id)
             for cid in checkpoint_ids:
-                try:
+                with contextlib.suppress(Exception):
                     await client.delete(f"/checkpoints/{cid}")
-                except Exception:
-                    pass
 
-    async def test_pinned_checkpoint_retained(self, client):
+    async def test_pinned_checkpoint_retained(self, client: httpx.AsyncClient) -> None:
         """Pinned checkpoints should survive retention pruning.
 
         Creates 8 checkpoints, pins the 3rd one, waits for pruning.
@@ -159,7 +162,7 @@ class TestT64CheckpointRetention:
         """
         import time
 
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
         checkpoint_ids: list[str] = []
 
         try:
@@ -191,10 +194,8 @@ class TestT64CheckpointRetention:
         finally:
             await destroy_computer(client, computer_id)
             for cid in checkpoint_ids:
-                try:
+                with contextlib.suppress(Exception):
                     await client.delete(f"/checkpoints/{cid}")
-                except Exception:
-                    pass
 
 
 # ---------------------------------------------------------------------------
@@ -205,18 +206,25 @@ class TestT64CheckpointRetention:
 class TestT65LitestreamReplication:
     """SQLite should be continuously replicated via Litestream."""
 
-    async def test_litestream_service_active(self, client):
+    async def test_litestream_service_active(self, client: httpx.AsyncClient) -> None:
         """Verify the Litestream systemd service is active and running."""
         import subprocess
+
+        if MSHKN_SERVER is None:
+            pytest.skip("MSHKN_SERVER not set; host-side check needs SSH access to the live server")
 
         result = subprocess.run(
             [
                 "ssh",
-                "-o", "IdentitiesOnly=yes",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=no",
-                "-i", os.path.expanduser("~/.ssh/id_ed25519"),
-                "root@135.181.6.215",
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-i",
+                str(Path("~/.ssh/id_ed25519").expanduser()),
+                MSHKN_SERVER,
                 "systemctl is-active litestream",
             ],
             capture_output=True,
@@ -227,28 +235,37 @@ class TestT65LitestreamReplication:
             f"Litestream service not active: {result.stdout.strip()} {result.stderr.strip()}"
         )
 
-    async def test_litestream_has_generations(self, client):
+    async def test_litestream_has_generations(self, client: httpx.AsyncClient) -> None:
         """Verify Litestream has created at least one generation in R2."""
         import subprocess
+
+        if MSHKN_SERVER is None:
+            pytest.skip("MSHKN_SERVER not set; host-side check needs SSH access to the live server")
 
         result = subprocess.run(
             [
                 "ssh",
-                "-o", "IdentitiesOnly=yes",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=no",
-                "-i", os.path.expanduser("~/.ssh/id_ed25519"),
-                "root@135.181.6.215",
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-i",
+                str(Path("~/.ssh/id_ed25519").expanduser()),
+                MSHKN_SERVER,
                 "litestream generations -config /etc/litestream.yml /opt/mshkn/mshkn.db",
             ],
             capture_output=True,
             text=True,
             timeout=15,
         )
-        lines = [l for l in result.stdout.strip().splitlines() if l and not l.startswith("name")]
-        assert len(lines) >= 1, (
-            f"No Litestream generations found: {result.stdout} {result.stderr}"
-        )
+        lines = [
+            line
+            for line in result.stdout.strip().splitlines()
+            if line and not line.startswith("name")
+        ]
+        assert len(lines) >= 1, f"No Litestream generations found: {result.stdout} {result.stderr}"
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +276,7 @@ class TestT65LitestreamReplication:
 class TestT66StaleVMCleanup:
     """Dead VMs should be automatically detected and cleaned up by the reaper."""
 
-    async def test_dead_vm_reaped(self, client):
+    async def test_dead_vm_reaped(self, client: httpx.AsyncClient) -> None:
         """Create a VM, kill its Firecracker process, verify reaper cleans it up.
 
         The reaper runs every 60s. We kill the Firecracker process via SSH
@@ -269,21 +286,28 @@ class TestT66StaleVMCleanup:
         import subprocess
         import time
 
+        if MSHKN_SERVER is None:
+            pytest.skip("MSHKN_SERVER not set; host-side check needs SSH access to the live server")
+
         # Create a computer
-        resp = await client.post("/computers", json={"uses": []})
+        resp = await client.post("/computers", json={})
         resp.raise_for_status()
         computer_id = resp.json()["computer_id"]
 
         try:
             # Find and kill the Firecracker process for this computer via SSH
-            result = subprocess.run(
+            subprocess.run(
                 [
                     "ssh",
-                    "-o", "IdentitiesOnly=yes",
-                    "-o", "BatchMode=yes",
-                    "-o", "StrictHostKeyChecking=no",
-                    "-i", os.path.expanduser("~/.ssh/id_ed25519"),
-                    "root@135.181.6.215",
+                    "-o",
+                    "IdentitiesOnly=yes",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-i",
+                    str(Path("~/.ssh/id_ed25519").expanduser()),
+                    MSHKN_SERVER,
                     f"pgrep -f 'fc-{computer_id}' | xargs -r kill -9",
                 ],
                 capture_output=True,
@@ -304,13 +328,9 @@ class TestT66StaleVMCleanup:
                 except Exception:
                     pass  # SSH timeout on dead VM is expected
 
-            pytest.fail(
-                f"Reaper did not clean up dead VM {computer_id} within 150s"
-            )
+            pytest.fail(f"Reaper did not clean up dead VM {computer_id} within 150s")
         except Exception:
             # Best-effort cleanup if test fails
-            try:
+            with contextlib.suppress(Exception):
                 await client.delete(f"/computers/{computer_id}")
-            except Exception:
-                pass
             raise

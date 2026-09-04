@@ -123,7 +123,9 @@ async def test_first_checkpoint_of_forked_computer_gets_source_parent(tmp_path: 
         await insert_computer(db, _make_computer("comp-orig"))
         await insert_checkpoint(
             db,
-            _make_checkpoint("ckpt-orig", computer_id="comp-orig", created_at="2026-03-08T01:00:00"),
+            _make_checkpoint(
+                "ckpt-orig", computer_id="comp-orig", created_at="2026-03-08T01:00:00"
+            ),
         )
 
         # Forked computer with source_checkpoint_id set

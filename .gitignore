@@ -4,12 +4,12 @@ __pycache__/
 *.pyc
 .mypy_cache/
 .ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
 *.egg-info/
 dist/
-telegram/.env
-telegram/offset.txt
 .agents/
 .claude/
 .worktrees/
-telegram/outgoing.jsonl
-telegram/incoming.jsonl
+.superpowers/

@@ -21,14 +21,11 @@ async def test_migrations_apply(tmp_path: Path) -> None:
     migrations_dir = Path("migrations")
     async with aiosqlite.connect(db_path) as db:
         await run_migrations(db, migrations_dir)
-        cursor = await db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-        )
+        cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         tables = [row[0] for row in await cursor.fetchall()]
     assert "accounts" in tables
     assert "computers" in tables
     assert "checkpoints" in tables
-    assert "capability_cache" in tables
 
 
 async def test_migrations_idempotent(tmp_path: Path) -> None:

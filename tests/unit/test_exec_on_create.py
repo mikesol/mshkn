@@ -1,4 +1,5 @@
 """Tests for exec-on-create and exec-on-fork features (issue #31)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiosqlite
 from httpx import ASGITransport, AsyncClient
 
-from mshkn.db import insert_account, insert_checkpoint, insert_computer, run_migrations
+from mshkn.db import insert_account, insert_checkpoint, run_migrations
 from mshkn.main import app
 from mshkn.models import Account, Checkpoint, Computer
 from mshkn.vm.ssh import ExecResult

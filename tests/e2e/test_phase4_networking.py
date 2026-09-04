@@ -48,7 +48,9 @@ def port_url(base_url: str, port: int) -> str:
 class TestT41AutoHttps:
     """A simple HTTP server in the VM should be reachable at the computer's public URL."""
 
-    async def test_http_server_reachable_via_public_url(self, client, long_client):
+    async def test_http_server_reachable_via_public_url(
+        self, client: httpx.AsyncClient, long_client: httpx.AsyncClient
+    ) -> None:
         """Start an HTTP server inside the VM and verify the public URL serves it."""
         recipe_id = await create_recipe(long_client, _PYTHON_DOCKERFILE)
         async with managed_computer(client, recipe_id=recipe_id) as computer_id:
@@ -85,7 +87,9 @@ class TestT41AutoHttps:
 class TestT42MultiplePorts:
     """Multiple servers on different ports should all be reachable."""
 
-    async def test_three_ports_reachable(self, client, long_client):
+    async def test_three_ports_reachable(
+        self, client: httpx.AsyncClient, long_client: httpx.AsyncClient
+    ) -> None:
         """Start servers on ports 3000, 5000, and 8080; all should respond."""
         recipe_id = await create_recipe(long_client, _PYTHON_DOCKERFILE)
         async with managed_computer(client, recipe_id=recipe_id) as computer_id:
@@ -103,12 +107,14 @@ class TestT42MultiplePorts:
                     f"http.server.HTTPServer(('', {port}), H).serve_forever()\n"
                 )
                 await exec_command(
-                    client, computer_id,
+                    client,
+                    computer_id,
                     f"cat > /tmp/srv{port}.py << 'PYEOF'\n{script}PYEOF",
                     timeout=5.0,
                 )
                 await exec_command(
-                    client, computer_id,
+                    client,
+                    computer_id,
                     f"nohup python3 /tmp/srv{port}.py &>/dev/null &",
                     timeout=5.0,
                 )
@@ -135,11 +141,14 @@ class TestT42MultiplePorts:
 class TestT43WebSocket:
     """WebSocket connections through the public URL should work."""
 
-    async def test_websocket_echo(self, client, long_client):
+    async def test_websocket_echo(
+        self, client: httpx.AsyncClient, long_client: httpx.AsyncClient
+    ) -> None:
         """Start a WS echo server in the VM and verify a round trip."""
         recipe_id = await create_recipe(long_client, _PYTHON_WS_DOCKERFILE)
         async with managed_computer(
-            long_client, recipe_id=recipe_id,
+            long_client,
+            recipe_id=recipe_id,
         ) as computer_id:
             # Write websocket echo server script
             ws_script = (
@@ -153,12 +162,14 @@ class TestT43WebSocket:
                 "asyncio.run(main())\n"
             )
             await exec_command(
-                client, computer_id,
+                client,
+                computer_id,
                 f"cat > /tmp/ws_echo.py << 'PYEOF'\n{ws_script}PYEOF",
                 timeout=5.0,
             )
             await exec_command(
-                client, computer_id,
+                client,
+                computer_id,
                 "nohup python3 /tmp/ws_echo.py &>/dev/null &",
                 timeout=5.0,
             )
@@ -190,9 +201,11 @@ class TestT43WebSocket:
 class TestT44UrlChangesOnCheckpointResume:
     """When a computer is checkpointed and forked, the new computer gets a new URL."""
 
-    async def test_fork_gets_different_url(self, client, long_client):
+    async def test_fork_gets_different_url(
+        self, client: httpx.AsyncClient, long_client: httpx.AsyncClient
+    ) -> None:
         """Fork from a checkpoint produces a computer with a different URL."""
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
         forked_id = None
         try:
             # Write a marker so we can verify state was preserved
@@ -211,8 +224,7 @@ class TestT44UrlChangesOnCheckpointResume:
             fork_url = fork_resp.json().get("url", "")
 
             assert orig_url != fork_url, (
-                f"Original and forked computers should have different URLs, "
-                f"both got: {orig_url}"
+                f"Original and forked computers should have different URLs, both got: {orig_url}"
             )
 
             # Verify state was preserved in the fork
@@ -232,10 +244,10 @@ class TestT44UrlChangesOnCheckpointResume:
 class TestT45NetworkIsolation:
     """VMs should not be able to reach each other's private networks."""
 
-    async def test_vms_cannot_ping_each_other(self, client):
+    async def test_vms_cannot_ping_each_other(self, client: httpx.AsyncClient) -> None:
         """Two VMs should not be able to ping each other's private IPs."""
-        comp_a = await create_computer(client, uses=[])
-        comp_b = await create_computer(client, uses=[])
+        comp_a = await create_computer(client)
+        comp_b = await create_computer(client)
         try:
             # Get VM IPs from status
             status_a = await client.get(f"/computers/{comp_a}/status")
@@ -257,8 +269,7 @@ class TestT45NetworkIsolation:
                 timeout=10.0,
             )
             assert "PING_FAILED" in result.stdout or "100% packet loss" in result.stdout, (
-                f"VM A should NOT be able to reach VM B at {ip_b}. "
-                f"Output: {result.stdout}"
+                f"VM A should NOT be able to reach VM B at {ip_b}. Output: {result.stdout}"
             )
 
             # VM B tries to ping VM A — should also fail
@@ -269,8 +280,7 @@ class TestT45NetworkIsolation:
                 timeout=10.0,
             )
             assert "PING_FAILED" in result.stdout or "100% packet loss" in result.stdout, (
-                f"VM B should NOT be able to reach VM A at {ip_a}. "
-                f"Output: {result.stdout}"
+                f"VM B should NOT be able to reach VM A at {ip_a}. Output: {result.stdout}"
             )
         finally:
             await destroy_computer(client, comp_a)

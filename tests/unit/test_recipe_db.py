@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import aiosqlite
@@ -21,7 +22,7 @@ from mshkn.models import Checkpoint, Computer, Recipe
 
 
 @pytest.fixture
-async def db():
+async def db() -> AsyncIterator[aiosqlite.Connection]:
     conn = await aiosqlite.connect(":memory:")
     await run_migrations(conn, Path("migrations"))
     await conn.execute(
@@ -183,9 +184,7 @@ async def test_count_recipe_references_with_computer(
     assert count == 1
 
     # Destroyed computer should not count
-    await db.execute(
-        "UPDATE computers SET status = 'destroyed' WHERE id = 'comp-001'"
-    )
+    await db.execute("UPDATE computers SET status = 'destroyed' WHERE id = 'comp-001'")
     await db.commit()
     count = await count_recipe_references(db, "rcp-001")
     assert count == 0

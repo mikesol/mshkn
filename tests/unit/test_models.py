@@ -20,7 +20,6 @@ def test_computer_creation() -> None:
     assert c.status == "running"
 
 
-
 def test_recipe_dataclass() -> None:
     r = Recipe(
         id="rcp-abc123",

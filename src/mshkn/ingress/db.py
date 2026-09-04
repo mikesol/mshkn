@@ -31,9 +31,7 @@ async def insert_ingress_rule(db: aiosqlite.Connection, rule: IngressRule) -> No
     await db.commit()
 
 
-async def get_ingress_rule_by_id(
-    db: aiosqlite.Connection, rule_id: str
-) -> IngressRule | None:
+async def get_ingress_rule_by_id(db: aiosqlite.Connection, rule_id: str) -> IngressRule | None:
     cursor = await db.execute(
         "SELECT internal_id, id, account_id, name, starlark_source, response_mode, "
         "max_body_bytes, rate_limit_rpm, enabled, created_at, updated_at "
@@ -105,9 +103,7 @@ async def update_ingress_rule(db: aiosqlite.Connection, rule: IngressRule) -> No
     await db.commit()
 
 
-async def rotate_ingress_rule_id(
-    db: aiosqlite.Connection, internal_id: str, new_id: str
-) -> None:
+async def rotate_ingress_rule_id(db: aiosqlite.Connection, internal_id: str, new_id: str) -> None:
     await db.execute(
         "UPDATE ingress_rules SET id=?, updated_at=datetime('now') WHERE internal_id=?",
         (new_id, internal_id),
@@ -117,9 +113,7 @@ async def rotate_ingress_rule_id(
 
 async def delete_ingress_rule(db: aiosqlite.Connection, rule_id: str) -> None:
     # Get internal_id first to cascade-delete logs
-    cursor = await db.execute(
-        "SELECT internal_id FROM ingress_rules WHERE id=?", (rule_id,)
-    )
+    cursor = await db.execute("SELECT internal_id FROM ingress_rules WHERE id=?", (rule_id,))
     row = await cursor.fetchone()
     if row:
         await db.execute("DELETE FROM ingress_log WHERE rule_internal_id=?", (row[0],))
@@ -165,11 +159,7 @@ async def list_ingress_logs(
     ]
 
 
-async def prune_old_ingress_logs(
-    db: aiosqlite.Connection, before_timestamp: str
-) -> int:
-    cursor = await db.execute(
-        "DELETE FROM ingress_log WHERE created_at < ?", (before_timestamp,)
-    )
+async def prune_old_ingress_logs(db: aiosqlite.Connection, before_timestamp: str) -> int:
+    cursor = await db.execute("DELETE FROM ingress_log WHERE created_at < ?", (before_timestamp,))
     await db.commit()
     return cursor.rowcount

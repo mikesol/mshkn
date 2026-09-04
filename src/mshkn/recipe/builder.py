@@ -76,10 +76,7 @@ async def build_recipe(
             # Create a placeholder — _post_process_rootfs will fix authorized_keys
             (build_dir / "mshkn_key.pub").write_text("")
 
-        build_cmd = (
-            f"docker build --memory=4g --cpuset-cpus=0-1 "
-            f"-t {image_tag} {build_dir}"
-        )
+        build_cmd = f"docker build --memory=4g --cpuset-cpus=0-1 -t {image_tag} {build_dir}"
         logger.debug("recipe %s: %s", recipe_id, build_cmd)
 
         try:
@@ -96,9 +93,7 @@ async def build_recipe(
             build_log_lines.append(build_output)
 
             if proc.returncode != 0:
-                raise RuntimeError(
-                    f"docker build failed (rc={proc.returncode}):\n{build_output}"
-                )
+                raise RuntimeError(f"docker build failed (rc={proc.returncode}):\n{build_output}")
         except TimeoutError as exc:
             raise RuntimeError("docker build timed out after 10 minutes") from exc
 
@@ -245,6 +240,7 @@ async def _post_process_rootfs(mount_point: str, config: Config) -> None:
         sshd_config += "\nPermitRootLogin yes\n"
     else:
         import re
+
         sshd_config = re.sub(
             r"#?PermitRootLogin\s+\S+",
             "PermitRootLogin yes",
@@ -256,6 +252,7 @@ async def _post_process_rootfs(mount_point: str, config: Config) -> None:
         sshd_config += "PubkeyAuthentication yes\n"
     else:
         import re
+
         sshd_config = re.sub(
             r"#?PubkeyAuthentication\s+\S+",
             "PubkeyAuthentication yes",
@@ -292,15 +289,15 @@ async def _post_process_rootfs(mount_point: str, config: Config) -> None:
     fcnet_script = mp / "usr" / "local" / "bin" / "fcnet-setup.sh"
     fcnet_script.parent.mkdir(parents=True, exist_ok=True)
     fcnet_script.write_text(
-        '#!/bin/bash\n'
-        '# Wait up to 1s for any non-loopback interface to appear.\n'
-        'for i in $(seq 1 200); do\n'
+        "#!/bin/bash\n"
+        "# Wait up to 1s for any non-loopback interface to appear.\n"
+        "for i in $(seq 1 200); do\n"
         '    if [ "$(ls /sys/class/net | grep -v lo | wc -l)" -gt 0 ]; then\n'
-        '        break\n'
-        '    fi\n'
-        '    sleep 0.005\n'
-        'done\n'
-        'for dev in $(ls /sys/class/net | grep -v lo); do\n'
+        "        break\n"
+        "    fi\n"
+        "    sleep 0.005\n"
+        "done\n"
+        "for dev in $(ls /sys/class/net | grep -v lo); do\n"
         '    mac_ip=$(ip link show dev "$dev" | grep link/ether | '
         'grep -oP "(?<=06:00:)[0-9a-f:]{11}")\n'
         '    if [ -n "$mac_ip" ]; then\n'
@@ -311,8 +308,8 @@ async def _post_process_rootfs(mount_point: str, config: Config) -> None:
         '        gw=$(echo "$ip" | awk -F. \'{printf "%d.%d.%d.%d", '
         "$1, $2, $3, $4-1}')\n"
         '        ip route add default via "$gw"\n'
-        '    fi\n'
-        'done\n'
+        "    fi\n"
+        "done\n"
     )
     fcnet_script.chmod(0o755)
 

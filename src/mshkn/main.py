@@ -43,11 +43,6 @@ _configure_logging()
 logger = logging.getLogger(__name__)
 
 
-async def get_db() -> aiosqlite.Connection:
-    """Dependency placeholder -- overridden in tests, set in lifespan for prod."""
-    raise RuntimeError("DB not initialized")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     config = Config.from_env()

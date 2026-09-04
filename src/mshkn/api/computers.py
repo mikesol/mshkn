@@ -60,14 +60,19 @@ router = APIRouter(prefix="/computers", tags=["computers"])
 def _get_pool(request: Request) -> SSHPool | None:
     return getattr(request.app.state, "ssh_pool", None)
 
+
 # Hold references to background tasks to prevent GC
 _background_tasks: set[asyncio.Task[None]] = set()
 
 # Track upload tasks per checkpoint ID so deletion can cancel/await them
 _upload_tasks: dict[str, asyncio.Task[None]] = {}
 
+
 def _start_upload_task(
-    checkpoint_id: str, snapshot_dir: Path, r2_prefix: str, r2_bucket: str,
+    checkpoint_id: str,
+    snapshot_dir: Path,
+    r2_prefix: str,
+    r2_bucket: str,
 ) -> None:
     """Start a background R2 upload and track it by checkpoint ID."""
     task = asyncio.create_task(upload_checkpoint(snapshot_dir, r2_prefix, r2_bucket))
@@ -152,7 +157,11 @@ async def _self_destruct(
 
     # Flush guest filesystem
     await ssh_exec(
-        computer.vm_ip, "sync", config.ssh_key_path, timeout=10.0, pool=pool,
+        computer.vm_ip,
+        "sync",
+        config.ssh_key_path,
+        timeout=10.0,
+        pool=pool,
     )
 
     # Pause/snapshot/resume
@@ -164,7 +173,8 @@ async def _self_destruct(
 
     # Freeze disk
     ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(
-        computer, checkpoint_id,
+        computer,
+        checkpoint_id,
     )
 
     # Determine parent_id for DAG lineage
@@ -221,7 +231,8 @@ async def _self_destruct(
 
     logger.info(
         "Self-destruct: computer %s checkpointed as %s and destroyed",
-        computer.id, checkpoint_id,
+        computer.id,
+        checkpoint_id,
     )
 
     # Drain deferred queue for this label
@@ -284,7 +295,10 @@ async def create_computer(
     if body.exec is not None:
         pool = _get_pool(request)
         result = await ssh_exec(
-            computer.vm_ip, body.exec, config.ssh_key_path, pool=pool,
+            computer.vm_ip,
+            body.exec,
+            config.ssh_key_path,
+            pool=pool,
         )
         exec_exit_code = result.exit_code
         exec_stdout = result.stdout
@@ -364,7 +378,10 @@ async def exec_bg(
 
     await update_last_exec_at(db, computer_id, datetime.now(UTC).isoformat())
     pid = await ssh_exec_bg(
-        computer.vm_ip, body.command, config.ssh_key_path, pool=_get_pool(request),
+        computer.vm_ip,
+        body.command,
+        config.ssh_key_path,
+        pool=_get_pool(request),
     )
     return {"pid": pid}
 
@@ -408,7 +425,10 @@ async def exec_kill(
     config: Config = request.app.state.config
     computer = await _get_running_computer(db, computer_id, account)
     result = await ssh_exec(
-        computer.vm_ip, f"kill {pid}", config.ssh_key_path, pool=_get_pool(request),
+        computer.vm_ip,
+        f"kill {pid}",
+        config.ssh_key_path,
+        pool=_get_pool(request),
     )
     if result.exit_code != 0:
         return {"status": "not_found", "stderr": result.stderr}
@@ -441,7 +461,10 @@ async def download_file(
     config: Config = request.app.state.config
     computer = await _get_running_computer(db, computer_id, account)
     data = await ssh_download(
-        computer.vm_ip, path, config.ssh_key_path, pool=_get_pool(request),
+        computer.vm_ip,
+        path,
+        config.ssh_key_path,
+        pool=_get_pool(request),
     )
     return Response(content=data, media_type="application/octet-stream")
 
@@ -470,7 +493,9 @@ async def computer_status(
     if computer.status == "running" and computer.vm_ip:
         try:
             metrics = await ssh_gather_metrics(
-                computer.vm_ip, config.ssh_key_path, timeout=10.0,
+                computer.vm_ip,
+                config.ssh_key_path,
+                timeout=10.0,
                 pool=_get_pool(request),
             )
             result["cpu_pct"] = metrics.cpu_pct
@@ -516,7 +541,10 @@ async def checkpoint_computer(
     # snapshot captures all written data (guest page cache is not visible
     # to dm-thin snapshots).
     await ssh_exec(
-        computer.vm_ip, "sync", config.ssh_key_path, timeout=10.0,
+        computer.vm_ip,
+        "sync",
+        config.ssh_key_path,
+        timeout=10.0,
         pool=_get_pool(request),
     )
 
@@ -531,7 +559,8 @@ async def checkpoint_computer(
     # Freeze disk state: create a dm-thin CoW snapshot so fork gets the disk
     # as it was at checkpoint time, not the computer's evolving state.
     ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(
-        computer, checkpoint_id,
+        computer,
+        checkpoint_id,
     )
 
     # Determine parent_id for DAG lineage
@@ -606,7 +635,9 @@ async def _process_deferred(
 
         # Fork from latest checkpoint
         computer = await vm_mgr.fork_from_checkpoint(
-            account.id, latest_ckpt, recipe_id=latest_ckpt.recipe_id,
+            account.id,
+            latest_ckpt,
+            recipe_id=latest_ckpt.recipe_id,
         )
 
         # Write each deferred exec to /tmp/exec/N.txt
@@ -618,7 +649,10 @@ async def _process_deferred(
             escaped = cmd.replace("'", "'\\''")
             write_cmds.append(f"printf '%s' '{escaped}' > /tmp/exec/{i}.txt")
         await ssh_exec(
-            computer.vm_ip, " && ".join(write_cmds), config.ssh_key_path, pool=None,
+            computer.vm_ip,
+            " && ".join(write_cmds),
+            config.ssh_key_path,
+            pool=None,
         )
 
         # Determine exec command: meta_exec from last request, or concatenate
@@ -633,11 +667,15 @@ async def _process_deferred(
         # Run the exec
         if exec_cmd:
             result = await ssh_exec(
-                computer.vm_ip, exec_cmd, config.ssh_key_path, pool=None,
+                computer.vm_ip,
+                exec_cmd,
+                config.ssh_key_path,
+                pool=None,
             )
             logger.info(
                 "Deferred exec for label %s: exit_code=%d",
-                label, result.exit_code,
+                label,
+                result.exit_code,
             )
 
             # Self-destruct if any deferred request wanted it
@@ -666,7 +704,9 @@ async def _process_deferred(
 
         logger.info(
             "Processed %d deferred request(s) for label %s -> computer %s",
-            len(deferred_items), label, computer.id,
+            len(deferred_items),
+            label,
+            computer.id,
         )
     except Exception:
         logger.exception("Failed to process deferred queue for label %s", label)

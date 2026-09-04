@@ -26,10 +26,12 @@ from tests.e2e.conftest import (
 @pytest.mark.asyncio
 async def test_exec_on_create(long_client: httpx.AsyncClient) -> None:
     """Create computer with exec='echo hello' — response includes stdout."""
-    resp = await long_client.post("/computers", json={
-        "uses": [],
-        "exec": "echo hello",
-    })
+    resp = await long_client.post(
+        "/computers",
+        json={
+            "exec": "echo hello",
+        },
+    )
     resp.raise_for_status()
     data = resp.json()
     assert data["exec_exit_code"] == 0
@@ -52,9 +54,12 @@ async def test_exec_on_fork(long_client: httpx.AsyncClient) -> None:
     await destroy_computer(long_client, comp_id)
 
     # Fork with exec
-    resp = await long_client.post(f"/checkpoints/{ckpt_id}/fork", json={
-        "exec": "cat /etc/hostname",
-    })
+    resp = await long_client.post(
+        f"/checkpoints/{ckpt_id}/fork",
+        json={
+            "exec": "cat /etc/hostname",
+        },
+    )
     resp.raise_for_status()
     data = resp.json()
     assert data["exec_exit_code"] == 0
@@ -72,10 +77,12 @@ async def test_exec_on_fork(long_client: httpx.AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_exec_on_create_failure(long_client: httpx.AsyncClient) -> None:
     """Create with exec that fails — error captured in response."""
-    resp = await long_client.post("/computers", json={
-        "uses": [],
-        "exec": "exit 42",
-    })
+    resp = await long_client.post(
+        "/computers",
+        json={
+            "exec": "exit 42",
+        },
+    )
     resp.raise_for_status()
     data = resp.json()
     assert data["exec_exit_code"] == 42
@@ -90,12 +97,14 @@ async def test_exec_on_create_failure(long_client: httpx.AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_self_destruct_on_create(long_client: httpx.AsyncClient) -> None:
     """Create with exec + self_destruct — computer destroyed, checkpoint created."""
-    resp = await long_client.post("/computers", json={
-        "uses": [],
-        "exec": "echo self-destruct-test",
-        "self_destruct": True,
-        "label": "test-sd-create",
-    })
+    resp = await long_client.post(
+        "/computers",
+        json={
+            "exec": "echo self-destruct-test",
+            "self_destruct": True,
+            "label": "test-sd-create",
+        },
+    )
     resp.raise_for_status()
     data = resp.json()
     assert data["exec_exit_code"] == 0
@@ -130,10 +139,13 @@ async def test_self_destruct_on_fork(long_client: httpx.AsyncClient) -> None:
     await destroy_computer(long_client, comp_id)
 
     # Fork with self-destruct
-    resp = await long_client.post(f"/checkpoints/{ckpt_id}/fork", json={
-        "exec": "echo chain-test",
-        "self_destruct": True,
-    })
+    resp = await long_client.post(
+        f"/checkpoints/{ckpt_id}/fork",
+        json={
+            "exec": "echo chain-test",
+            "self_destruct": True,
+        },
+    )
     resp.raise_for_status()
     data = resp.json()
     assert data["exec_exit_code"] == 0
@@ -159,12 +171,14 @@ async def test_self_destruct_on_fork(long_client: httpx.AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_self_destruct_on_failure(long_client: httpx.AsyncClient) -> None:
     """Self-destruct still fires on non-zero exit (preserves error state)."""
-    resp = await long_client.post("/computers", json={
-        "uses": [],
-        "exec": "exit 1",
-        "self_destruct": True,
-        "label": "test-sd-fail",
-    })
+    resp = await long_client.post(
+        "/computers",
+        json={
+            "exec": "exit 1",
+            "self_destruct": True,
+            "label": "test-sd-fail",
+        },
+    )
     resp.raise_for_status()
     data = resp.json()
     assert data["exec_exit_code"] == 1
@@ -193,13 +207,15 @@ async def test_callback_url(long_client: httpx.AsyncClient) -> None:
     # Use the mshkn API URL as callback — server can reach itself
     callback_url = f"{API_URL}/checkpoints"
 
-    resp = await long_client.post("/computers", json={
-        "uses": [],
-        "exec": "echo callback-test",
-        "self_destruct": True,
-        "label": "test-callback",
-        "callback_url": callback_url,
-    })
+    resp = await long_client.post(
+        "/computers",
+        json={
+            "exec": "echo callback-test",
+            "self_destruct": True,
+            "label": "test-callback",
+            "callback_url": callback_url,
+        },
+    )
     resp.raise_for_status()
     data = resp.json()
     assert data["exec_exit_code"] == 0
@@ -221,13 +237,15 @@ async def test_callback_url(long_client: httpx.AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_callback_unreachable(long_client: httpx.AsyncClient) -> None:
     """Callback with bad URL — doesn't crash, self-destruct still works."""
-    resp = await long_client.post("/computers", json={
-        "uses": [],
-        "exec": "echo unreachable-test",
-        "self_destruct": True,
-        "label": "test-callback-fail",
-        "callback_url": "http://192.0.2.1:9999/nope",  # RFC 5737 test address
-    })
+    resp = await long_client.post(
+        "/computers",
+        json={
+            "exec": "echo unreachable-test",
+            "self_destruct": True,
+            "label": "test-callback-fail",
+            "callback_url": "http://192.0.2.1:9999/nope",  # RFC 5737 test address
+        },
+    )
     resp.raise_for_status()
     data = resp.json()
     assert data["exec_exit_code"] == 0
@@ -255,9 +273,12 @@ async def test_exclusive_error_on_conflict(long_client: httpx.AsyncClient) -> No
     fork1_comp = fork1.json()["computer_id"]
 
     # Second fork with exclusive should fail
-    fork2 = await long_client.post(f"/checkpoints/{ckpt_id}/fork", json={
-        "exclusive": "error_on_conflict",
-    })
+    fork2 = await long_client.post(
+        f"/checkpoints/{ckpt_id}/fork",
+        json={
+            "exclusive": "error_on_conflict",
+        },
+    )
     assert fork2.status_code == 409
 
     # Clean up
@@ -285,10 +306,13 @@ async def test_exclusive_defer_on_conflict(long_client: httpx.AsyncClient) -> No
     fork1_comp = fork1.json()["computer_id"]
 
     # Deferred fork should return 202
-    fork2 = await long_client.post(f"/checkpoints/{ckpt_id}/fork", json={
-        "exclusive": "defer_on_conflict",
-        "exec": "echo deferred-work",
-    })
+    fork2 = await long_client.post(
+        f"/checkpoints/{ckpt_id}/fork",
+        json={
+            "exclusive": "defer_on_conflict",
+            "exec": "echo deferred-work",
+        },
+    )
     assert fork2.status_code == 202
     assert fork2.json()["status"] == "queued"
 
@@ -318,10 +342,13 @@ async def test_exclusive_no_conflict(long_client: httpx.AsyncClient) -> None:
     await destroy_computer(long_client, comp_id)
 
     # Fork with exclusive — no active computer, should succeed
-    fork = await long_client.post(f"/checkpoints/{ckpt_id}/fork", json={
-        "exclusive": "error_on_conflict",
-        "exec": "echo no-conflict",
-    })
+    fork = await long_client.post(
+        f"/checkpoints/{ckpt_id}/fork",
+        json={
+            "exclusive": "error_on_conflict",
+            "exec": "echo no-conflict",
+        },
+    )
     fork.raise_for_status()
     data = fork.json()
     assert data["exec_exit_code"] == 0
@@ -386,11 +413,14 @@ async def test_deferred_batch_exec_files(long_client: httpx.AsyncClient) -> None
 
     # Queue 3 deferred requests
     for i in range(3):
-        resp = await long_client.post(f"/checkpoints/{ckpt_id}/fork", json={
-            "exclusive": "defer_on_conflict",
-            "exec": f"echo message-{i}",
-            "meta_exec": "cat /tmp/exec/*.txt",
-        })
+        resp = await long_client.post(
+            f"/checkpoints/{ckpt_id}/fork",
+            json={
+                "exclusive": "defer_on_conflict",
+                "exec": f"echo message-{i}",
+                "meta_exec": "cat /tmp/exec/*.txt",
+            },
+        )
         assert resp.status_code == 202
 
     # Destroy active computer — triggers deferred processing
@@ -436,15 +466,17 @@ async def test_deferred_batch_with_callback(long_client: httpx.AsyncClient) -> N
 
     # Queue 3 deferred with meta_exec that reads all exec files and writes output
     for i in range(3):
-        resp = await long_client.post(f"/checkpoints/{ckpt_id}/fork", json={
-            "exclusive": "defer_on_conflict",
-            "exec": f"task-{i}",
-            "meta_exec": (
-                "cat /tmp/exec/*.txt > /var/batch_result.txt && "
-                "cat /var/batch_result.txt"
-            ),
-            "self_destruct": True,
-        })
+        resp = await long_client.post(
+            f"/checkpoints/{ckpt_id}/fork",
+            json={
+                "exclusive": "defer_on_conflict",
+                "exec": f"task-{i}",
+                "meta_exec": (
+                    "cat /tmp/exec/*.txt > /var/batch_result.txt && cat /var/batch_result.txt"
+                ),
+                "self_destruct": True,
+            },
+        )
         assert resp.status_code == 202
 
     # Destroy to trigger deferred processing
@@ -458,15 +490,16 @@ async def test_deferred_batch_with_callback(long_client: httpx.AsyncClient) -> N
     ckpts_resp.raise_for_status()
     ckpts = ckpts_resp.json()
     # Should have at least 2: original + one from deferred self-destruct
-    assert len(ckpts) >= 2, (
-        f"Expected at least 2 checkpoints in chain, got {len(ckpts)}"
-    )
+    assert len(ckpts) >= 2, f"Expected at least 2 checkpoints in chain, got {len(ckpts)}"
 
     # Fork from the latest checkpoint and verify /var/batch_result.txt
     latest_ckpt = ckpts[0]["id"]
-    fork_resp = await long_client.post(f"/checkpoints/{latest_ckpt}/fork", json={
-        "exec": "cat /var/batch_result.txt 2>/dev/null || echo 'not found'",
-    })
+    fork_resp = await long_client.post(
+        f"/checkpoints/{latest_ckpt}/fork",
+        json={
+            "exec": "cat /var/batch_result.txt 2>/dev/null || echo 'not found'",
+        },
+    )
     fork_resp.raise_for_status()
     fork_data = fork_resp.json()
     stdout = fork_data.get("exec_stdout", "")

@@ -38,6 +38,7 @@ _restore_lock = asyncio.Lock()
 @dataclass
 class RestoreResult:
     """Result of a staging restore — the VM is running on its final slot."""
+
     pid: int
     socket_path: str
     vm_ip: str
@@ -109,7 +110,9 @@ async def restore_from_snapshot(
             fc_client = FirecrackerClient(socket_path)
             try:
                 await fc_client.load_snapshot(
-                    vmstate_path, memory_path, resume_vm=True,
+                    vmstate_path,
+                    memory_path,
+                    resume_vm=True,
                 )
             finally:
                 await fc_client.close()

@@ -25,8 +25,7 @@ def _to_starlark_literal(obj: object) -> str:
         return repr(obj)
     if isinstance(obj, dict):
         items = ", ".join(
-            f"{_to_starlark_literal(k)}: {_to_starlark_literal(v)}"
-            for k, v in obj.items()
+            f"{_to_starlark_literal(k)}: {_to_starlark_literal(v)}" for k, v in obj.items()
         )
         return "{" + items + "}"
     if isinstance(obj, (list, tuple)):
@@ -51,9 +50,7 @@ def validate_starlark(source: str) -> list[str]:
     return errors
 
 
-def execute_transform(
-    source: str, request_dict: dict[str, Any]
-) -> dict[str, Any] | None:
+def execute_transform(source: str, request_dict: dict[str, Any]) -> dict[str, Any] | None:
     """Execute a Starlark transform function against a request dict.
 
     Returns the transform result (dict or None).

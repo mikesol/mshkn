@@ -1,0 +1,13 @@
+[Unit]
+Description=mshkn dm-thin pool, base volume, and VM NAT
+DefaultDependencies=no
+After=local-fs.target docker.service
+Before=mshkn.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/mshkn-pool-up
+
+[Install]
+WantedBy=multi-user.target
