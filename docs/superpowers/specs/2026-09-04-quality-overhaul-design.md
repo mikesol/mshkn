@@ -24,7 +24,7 @@ The codebase was built feature-by-feature and it shows:
 | Boundary shape | Split by concern: `Hypervisor`, `BlockStore`, `Guest`, `ObjectStore`, `Proxy` |
 | Package manager | uv only; delete `poetry.lock` |
 | Telegram bridge and `skills/` | Move out of this repo (copied to `../mshkn-devtools/` before deletion) |
-| Validation | Every PR is validated locally and against live E2E on `135.181.6.215` before merge is requested |
+| Validation | Every PR is validated locally and against live E2E on the dedicated KVM server named in CLAUDE.md before merge is requested. The original Hetzner box no longer exists; its replacement is set up from DEPLOY.md as the first task, which is also DEPLOY.md's first real test |
 
 ## 3. Target layout
 
@@ -320,7 +320,7 @@ Tests are type-checked under the same mypy strict config as `src/` and linted wi
 - `.github/workflows/ci.yml` on push to `main` and on pull requests: checkout, `astral-sh/setup-uv`, `uv sync --frozen`, `uv lock --check`, `ruff check .`, `ruff format --check .`, `mypy src tests`, `pytest -m "not e2e" --cov`. Concurrency group cancels superseded runs.
 - `.pre-commit-config.yaml` with ruff check and format.
 - `scripts/deploy.sh`: ssh deploy (`git pull`, `uv sync --frozen`, `systemctl restart mshkn litestream`). Replaces the root-level `deploy.sh`.
-- `scripts/e2e.sh`: `git push`, `scripts/deploy.sh`, orphan cleanup (firecracker processes, taps, thin devices not backed by a running computer), ensure the test account via the CLI, run `pytest tests/e2e -m e2e`, print a pass/fail summary.
+- `scripts/e2e.sh`: `git push`, `scripts/deploy.sh`, orphan cleanup (firecracker processes, taps, thin devices not backed by a running computer), ensure the test account via the CLI, run `pytest tests/e2e -m e2e`, print a pass/fail summary. The server address comes from `MSHKN_SERVER` (documented in CLAUDE.md), not a literal in the script.
 - No Makefile; the commands are documented in README and CLAUDE.md.
 
 ## 13. Docs and repo hygiene
@@ -328,7 +328,7 @@ Tests are type-checked under the same mypy strict config as `src/` and linted wi
 - `README.md`: rewritten to describe what exists (Firecracker microVMs, dm-thin CoW, Docker recipes, checkpoints/fork/merge, ingress, ephemeral exec), what does not (multi-host, billing, true snapshot-restore across hosts, exec log retention), how to run each test tier, and the layout.
 - `docs/ARCHITECTURE.md`: request path, service responsibilities, host boundary, state ownership, lifecycle of a computer and a checkpoint, failure handling and cleanup guarantees, how to run against the fake host.
 - `docs/plans/README.md`: index of every plan with status (implemented, partially implemented, superseded by X).
-- `CLAUDE.md`: Telegram section removed; "Current phase" replaced with a pointer to the roadmap index; validation command becomes the CI command; E2E gate references `scripts/e2e.sh`; stale test counts and pool-recovery references to `capability_cache` removed.
+- `CLAUDE.md`: Telegram section removed (the bridge is superseded by Claude remote control); "Current phase" replaced with a pointer to the roadmap index; validation command becomes the CI command; E2E gate references `scripts/e2e.sh`; stale test counts and pool-recovery references to `capability_cache` removed.
 - `DEPLOY.md`: adds Docker install and `docker build -t mshkn-base`, uses `uv sync --frozen`, uses the accounts CLI, removes the Nix `PATH`, notes the litestream `PartOf` dependency.
 - Removed from the repo: `telegram/`, `skills/`, `skills-lock.json`, `e2e_test.sh`, root `deploy.sh` (moved to `scripts/`), `tests/integration/`, `src/mshkn/checkpoint/delta.py`, `init_thin_pool`, `create_base_volume`, `ensure_nat`, the `get_db` placeholder, `poetry.lock`. `telegram/` and `skills/` are copied to `../mshkn-devtools/` (outside git) first.
 - `.gitignore` drops the telegram entries and adds `.coverage`, `htmlcov/`.
@@ -355,4 +355,5 @@ Six PRs, each: `ruff check . && ruff format --check . && mypy src tests && pytes
 
 - **E2E drift.** The recipe rewrite changed the E2E suite after the last recorded full run. PR 1 establishes a fresh baseline run before any refactor lands, and every later PR is compared against it.
 - **Behavior preservation during extraction.** PRs 3 and 4 move a lot of code. The fake host lets each moved flow be exercised locally before touching the server, and the E2E gate catches what fakes cannot.
-- **Hidden coupling in the live server's `.env` and systemd unit.** Env aliases are preserved; the deploy script is run manually on the first PR to confirm nothing depends on the removed `deploy.sh`.
+- **The live server has to be rebuilt.** The old box is gone (its IP now belongs to another machine). A dedicated KVM host is provisioned by the owner; DEPLOY.md is followed verbatim to set it up and corrected wherever it is wrong, and a full E2E baseline is recorded there before any refactor PR is merged. No PR is merged before that baseline exists.
+- **Hidden coupling in the server's `.env` and systemd unit.** Env aliases are preserved; the new box's unit and `.env` are written from the corrected DEPLOY.md.
