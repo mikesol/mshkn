@@ -21,6 +21,7 @@ from mshkn.db import (
 )
 from mshkn.errors import Conflict, NotFound
 from mshkn.models import Checkpoint, Computer, Recipe
+from mshkn.resources import DEFAULT_RESOURCES, Resources
 from mshkn.shell import run
 from mshkn.vm.firecracker import (
     FirecrackerClient,
@@ -40,7 +41,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MEM_MIB = 256
 _ALERT_HISTORY_SIZE = 100
 
 
@@ -52,34 +52,6 @@ class Alert:
     value: float  # the metric value that triggered it
     threshold: float  # the threshold that was exceeded
     timestamp: str  # ISO 8601
-
-
-_DEFAULT_VCPU = 2
-
-
-def parse_needs(needs: dict[str, object] | None) -> tuple[int, int]:
-    """Parse a needs dict into (mem_size_mib, vcpu_count)."""
-    if not needs:
-        return _DEFAULT_MEM_MIB, _DEFAULT_VCPU
-
-    mem_size_mib = _DEFAULT_MEM_MIB
-    vcpu_count = _DEFAULT_VCPU
-
-    ram = needs.get("ram")
-    if isinstance(ram, str):
-        raw = ram.strip().upper()
-        if raw.endswith("GB"):
-            mem_size_mib = int(float(raw[:-2]) * 1024)
-        elif raw.endswith("MB"):
-            mem_size_mib = int(float(raw[:-2]))
-
-    cores = needs.get("cores")
-    if isinstance(cores, int):
-        vcpu_count = cores
-    elif isinstance(cores, str):
-        vcpu_count = int(cores)
-
-    return mem_size_mib, vcpu_count
 
 
 class VMManager:
@@ -397,10 +369,9 @@ class VMManager:
         self,
         account_id: str,
         recipe_id: str | None = None,
-        needs: dict[str, object] | None = None,
+        resources: Resources = DEFAULT_RESOURCES,
     ) -> Computer:
-        mem_size_mib, vcpu_count = parse_needs(needs)
-        custom_resources = mem_size_mib != _DEFAULT_MEM_MIB or vcpu_count != _DEFAULT_VCPU
+        custom_resources = not resources.is_default
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
 
         # Resolve recipe to source volume
@@ -434,8 +405,8 @@ class VMManager:
 
             logger.info(
                 "Cold-booting with custom resources: mem=%dMiB, vcpu=%d",
-                mem_size_mib,
-                vcpu_count,
+                resources.mem_mib,
+                resources.vcpus,
             )
             result = await cold_boot_from_disk(
                 disk_volume_id=volume_id,
@@ -444,8 +415,8 @@ class VMManager:
                 thin_volume_sectors=self.config.thin_volume_sectors,
                 final_volume_name=volume_name,
                 kernel_path=str(self.config.kernel_path),
-                mem_size_mib=mem_size_mib,
-                vcpu_count=vcpu_count,
+                mem_size_mib=resources.mem_mib,
+                vcpu_count=resources.vcpus,
                 socket_path=f"/tmp/fc-{computer_id}.socket",
             )
         else:

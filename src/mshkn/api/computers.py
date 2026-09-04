@@ -32,6 +32,7 @@ from mshkn.db import (
     update_last_exec_at,
 )
 from mshkn.models import Checkpoint
+from mshkn.resources import Resources
 from mshkn.vm.ssh import (
     SSHPool,
     ssh_download,
@@ -282,7 +283,8 @@ async def create_computer(
     if active_count >= account.vm_limit:
         raise HTTPException(status_code=429, detail="VM limit reached")
 
-    computer = await vm_mgr.create(account.id, recipe_id=body.recipe_id, needs=body.needs)
+    resources = Resources.from_needs(body.needs)
+    computer = await vm_mgr.create(account.id, recipe_id=body.recipe_id, resources=resources)
     computers_created_total.inc()
     computers_active.inc()
 
