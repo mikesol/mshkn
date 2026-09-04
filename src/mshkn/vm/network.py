@@ -56,8 +56,7 @@ async def destroy_tap(slot: int) -> None:
     _, vm_ip = slot_to_ip(slot)
     # Remove iptables rules (best-effort)
     await run(
-        f"iptables -D FORWARD -i {tap} -s {vm_ip} "
-        f"! -d 172.16.0.0/12 -j ACCEPT",
+        f"iptables -D FORWARD -i {tap} -s {vm_ip} ! -d 172.16.0.0/12 -j ACCEPT",
         check=False,
     )
     await run(

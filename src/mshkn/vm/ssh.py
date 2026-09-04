@@ -43,7 +43,8 @@ class SSHPool:
                 # Not recently used — verify with a command
                 try:
                     result = await asyncio.wait_for(
-                        conn.run("true", check=False), timeout=3.0,
+                        conn.run("true", check=False),
+                        timeout=3.0,
                     )
                     if result.exit_status == 0:
                         self._last_used[vm_ip] = now
@@ -181,9 +182,7 @@ async def ssh_exec_stream(
 
         collected: list[tuple[str, str]] = []
 
-        async def read_stream(
-            stream: asyncssh.SSHReader[str], name: str
-        ) -> None:
+        async def read_stream(stream: asyncssh.SSHReader[str], name: str) -> None:
             async for line in stream:
                 collected.append((name, line.rstrip("\n")))
 
@@ -202,7 +201,8 @@ async def ssh_exec_stream(
         # then cancel them so we don't hang forever.
         grace = 2.0
         _done, pending = await asyncio.wait(
-            [stdout_task, stderr_task], timeout=grace,
+            [stdout_task, stderr_task],
+            timeout=grace,
         )
         for task in pending:
             log.debug("ssh_exec_stream: cancelling lingering stream reader")
@@ -260,7 +260,7 @@ async def ssh_gather_metrics(
     cmd = (
         "top -bn1 -d0.5 | grep '%Cpu' | awk '{print $8}'; "
         "free -m | awk '/^Mem:/{print $2,$3}'; "
-        "df -BM / | awk 'NR==2{gsub(/M/,\"\",$2); gsub(/M/,\"\",$3); print $2,$3}'; "
+        'df -BM / | awk \'NR==2{gsub(/M/,"",$2); gsub(/M/,"",$3); print $2,$3}\'; '
         "ps -eo pid,comm --no-headers | head -50"
     )
     result = await ssh_exec(vm_ip, cmd, ssh_key_path, timeout=timeout, pool=pool)

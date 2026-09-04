@@ -12,8 +12,7 @@ class JSONFormatter(logging.Formatter):
 
     # Fields from LogRecord to exclude from extra output
     _BUILTIN_ATTRS = frozenset(
-        logging.LogRecord("", 0, "", 0, None, None, None).__dict__.keys()
-        | {"message", "asctime"}
+        logging.LogRecord("", 0, "", 0, None, None, None).__dict__.keys() | {"message", "asctime"}
     )
 
     def format(self, record: logging.LogRecord) -> str:

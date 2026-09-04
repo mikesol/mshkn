@@ -185,7 +185,9 @@ async def delete_recipe_endpoint(
         except Exception:
             logger.exception(
                 "Failed to remove volume %s (vol %d) for recipe %s",
-                volume_name, recipe.base_volume_id, recipe_id,
+                volume_name,
+                recipe.base_volume_id,
+                recipe_id,
             )
 
     await delete_recipe(db, recipe_id)

@@ -158,9 +158,7 @@ class TestT116HealthCheck:
         # Detailed subsystem checks:
         if "subsystems" in body:
             for sub in ["database", "firecracker", "storage"]:
-                assert sub in body["subsystems"], (
-                    f"Missing subsystem '{sub}' in health check"
-                )
+                assert sub in body["subsystems"], f"Missing subsystem '{sub}' in health check"
 
 
 # ---------------------------------------------------------------------------
@@ -203,23 +201,15 @@ class TestT118CheckpointDag:
         checkpoint_b = None
         try:
             # Write some state and checkpoint
-            await exec_command(
-                long_client, computer_id, "echo 'state_a' > /tmp/state.txt"
-            )
-            checkpoint_a = await checkpoint_computer(
-                long_client, computer_id, label="checkpoint-A"
-            )
+            await exec_command(long_client, computer_id, "echo 'state_a' > /tmp/state.txt")
+            checkpoint_a = await checkpoint_computer(long_client, computer_id, label="checkpoint-A")
 
             # Fork from checkpoint A
             forked_id = await fork_checkpoint(long_client, checkpoint_a)
 
             # Write new state in fork and checkpoint
-            await exec_command(
-                long_client, forked_id, "echo 'state_b' >> /tmp/state.txt"
-            )
-            checkpoint_b = await checkpoint_computer(
-                long_client, forked_id, label="checkpoint-B"
-            )
+            await exec_command(long_client, forked_id, "echo 'state_b' >> /tmp/state.txt")
+            checkpoint_b = await checkpoint_computer(long_client, forked_id, label="checkpoint-B")
 
             # List checkpoints and verify parent lineage
             resp = await long_client.get("/checkpoints")
@@ -233,9 +223,7 @@ class TestT118CheckpointDag:
                     cp_b = cp
                     break
 
-            assert cp_b is not None, (
-                f"Checkpoint B ({checkpoint_b}) not found in list"
-            )
+            assert cp_b is not None, f"Checkpoint B ({checkpoint_b}) not found in list"
             assert cp_b.get("parent_id") is not None, (
                 f"Checkpoint B should have a parent_id, got: {cp_b}"
             )

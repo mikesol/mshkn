@@ -176,7 +176,12 @@ async def test_self_destruct_creates_checkpoint_and_destroys(tmp_path: Path) -> 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(
                 "/computers",
-                json={"uses": [], "exec": "echo done", "self_destruct": True, "label": "test-chain"},
+                json={
+                    "uses": [],
+                    "exec": "echo done",
+                    "self_destruct": True,
+                    "label": "test-chain",
+                },
                 headers={"Authorization": "Bearer test-key"},
             )
 
@@ -341,7 +346,7 @@ async def test_callback_url_fires_on_self_destruct(tmp_path: Path) -> None:
 
     captured_payload: dict | None = None
 
-    async def fake_deliver(url: str, payload: dict, max_retries: int = 3) -> None:  # noqa: ARG001
+    async def fake_deliver(url: str, payload: dict, max_retries: int = 3) -> None:
         nonlocal captured_payload
         captured_payload = payload
 
@@ -371,6 +376,7 @@ async def test_callback_url_fires_on_self_destruct(tmp_path: Path) -> None:
 
     # Wait for background task to complete
     import asyncio
+
     await asyncio.sleep(0.1)
 
     assert captured_payload is not None

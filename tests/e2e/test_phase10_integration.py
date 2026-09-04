@@ -7,10 +7,6 @@ but Parallel Exploration and Failure Recovery work with bare VMs.
 
 from __future__ import annotations
 
-import asyncio
-
-import pytest
-
 from .conftest import (
     checkpoint_computer,
     create_computer,
@@ -18,9 +14,7 @@ from .conftest import (
     destroy_computer,
     exec_command,
     fork_checkpoint,
-    managed_computer,
 )
-
 
 # ---------------------------------------------------------------------------
 # T10.1 — Web App Development Workflow
@@ -84,7 +78,8 @@ class TestT103ParallelExploration:
         try:
             # Write base state
             await exec_command(
-                long_client, computer_id,
+                long_client,
+                computer_id,
                 "echo 'base_state' > /root/experiment.txt",
             )
 
@@ -100,31 +95,26 @@ class TestT103ParallelExploration:
 
             # Each fork writes different content
             experiments = ["approach_alpha", "approach_beta", "approach_gamma"]
-            for fid, experiment in zip(forked_ids, experiments):
+            for fid, experiment in zip(forked_ids, experiments, strict=True):
                 await exec_command(
-                    long_client, fid,
+                    long_client,
+                    fid,
                     f"echo '{experiment}' >> /root/experiment.txt",
                 )
 
             # Verify each fork has different content
             contents: list[str] = []
             for fid in forked_ids:
-                result = await exec_command(
-                    long_client, fid, "cat /root/experiment.txt"
-                )
+                result = await exec_command(long_client, fid, "cat /root/experiment.txt")
                 contents.append(result.stdout.strip())
 
             # All should have base_state
             for i, content in enumerate(contents):
-                assert "base_state" in content, (
-                    f"Fork {i} missing base_state: {content}"
-                )
+                assert "base_state" in content, f"Fork {i} missing base_state: {content}"
 
             # Each should have its unique experiment line
-            for i, (content, experiment) in enumerate(zip(contents, experiments)):
-                assert experiment in content, (
-                    f"Fork {i} missing '{experiment}': {content}"
-                )
+            for i, (content, experiment) in enumerate(zip(contents, experiments, strict=True)):
+                assert experiment in content, f"Fork {i} missing '{experiment}': {content}"
 
             # No fork should have another fork's experiment
             for i, content in enumerate(contents):
@@ -169,14 +159,13 @@ class TestT104FailureRecovery:
         try:
             # Write important file
             await exec_command(
-                long_client, computer_id,
+                long_client,
+                computer_id,
                 "echo 'critical_data_12345' > /root/important.txt",
             )
 
             # Verify it exists
-            result = await exec_command(
-                long_client, computer_id, "cat /root/important.txt"
-            )
+            result = await exec_command(long_client, computer_id, "cat /root/important.txt")
             assert "critical_data_12345" in result.stdout
 
             # Checkpoint the good state
@@ -185,23 +174,22 @@ class TestT104FailureRecovery:
             )
 
             # Corrupt the state: delete the important file
-            await exec_command(
-                long_client, computer_id, "rm /root/important.txt"
-            )
+            await exec_command(long_client, computer_id, "rm /root/important.txt")
 
             # Verify it's gone
             result = await exec_command(
-                long_client, computer_id,
+                long_client,
+                computer_id,
                 "cat /root/important.txt 2>&1 || echo FILE_MISSING",
             )
-            assert "FILE_MISSING" in result.stdout or "No such file" in result.stdout + result.stderr
+            assert (
+                "FILE_MISSING" in result.stdout or "No such file" in result.stdout + result.stderr
+            )
 
             # Fork from the checkpoint — file should be restored
             recovered_id = await fork_checkpoint(long_client, checkpoint_id)
 
-            result = await exec_command(
-                long_client, recovered_id, "cat /root/important.txt"
-            )
+            result = await exec_command(long_client, recovered_id, "cat /root/important.txt")
             assert "critical_data_12345" in result.stdout, (
                 f"File should be recovered from checkpoint, got: {result.stdout}"
             )

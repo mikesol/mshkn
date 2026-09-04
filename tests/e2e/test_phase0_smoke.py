@@ -6,17 +6,13 @@ If T0.1 fails, nothing else matters.
 
 from __future__ import annotations
 
-import pytest
-
 from .conftest import (
-    ExecResult,
     create_computer,
     create_recipe,
     destroy_computer,
     exec_command,
     managed_computer,
 )
-
 
 # ---------------------------------------------------------------------------
 # T0.1 — Cold Create, No Capabilities
@@ -75,9 +71,7 @@ class TestT02CreateWithRecipe:
         async with managed_computer(long_client, recipe_id=recipe_id) as computer_id:
             result = await exec_command(long_client, computer_id, "python3 --version")
             version_line = result.stdout.strip()
-            assert version_line.startswith("Python 3"), (
-                f"Expected Python 3.x, got: {version_line}"
-            )
+            assert version_line.startswith("Python 3"), f"Expected Python 3.x, got: {version_line}"
 
     async def test_recipe_destroy_clean(self, long_client):
         """Destroy after recipe-based create is clean."""
@@ -108,10 +102,8 @@ class TestT03ExecBasics:
                 "for i in $(seq 1 5); do echo $i; sleep 0.1; done",
                 timeout=30.0,
             )
-            lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
-            assert lines == ["1", "2", "3", "4", "5"], (
-                f"Expected lines 1-5, got: {lines}"
-            )
+            lines = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
+            assert lines == ["1", "2", "3", "4", "5"], f"Expected lines 1-5, got: {lines}"
 
     async def test_stderr_comes_through(self, client):
         """echo to stderr arrives as stderr events."""
@@ -152,17 +144,14 @@ class TestT03ExecBasics:
 
             # If there are exit-type events, check that exit code is non-zero
             if exit_events:
-                for evt, data in exit_events:
+                for _evt, data in exit_events:
                     if data.isdigit() or (data.startswith("-") and data[1:].isdigit()):
                         assert int(data) != 0, "Expected non-zero exit code"
                         return
 
             # If no explicit exit event, the test still passes — we document
             # that exit codes may not be surfaced yet
-            print(
-                f"NOTE: No explicit exit code event found. "
-                f"Events were: {result.events}"
-            )
+            print(f"NOTE: No explicit exit code event found. Events were: {result.events}")
 
     async def test_multiline_stdout(self, client):
         """Multiple lines of stdout are all captured."""
@@ -172,5 +161,5 @@ class TestT03ExecBasics:
                 computer_id,
                 'echo "line1" && echo "line2" && echo "line3"',
             )
-            lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+            lines = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
             assert lines == ["line1", "line2", "line3"]

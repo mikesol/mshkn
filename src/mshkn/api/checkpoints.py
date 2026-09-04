@@ -86,8 +86,12 @@ async def fork_checkpoint(
                 }
                 now = datetime.now(UTC).isoformat()
                 await insert_deferred(
-                    db, deferred_id, ckpt.label, account.id,
-                    json.dumps(payload), now,
+                    db,
+                    deferred_id,
+                    ckpt.label,
+                    account.id,
+                    json.dumps(payload),
+                    now,
                 )
                 return JSONResponse(
                     status_code=202,
@@ -110,7 +114,10 @@ async def fork_checkpoint(
         config = request.app.state.config
         pool = _get_pool(request)
         result = await ssh_exec(
-            computer.vm_ip, body.exec, config.ssh_key_path, pool=pool,
+            computer.vm_ip,
+            body.exec,
+            config.ssh_key_path,
+            pool=pool,
         )
         exec_exit_code = result.exit_code
         exec_stdout = result.stdout
@@ -283,10 +290,7 @@ async def merge_checkpoints(
         shutil.rmtree(merge_dir, ignore_errors=True)
 
     # Build conflict info for response
-    conflicts = [
-        {"path": c.path, "resolution": "fork_a"}
-        for c in result.conflicts
-    ]
+    conflicts = [{"path": c.path, "resolution": "fork_a"} for c in result.conflicts]
 
     # Create checkpoint record
     now = datetime.now(UTC).isoformat()
@@ -314,7 +318,10 @@ async def merge_checkpoints(
     # but the volume itself is the checkpoint — skip R2 for now)
     logger.info(
         "Merged checkpoint %s: auto_merged=%d, unchanged=%d, conflicts=%d",
-        checkpoint_id, result.auto_merged, result.unchanged, len(result.conflicts),
+        checkpoint_id,
+        result.auto_merged,
+        result.unchanged,
+        len(result.conflicts),
     )
 
     return {

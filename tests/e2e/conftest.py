@@ -11,13 +11,15 @@ import asyncio
 import os
 import statistics
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 # ---------------------------------------------------------------------------
 # Config
@@ -45,18 +47,14 @@ def api_key() -> str:
 
 @pytest.fixture
 async def client() -> AsyncIterator[httpx.AsyncClient]:
-    async with httpx.AsyncClient(
-        base_url=API_URL, headers=HEADERS, timeout=60.0
-    ) as c:
+    async with httpx.AsyncClient(base_url=API_URL, headers=HEADERS, timeout=60.0) as c:
         yield c
 
 
 @pytest.fixture
 async def long_client() -> AsyncIterator[httpx.AsyncClient]:
     """Client with longer timeout for slow operations like fork."""
-    async with httpx.AsyncClient(
-        base_url=API_URL, headers=HEADERS, timeout=120.0
-    ) as c:
+    async with httpx.AsyncClient(base_url=API_URL, headers=HEADERS, timeout=120.0) as c:
         yield c
 
 
@@ -109,9 +107,7 @@ async def exec_command(
     )
 
 
-async def create_recipe(
-    client: httpx.AsyncClient, dockerfile: str, timeout: float = 300.0
-) -> str:
+async def create_recipe(client: httpx.AsyncClient, dockerfile: str, timeout: float = 300.0) -> str:
     """Create a recipe, wait for it to be ready, return recipe_id."""
     resp = await client.post("/recipes", json={"dockerfile": dockerfile})
     resp.raise_for_status()
@@ -148,10 +144,8 @@ async def create_computer(
 
 async def destroy_computer(client: httpx.AsyncClient, computer_id: str) -> None:
     """Destroy a computer, ignore errors."""
-    try:
+    with suppress(Exception):
         await client.delete(f"/computers/{computer_id}")
-    except Exception:
-        pass
 
 
 async def checkpoint_computer(
@@ -175,10 +169,8 @@ async def fork_checkpoint(client: httpx.AsyncClient, checkpoint_id: str) -> str:
 
 async def delete_checkpoint(client: httpx.AsyncClient, checkpoint_id: str) -> None:
     """Delete a checkpoint, ignore errors."""
-    try:
+    with suppress(Exception):
         await client.delete(f"/checkpoints/{checkpoint_id}")
-    except Exception:
-        pass
 
 
 @asynccontextmanager
@@ -238,7 +230,8 @@ class LatencyStats:
     def report(self, name: str, target_ms: float | None = None) -> str:
         lines = [
             f"{name}: n={self.count}",
-            f"  min={self.min:.0f}ms  p50={self.p50:.0f}ms  p95={self.p95:.0f}ms  p99={self.p99:.0f}ms  max={self.max:.0f}ms",
+            f"  min={self.min:.0f}ms  p50={self.p50:.0f}ms  p95={self.p95:.0f}ms  "
+            f"p99={self.p99:.0f}ms  max={self.max:.0f}ms",
         ]
         if target_ms:
             status = "PASS" if self.p95 <= target_ms else "FAIL"

@@ -9,7 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 async def pool_create_snap(
-    pool_name: str, new_volume_id: int, source_volume_id: int,
+    pool_name: str,
+    new_volume_id: int,
+    source_volume_id: int,
 ) -> None:
     """Issue create_snap in the dm-thin pool, retrying on orphaned volume ID."""
     try:
@@ -22,8 +24,7 @@ async def pool_create_snap(
             )
             await run(f"dmsetup message {pool_name} 0 'delete {new_volume_id}'")
             await run(
-                f"dmsetup message {pool_name} 0 "
-                f"'create_snap {new_volume_id} {source_volume_id}'"
+                f"dmsetup message {pool_name} 0 'create_snap {new_volume_id} {source_volume_id}'"
             )
         else:
             raise
@@ -47,7 +48,8 @@ async def create_snapshot(
     except ShellError as e:
         if "File exists" in e.stderr or "already exists" in e.stderr:
             logger.warning(
-                "Stale device %s exists, removing and retrying", new_volume_name,
+                "Stale device %s exists, removing and retrying",
+                new_volume_name,
             )
             await run(f"dmsetup remove {new_volume_name}", check=False)
             await run(
@@ -76,20 +78,27 @@ async def remove_volume(pool_name: str, volume_name: str, volume_id: int) -> Non
             if attempt < max_retries - 1:
                 logger.debug(
                     "dmsetup remove %s failed (attempt %d/%d): %s",
-                    volume_name, attempt + 1, max_retries, e.stderr.strip(),
+                    volume_name,
+                    attempt + 1,
+                    max_retries,
+                    e.stderr.strip(),
                 )
                 await asyncio.sleep(0.5)
             else:
                 logger.warning(
                     "dmsetup remove %s failed after %d attempts: %s",
-                    volume_name, max_retries, e.stderr.strip(),
+                    volume_name,
+                    max_retries,
+                    e.stderr.strip(),
                 )
 
     try:
         await run(f"dmsetup message {pool_name} 0 'delete {volume_id}'")
     except ShellError as e:
         logger.warning(
-            "dmsetup delete vol %d failed: %s", volume_id, e.stderr.strip(),
+            "dmsetup delete vol %d failed: %s",
+            volume_id,
+            e.stderr.strip(),
         )
 
     logger.info("Removed volume %s (vol %d)", volume_name, volume_id)

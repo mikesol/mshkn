@@ -52,7 +52,9 @@ class CaddyClient:
                 if resp.status_code >= 400:
                     logger.error(
                         "Failed to add Caddy route for %s: %s %s",
-                        computer_id, resp.status_code, resp.text,
+                        computer_id,
+                        resp.status_code,
+                        resp.text,
                     )
                     raise RuntimeError(f"Caddy add_route failed: {resp.status_code} {resp.text}")
                 break
@@ -71,7 +73,9 @@ class CaddyClient:
             # Route may not exist (e.g. Caddy restarted) — log but don't fail
             logger.warning(
                 "Failed to remove Caddy route for %s: %s %s",
-                computer_id, resp.status_code, resp.text,
+                computer_id,
+                resp.status_code,
+                resp.text,
             )
             return
         logger.info("Removed Caddy route for %s", computer_id)

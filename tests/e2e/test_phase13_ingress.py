@@ -7,8 +7,9 @@ trigger (async/sync fork, create), rate limiting, rule rotation, and logs.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
@@ -22,11 +23,14 @@ from tests.e2e.conftest import (
     destroy_computer,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 # ---------------------------------------------------------------------------
 # Starlark sources
 # ---------------------------------------------------------------------------
 
-STARLARK_FORK = '''
+STARLARK_FORK = """
 def transform(req):
     body = req["body_json"]
     if not body or "checkpoint_id" not in body:
@@ -37,18 +41,18 @@ def transform(req):
     if "self_destruct" in body:
         result["self_destruct"] = body["self_destruct"]
     return result
-'''
+"""
 
-STARLARK_CREATE = '''
+STARLARK_CREATE = """
 def transform(req):
     return {"action": "create", "exec": "echo hello-from-ingress", "self_destruct": True}
-'''
+"""
 
-STARLARK_NONE = 'def transform(req):\n  return None'
+STARLARK_NONE = "def transform(req):\n  return None"
 STARLARK_ERROR = 'def transform(req):\n  return req["nonexistent"]["key"]'
 STARLARK_INVALID_ACTION = 'def transform(req):\n  return {"action": "invalid"}'
 
-STARLARK_ECHO_FIELDS = '''
+STARLARK_ECHO_FIELDS = """
 def transform(req):
     return {
         "action": "create",
@@ -59,15 +63,15 @@ def transform(req):
         ),
         "self_destruct": True,
     }
-'''
+"""
 
-STARLARK_CONDITIONAL_NONE = '''
+STARLARK_CONDITIONAL_NONE = """
 def transform(req):
     body = req["body_json"]
     if body and body.get("skip"):
         return None
     return {"action": "create", "exec": "echo ok", "self_destruct": True}
-'''
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -77,17 +81,13 @@ def transform(req):
 
 @pytest.fixture
 async def client() -> AsyncIterator[httpx.AsyncClient]:
-    async with httpx.AsyncClient(
-        base_url=API_URL, headers=HEADERS, timeout=60.0
-    ) as c:
+    async with httpx.AsyncClient(base_url=API_URL, headers=HEADERS, timeout=60.0) as c:
         yield c
 
 
 @pytest.fixture
 async def long_client() -> AsyncIterator[httpx.AsyncClient]:
-    async with httpx.AsyncClient(
-        base_url=API_URL, headers=HEADERS, timeout=120.0
-    ) as c:
+    async with httpx.AsyncClient(base_url=API_URL, headers=HEADERS, timeout=120.0) as c:
         yield c
 
 
@@ -113,10 +113,8 @@ async def create_rule(
 
 
 async def delete_rule(client: httpx.AsyncClient, rule_id: str) -> None:
-    try:
+    with contextlib.suppress(Exception):
         await client.delete(f"/ingress_rules/{rule_id}")
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +276,10 @@ async def test_ingress_async_fork(
     await destroy_computer(long_client, comp_id)
 
     rule = await create_rule(
-        long_client, "async-fork", STARLARK_FORK, response_mode="async",
+        long_client,
+        "async-fork",
+        STARLARK_FORK,
+        response_mode="async",
     )
     rule_id = rule["id"]
     try:
@@ -299,7 +300,8 @@ async def test_ingress_async_fork(
         for _ in range(30):
             await asyncio.sleep(2)
             ckpts_resp = await long_client.get(
-                "/checkpoints", params={"label": "test-ingress-async"},
+                "/checkpoints",
+                params={"label": "test-ingress-async"},
             )
             ckpts_resp.raise_for_status()
             ckpts = ckpts_resp.json()
@@ -315,7 +317,8 @@ async def test_ingress_async_fork(
 
         # Clean up checkpoints
         ckpts_resp = await long_client.get(
-            "/checkpoints", params={"label": "test-ingress-async"},
+            "/checkpoints",
+            params={"label": "test-ingress-async"},
         )
         for c in ckpts_resp.json():
             await delete_checkpoint(long_client, c["id"])
@@ -339,7 +342,10 @@ async def test_ingress_sync_fork(
     await destroy_computer(long_client, comp_id)
 
     rule = await create_rule(
-        long_client, "sync-fork", STARLARK_FORK, response_mode="sync",
+        long_client,
+        "sync-fork",
+        STARLARK_FORK,
+        response_mode="sync",
     )
     rule_id = rule["id"]
     try:
@@ -360,7 +366,8 @@ async def test_ingress_sync_fork(
 
         # Clean up checkpoints
         ckpts_resp = await long_client.get(
-            "/checkpoints", params={"label": "test-ingress-sync"},
+            "/checkpoints",
+            params={"label": "test-ingress-sync"},
         )
         for c in ckpts_resp.json():
             await delete_checkpoint(long_client, c["id"])
@@ -380,7 +387,10 @@ async def test_ingress_sync_create(
 ) -> None:
     """Ingress trigger creates a computer synchronously with exec output."""
     rule = await create_rule(
-        long_client, "sync-create", STARLARK_CREATE, response_mode="sync",
+        long_client,
+        "sync-create",
+        STARLARK_CREATE,
+        response_mode="sync",
     )
     rule_id = rule["id"]
     try:
@@ -412,7 +422,10 @@ async def test_starlark_transform_fields(
 ) -> None:
     """Starlark transform correctly receives body_json, query_params, headers."""
     rule = await create_rule(
-        long_client, "fields-test", STARLARK_ECHO_FIELDS, response_mode="sync",
+        long_client,
+        "fields-test",
+        STARLARK_ECHO_FIELDS,
+        response_mode="sync",
     )
     rule_id = rule["id"]
     try:
@@ -510,7 +523,8 @@ async def test_ingress_disabled_rule_404(
     try:
         # Disable the rule
         resp = await client.put(
-            f"/ingress_rules/{rule_id}", json={"enabled": False},
+            f"/ingress_rules/{rule_id}",
+            json={"enabled": False},
         )
         resp.raise_for_status()
 
@@ -532,7 +546,10 @@ async def test_ingress_body_too_large_413(
 ) -> None:
     """POST with body exceeding max_body_bytes returns 413."""
     rule = await create_rule(
-        client, "small-body", STARLARK_NONE, max_body_bytes=1024,
+        client,
+        "small-body",
+        STARLARK_NONE,
+        max_body_bytes=1024,
     )
     rule_id = rule["id"]
     try:
@@ -597,7 +614,10 @@ async def test_rate_limiting(
 ) -> None:
     """Rate limiting enforces rate_limit_rpm — excess requests get 429."""
     rule = await create_rule(
-        client, "rate-limit", STARLARK_NONE, rate_limit_rpm=5,
+        client,
+        "rate-limit",
+        STARLARK_NONE,
+        rate_limit_rpm=5,
     )
     rule_id = rule["id"]
     try:

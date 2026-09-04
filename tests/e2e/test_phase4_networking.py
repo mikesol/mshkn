@@ -103,12 +103,14 @@ class TestT42MultiplePorts:
                     f"http.server.HTTPServer(('', {port}), H).serve_forever()\n"
                 )
                 await exec_command(
-                    client, computer_id,
+                    client,
+                    computer_id,
                     f"cat > /tmp/srv{port}.py << 'PYEOF'\n{script}PYEOF",
                     timeout=5.0,
                 )
                 await exec_command(
-                    client, computer_id,
+                    client,
+                    computer_id,
                     f"nohup python3 /tmp/srv{port}.py &>/dev/null &",
                     timeout=5.0,
                 )
@@ -139,7 +141,8 @@ class TestT43WebSocket:
         """Start a WS echo server in the VM and verify a round trip."""
         recipe_id = await create_recipe(long_client, _PYTHON_WS_DOCKERFILE)
         async with managed_computer(
-            long_client, recipe_id=recipe_id,
+            long_client,
+            recipe_id=recipe_id,
         ) as computer_id:
             # Write websocket echo server script
             ws_script = (
@@ -153,12 +156,14 @@ class TestT43WebSocket:
                 "asyncio.run(main())\n"
             )
             await exec_command(
-                client, computer_id,
+                client,
+                computer_id,
                 f"cat > /tmp/ws_echo.py << 'PYEOF'\n{ws_script}PYEOF",
                 timeout=5.0,
             )
             await exec_command(
-                client, computer_id,
+                client,
+                computer_id,
                 "nohup python3 /tmp/ws_echo.py &>/dev/null &",
                 timeout=5.0,
             )
@@ -211,8 +216,7 @@ class TestT44UrlChangesOnCheckpointResume:
             fork_url = fork_resp.json().get("url", "")
 
             assert orig_url != fork_url, (
-                f"Original and forked computers should have different URLs, "
-                f"both got: {orig_url}"
+                f"Original and forked computers should have different URLs, both got: {orig_url}"
             )
 
             # Verify state was preserved in the fork
@@ -257,8 +261,7 @@ class TestT45NetworkIsolation:
                 timeout=10.0,
             )
             assert "PING_FAILED" in result.stdout or "100% packet loss" in result.stdout, (
-                f"VM A should NOT be able to reach VM B at {ip_b}. "
-                f"Output: {result.stdout}"
+                f"VM A should NOT be able to reach VM B at {ip_b}. Output: {result.stdout}"
             )
 
             # VM B tries to ping VM A — should also fail
@@ -269,8 +272,7 @@ class TestT45NetworkIsolation:
                 timeout=10.0,
             )
             assert "PING_FAILED" in result.stdout or "100% packet loss" in result.stdout, (
-                f"VM B should NOT be able to reach VM A at {ip_a}. "
-                f"Output: {result.stdout}"
+                f"VM B should NOT be able to reach VM A at {ip_a}. Output: {result.stdout}"
             )
         finally:
             await destroy_computer(client, comp_a)

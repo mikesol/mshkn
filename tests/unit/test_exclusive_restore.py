@@ -139,12 +139,20 @@ async def test_deferred_queue_insert_and_list(tmp_path: Path) -> None:
     db = await _setup_db(tmp_path)
     try:
         await insert_deferred(
-            db, "def-1", "my-agent", "acct-1",
-            '{"checkpoint_id":"ckpt-1"}', "2026-03-08T00:00:00",
+            db,
+            "def-1",
+            "my-agent",
+            "acct-1",
+            '{"checkpoint_id":"ckpt-1"}',
+            "2026-03-08T00:00:00",
         )
         await insert_deferred(
-            db, "def-2", "my-agent", "acct-1",
-            '{"checkpoint_id":"ckpt-1"}', "2026-03-08T00:01:00",
+            db,
+            "def-2",
+            "my-agent",
+            "acct-1",
+            '{"checkpoint_id":"ckpt-1"}',
+            "2026-03-08T00:01:00",
         )
 
         items = await list_deferred_by_label(db, "my-agent")
@@ -159,12 +167,20 @@ async def test_deferred_queue_delete_by_label(tmp_path: Path) -> None:
     db = await _setup_db(tmp_path)
     try:
         await insert_deferred(
-            db, "def-1", "my-agent", "acct-1",
-            '{"checkpoint_id":"ckpt-1"}', "2026-03-08T00:00:00",
+            db,
+            "def-1",
+            "my-agent",
+            "acct-1",
+            '{"checkpoint_id":"ckpt-1"}',
+            "2026-03-08T00:00:00",
         )
         await insert_deferred(
-            db, "def-2", "other-agent", "acct-1",
-            '{"checkpoint_id":"ckpt-2"}', "2026-03-08T00:01:00",
+            db,
+            "def-2",
+            "other-agent",
+            "acct-1",
+            '{"checkpoint_id":"ckpt-2"}',
+            "2026-03-08T00:01:00",
         )
 
         await delete_deferred_by_label(db, "my-agent")

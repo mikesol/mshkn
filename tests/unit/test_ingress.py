@@ -8,6 +8,7 @@ import aiosqlite
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from mshkn.api.ingress import _validate_transform_result
 from mshkn.db import run_migrations
 from mshkn.ingress.db import (
     delete_ingress_rule,
@@ -21,6 +22,7 @@ from mshkn.ingress.db import (
     update_ingress_rule,
 )
 from mshkn.ingress.models import IngressLog, IngressRule
+from mshkn.ingress.starlark import StarlarkError, execute_transform, validate_starlark
 from mshkn.main import app
 
 
@@ -63,7 +65,9 @@ def _make_rule(**overrides: object) -> IngressRule:
         "id": "ir_test123",
         "account_id": "acct-test",
         "name": "test-rule",
-        "starlark_source": 'def transform(req):\n  return {"action": "fork", "checkpoint_id": "cp_1"}',
+        "starlark_source": (
+            'def transform(req):\n  return {"action": "fork", "checkpoint_id": "cp_1"}'
+        ),
         "response_mode": "async",
         "max_body_bytes": 10485760,
         "rate_limit_rpm": 60,
@@ -188,8 +192,6 @@ async def test_prune_old_logs(tmp_path: Path) -> None:
 
 # --- Starlark sandbox tests ---
 
-from mshkn.ingress.starlark import StarlarkError, execute_transform, validate_starlark
-
 
 def test_validate_starlark_valid() -> None:
     source = 'def transform(req):\n  return {"action": "fork", "checkpoint_id": "cp_1"}'
@@ -211,7 +213,9 @@ def test_validate_starlark_syntax_error() -> None:
 
 
 def test_execute_transform_fork() -> None:
-    source = 'def transform(req):\n  return {"action": "fork", "checkpoint_id": req["body_json"]["cp"]}'
+    source = (
+        'def transform(req):\n  return {"action": "fork", "checkpoint_id": req["body_json"]["cp"]}'
+    )
     req = {
         "method": "POST",
         "path": "/webhook",
@@ -260,8 +264,6 @@ def test_execute_transform_runtime_error() -> None:
 
 # --- API endpoint tests ---
 
-from mshkn.api.ingress import _validate_transform_result
-
 
 def test_validate_transform_result_none() -> None:
     assert _validate_transform_result(None) == []
@@ -308,15 +310,15 @@ def test_validate_transform_result_invalid_exclusive() -> None:
 async def test_api_create_rule(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/ingress_rules",
                 headers=AUTH_HEADERS,
                 json={
                     "name": "my-rule",
-                    "starlark_source": 'def transform(req):\n  return {"action": "fork", "checkpoint_id": "cp_1"}',
+                    "starlark_source": (
+                        'def transform(req):\n  return {"action": "fork", "checkpoint_id": "cp_1"}'
+                    ),
                 },
             )
             assert resp.status_code == 200
@@ -333,9 +335,7 @@ async def test_api_create_rule(tmp_path: Path) -> None:
 async def test_api_create_rule_invalid_starlark(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
                 "/ingress_rules",
                 headers=AUTH_HEADERS,
@@ -354,9 +354,7 @@ async def test_api_create_rule_invalid_starlark(tmp_path: Path) -> None:
 async def test_api_list_rules(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             # Create two rules
             for name in ("rule-a", "rule-b"):
                 await client.post(
@@ -364,7 +362,7 @@ async def test_api_list_rules(tmp_path: Path) -> None:
                     headers=AUTH_HEADERS,
                     json={
                         "name": name,
-                        "starlark_source": 'def transform(req):\n  return None',
+                        "starlark_source": "def transform(req):\n  return None",
                     },
                 )
             resp = await client.get("/ingress_rules", headers=AUTH_HEADERS)
@@ -378,20 +376,19 @@ async def test_api_list_rules(tmp_path: Path) -> None:
 async def test_api_get_rule(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             create_resp = await client.post(
                 "/ingress_rules",
                 headers=AUTH_HEADERS,
                 json={
                     "name": "get-me",
-                    "starlark_source": 'def transform(req):\n  return None',
+                    "starlark_source": "def transform(req):\n  return None",
                 },
             )
             rule_id = create_resp.json()["id"]
             resp = await client.get(
-                f"/ingress_rules/{rule_id}", headers=AUTH_HEADERS,
+                f"/ingress_rules/{rule_id}",
+                headers=AUTH_HEADERS,
             )
             assert resp.status_code == 200
             data = resp.json()
@@ -405,26 +402,26 @@ async def test_api_get_rule(tmp_path: Path) -> None:
 async def test_api_delete_rule(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             create_resp = await client.post(
                 "/ingress_rules",
                 headers=AUTH_HEADERS,
                 json={
                     "name": "delete-me",
-                    "starlark_source": 'def transform(req):\n  return None',
+                    "starlark_source": "def transform(req):\n  return None",
                 },
             )
             rule_id = create_resp.json()["id"]
             resp = await client.delete(
-                f"/ingress_rules/{rule_id}", headers=AUTH_HEADERS,
+                f"/ingress_rules/{rule_id}",
+                headers=AUTH_HEADERS,
             )
             assert resp.status_code == 204
 
             # Verify it's gone
             resp2 = await client.get(
-                f"/ingress_rules/{rule_id}", headers=AUTH_HEADERS,
+                f"/ingress_rules/{rule_id}",
+                headers=AUTH_HEADERS,
             )
             assert resp2.status_code == 404
     finally:
@@ -435,20 +432,19 @@ async def test_api_delete_rule(tmp_path: Path) -> None:
 async def test_api_rotate_rule(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             create_resp = await client.post(
                 "/ingress_rules",
                 headers=AUTH_HEADERS,
                 json={
                     "name": "rotate-me",
-                    "starlark_source": 'def transform(req):\n  return None',
+                    "starlark_source": "def transform(req):\n  return None",
                 },
             )
             old_id = create_resp.json()["id"]
             resp = await client.post(
-                f"/ingress_rules/{old_id}/rotate", headers=AUTH_HEADERS,
+                f"/ingress_rules/{old_id}/rotate",
+                headers=AUTH_HEADERS,
             )
             assert resp.status_code == 200
             new_id = resp.json()["id"]
@@ -457,7 +453,8 @@ async def test_api_rotate_rule(tmp_path: Path) -> None:
 
             # Old ID gone
             resp2 = await client.get(
-                f"/ingress_rules/{old_id}", headers=AUTH_HEADERS,
+                f"/ingress_rules/{old_id}",
+                headers=AUTH_HEADERS,
             )
             assert resp2.status_code == 404
     finally:
@@ -468,15 +465,15 @@ async def test_api_rotate_rule(tmp_path: Path) -> None:
 async def test_api_test_rule(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             create_resp = await client.post(
                 "/ingress_rules",
                 headers=AUTH_HEADERS,
                 json={
                     "name": "test-rule",
-                    "starlark_source": 'def transform(req):\n  return {"action": "fork", "checkpoint_id": "cp_1"}',
+                    "starlark_source": (
+                        'def transform(req):\n  return {"action": "fork", "checkpoint_id": "cp_1"}'
+                    ),
                 },
             )
             rule_id = create_resp.json()["id"]
@@ -498,9 +495,7 @@ async def test_api_test_rule(tmp_path: Path) -> None:
 async def test_api_requires_auth(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/ingress_rules")
             assert resp.status_code == 401
     finally:
@@ -511,9 +506,7 @@ async def test_api_requires_auth(tmp_path: Path) -> None:
 async def test_trigger_404_unknown_rule(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/ingress/ir_nonexistent")
             assert resp.status_code == 404
     finally:
@@ -526,12 +519,13 @@ async def test_trigger_disabled_rule_404(tmp_path: Path) -> None:
     try:
         # Insert a disabled rule directly
         from mshkn.ingress.db import insert_ingress_rule as _ins
+
         rule = IngressRule(
             internal_id="int-dis",
             id="ir_disabled",
             account_id="acct-test",
             name="disabled",
-            starlark_source='def transform(req):\n  return None',
+            starlark_source="def transform(req):\n  return None",
             response_mode="async",
             max_body_bytes=10485760,
             rate_limit_rpm=60,
@@ -541,9 +535,7 @@ async def test_trigger_disabled_rule_404(tmp_path: Path) -> None:
         )
         await _ins(db, rule)
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/ingress/ir_disabled")
             assert resp.status_code == 404
     finally:
@@ -555,12 +547,13 @@ async def test_trigger_none_returns_204(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
         from mshkn.ingress.db import insert_ingress_rule as _ins
+
         rule = IngressRule(
             internal_id="int-none",
             id="ir_none_result",
             account_id="acct-test",
             name="none-rule",
-            starlark_source='def transform(req):\n  return None',
+            starlark_source="def transform(req):\n  return None",
             response_mode="async",
             max_body_bytes=10485760,
             rate_limit_rpm=60,
@@ -570,9 +563,7 @@ async def test_trigger_none_returns_204(tmp_path: Path) -> None:
         )
         await _ins(db, rule)
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/ingress/ir_none_result")
             assert resp.status_code == 204
     finally:
@@ -584,6 +575,7 @@ async def test_trigger_starlark_error_502(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
         from mshkn.ingress.db import insert_ingress_rule as _ins
+
         rule = IngressRule(
             internal_id="int-err",
             id="ir_starlark_error",
@@ -599,9 +591,7 @@ async def test_trigger_starlark_error_502(tmp_path: Path) -> None:
         )
         await _ins(db, rule)
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/ingress/ir_starlark_error")
             assert resp.status_code == 502
     finally:
@@ -613,6 +603,7 @@ async def test_trigger_invalid_action_502(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
         from mshkn.ingress.db import insert_ingress_rule as _ins
+
         rule = IngressRule(
             internal_id="int-bad",
             id="ir_bad_action",
@@ -628,9 +619,7 @@ async def test_trigger_invalid_action_502(tmp_path: Path) -> None:
         )
         await _ins(db, rule)
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/ingress/ir_bad_action")
             assert resp.status_code == 502
     finally:

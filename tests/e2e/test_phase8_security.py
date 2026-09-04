@@ -32,9 +32,7 @@ class TestT81VmEscape:
     async def test_proc1_is_vm_init_not_host(self, client):
         """/proc/1/cmdline should show the VM's init, not the host's."""
         async with managed_computer(client) as computer_id:
-            result = await exec_command(
-                client, computer_id, "cat /proc/1/cmdline | tr '\\0' ' '"
-            )
+            result = await exec_command(client, computer_id, "cat /proc/1/cmdline | tr '\\0' ' '")
             cmdline = result.stdout.strip()
             # VM init is typically /sbin/init or systemd, NOT the host's
             # orchestrator process. The key thing: it should NOT contain
@@ -57,13 +55,9 @@ class TestT81VmEscape:
             # and should NOT show host-specific hardware
             combined = output + result.stderr
             has_vm_markers = (
-                "virtio" in combined.lower()
-                or "serial" in combined.lower()
-                or len(combined) > 0
+                "virtio" in combined.lower() or "serial" in combined.lower() or len(combined) > 0
             )
-            assert has_vm_markers, (
-                f"dmesg should show VM kernel messages, got: {output[:500]}"
-            )
+            assert has_vm_markers, f"dmesg should show VM kernel messages, got: {output[:500]}"
 
     async def test_mount_shows_no_host_filesystems(self, client):
         """mount output should not reveal host filesystem paths."""
@@ -119,16 +113,13 @@ class TestT83InvalidApiKey:
 
     async def test_no_auth_header_returns_401(self):
         """Request with no Authorization header should get 401."""
-        async with httpx.AsyncClient(
-            base_url=API_URL, timeout=10.0
-        ) as no_auth_client:
+        async with httpx.AsyncClient(base_url=API_URL, timeout=10.0) as no_auth_client:
             resp = await no_auth_client.post(
-                "/computers", json={},
+                "/computers",
+                json={},
                 headers={"Content-Type": "application/json"},
             )
-            assert resp.status_code == 401, (
-                f"Expected 401 for no auth, got {resp.status_code}"
-            )
+            assert resp.status_code == 401, f"Expected 401 for no auth, got {resp.status_code}"
 
     async def test_invalid_bearer_token_returns_401(self):
         """Request with 'Bearer invalid-key' should get 401."""
@@ -136,13 +127,9 @@ class TestT83InvalidApiKey:
             "Authorization": "Bearer invalid-key",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(
-            base_url=API_URL, headers=headers, timeout=10.0
-        ) as bad_client:
+        async with httpx.AsyncClient(base_url=API_URL, headers=headers, timeout=10.0) as bad_client:
             resp = await bad_client.post("/computers", json={})
-            assert resp.status_code == 401, (
-                f"Expected 401 for invalid key, got {resp.status_code}"
-            )
+            assert resp.status_code == 401, f"Expected 401 for invalid key, got {resp.status_code}"
 
     async def test_malformed_auth_header_returns_401(self):
         """Request with 'NotBearer key' auth format should get 401."""
@@ -150,9 +137,7 @@ class TestT83InvalidApiKey:
             "Authorization": "NotBearer some-key-here",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(
-            base_url=API_URL, headers=headers, timeout=10.0
-        ) as bad_client:
+        async with httpx.AsyncClient(base_url=API_URL, headers=headers, timeout=10.0) as bad_client:
             resp = await bad_client.post("/computers", json={})
             assert resp.status_code == 401, (
                 f"Expected 401 for malformed auth, got {resp.status_code}"
@@ -190,7 +175,9 @@ class TestT84ResourceLimits:
 
             # Clean up background processes
             await exec_command(
-                client, computer_id, "kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; echo CLEANED",
+                client,
+                computer_id,
+                "kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; echo CLEANED",
                 timeout=15.0,
             )
 
@@ -241,8 +228,7 @@ class TestT84ResourceLimits:
             # Should NOT succeed — expect MemoryError or killed
             if "allocated_600mb" in combined:
                 pytest.fail(
-                    "600MB allocation succeeded in a 512MB VM — "
-                    "memory limits may not be enforced"
+                    "600MB allocation succeeded in a 512MB VM — memory limits may not be enforced"
                 )
             # Expect either MemoryError, Killed, or similar
             print(f"600MB allocation result (expected failure): {combined[:500]}")
@@ -315,7 +301,8 @@ class TestT85NetworkEgress:
         try:
             # Get IP of VM B by checking its network config
             result_b = await exec_command(
-                client, comp_b,
+                client,
+                comp_b,
                 "ip -4 addr show eth0 2>/dev/null | grep inet | awk '{print $2}' | cut -d/ -f1 "
                 "|| hostname -I | awk '{print $1}'",
                 timeout=10.0,
@@ -334,8 +321,7 @@ class TestT85NetworkEgress:
             )
             combined = result.stdout + result.stderr
             assert "PING_FAILED" in combined or "100% packet loss" in combined, (
-                f"VM A should NOT be able to reach VM B at {ip_b}. "
-                f"Output: {combined[:500]}"
+                f"VM A should NOT be able to reach VM B at {ip_b}. Output: {combined[:500]}"
             )
         finally:
             await destroy_computer(client, comp_a)

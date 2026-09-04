@@ -1,4 +1,11 @@
-from mshkn.vm.staging import STAGING_SLOT, STAGING_TAP, STAGING_HOST_IP, STAGING_VM_IP, STAGING_MAC, STAGING_DRIVE_NAME
+from mshkn.vm.staging import (
+    STAGING_DRIVE_NAME,
+    STAGING_HOST_IP,
+    STAGING_MAC,
+    STAGING_SLOT,
+    STAGING_TAP,
+    STAGING_VM_IP,
+)
 
 
 def test_staging_constants():

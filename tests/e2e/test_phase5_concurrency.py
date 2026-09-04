@@ -13,16 +13,11 @@ import httpx
 import pytest
 
 from .conftest import (
-    LatencyStats,
-    create_computer,
     checkpoint_computer,
+    create_computer,
     destroy_computer,
     exec_command,
-    managed_computer,
-    API_URL,
-    HEADERS,
 )
-
 
 # ---------------------------------------------------------------------------
 # T5.1 — 10 Concurrent Computers
@@ -43,15 +38,11 @@ class TestT51ConcurrentComputers:
             create_tasks = [create_computer(client) for _ in range(n)]
             computer_ids = await asyncio.gather(*create_tasks)
             t_create_ms = (time.perf_counter() - t_create_start) * 1000
-            assert len(computer_ids) == n, (
-                f"Expected {n} computers, got {len(computer_ids)}"
-            )
+            assert len(computer_ids) == n, f"Expected {n} computers, got {len(computer_ids)}"
 
             # Phase 2: Exec "echo hello" on all 10 concurrently
             t_exec_start = time.perf_counter()
-            exec_tasks = [
-                exec_command(client, cid, "echo hello") for cid in computer_ids
-            ]
+            exec_tasks = [exec_command(client, cid, "echo hello") for cid in computer_ids]
             results = await asyncio.gather(*exec_tasks)
             t_exec_ms = (time.perf_counter() - t_exec_start) * 1000
 
@@ -67,7 +58,6 @@ class TestT51ConcurrentComputers:
             t_destroy_ms = (time.perf_counter() - t_destroy_start) * 1000
 
             # Mark as cleaned up so finally block doesn't double-destroy
-            cleaned = computer_ids[:]
             computer_ids = []
 
             # Report timing
@@ -245,7 +235,9 @@ class TestT54MemoryPressure:
                 # Quick health check on the latest computer
                 if new_ids:
                     result = await exec_command(client, new_ids[-1], "free -m | head -2")
-                    print(f"Batch {batch // batch_size}: {len(computer_ids)} total. {result.stdout}")
+                    print(
+                        f"Batch {batch // batch_size}: {len(computer_ids)} total. {result.stdout}"
+                    )
 
             print(f"Created {len(computer_ids)} computers before stopping.")
             assert len(computer_ids) > 0
@@ -321,14 +313,12 @@ class TestT56ResourceAllocation:
             result = await exec_command(client, computer_id, "free -m")
             # Parse total memory from free output
             lines = result.stdout.strip().splitlines()
-            mem_line = [l for l in lines if l.startswith("Mem:")]
+            mem_line = [line for line in lines if line.startswith("Mem:")]
             assert mem_line, f"Could not find Mem: line in free output: {result.stdout}"
 
             total_mb = int(mem_line[0].split()[1])
             # 8GB = 8192MB, allow some overhead margin (7500-8500)
-            assert 7500 <= total_mb <= 8500, (
-                f"Expected ~8192MB RAM, got {total_mb}MB"
-            )
+            assert 7500 <= total_mb <= 8500, f"Expected ~8192MB RAM, got {total_mb}MB"
         finally:
             await destroy_computer(client, computer_id)
 
@@ -347,7 +337,7 @@ class TestT57PerAccountVmLimit:
         limit = 20  # Expected per-account limit
 
         try:
-            for i in range(limit + 5):
+            for _i in range(limit + 5):
                 try:
                     cid = await create_computer(client)
                     computer_ids.append(cid)
@@ -363,9 +353,7 @@ class TestT57PerAccountVmLimit:
                     print(f"Limit enforced after {len(computer_ids)} computers")
                     return
 
-            pytest.fail(
-                f"Created {len(computer_ids)} computers without hitting any limit"
-            )
+            pytest.fail(f"Created {len(computer_ids)} computers without hitting any limit")
         finally:
             cleanup = [destroy_computer(client, cid) for cid in computer_ids]
             if cleanup:
@@ -407,9 +395,7 @@ class TestT58IdleTimeout:
                     computer_id = ""
                     return  # Success — VM was auto-destroyed
 
-            pytest.fail(
-                f"Computer {computer_id} was not auto-destroyed after 300s idle"
-            )
+            pytest.fail(f"Computer {computer_id} was not auto-destroyed after 300s idle")
         finally:
             if computer_id:
                 await destroy_computer(client, computer_id)
@@ -450,10 +436,7 @@ class TestT59ApiRateLimiting:
             rate_limited = [s for s in status_codes if s == 429]
             if rate_limited:
                 throttled = True
-                print(
-                    f"Rate limited: {len(rate_limited)}/{num_requests} "
-                    f"requests returned 429"
-                )
+                print(f"Rate limited: {len(rate_limited)}/{num_requests} requests returned 429")
 
             assert throttled, (
                 f"Expected some 429 responses from {num_requests} rapid requests, "

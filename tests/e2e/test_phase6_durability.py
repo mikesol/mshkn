@@ -8,7 +8,8 @@ the orchestrator, rebooting the host, blocking S3, etc.), so they will fail.
 from __future__ import annotations
 
 import asyncio
-import os
+import contextlib
+from pathlib import Path
 
 import pytest
 
@@ -17,7 +18,6 @@ from .conftest import (
     destroy_computer,
     managed_computer,
 )
-
 
 # ---------------------------------------------------------------------------
 # T6.1 — Orchestrator Crash Recovery
@@ -112,10 +112,8 @@ class TestT64CheckpointRetention:
         # Clean up pre-existing checkpoints so we start from a known state
         existing = await self._list_checkpoint_ids(client)
         for cid in existing:
-            try:
+            with contextlib.suppress(Exception):
                 await client.delete(f"/checkpoints/{cid}")
-            except Exception:
-                pass
 
         computer_id = await create_computer(client)
         checkpoint_ids: list[str] = []
@@ -146,10 +144,8 @@ class TestT64CheckpointRetention:
         finally:
             await destroy_computer(client, computer_id)
             for cid in checkpoint_ids:
-                try:
+                with contextlib.suppress(Exception):
                     await client.delete(f"/checkpoints/{cid}")
-                except Exception:
-                    pass
 
     async def test_pinned_checkpoint_retained(self, client):
         """Pinned checkpoints should survive retention pruning.
@@ -191,10 +187,8 @@ class TestT64CheckpointRetention:
         finally:
             await destroy_computer(client, computer_id)
             for cid in checkpoint_ids:
-                try:
+                with contextlib.suppress(Exception):
                     await client.delete(f"/checkpoints/{cid}")
-                except Exception:
-                    pass
 
 
 # ---------------------------------------------------------------------------
@@ -212,10 +206,14 @@ class TestT65LitestreamReplication:
         result = subprocess.run(
             [
                 "ssh",
-                "-o", "IdentitiesOnly=yes",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=no",
-                "-i", os.path.expanduser("~/.ssh/id_ed25519"),
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-i",
+                str(Path("~/.ssh/id_ed25519").expanduser()),
                 "root@135.181.6.215",
                 "systemctl is-active litestream",
             ],
@@ -234,10 +232,14 @@ class TestT65LitestreamReplication:
         result = subprocess.run(
             [
                 "ssh",
-                "-o", "IdentitiesOnly=yes",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=no",
-                "-i", os.path.expanduser("~/.ssh/id_ed25519"),
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-i",
+                str(Path("~/.ssh/id_ed25519").expanduser()),
                 "root@135.181.6.215",
                 "litestream generations -config /etc/litestream.yml /opt/mshkn/mshkn.db",
             ],
@@ -245,10 +247,12 @@ class TestT65LitestreamReplication:
             text=True,
             timeout=15,
         )
-        lines = [l for l in result.stdout.strip().splitlines() if l and not l.startswith("name")]
-        assert len(lines) >= 1, (
-            f"No Litestream generations found: {result.stdout} {result.stderr}"
-        )
+        lines = [
+            line
+            for line in result.stdout.strip().splitlines()
+            if line and not line.startswith("name")
+        ]
+        assert len(lines) >= 1, f"No Litestream generations found: {result.stdout} {result.stderr}"
 
 
 # ---------------------------------------------------------------------------
@@ -276,13 +280,17 @@ class TestT66StaleVMCleanup:
 
         try:
             # Find and kill the Firecracker process for this computer via SSH
-            result = subprocess.run(
+            subprocess.run(
                 [
                     "ssh",
-                    "-o", "IdentitiesOnly=yes",
-                    "-o", "BatchMode=yes",
-                    "-o", "StrictHostKeyChecking=no",
-                    "-i", os.path.expanduser("~/.ssh/id_ed25519"),
+                    "-o",
+                    "IdentitiesOnly=yes",
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-i",
+                    str(Path("~/.ssh/id_ed25519").expanduser()),
                     "root@135.181.6.215",
                     f"pgrep -f 'fc-{computer_id}' | xargs -r kill -9",
                 ],
@@ -304,13 +312,9 @@ class TestT66StaleVMCleanup:
                 except Exception:
                     pass  # SSH timeout on dead VM is expected
 
-            pytest.fail(
-                f"Reaper did not clean up dead VM {computer_id} within 150s"
-            )
+            pytest.fail(f"Reaper did not clean up dead VM {computer_id} within 150s")
         except Exception:
             # Best-effort cleanup if test fails
-            try:
+            with contextlib.suppress(Exception):
                 await client.delete(f"/computers/{computer_id}")
-            except Exception:
-                pass
             raise

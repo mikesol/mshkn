@@ -67,6 +67,7 @@ class TestT71AllEndpoints:
 
             # Give it a moment to produce output
             import asyncio
+
             await asyncio.sleep(2.0)
 
             # Tail the logs — read with a short timeout since the process
@@ -137,9 +138,7 @@ class TestT71AllEndpoints:
         async with managed_computer(client) as cid:
             # Create a file via exec
             expected = "download-test-content-12345"
-            await exec_command(
-                client, cid, f"echo -n '{expected}' > /tmp/download_test.txt"
-            )
+            await exec_command(client, cid, f"echo -n '{expected}' > /tmp/download_test.txt")
 
             # Download it
             resp = await client.get(
@@ -176,9 +175,7 @@ class TestT71AllEndpoints:
                 forked_id = await fork_checkpoint(long_client, cp_id)
                 try:
                     # Verify state carried over
-                    result = await exec_command(
-                        long_client, forked_id, "cat /root/state.txt"
-                    )
+                    result = await exec_command(long_client, forked_id, "cat /root/state.txt")
                     assert result.stdout.strip() == "checkpoint-state"
                 finally:
                     await destroy_computer(long_client, forked_id)
@@ -203,15 +200,9 @@ class TestT71AllEndpoints:
                 assert isinstance(checkpoints, list)
 
                 # Our labels should appear
-                labels_found = {
-                    cp.get("label") for cp in checkpoints if isinstance(cp, dict)
-                }
-                assert label_a in labels_found, (
-                    f"Label {label_a!r} not found in {labels_found}"
-                )
-                assert label_b in labels_found, (
-                    f"Label {label_b!r} not found in {labels_found}"
-                )
+                labels_found = {cp.get("label") for cp in checkpoints if isinstance(cp, dict)}
+                assert label_a in labels_found, f"Label {label_a!r} not found in {labels_found}"
+                assert label_b in labels_found, f"Label {label_b!r} not found in {labels_found}"
             finally:
                 await delete_checkpoint(long_client, cp_a)
                 await delete_checkpoint(long_client, cp_b)
@@ -230,9 +221,7 @@ class TestT71AllEndpoints:
             list_resp = await long_client.get("/checkpoints")
             list_resp.raise_for_status()
             ids_remaining = {
-                cp.get("checkpoint_id")
-                for cp in list_resp.json()
-                if isinstance(cp, dict)
+                cp.get("checkpoint_id") for cp in list_resp.json() if isinstance(cp, dict)
             }
             assert cp_id not in ids_remaining
 
@@ -415,6 +404,7 @@ class TestT73BackgroundProcessLifecycle:
 
             # Second kill — should indicate not found, not crash
             import asyncio
+
             await asyncio.sleep(0.5)
 
             kill2 = await client.post(f"/computers/{cid}/exec/kill/{pid}")
@@ -439,6 +429,7 @@ class TestT73BackgroundProcessLifecycle:
 
             # Wait for process to complete
             import asyncio
+
             await asyncio.sleep(2.0)
 
             # Tail logs
@@ -497,10 +488,7 @@ class TestT74DoubleDestroy:
 
         # If it's 500, note it but don't fail — it's a known bug
         if resp2.status_code == 500:
-            print(
-                f"NOTE: Double destroy returned 500 (known bug). "
-                f"Body: {resp2.text[:200]}"
-            )
+            print(f"NOTE: Double destroy returned 500 (known bug). Body: {resp2.text[:200]}")
 
 
 # ---------------------------------------------------------------------------
