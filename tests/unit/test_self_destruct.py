@@ -17,7 +17,7 @@ from mshkn.db import (
     run_migrations,
 )
 from mshkn.main import app
-from mshkn.models import Account, Checkpoint, Computer
+from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
 from mshkn.vm.ssh import ExecResult
 
 
@@ -30,7 +30,7 @@ def _account() -> Account:
     )
 
 
-def _computer(n: int = 1, status: str = "running") -> Computer:
+def _computer(n: int = 1, status: ComputerStatus = ComputerStatus.RUNNING) -> Computer:
     return Computer(
         id=f"comp-{n}",
         account_id="acct-1",

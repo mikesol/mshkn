@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mshkn.models import Account, Checkpoint, Computer, Recipe
+from mshkn.models import (
+    Account,
+    Checkpoint,
+    Computer,
+    ComputerStatus,
+    DeferredRequest,
+    Recipe,
+    RecipeStatus,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -114,7 +122,7 @@ async def get_computer(db: aiosqlite.Connection, computer_id: str) -> Computer |
         firecracker_pid=row[6],
         manifest_hash=row[7],
         manifest_json=row[8],
-        status=row[9],
+        status=ComputerStatus(row[9]),
         created_at=row[10],
         last_exec_at=row[11],
         source_checkpoint_id=row[12],
@@ -142,7 +150,7 @@ async def list_all_computers(db: aiosqlite.Connection) -> list[Computer]:
             firecracker_pid=r[6],
             manifest_hash=r[7],
             manifest_json=r[8],
-            status=r[9],
+            status=ComputerStatus(r[9]),
             created_at=r[10],
             last_exec_at=r[11],
             source_checkpoint_id=r[12],
@@ -162,7 +170,9 @@ async def count_active_computers_by_account(db: aiosqlite.Connection, account_id
     return row[0] if row else 0
 
 
-async def update_computer_status(db: aiosqlite.Connection, computer_id: str, status: str) -> None:
+async def update_computer_status(
+    db: aiosqlite.Connection, computer_id: str, status: ComputerStatus
+) -> None:
     await db.execute(
         "UPDATE computers SET status = ? WHERE id = ?",
         (status, computer_id),
@@ -393,7 +403,7 @@ async def get_active_computer_for_label(
         firecracker_pid=row[6],
         manifest_hash=row[7],
         manifest_json=row[8],
-        status=row[9],
+        status=ComputerStatus(row[9]),
         created_at=row[10],
         last_exec_at=row[11],
         source_checkpoint_id=row[12],
@@ -418,7 +428,7 @@ async def insert_deferred(
     await db.commit()
 
 
-async def list_deferred_by_label(db: aiosqlite.Connection, label: str) -> list[dict[str, str]]:
+async def list_deferred_by_label(db: aiosqlite.Connection, label: str) -> list[DeferredRequest]:
     """Return all deferred requests for a label, ordered by created_at ASC."""
     cursor = await db.execute(
         "SELECT id, label, account_id, request_payload, created_at "
@@ -427,13 +437,13 @@ async def list_deferred_by_label(db: aiosqlite.Connection, label: str) -> list[d
     )
     rows = await cursor.fetchall()
     return [
-        {
-            "id": r[0],
-            "label": r[1],
-            "account_id": r[2],
-            "request_payload": r[3],
-            "created_at": r[4],
-        }
+        DeferredRequest(
+            id=r[0],
+            label=r[1],
+            account_id=r[2],
+            request_payload=r[3],
+            created_at=r[4],
+        )
         for r in rows
     ]
 
@@ -482,7 +492,7 @@ async def get_recipe(db: aiosqlite.Connection, recipe_id: str) -> Recipe | None:
         account_id=row[1],
         dockerfile=row[2],
         content_hash=row[3],
-        status=row[4],
+        status=RecipeStatus(row[4]),
         build_log=row[5],
         base_volume_id=row[6],
         template_vmstate=row[7],
@@ -510,7 +520,7 @@ async def get_recipe_by_content_hash(
         account_id=row[1],
         dockerfile=row[2],
         content_hash=row[3],
-        status=row[4],
+        status=RecipeStatus(row[4]),
         build_log=row[5],
         base_volume_id=row[6],
         template_vmstate=row[7],
@@ -534,7 +544,7 @@ async def list_recipes_by_account(db: aiosqlite.Connection, account_id: str) -> 
             account_id=r[1],
             dockerfile=r[2],
             content_hash=r[3],
-            status=r[4],
+            status=RecipeStatus(r[4]),
             build_log=r[5],
             base_volume_id=r[6],
             template_vmstate=r[7],
@@ -546,7 +556,9 @@ async def list_recipes_by_account(db: aiosqlite.Connection, account_id: str) -> 
     ]
 
 
-async def update_recipe_status(db: aiosqlite.Connection, recipe_id: str, status: str) -> None:
+async def update_recipe_status(
+    db: aiosqlite.Connection, recipe_id: str, status: RecipeStatus
+) -> None:
     await db.execute(
         "UPDATE recipes SET status = ? WHERE id = ?",
         (status, recipe_id),
@@ -558,7 +570,7 @@ async def update_recipe_build_result(
     db: aiosqlite.Connection,
     recipe_id: str,
     *,
-    status: str,
+    status: RecipeStatus,
     build_log: str | None = None,
     base_volume_id: int | None = None,
     built_at: str | None = None,

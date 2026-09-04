@@ -30,6 +30,7 @@ from mshkn.ingress.db import (
 from mshkn.ingress.models import (
     IngressLog,
     IngressLogResponse,
+    IngressLogStatus,
     IngressRule,
     IngressRuleCreateRequest,
     IngressRuleResponse,
@@ -627,7 +628,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         result = execute_transform(rule.starlark_source, request_dict)
     except StarlarkError as exc:
         # Log the failure
-        await _log_invocation(db, rule.internal_id, "failed", None, str(exc))
+        await _log_invocation(db, rule.internal_id, IngressLogStatus.FAILED, None, str(exc))
         raise HTTPException(
             status_code=502,
             detail=f"Starlark execution error: {exc}",
@@ -635,7 +636,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
 
     # 5. Validate result
     if result is None:
-        await _log_invocation(db, rule.internal_id, "completed", None, None)
+        await _log_invocation(db, rule.internal_id, IngressLogStatus.COMPLETED, None, None)
         return Response(status_code=204)
 
     validation_errors = _validate_transform_result(result)
@@ -643,7 +644,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         await _log_invocation(
             db,
             rule.internal_id,
-            "failed",
+            IngressLogStatus.FAILED,
             json.dumps(result),
             "; ".join(validation_errors),
         )
@@ -674,11 +675,11 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         await _log_invocation(
             db,
             rule.internal_id,
-            "accepted",
+            IngressLogStatus.ACCEPTED,
             json.dumps(result),
             None,
         )
-        return JSONResponse(status_code=202, content={"status": "accepted"})
+        return JSONResponse(status_code=202, content={"status": IngressLogStatus.ACCEPTED})
 
     # Sync: wait and return
     try:
@@ -693,7 +694,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         await _log_invocation(
             db,
             rule.internal_id,
-            "completed",
+            IngressLogStatus.COMPLETED,
             json.dumps(result),
             None,
         )
@@ -702,7 +703,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         await _log_invocation(
             db,
             rule.internal_id,
-            "failed",
+            IngressLogStatus.FAILED,
             json.dumps(result),
             str(exc.detail),
         )
@@ -711,7 +712,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         await _log_invocation(
             db,
             rule.internal_id,
-            "failed",
+            IngressLogStatus.FAILED,
             json.dumps(result),
             str(exc),
         )
@@ -721,7 +722,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
 async def _log_invocation(
     db: aiosqlite.Connection,
     rule_internal_id: str,
-    status: str,
+    status: IngressLogStatus,
     starlark_result: str | None,
     error_message: str | None,
 ) -> None:

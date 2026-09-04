@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from mshkn.db import insert_account, insert_checkpoint, run_migrations
 from mshkn.main import app
-from mshkn.models import Account, Checkpoint, Computer
+from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
 from mshkn.vm.ssh import ExecResult
 
 
@@ -41,7 +41,7 @@ def _make_computer(n: int = 1) -> Computer:
         firecracker_pid=1000 + n,
         manifest_hash="abc",
         manifest_json='{"uses": []}',
-        status="running",
+        status=ComputerStatus.RUNNING,
         created_at="2026-03-08T00:00:00",
         last_exec_at=None,
     )

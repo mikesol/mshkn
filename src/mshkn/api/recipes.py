@@ -20,7 +20,7 @@ from mshkn.db import (
     insert_recipe,
     list_recipes_by_account,
 )
-from mshkn.models import Recipe
+from mshkn.models import Recipe, RecipeStatus
 from mshkn.recipe.builder import build_recipe, dockerfile_content_hash
 from mshkn.vm.storage import remove_volume
 
@@ -105,7 +105,7 @@ async def create_recipe(
         account_id=account.id,
         dockerfile=body.dockerfile,
         content_hash=content_hash,
-        status="pending",
+        status=RecipeStatus.PENDING,
         build_log=None,
         base_volume_id=None,
         template_vmstate=None,

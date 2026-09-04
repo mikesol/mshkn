@@ -31,7 +31,7 @@ from mshkn.db import (
     list_deferred_by_label,
     update_last_exec_at,
 )
-from mshkn.models import Checkpoint
+from mshkn.models import Checkpoint, ComputerStatus
 from mshkn.resources import Resources
 from mshkn.vm.ssh import (
     SSHPool,
@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     import aiosqlite
 
     from mshkn.config import Config
-    from mshkn.models import Account, Computer
+    from mshkn.models import Account, Computer, DeferredRequest
     from mshkn.vm.manager import VMManager
 
 logger = logging.getLogger(__name__)
@@ -264,7 +264,7 @@ async def _get_running_computer(
     computer = await get_computer(db, computer_id)
     if computer is None or computer.account_id != account.id:
         raise HTTPException(status_code=404, detail="Computer not found")
-    if computer.status != "running":
+    if computer.status != ComputerStatus.RUNNING:
         raise HTTPException(status_code=400, detail=f"Computer is {computer.status}")
     return computer
 
@@ -480,7 +480,11 @@ async def computer_status(
     db: aiosqlite.Connection = request.app.state.db
     config: Config = request.app.state.config
     computer = await get_computer(db, computer_id)
-    if computer is None or computer.account_id != account.id or computer.status == "destroyed":
+    if (
+        computer is None
+        or computer.account_id != account.id
+        or computer.status == ComputerStatus.DESTROYED
+    ):
         raise HTTPException(status_code=404, detail="Computer not found")
     result: dict[str, object] = {
         "computer_id": computer.id,
@@ -492,7 +496,7 @@ async def computer_status(
         "last_exec_at": computer.last_exec_at,
     }
     # Enrich with live VM metrics if the VM is running
-    if computer.status == "running" and computer.vm_ip:
+    if computer.status == ComputerStatus.RUNNING and computer.vm_ip:
         try:
             metrics = await ssh_gather_metrics(
                 computer.vm_ip,
@@ -607,7 +611,7 @@ async def checkpoint_computer(
 
 async def _process_deferred(
     label: str,
-    deferred_items: list[dict[str, str]],
+    deferred_items: list[DeferredRequest],
     db: aiosqlite.Connection,
     config: Config,
     vm_mgr: VMManager,
@@ -633,7 +637,7 @@ async def _process_deferred(
         latest_ckpt = all_ckpts[0]  # sorted by created_at DESC
 
         # Parse all deferred payloads
-        payloads = [json.loads(d["request_payload"]) for d in deferred_items]
+        payloads = [json.loads(d.request_payload) for d in deferred_items]
 
         # Fork from latest checkpoint
         computer = await vm_mgr.fork_from_checkpoint(
@@ -724,7 +728,7 @@ async def destroy_computer(
     computer = await get_computer(db, computer_id)
     if computer is None or computer.account_id != account.id:
         raise HTTPException(status_code=404, detail="Computer not found")
-    if computer.status == "destroyed":
+    if computer.status == ComputerStatus.DESTROYED:
         raise HTTPException(status_code=404, detail="Computer not found")
     vm_mgr: VMManager = request.app.state.vm_manager
     await vm_mgr.destroy(computer_id)
@@ -753,4 +757,4 @@ async def destroy_computer(
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
 
-    return {"status": "destroyed"}
+    return {"status": ComputerStatus.DESTROYED}

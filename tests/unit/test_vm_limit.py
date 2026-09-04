@@ -6,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 
 from mshkn.db import insert_account, insert_computer, run_migrations
 from mshkn.main import app
-from mshkn.models import Account, Computer
+from mshkn.models import Account, Computer, ComputerStatus
 
 
 async def _setup(tmp_path: Path, vm_limit: int = 2) -> aiosqlite.Connection:
@@ -25,7 +25,7 @@ async def _setup(tmp_path: Path, vm_limit: int = 2) -> aiosqlite.Connection:
     return db
 
 
-def _make_computer(n: int, status: str = "running") -> Computer:
+def _make_computer(n: int, status: ComputerStatus = ComputerStatus.RUNNING) -> Computer:
     return Computer(
         id=f"comp-{n}",
         account_id="acct-1",
@@ -89,7 +89,7 @@ async def test_create_rejected_at_limit(tmp_path: Path) -> None:
 
 async def test_destroyed_computers_dont_count_toward_limit(tmp_path: Path) -> None:
     db = await _setup(tmp_path, vm_limit=1)
-    await insert_computer(db, _make_computer(1, status="destroyed"))
+    await insert_computer(db, _make_computer(1, status=ComputerStatus.DESTROYED))
 
     mock_computer = _make_computer(99)
     vm_mgr = AsyncMock()

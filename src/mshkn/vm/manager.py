@@ -20,7 +20,7 @@ from mshkn.db import (
     update_computer_status,
 )
 from mshkn.errors import Conflict, NotFound
-from mshkn.models import Checkpoint, Computer, Recipe
+from mshkn.models import Checkpoint, Computer, ComputerStatus, Recipe, RecipeStatus
 from mshkn.resources import DEFAULT_RESOURCES, Resources
 from mshkn.shell import run
 from mshkn.vm.firecracker import (
@@ -79,7 +79,7 @@ class VMManager:
         max_vol = 99  # start at 100 by default
         if computers:
             max_vol = max(max_vol, max(c.thin_volume_id for c in computers))
-            running = [c for c in computers if c.status == "running"]
+            running = [c for c in computers if c.status == ComputerStatus.RUNNING]
             if running:
                 active_slots = {int(c.tap_device.replace("tap", "")) for c in running}
                 self._next_slot = min(max(active_slots) + 1, 256)
@@ -381,7 +381,7 @@ class VMManager:
             recipe = await get_recipe(self.db, recipe_id)
             if recipe is None:
                 raise NotFound(f"Recipe {recipe_id} not found")
-            if recipe.status != "ready":
+            if recipe.status != RecipeStatus.READY:
                 raise Conflict(f"Recipe {recipe_id} is not ready (status={recipe.status})")
             if recipe.base_volume_id is None:
                 raise Conflict(f"Recipe {recipe_id} has no base volume")
@@ -499,7 +499,7 @@ class VMManager:
             firecracker_pid=result.pid,
             manifest_hash="none",
             manifest_json="{}",
-            status="running",
+            status=ComputerStatus.RUNNING,
             created_at=now,
             last_exec_at=None,
             recipe_id=recipe_id,
@@ -632,7 +632,7 @@ class VMManager:
             firecracker_pid=result.pid,
             manifest_hash="none",
             manifest_json="{}",
-            status="running",
+            status=ComputerStatus.RUNNING,
             created_at=now,
             last_exec_at=None,
             source_checkpoint_id=checkpoint.id,
@@ -672,7 +672,7 @@ class VMManager:
         computer = await get_computer(self.db, computer_id)
         if computer is None:
             raise NotFound(f"Computer {computer_id} not found")
-        if computer.status == "destroyed":
+        if computer.status == ComputerStatus.DESTROYED:
             logger.warning("Computer %s already destroyed, skipping", computer_id)
             return
 
@@ -703,7 +703,7 @@ class VMManager:
             await self.ssh_pool.remove(computer.vm_ip)
 
         # Update DB
-        await update_computer_status(self.db, computer_id, "destroyed")
+        await update_computer_status(self.db, computer_id, ComputerStatus.DESTROYED)
         logger.info("Destroyed computer %s", computer_id)
 
     # ── Stale VM Reaper ───────────────────────────────────────────────────
@@ -724,7 +724,7 @@ class VMManager:
         Returns the number of VMs reaped.
         """
         computers = await list_all_computers(self.db)
-        running = [c for c in computers if c.status == "running"]
+        running = [c for c in computers if c.status == ComputerStatus.RUNNING]
         reaped = 0
 
         for computer in running:
@@ -776,7 +776,7 @@ class VMManager:
             self._release_slot(slot)
 
         # Mark destroyed in DB
-        await update_computer_status(self.db, computer.id, "destroyed")
+        await update_computer_status(self.db, computer.id, ComputerStatus.DESTROYED)
         logger.info("Reaped dead VM %s", computer.id)
 
     async def reap_idle_vms(self) -> int:
@@ -788,7 +788,7 @@ class VMManager:
             return 0
 
         computers = await list_all_computers(self.db)
-        running = [c for c in computers if c.status == "running"]
+        running = [c for c in computers if c.status == ComputerStatus.RUNNING]
         now = datetime.now(UTC)
 
         idle_vms: list[Computer] = []

@@ -22,7 +22,7 @@ from mshkn.ingress.db import (
     rotate_ingress_rule_id,
     update_ingress_rule,
 )
-from mshkn.ingress.models import IngressLog, IngressRule
+from mshkn.ingress.models import IngressLog, IngressLogStatus, IngressRule
 from mshkn.ingress.starlark import StarlarkError, execute_transform, validate_starlark
 from mshkn.main import app
 
@@ -145,7 +145,7 @@ async def test_ingress_log_crud(tmp_path: Path) -> None:
     log = IngressLog(
         id="log-001",
         rule_internal_id="int-001",
-        status="completed",
+        status=IngressLogStatus.COMPLETED,
         starlark_result='{"action": "fork"}',
         error_message=None,
         created_at="2026-01-01T00:00:00Z",
@@ -153,7 +153,7 @@ async def test_ingress_log_crud(tmp_path: Path) -> None:
     await insert_ingress_log(db, log)
     logs = await list_ingress_logs(db, "int-001")
     assert len(logs) == 1
-    assert logs[0].status == "completed"
+    assert logs[0].status == IngressLogStatus.COMPLETED
     await db.close()
 
 
@@ -166,7 +166,7 @@ async def test_prune_old_logs(tmp_path: Path) -> None:
         IngressLog(
             id="old",
             rule_internal_id="int-001",
-            status="completed",
+            status=IngressLogStatus.COMPLETED,
             starlark_result=None,
             error_message=None,
             created_at="2020-01-01T00:00:00Z",
@@ -177,7 +177,7 @@ async def test_prune_old_logs(tmp_path: Path) -> None:
         IngressLog(
             id="new",
             rule_internal_id="int-001",
-            status="completed",
+            status=IngressLogStatus.COMPLETED,
             starlark_result=None,
             error_message=None,
             created_at="2099-01-01T00:00:00Z",

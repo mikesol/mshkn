@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mshkn.ingress.models import IngressLog, IngressRule
+from mshkn.ingress.models import IngressLog, IngressLogStatus, IngressRule
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -150,7 +150,7 @@ async def list_ingress_logs(
         IngressLog(
             id=r[0],
             rule_internal_id=r[1],
-            status=r[2],
+            status=IngressLogStatus(r[2]),
             starlark_result=r[3],
             error_message=r[4],
             created_at=r[5],

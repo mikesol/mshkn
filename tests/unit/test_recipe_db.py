@@ -18,7 +18,7 @@ from mshkn.db import (
     update_recipe_build_result,
     update_recipe_status,
 )
-from mshkn.models import Checkpoint, Computer, Recipe
+from mshkn.models import Checkpoint, Computer, ComputerStatus, Recipe, RecipeStatus
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def _make_recipe(
     recipe_id: str = "rcp-001",
     account_id: str = "acct-test",
     content_hash: str = "deadbeef",
-    status: str = "pending",
+    status: RecipeStatus = RecipeStatus.PENDING,
 ) -> Recipe:
     return Recipe(
         id=recipe_id,
@@ -64,7 +64,7 @@ async def test_insert_and_get_recipe(db: aiosqlite.Connection) -> None:
     assert result.account_id == "acct-test"
     assert result.dockerfile == "FROM ubuntu:24.04\nRUN apt-get update"
     assert result.content_hash == "deadbeef"
-    assert result.status == "pending"
+    assert result.status == RecipeStatus.PENDING
     assert result.build_log is None
     assert result.base_volume_id is None
     assert result.built_at is None
@@ -86,10 +86,10 @@ async def test_list_recipes_by_account(db: aiosqlite.Connection) -> None:
 
 async def test_update_recipe_status(db: aiosqlite.Connection) -> None:
     await insert_recipe(db, _make_recipe())
-    await update_recipe_status(db, "rcp-001", "building")
+    await update_recipe_status(db, "rcp-001", RecipeStatus.BUILDING)
     result = await get_recipe(db, "rcp-001")
     assert result is not None
-    assert result.status == "building"
+    assert result.status == RecipeStatus.BUILDING
 
 
 async def test_update_recipe_build_result(db: aiosqlite.Connection) -> None:
@@ -97,21 +97,21 @@ async def test_update_recipe_build_result(db: aiosqlite.Connection) -> None:
     await update_recipe_build_result(
         db,
         "rcp-001",
-        status="ready",
+        status=RecipeStatus.READY,
         build_log="Build successful",
         base_volume_id=42,
         built_at="2026-03-13T01:00:00Z",
     )
     result = await get_recipe(db, "rcp-001")
     assert result is not None
-    assert result.status == "ready"
+    assert result.status == RecipeStatus.READY
     assert result.build_log == "Build successful"
     assert result.base_volume_id == 42
     assert result.built_at == "2026-03-13T01:00:00Z"
 
 
 async def test_get_recipe_by_content_hash(db: aiosqlite.Connection) -> None:
-    await insert_recipe(db, _make_recipe(status="ready"))
+    await insert_recipe(db, _make_recipe(status=RecipeStatus.READY))
     result = await get_recipe_by_content_hash(db, "acct-test", "deadbeef")
     assert result is not None
     assert result.id == "rcp-001"
@@ -124,7 +124,7 @@ async def test_get_recipe_by_content_hash(db: aiosqlite.Connection) -> None:
 async def test_get_recipe_by_content_hash_excludes_failed(
     db: aiosqlite.Connection,
 ) -> None:
-    await insert_recipe(db, _make_recipe(status="failed"))
+    await insert_recipe(db, _make_recipe(status=RecipeStatus.FAILED))
     result = await get_recipe_by_content_hash(db, "acct-test", "deadbeef")
     assert result is None
 
@@ -140,9 +140,9 @@ async def test_get_max_recipe_volume_id_returns_max(db: aiosqlite.Connection) ->
     await insert_recipe(db, _make_recipe("rcp-001", content_hash="hash1"))
     await insert_recipe(db, _make_recipe("rcp-002", content_hash="hash2"))
     await insert_recipe(db, _make_recipe("rcp-003", content_hash="hash3"))
-    await update_recipe_build_result(db, "rcp-001", status="ready", base_volume_id=10)
-    await update_recipe_build_result(db, "rcp-002", status="ready", base_volume_id=25)
-    await update_recipe_build_result(db, "rcp-003", status="ready", base_volume_id=7)
+    await update_recipe_build_result(db, "rcp-001", status=RecipeStatus.READY, base_volume_id=10)
+    await update_recipe_build_result(db, "rcp-002", status=RecipeStatus.READY, base_volume_id=25)
+    await update_recipe_build_result(db, "rcp-003", status=RecipeStatus.READY, base_volume_id=7)
     result = await get_max_recipe_volume_id(db)
     assert result == 25
 
@@ -174,7 +174,7 @@ async def test_count_recipe_references_with_computer(
         firecracker_pid=None,
         manifest_hash="abc",
         manifest_json='{"uses": []}',
-        status="running",
+        status=ComputerStatus.RUNNING,
         created_at="2026-03-13T00:00:00Z",
         last_exec_at=None,
         recipe_id="rcp-001",

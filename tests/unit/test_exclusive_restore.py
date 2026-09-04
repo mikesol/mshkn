@@ -14,7 +14,7 @@ from mshkn.db import (
     list_deferred_by_label,
     run_migrations,
 )
-from mshkn.models import Account, Checkpoint, Computer
+from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
 
 
 def _account() -> Account:
@@ -50,7 +50,7 @@ def _checkpoint(
 
 def _computer(
     computer_id: str = "comp-1",
-    status: str = "running",
+    status: ComputerStatus = ComputerStatus.RUNNING,
     source_checkpoint_id: str | None = "ckpt-1",
 ) -> Computer:
     return Computer(
@@ -98,7 +98,7 @@ async def test_get_active_computer_for_label_ignores_destroyed(tmp_path: Path) -
     try:
         ckpt = _checkpoint()
         await insert_checkpoint(db, ckpt)
-        comp = _computer(status="destroyed", source_checkpoint_id="ckpt-1")
+        comp = _computer(status=ComputerStatus.DESTROYED, source_checkpoint_id="ckpt-1")
         await insert_computer(db, comp)
 
         result = await get_active_computer_for_label(db, "acct-1", "my-agent")
@@ -157,8 +157,8 @@ async def test_deferred_queue_insert_and_list(tmp_path: Path) -> None:
 
         items = await list_deferred_by_label(db, "my-agent")
         assert len(items) == 2
-        assert items[0]["id"] == "def-1"
-        assert items[1]["id"] == "def-2"
+        assert items[0].id == "def-1"
+        assert items[1].id == "def-2"
     finally:
         await db.close()
 
