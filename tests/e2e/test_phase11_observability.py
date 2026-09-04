@@ -77,7 +77,7 @@ class TestT113ComputerStatus:
 
         Expected fields: computer_id, status, created_at, vm_ip, url
         """
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             resp = await client.get(f"/computers/{computer_id}/status")
             resp.raise_for_status()
             body = resp.json()
@@ -105,7 +105,7 @@ class TestT114RequestTracing:
 
         This enables correlating client requests with server logs.
         """
-        resp = await client.post("/computers", json={"uses": []})
+        resp = await client.post("/computers", json={})
         computer_id = resp.json().get("computer_id")
         try:
             assert "x-request-id" in resp.headers or "X-Request-Id" in resp.headers
@@ -197,7 +197,7 @@ class TestT118CheckpointDag:
         The checkpoint DAG enables navigating the full history of forks
         and understanding which checkpoint a given state derived from.
         """
-        computer_id = await create_computer(long_client, uses=[])
+        computer_id = await create_computer(long_client)
         checkpoint_a = None
         forked_id = None
         checkpoint_b = None
@@ -264,7 +264,7 @@ class TestT119ResourceUsage:
         Maps to spec T11.5: ram_usage_mb is sane, disk_usage_mb reflects reality,
         processes array has entries with PIDs and commands.
         """
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             resp = await client.get(f"/computers/{computer_id}/status")
             resp.raise_for_status()
             body = resp.json()
@@ -295,7 +295,7 @@ class TestT119ResourceUsage:
 
     async def test_disk_usage_reflects_writes(self, client):
         """Write data to disk, verify status reflects increased usage."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             # Get baseline
             resp = await client.get(f"/computers/{computer_id}/status")
             resp.raise_for_status()
@@ -325,7 +325,7 @@ class TestT1110StatusConsistency:
 
     async def test_ram_matches_free(self, client):
         """computer_status ram_usage_mb should roughly match `free -m`."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             # Get status
             resp = await client.get(f"/computers/{computer_id}/status")
             resp.raise_for_status()
@@ -350,7 +350,7 @@ class TestT1110StatusConsistency:
 
     async def test_disk_matches_df(self, client):
         """computer_status disk_usage_mb should roughly match `df`."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             # Get status
             resp = await client.get(f"/computers/{computer_id}/status")
             resp.raise_for_status()

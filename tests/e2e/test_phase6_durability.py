@@ -117,7 +117,7 @@ class TestT64CheckpointRetention:
             except Exception:
                 pass
 
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
         checkpoint_ids: list[str] = []
 
         try:
@@ -159,7 +159,7 @@ class TestT64CheckpointRetention:
         """
         import time
 
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
         checkpoint_ids: list[str] = []
 
         try:
@@ -270,7 +270,7 @@ class TestT66StaleVMCleanup:
         import time
 
         # Create a computer
-        resp = await client.post("/computers", json={"uses": []})
+        resp = await client.post("/computers", json={})
         resp.raise_for_status()
         computer_id = resp.json()["computer_id"]
 

@@ -135,14 +135,9 @@ async def create_recipe(
 
 async def create_computer(
     client: httpx.AsyncClient,
-    uses: list[str] | None = None,  # noqa: ARG001
     recipe_id: str | None = None,
 ) -> str:
-    """Create a computer, return computer_id.
-
-    The `uses` parameter is deprecated (ignored) — kept for backward compatibility.
-    Use `recipe_id` instead.
-    """
+    """Create a computer, return computer_id."""
     body: dict[str, object] = {}
     if recipe_id:
         body["recipe_id"] = recipe_id
@@ -189,24 +184,14 @@ async def delete_checkpoint(client: httpx.AsyncClient, checkpoint_id: str) -> No
 @asynccontextmanager
 async def managed_computer(
     client: httpx.AsyncClient,
-    uses: list[str] | None = None,  # noqa: ARG001
     recipe_id: str | None = None,
 ) -> AsyncIterator[str]:
-    """Context manager that creates and destroys a computer.
-
-    The `uses` parameter is deprecated (ignored) — kept for backward compatibility.
-    Use `recipe_id` instead.
-    """
+    """Context manager that creates and destroys a computer."""
     comp_id = await create_computer(client, recipe_id=recipe_id)
     try:
         yield comp_id
     finally:
         await destroy_computer(client, comp_id)
-
-
-def timed() -> tuple[float, None]:
-    """Returns (elapsed_ms, None) — use as: start = time.perf_counter()"""
-    raise NotImplementedError("Use time.perf_counter() directly")
 
 
 @dataclass

@@ -40,7 +40,7 @@ class TestT51ConcurrentComputers:
         try:
             # Phase 1: Create all 10 concurrently
             t_create_start = time.perf_counter()
-            create_tasks = [create_computer(client, uses=[]) for _ in range(n)]
+            create_tasks = [create_computer(client) for _ in range(n)]
             computer_ids = await asyncio.gather(*create_tasks)
             t_create_ms = (time.perf_counter() - t_create_start) * 1000
             assert len(computer_ids) == n, (
@@ -102,7 +102,7 @@ class TestT52ConcurrentCheckpoints:
         try:
             # Create 3 computers sequentially (not the focus of this test)
             for i in range(n):
-                cid = await create_computer(client, uses=[])
+                cid = await create_computer(client)
                 computer_ids.append(cid)
                 # Write some state so checkpoints are meaningful
                 await exec_command(client, cid, f"echo 'state-{i}' > /tmp/state.txt")
@@ -149,7 +149,7 @@ class TestT53ConcurrentCreatesAndDestroys:
         try:
             # Create 3 initial computers
             for _ in range(3):
-                cid = await create_computer(client, uses=[])
+                cid = await create_computer(client)
                 running_ids.append(cid)
 
             # Verify all 3 are alive
@@ -161,7 +161,7 @@ class TestT53ConcurrentCreatesAndDestroys:
             victim = running_ids[0]
 
             async def create_one() -> str:
-                return await create_computer(client, uses=[])
+                return await create_computer(client)
 
             async def destroy_one(cid: str) -> None:
                 resp = await client.delete(f"/computers/{cid}")
@@ -228,7 +228,7 @@ class TestT54MemoryPressure:
 
         try:
             for batch in range(0, max_computers, batch_size):
-                tasks = [create_computer(client, uses=[]) for _ in range(batch_size)]
+                tasks = [create_computer(client) for _ in range(batch_size)]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
                 new_ids = [r for r in results if isinstance(r, str)]
@@ -275,7 +275,7 @@ class TestT55NvmePressure:
 
         try:
             for i in range(n):
-                cid = await create_computer(client, uses=[])
+                cid = await create_computer(client)
                 computer_ids.append(cid)
 
                 # Write 100MB of data inside the VM
@@ -312,7 +312,7 @@ class TestT56ResourceAllocation:
         """Create a computer with 8GB RAM, verify it has ~8GB."""
         resp = await client.post(
             "/computers",
-            json={"uses": [], "needs": {"ram": "8GB"}},
+            json={"needs": {"ram": "8GB"}},
         )
         resp.raise_for_status()
         computer_id = resp.json()["computer_id"]
@@ -349,7 +349,7 @@ class TestT57PerAccountVmLimit:
         try:
             for i in range(limit + 5):
                 try:
-                    cid = await create_computer(client, uses=[])
+                    cid = await create_computer(client)
                     computer_ids.append(cid)
                 except httpx.HTTPStatusError as e:
                     # Should get 429 or 403 when limit is exceeded
@@ -389,7 +389,7 @@ class TestT58IdleTimeout:
         """
         import time
 
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
 
         try:
             # Verify it's alive
@@ -425,7 +425,7 @@ class TestT59ApiRateLimiting:
 
     async def test_rapid_requests_throttled(self, client):
         """Sending many rapid requests should eventually get rate-limited."""
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
 
         try:
             throttled = False

@@ -27,7 +27,6 @@ from tests.e2e.conftest import (
 async def test_exec_on_create(long_client: httpx.AsyncClient) -> None:
     """Create computer with exec='echo hello' — response includes stdout."""
     resp = await long_client.post("/computers", json={
-        "uses": [],
         "exec": "echo hello",
     })
     resp.raise_for_status()
@@ -73,7 +72,6 @@ async def test_exec_on_fork(long_client: httpx.AsyncClient) -> None:
 async def test_exec_on_create_failure(long_client: httpx.AsyncClient) -> None:
     """Create with exec that fails — error captured in response."""
     resp = await long_client.post("/computers", json={
-        "uses": [],
         "exec": "exit 42",
     })
     resp.raise_for_status()
@@ -91,7 +89,6 @@ async def test_exec_on_create_failure(long_client: httpx.AsyncClient) -> None:
 async def test_self_destruct_on_create(long_client: httpx.AsyncClient) -> None:
     """Create with exec + self_destruct — computer destroyed, checkpoint created."""
     resp = await long_client.post("/computers", json={
-        "uses": [],
         "exec": "echo self-destruct-test",
         "self_destruct": True,
         "label": "test-sd-create",
@@ -160,7 +157,6 @@ async def test_self_destruct_on_fork(long_client: httpx.AsyncClient) -> None:
 async def test_self_destruct_on_failure(long_client: httpx.AsyncClient) -> None:
     """Self-destruct still fires on non-zero exit (preserves error state)."""
     resp = await long_client.post("/computers", json={
-        "uses": [],
         "exec": "exit 1",
         "self_destruct": True,
         "label": "test-sd-fail",
@@ -194,7 +190,6 @@ async def test_callback_url(long_client: httpx.AsyncClient) -> None:
     callback_url = f"{API_URL}/checkpoints"
 
     resp = await long_client.post("/computers", json={
-        "uses": [],
         "exec": "echo callback-test",
         "self_destruct": True,
         "label": "test-callback",
@@ -222,7 +217,6 @@ async def test_callback_url(long_client: httpx.AsyncClient) -> None:
 async def test_callback_unreachable(long_client: httpx.AsyncClient) -> None:
     """Callback with bad URL — doesn't crash, self-destruct still works."""
     resp = await long_client.post("/computers", json={
-        "uses": [],
         "exec": "echo unreachable-test",
         "self_destruct": True,
         "label": "test-callback-fail",

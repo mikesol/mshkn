@@ -50,7 +50,7 @@ class TestT11CreateLatency:
             computer_id: str | None = None
             try:
                 start = time.perf_counter()
-                computer_id = await create_computer(client, uses=[])
+                computer_id = await create_computer(client)
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
                 print(f"  create #{i+1}: {elapsed_ms:.0f}ms")
@@ -113,7 +113,7 @@ class TestT16WarmL3CreateLatency:
     async def test_warm_l3_cache_create_latency(self, client):
         """First create warms L3 cache, subsequent creates should be fast."""
         # Warm the L3 cache with a throwaway create
-        warmup_id = await create_computer(client, uses=[])
+        warmup_id = await create_computer(client)
         await destroy_computer(client, warmup_id)
 
         # Now measure with warm L3 cache
@@ -122,7 +122,7 @@ class TestT16WarmL3CreateLatency:
             computer_id: str | None = None
             try:
                 start = time.perf_counter()
-                computer_id = await create_computer(client, uses=[])
+                computer_id = await create_computer(client)
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 timings.append(elapsed_ms)
                 print(f"  warm L3 create #{i+1}: {elapsed_ms:.0f}ms")
@@ -147,7 +147,7 @@ class TestT12CheckpointLatency:
 
     async def test_empty_state_checkpoint(self, long_client):
         """Checkpoint immediately after create, assert a tight p95 target."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             timings: list[float] = []
 
             for i in range(EMPTY_CHECKPOINT_SAMPLES):
@@ -173,7 +173,7 @@ class TestT12CheckpointLatency:
 
     async def test_small_state_checkpoint(self, long_client):
         """Write 1MB file, then checkpoint repeatedly with a p95 target."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             timings: list[float] = []
             for i in range(SMALL_STATE_CHECKPOINT_SAMPLES):
                 await exec_command(
@@ -204,7 +204,7 @@ class TestT12CheckpointLatency:
 
     async def test_large_state_checkpoint(self, long_client):
         """Write 100MB file, then checkpoint. Measure honestly (may exceed 1s)."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             # Write 100MB of data
             await exec_command(
                 long_client,
@@ -225,7 +225,7 @@ class TestT12CheckpointLatency:
 
     async def test_many_small_files_checkpoint(self, long_client):
         """Write many small files, then checkpoint repeatedly with a p95 target."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             timings: list[float] = []
             for i in range(MANY_SMALL_FILES_CHECKPOINT_SAMPLES):
                 await exec_command(
@@ -272,7 +272,7 @@ class TestT13ResumeLatency:
 
     async def test_resume_latency(self, long_client):
         """Resume via fork repeatedly and assert a tight p95 target."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             checkpoint_id = await checkpoint_computer(
                 long_client, computer_id, label="resume-test"
             )
@@ -310,7 +310,7 @@ class TestT14ForkLatency:
         """Fork from checkpoint repeatedly and assert a tight p95 target."""
         forked_ids: list[str] = []
 
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             checkpoint_id = await checkpoint_computer(
                 long_client, computer_id, label="fork-minimal"
             )
@@ -346,7 +346,7 @@ class TestT14ForkLatency:
 
         try:
             # --- Small state (1MB) ---
-            small_comp = await create_computer(long_client, uses=[])
+            small_comp = await create_computer(long_client)
             cleanup_ids.append(small_comp)
 
             await exec_command(
@@ -367,7 +367,7 @@ class TestT14ForkLatency:
                 print(f"  fork small #{i+1}: {elapsed_ms:.0f}ms")
 
             # --- Large state (50MB) ---
-            large_comp = await create_computer(long_client, uses=[])
+            large_comp = await create_computer(long_client)
             cleanup_ids.append(large_comp)
 
             await exec_command(
@@ -419,7 +419,7 @@ class TestT17ForkRestoreLatency:
 
     async def test_fork_snapshot_restore_latency(self, long_client):
         """Fork from checkpoint, verify state is preserved, assert latency."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             # Write a marker file
             await exec_command(
                 long_client, computer_id,
@@ -469,7 +469,7 @@ class TestT15MergeLatency:
 
     async def test_merge_latency(self, long_client):
         """Merge two forks — not yet implemented."""
-        async with managed_computer(long_client, uses=[]) as computer_id:
+        async with managed_computer(long_client) as computer_id:
             ckpt = await checkpoint_computer(
                 long_client, computer_id, label="merge-base"
             )

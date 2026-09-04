@@ -192,7 +192,7 @@ class TestT44UrlChangesOnCheckpointResume:
 
     async def test_fork_gets_different_url(self, client, long_client):
         """Fork from a checkpoint produces a computer with a different URL."""
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
         forked_id = None
         try:
             # Write a marker so we can verify state was preserved
@@ -234,8 +234,8 @@ class TestT45NetworkIsolation:
 
     async def test_vms_cannot_ping_each_other(self, client):
         """Two VMs should not be able to ping each other's private IPs."""
-        comp_a = await create_computer(client, uses=[])
-        comp_b = await create_computer(client, uses=[])
+        comp_a = await create_computer(client)
+        comp_b = await create_computer(client)
         try:
             # Get VM IPs from status
             status_a = await client.get(f"/computers/{comp_a}/status")

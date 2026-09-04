@@ -78,7 +78,7 @@ class TestT103ParallelExploration:
 
     async def test_fork_three_ways_different_content(self, long_client):
         """Create base state, fork 3 times, each writes different content."""
-        computer_id = await create_computer(long_client, uses=[])
+        computer_id = await create_computer(long_client)
         checkpoint_id = None
         forked_ids: list[str] = []
         try:
@@ -163,7 +163,7 @@ class TestT104FailureRecovery:
 
     async def test_recover_deleted_file_from_checkpoint(self, long_client):
         """Write important file, checkpoint, delete it, fork to recover."""
-        computer_id = await create_computer(long_client, uses=[])
+        computer_id = await create_computer(long_client)
         checkpoint_id = None
         recovered_id = None
         try:

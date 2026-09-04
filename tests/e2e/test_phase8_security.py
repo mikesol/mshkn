@@ -31,7 +31,7 @@ class TestT81VmEscape:
 
     async def test_proc1_is_vm_init_not_host(self, client):
         """/proc/1/cmdline should show the VM's init, not the host's."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client, computer_id, "cat /proc/1/cmdline | tr '\\0' ' '"
             )
@@ -48,7 +48,7 @@ class TestT81VmEscape:
 
     async def test_dmesg_shows_vm_kernel(self, client):
         """dmesg should work but only show VM kernel messages."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "dmesg | head -20")
             output = result.stdout
             # Should contain typical VM boot messages
@@ -67,7 +67,7 @@ class TestT81VmEscape:
 
     async def test_mount_shows_no_host_filesystems(self, client):
         """mount output should not reveal host filesystem paths."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "mount")
             output = result.stdout
             assert output, "mount should produce output"
@@ -90,7 +90,7 @@ class TestT82CrossTenantIsolation:
     async def test_cannot_access_other_tenants_computer(self, client):
         """A computer created with one key should not be accessible with another."""
         # Create a computer with the valid key
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
         try:
             # Try to access it with a different/invalid key
             bad_headers = {
@@ -123,7 +123,7 @@ class TestT83InvalidApiKey:
             base_url=API_URL, timeout=10.0
         ) as no_auth_client:
             resp = await no_auth_client.post(
-                "/computers", json={"uses": []},
+                "/computers", json={},
                 headers={"Content-Type": "application/json"},
             )
             assert resp.status_code == 401, (
@@ -139,7 +139,7 @@ class TestT83InvalidApiKey:
         async with httpx.AsyncClient(
             base_url=API_URL, headers=headers, timeout=10.0
         ) as bad_client:
-            resp = await bad_client.post("/computers", json={"uses": []})
+            resp = await bad_client.post("/computers", json={})
             assert resp.status_code == 401, (
                 f"Expected 401 for invalid key, got {resp.status_code}"
             )
@@ -153,7 +153,7 @@ class TestT83InvalidApiKey:
         async with httpx.AsyncClient(
             base_url=API_URL, headers=headers, timeout=10.0
         ) as bad_client:
-            resp = await bad_client.post("/computers", json={"uses": []})
+            resp = await bad_client.post("/computers", json={})
             assert resp.status_code == 401, (
                 f"Expected 401 for malformed auth, got {resp.status_code}"
             )
@@ -169,7 +169,7 @@ class TestT84ResourceLimits:
 
     async def test_many_processes_vm_still_responds(self, client):
         """Create 100 background sleep processes; VM should still respond after."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             # Create many background processes (controlled, not a fork bomb)
             # Keep count moderate to stay within VM process limits
             result = await exec_command(
@@ -196,7 +196,7 @@ class TestT84ResourceLimits:
 
     async def test_disk_fill_eventually_fails(self, client):
         """Writing 500MB to /tmp should eventually hit the disk limit."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
@@ -217,7 +217,7 @@ class TestT84ResourceLimits:
 
     async def test_memory_400mb_in_512mb_vm(self, client):
         """Allocating 400MB in a 512MB VM should work."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
@@ -230,7 +230,7 @@ class TestT84ResourceLimits:
 
     async def test_memory_600mb_in_512mb_vm_should_fail(self, client):
         """Allocating 600MB in a 512MB VM should fail (OOM)."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
@@ -262,7 +262,7 @@ class TestT85NetworkEgress:
 
     async def test_vm_can_reach_internet(self, client):
         """VM should be able to reach the internet (ping 8.8.8.8)."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
@@ -281,7 +281,7 @@ class TestT85NetworkEgress:
         the VM might be able to reach the host. If it can, this is a security
         concern that should be addressed with iptables rules.
         """
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             # Try to reach the host orchestrator. curl may not be installed,
             # so we try wget and fall back to /dev/tcp.
             result = await exec_command(
@@ -310,8 +310,8 @@ class TestT85NetworkEgress:
 
     async def test_two_vms_cannot_reach_each_other(self, client):
         """Two VMs on different /30 subnets should not be able to reach each other."""
-        comp_a = await create_computer(client, uses=[])
-        comp_b = await create_computer(client, uses=[])
+        comp_a = await create_computer(client)
+        comp_b = await create_computer(client)
         try:
             # Get IP of VM B by checking its network config
             result_b = await exec_command(

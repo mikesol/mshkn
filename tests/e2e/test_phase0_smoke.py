@@ -28,7 +28,7 @@ class TestT01ColdCreateNoCapabilities:
 
     async def test_create_returns_computer_id_and_url(self, client):
         """Create returns a computer_id and url."""
-        resp = await client.post("/computers", json={"uses": []})
+        resp = await client.post("/computers", json={})
         resp.raise_for_status()
         body = resp.json()
 
@@ -45,13 +45,13 @@ class TestT01ColdCreateNoCapabilities:
 
     async def test_exec_echo_hello(self, client):
         """computer_exec(id, 'echo hello') returns 'hello'."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "echo hello")
             assert result.stdout.strip() == "hello"
 
     async def test_destroy_without_error(self, client):
         """computer_destroy(id) completes without error."""
-        computer_id = await create_computer(client, uses=[])
+        computer_id = await create_computer(client)
         resp = await client.delete(f"/computers/{computer_id}")
         resp.raise_for_status()
         body = resp.json()
@@ -101,7 +101,7 @@ class TestT03ExecBasics:
 
     async def test_streaming_sequential_output(self, client):
         """Run a loop that emits lines 1-5 with sleeps; verify all lines arrive."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
@@ -115,7 +115,7 @@ class TestT03ExecBasics:
 
     async def test_stderr_comes_through(self, client):
         """echo to stderr arrives as stderr events."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "echo err >&2")
             assert "err" in result.stderr, (
                 f"Expected 'err' in stderr, got stdout={result.stdout!r}, "
@@ -124,7 +124,7 @@ class TestT03ExecBasics:
 
     async def test_stdout_and_stderr_separated(self, client):
         """stdout and stderr are delivered on separate event channels."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
@@ -140,7 +140,7 @@ class TestT03ExecBasics:
         We check for any indication: an 'exit' event, an 'error' event,
         or an HTTP-level error.
         """
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "exit 42")
 
             # Look for any exit code indication in the events
@@ -166,7 +166,7 @@ class TestT03ExecBasics:
 
     async def test_multiline_stdout(self, client):
         """Multiple lines of stdout are all captured."""
-        async with managed_computer(client, uses=[]) as computer_id:
+        async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
