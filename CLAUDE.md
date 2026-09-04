@@ -2,33 +2,6 @@
 
 Disposable cloud computers for AI agents. See `docs/plans/2026-03-07-disposable-cloud-computers-design.md` for architecture and `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` for the definition-of-done test plan that encodes the full spec as 115 E2E tests.
 
-## Telegram Bridge
-
-Mike communicates with Claude via Telegram through `@StronglyNormalBot`. The token is in `telegram/.env`.
-
-### Starting the bridge
-
-At conversation start, launch the bridge in watch mode:
-
-```
-TELEGRAM_BOT_TOKEN=$(grep TELEGRAM_BOT_TOKEN telegram/.env | cut -d= -f2) .venv/bin/python telegram/bridge.py watch
-```
-
-Run this via `run_in_background`. The process exits when messages arrive and you get notified. After handling, always relaunch watch immediately.
-
-### Commands
-
-- **Watch:** `TELEGRAM_BOT_TOKEN=$(grep TELEGRAM_BOT_TOKEN telegram/.env | cut -d= -f2) .venv/bin/python telegram/bridge.py watch` (background — exits on new messages)
-- **Send:** write JSON to `telegram/outgoing.jsonl` — `python3 -c "import json; print(json.dumps({'chat_id': 6522858700, 'text': 'your message'}))" >> telegram/outgoing.jsonl` — then the daemon picks it up. Or use send mode directly: `TELEGRAM_BOT_TOKEN=... .venv/bin/python telegram/bridge.py send 6522858700 "message"`
-- **Daemon:** rarely needed; watch mode is preferred
-
-### Responding
-
-- Incoming messages land in `telegram/incoming.jsonl`
-- Send replies by writing to `telegram/outgoing.jsonl` (use `python3 -c "import json; ..."` to avoid shell escaping issues) or via `bridge.py send`
-- Mike's chat ID is `6522858700`
-- Always relaunch watch after handling messages
-
 ## How to find work
 
 ```
@@ -100,9 +73,9 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thre
 
 - **NEVER merge PRs without explicit user authorization.** Always wait for the user to say "merge it" (or equivalent). Creating a PR is fine; merging is not. No exceptions.
 - **Spec seems wrong?** STOP. Open a GitHub Issue labeled `spec-change` with: the problem (with evidence), affected design doc sections, proposed change, downstream impact. Don't build on a wrong assumption.
-- **Validate locally first**: `ruff check src/ && mypy src/ && .venv/bin/pytest tests/ --ignore=tests/e2e --ignore=tests/integration -x`. Always use `.venv` for poetry, pytest, python, and formatters.
-- **E2E tests on live infra are the source of truth.** After deploying, run E2E against `135.181.6.215:8000`. Never accept regressions — if a test that passed before now fails, that's a real problem. Fix it or stop and discuss.
-- **Deploy workflow**: commit → push → `ssh root@135.181.6.215 "cd /opt/mshkn && git pull && systemctl restart mshkn"` → clean stale VMs → E2E. Always clean up orphan dm-thin volumes, tap devices, and firecracker processes before running E2E after deploy. If DB is reset, recreate the test account (acct-mike / mk-test-key-2026) before running E2E.
+- **Validate locally first**: `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest`. This is exactly what CI runs. Always use the project venv via `uv run`.
+- **E2E tests on live infra are the source of truth.** After deploying, run `scripts/e2e.sh`. Never accept regressions — if a test that passed before now fails, that's a real problem. Fix it or stop and discuss.
+- **Deploy workflow**: commit → `scripts/e2e.sh` (it pushes, deploys, cleans orphan dm-thin volumes, tap devices, and firecracker processes, and recreates the test account if the DB was reset).
 - **No papering over failures.** If you can't solve something, say so. Don't mark tests as xfail, don't weaken assertions, don't add workarounds that hide the real issue. Failing tests are honest reminders of what's left.
 - **Be mega-rigorous.** Don't code to the benchmark. Don't sweep stuff under the carpet. Evidence before assertions.
 - **Wait for CI before merging.** After creating a PR, use `gh pr checks <N> --watch` to confirm all checks pass before requesting merge authorization. Never merge a red PR.
@@ -114,12 +87,17 @@ See `DEPLOY.md` for full fresh-server setup instructions (Firecracker, dm-thin p
 
 ## Server reference
 
-- **Host**: Hetzner AX41-NVMe at `135.181.6.215`, AMD Ryzen 5 3600, 64GB RAM, 2x512GB NVMe
-- **SSH**: `ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 root@135.181.6.215`
-- **Service**: `systemctl {restart,status,stop} mshkn`
-- **Logs**: `journalctl -u mshkn --since '5 min ago' --no-pager`
+The live E2E server is a dedicated KVM host set up from `DEPLOY.md`. Export its
+address once per shell:
+
+    export MSHKN_SERVER=root@<ip>
+
+- **Deploy**: `scripts/deploy.sh`
+- **E2E**: `scripts/e2e.sh` (pushes, deploys, cleans orphaned VM resources, ensures the
+  test account, runs `pytest tests/e2e -m e2e`)
+- **Service**: `ssh $MSHKN_SERVER systemctl {restart,status,stop} mshkn`
+- **Logs**: `ssh $MSHKN_SERVER journalctl -u mshkn --since '5 min ago' --no-pager`
 - **Test account**: `acct-mike` / `mk-test-key-2026`
-- **E2E**: `MSHKN_API_URL=http://135.181.6.215:8000 .venv/bin/pytest tests/e2e/ -v --tb=short`
 
 ## Current phase
 
