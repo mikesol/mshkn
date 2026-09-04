@@ -20,6 +20,7 @@ import pytest
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from typing import Any
 
 # ---------------------------------------------------------------------------
 # Config
@@ -111,8 +112,8 @@ async def create_recipe(client: httpx.AsyncClient, dockerfile: str, timeout: flo
     """Create a recipe, wait for it to be ready, return recipe_id."""
     resp = await client.post("/recipes", json={"dockerfile": dockerfile})
     resp.raise_for_status()
-    data = resp.json()
-    recipe_id = data["recipe_id"]
+    data: dict[str, Any] = resp.json()
+    recipe_id: str = data["recipe_id"]
     if data["status"] == "ready":
         return recipe_id
 
@@ -121,7 +122,7 @@ async def create_recipe(client: httpx.AsyncClient, dockerfile: str, timeout: flo
         await asyncio.sleep(3)
         r = await client.get(f"/recipes/{recipe_id}")
         r.raise_for_status()
-        info = r.json()
+        info: dict[str, Any] = r.json()
         if info["status"] == "ready":
             return recipe_id
         if info["status"] == "failed":
@@ -139,7 +140,9 @@ async def create_computer(
         body["recipe_id"] = recipe_id
     resp = await client.post("/computers", json=body)
     resp.raise_for_status()
-    return resp.json()["computer_id"]
+    created: dict[str, Any] = resp.json()
+    computer_id: str = created["computer_id"]
+    return computer_id
 
 
 async def destroy_computer(client: httpx.AsyncClient, computer_id: str) -> None:
@@ -157,14 +160,18 @@ async def checkpoint_computer(
         body["label"] = label
     resp = await client.post(f"/computers/{computer_id}/checkpoint", json=body)
     resp.raise_for_status()
-    return resp.json()["checkpoint_id"]
+    checkpoint: dict[str, Any] = resp.json()
+    checkpoint_id: str = checkpoint["checkpoint_id"]
+    return checkpoint_id
 
 
 async def fork_checkpoint(client: httpx.AsyncClient, checkpoint_id: str) -> str:
     """Fork from a checkpoint, return new computer_id."""
     resp = await client.post(f"/checkpoints/{checkpoint_id}/fork", json={})
     resp.raise_for_status()
-    return resp.json()["computer_id"]
+    forked: dict[str, Any] = resp.json()
+    new_computer_id: str = forked["computer_id"]
+    return new_computer_id
 
 
 async def delete_checkpoint(client: httpx.AsyncClient, checkpoint_id: str) -> None:

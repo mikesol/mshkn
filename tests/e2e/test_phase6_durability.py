@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -18,6 +19,9 @@ from .conftest import (
     destroy_computer,
     managed_computer,
 )
+
+if TYPE_CHECKING:
+    import httpx
 
 # ---------------------------------------------------------------------------
 # T6.1 — Orchestrator Crash Recovery
@@ -32,7 +36,7 @@ class TestT61OrchestratorCrashRecovery:
     survives a round-trip exec.
     """
 
-    async def test_computer_survives_in_status(self, client):
+    async def test_computer_survives_in_status(self, client: httpx.AsyncClient) -> None:
         """Create a computer, verify /status returns it with correct fields.
 
         In a real crash-recovery test we would:
@@ -65,7 +69,7 @@ class TestT61OrchestratorCrashRecovery:
 class TestT62HostReboot:
     """After a full host reboot, checkpoints should be restorable."""
 
-    async def test_checkpoint_survives_host_reboot(self, client):
+    async def test_checkpoint_survives_host_reboot(self, client: httpx.AsyncClient) -> None:
         """Would require rebooting the Hetzner server mid-test."""
         pytest.skip("Not implementable as an automated E2E test")
 
@@ -78,7 +82,7 @@ class TestT62HostReboot:
 class TestT63S3Unavailable:
     """Checkpoint should handle S3/R2 being unreachable gracefully."""
 
-    async def test_checkpoint_when_s3_down(self, client):
+    async def test_checkpoint_when_s3_down(self, client: httpx.AsyncClient) -> None:
         """Would require injecting a network partition to R2."""
         pytest.skip("Not implementable without network fault injection")
 
@@ -95,13 +99,13 @@ class TestT64CheckpointRetention:
     for testing purposes.
     """
 
-    async def _list_checkpoint_ids(self, client) -> set[str]:
+    async def _list_checkpoint_ids(self, client: httpx.AsyncClient) -> set[str]:
         """Helper: return set of all checkpoint IDs for the current account."""
         resp = await client.get("/checkpoints")
         resp.raise_for_status()
         return {c["checkpoint_id"] for c in resp.json()}
 
-    async def test_excess_checkpoints_pruned(self, client):
+    async def test_excess_checkpoints_pruned(self, client: httpx.AsyncClient) -> None:
         """Create more checkpoints than the retention limit; oldest should be pruned.
 
         Cleans up existing checkpoints first, then creates 8 (retention=5),
@@ -147,7 +151,7 @@ class TestT64CheckpointRetention:
                 with contextlib.suppress(Exception):
                     await client.delete(f"/checkpoints/{cid}")
 
-    async def test_pinned_checkpoint_retained(self, client):
+    async def test_pinned_checkpoint_retained(self, client: httpx.AsyncClient) -> None:
         """Pinned checkpoints should survive retention pruning.
 
         Creates 8 checkpoints, pins the 3rd one, waits for pruning.
@@ -199,7 +203,7 @@ class TestT64CheckpointRetention:
 class TestT65LitestreamReplication:
     """SQLite should be continuously replicated via Litestream."""
 
-    async def test_litestream_service_active(self, client):
+    async def test_litestream_service_active(self, client: httpx.AsyncClient) -> None:
         """Verify the Litestream systemd service is active and running."""
         import subprocess
 
@@ -225,7 +229,7 @@ class TestT65LitestreamReplication:
             f"Litestream service not active: {result.stdout.strip()} {result.stderr.strip()}"
         )
 
-    async def test_litestream_has_generations(self, client):
+    async def test_litestream_has_generations(self, client: httpx.AsyncClient) -> None:
         """Verify Litestream has created at least one generation in R2."""
         import subprocess
 
@@ -263,7 +267,7 @@ class TestT65LitestreamReplication:
 class TestT66StaleVMCleanup:
     """Dead VMs should be automatically detected and cleaned up by the reaper."""
 
-    async def test_dead_vm_reaped(self, client):
+    async def test_dead_vm_reaped(self, client: httpx.AsyncClient) -> None:
         """Create a VM, kill its Firecracker process, verify reaper cleans it up.
 
         The reaper runs every 60s. We kill the Firecracker process via SSH

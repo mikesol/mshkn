@@ -29,7 +29,7 @@ from .conftest import (
 class TestT81VmEscape:
     """Verify the VM cannot access host resources or see host state."""
 
-    async def test_proc1_is_vm_init_not_host(self, client):
+    async def test_proc1_is_vm_init_not_host(self, client: httpx.AsyncClient) -> None:
         """/proc/1/cmdline should show the VM's init, not the host's."""
         async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "cat /proc/1/cmdline | tr '\\0' ' '")
@@ -44,7 +44,7 @@ class TestT81VmEscape:
                     f"/proc/1/cmdline contains host indicator '{indicator}': {cmdline}"
                 )
 
-    async def test_dmesg_shows_vm_kernel(self, client):
+    async def test_dmesg_shows_vm_kernel(self, client: httpx.AsyncClient) -> None:
         """dmesg should work but only show VM kernel messages."""
         async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "dmesg | head -20")
@@ -59,7 +59,7 @@ class TestT81VmEscape:
             )
             assert has_vm_markers, f"dmesg should show VM kernel messages, got: {output[:500]}"
 
-    async def test_mount_shows_no_host_filesystems(self, client):
+    async def test_mount_shows_no_host_filesystems(self, client: httpx.AsyncClient) -> None:
         """mount output should not reveal host filesystem paths."""
         async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "mount")
@@ -81,7 +81,7 @@ class TestT81VmEscape:
 class TestT82CrossTenantIsolation:
     """Verify one tenant cannot access another tenant's computers."""
 
-    async def test_cannot_access_other_tenants_computer(self, client):
+    async def test_cannot_access_other_tenants_computer(self, client: httpx.AsyncClient) -> None:
         """A computer created with one key should not be accessible with another."""
         # Create a computer with the valid key
         computer_id = await create_computer(client)
@@ -111,7 +111,7 @@ class TestT82CrossTenantIsolation:
 class TestT83InvalidApiKey:
     """Verify that missing or invalid API keys are rejected."""
 
-    async def test_no_auth_header_returns_401(self):
+    async def test_no_auth_header_returns_401(self) -> None:
         """Request with no Authorization header should get 401."""
         async with httpx.AsyncClient(base_url=API_URL, timeout=10.0) as no_auth_client:
             resp = await no_auth_client.post(
@@ -121,7 +121,7 @@ class TestT83InvalidApiKey:
             )
             assert resp.status_code == 401, f"Expected 401 for no auth, got {resp.status_code}"
 
-    async def test_invalid_bearer_token_returns_401(self):
+    async def test_invalid_bearer_token_returns_401(self) -> None:
         """Request with 'Bearer invalid-key' should get 401."""
         headers = {
             "Authorization": "Bearer invalid-key",
@@ -131,7 +131,7 @@ class TestT83InvalidApiKey:
             resp = await bad_client.post("/computers", json={})
             assert resp.status_code == 401, f"Expected 401 for invalid key, got {resp.status_code}"
 
-    async def test_malformed_auth_header_returns_401(self):
+    async def test_malformed_auth_header_returns_401(self) -> None:
         """Request with 'NotBearer key' auth format should get 401."""
         headers = {
             "Authorization": "NotBearer some-key-here",
@@ -152,7 +152,7 @@ class TestT83InvalidApiKey:
 class TestT84ResourceLimits:
     """Verify resource limits prevent a single VM from impacting the host."""
 
-    async def test_many_processes_vm_still_responds(self, client):
+    async def test_many_processes_vm_still_responds(self, client: httpx.AsyncClient) -> None:
         """Create 100 background sleep processes; VM should still respond after."""
         async with managed_computer(client) as computer_id:
             # Create many background processes (controlled, not a fork bomb)
@@ -181,7 +181,7 @@ class TestT84ResourceLimits:
                 timeout=15.0,
             )
 
-    async def test_disk_fill_eventually_fails(self, client):
+    async def test_disk_fill_eventually_fails(self, client: httpx.AsyncClient) -> None:
         """Writing 500MB to /tmp should eventually hit the disk limit."""
         async with managed_computer(client) as computer_id:
             result = await exec_command(
@@ -202,7 +202,7 @@ class TestT84ResourceLimits:
             result2 = await exec_command(client, computer_id, "echo alive_after_fill")
             assert "alive_after_fill" in result2.stdout
 
-    async def test_memory_400mb_in_512mb_vm(self, client):
+    async def test_memory_400mb_in_512mb_vm(self, client: httpx.AsyncClient) -> None:
         """Allocating 400MB in a 512MB VM should work."""
         async with managed_computer(client) as computer_id:
             result = await exec_command(
@@ -215,7 +215,7 @@ class TestT84ResourceLimits:
             # This might work or fail depending on actual VM memory config
             print(f"400MB allocation result: {combined[:500]}")
 
-    async def test_memory_600mb_in_512mb_vm_should_fail(self, client):
+    async def test_memory_600mb_in_512mb_vm_should_fail(self, client: httpx.AsyncClient) -> None:
         """Allocating 600MB in a 512MB VM should fail (OOM)."""
         async with managed_computer(client) as computer_id:
             result = await exec_command(
@@ -246,7 +246,7 @@ class TestT84ResourceLimits:
 class TestT85NetworkEgress:
     """Verify network egress rules: internet reachable, host restricted, VMs isolated."""
 
-    async def test_vm_can_reach_internet(self, client):
+    async def test_vm_can_reach_internet(self, client: httpx.AsyncClient) -> None:
         """VM should be able to reach the internet (ping 8.8.8.8)."""
         async with managed_computer(client) as computer_id:
             result = await exec_command(
@@ -260,7 +260,7 @@ class TestT85NetworkEgress:
                 f"VM should reach internet. Ping output: {combined[:500]}"
             )
 
-    async def test_vm_host_orchestrator_port_access(self, client):
+    async def test_vm_host_orchestrator_port_access(self, client: httpx.AsyncClient) -> None:
         """Test whether VM can reach the host orchestrator port (172.16.0.1:8000).
 
         NOTE: This test documents the current behavior. Since NAT is set up,
@@ -294,7 +294,7 @@ class TestT85NetworkEgress:
                     f"This should be blocked with iptables rules."
                 )
 
-    async def test_two_vms_cannot_reach_each_other(self, client):
+    async def test_two_vms_cannot_reach_each_other(self, client: httpx.AsyncClient) -> None:
         """Two VMs on different /30 subnets should not be able to reach each other."""
         comp_a = await create_computer(client)
         comp_b = await create_computer(client)
@@ -336,7 +336,7 @@ class TestT85NetworkEgress:
 class TestT86CheckpointDataIsolation:
     """Verify checkpoint data in R2/S3 is properly access-controlled."""
 
-    async def test_checkpoint_data_not_publicly_accessible(self, client):
+    async def test_checkpoint_data_not_publicly_accessible(self, client: httpx.AsyncClient) -> None:
         """Checkpoint blobs in R2 should not be accessible without proper auth.
 
         This would require:

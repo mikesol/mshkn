@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import aiosqlite
@@ -21,7 +22,7 @@ from mshkn.models import Checkpoint, Computer, Recipe
 
 
 @pytest.fixture
-async def db():
+async def db() -> AsyncIterator[aiosqlite.Connection]:
     conn = await aiosqlite.connect(":memory:")
     await run_migrations(conn, Path("migrations"))
     await conn.execute(

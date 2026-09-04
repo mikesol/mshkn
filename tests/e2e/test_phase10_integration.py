@@ -7,6 +7,8 @@ but Parallel Exploration and Failure Recovery work with bare VMs.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .conftest import (
     checkpoint_computer,
     create_computer,
@@ -16,6 +18,9 @@ from .conftest import (
     fork_checkpoint,
 )
 
+if TYPE_CHECKING:
+    import httpx
+
 # ---------------------------------------------------------------------------
 # T10.1 — Web App Development Workflow
 # ---------------------------------------------------------------------------
@@ -24,7 +29,7 @@ from .conftest import (
 class TestT101WebAppDevelopment:
     """Full web app dev workflow: create project, install deps, run server."""
 
-    async def test_nextjs_scaffold_and_run(self, client):
+    async def test_nextjs_scaffold_and_run(self, client: httpx.AsyncClient) -> None:
         """Scaffold a Next.js app, install deps, start dev server, hit it.
 
         Workflow:
@@ -45,7 +50,7 @@ class TestT101WebAppDevelopment:
 class TestT102DataScienceWorkflow:
     """Data science workflow: install pandas, run analysis, checkpoint results."""
 
-    async def test_pandas_analysis_checkpoint_resume(self, client):
+    async def test_pandas_analysis_checkpoint_resume(self, client: httpx.AsyncClient) -> None:
         """Install pandas, create a dataset, analyze it, checkpoint mid-work.
 
         Workflow:
@@ -70,7 +75,7 @@ class TestT103ParallelExploration:
     NOT xfail — this works with bare VMs using checkpoint/fork.
     """
 
-    async def test_fork_three_ways_different_content(self, long_client):
+    async def test_fork_three_ways_different_content(self, long_client: httpx.AsyncClient) -> None:
         """Create base state, fork 3 times, each writes different content."""
         computer_id = await create_computer(long_client)
         checkpoint_id = None
@@ -151,7 +156,9 @@ class TestT104FailureRecovery:
     NOT xfail — this works with bare VMs.
     """
 
-    async def test_recover_deleted_file_from_checkpoint(self, long_client):
+    async def test_recover_deleted_file_from_checkpoint(
+        self, long_client: httpx.AsyncClient
+    ) -> None:
         """Write important file, checkpoint, delete it, fork to recover."""
         computer_id = await create_computer(long_client)
         checkpoint_id = None
@@ -210,7 +217,7 @@ class TestT104FailureRecovery:
 class TestT105DumbAgentTest:
     """End-to-end test with an LLM agent using the computer API."""
 
-    async def test_agent_explores_and_checkpoints(self, client):
+    async def test_agent_explores_and_checkpoints(self, client: httpx.AsyncClient) -> None:
         """An LLM agent should be able to use the full computer lifecycle.
 
         Workflow:

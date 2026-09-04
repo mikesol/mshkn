@@ -25,6 +25,7 @@ from tests.e2e.conftest import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from typing import Any
 
 # ---------------------------------------------------------------------------
 # Starlark sources
@@ -105,11 +106,12 @@ async def ingress_client() -> AsyncIterator[httpx.AsyncClient]:
 
 async def create_rule(
     client: httpx.AsyncClient, name: str, source: str, **kwargs: object
-) -> dict[str, object]:
+) -> dict[str, Any]:
     body = {"name": name, "starlark_source": source, **kwargs}
     resp = await client.post("/ingress_rules", json=body)
     resp.raise_for_status()
-    return resp.json()
+    result: dict[str, Any] = resp.json()
+    return result
 
 
 async def delete_rule(client: httpx.AsyncClient, rule_id: str) -> None:

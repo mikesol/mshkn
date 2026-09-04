@@ -37,7 +37,7 @@ class TestT71AllEndpoints:
 
     # -- computer_exec (sync) — covered by phase 0 --
 
-    async def test_computer_exec_bg(self, client):
+    async def test_computer_exec_bg(self, client: httpx.AsyncClient) -> None:
         """POST /computers/{id}/exec/bg returns a PID."""
         async with managed_computer(client) as cid:
             resp = await client.post(
@@ -54,7 +54,7 @@ class TestT71AllEndpoints:
             # Clean up the sleep
             await client.post(f"/computers/{cid}/exec/kill/{pid}")
 
-    async def test_computer_exec_logs(self, client):
+    async def test_computer_exec_logs(self, client: httpx.AsyncClient) -> None:
         """POST exec/bg with output, then GET exec/logs/{pid} streams it."""
         async with managed_computer(client) as cid:
             # Start a bg process that produces output
@@ -94,7 +94,7 @@ class TestT71AllEndpoints:
                 f"Expected at least 1 log line, got: {collected_lines}"
             )
 
-    async def test_computer_exec_kill(self, client):
+    async def test_computer_exec_kill(self, client: httpx.AsyncClient) -> None:
         """POST exec/kill/{pid} kills a background process."""
         async with managed_computer(client) as cid:
             # Start a long-lived bg process
@@ -111,7 +111,7 @@ class TestT71AllEndpoints:
             kill_body = kill_resp.json()
             assert kill_body.get("status") == "killed"
 
-    async def test_computer_upload_and_verify(self, client):
+    async def test_computer_upload_and_verify(self, client: httpx.AsyncClient) -> None:
         """POST /computers/{id}/upload uploads a file, exec cat verifies."""
         async with managed_computer(client) as cid:
             content = b"hello from upload test\n" * 50  # ~1KB
@@ -133,7 +133,7 @@ class TestT71AllEndpoints:
             byte_count = int(result.stdout.strip())
             assert byte_count == len(content)
 
-    async def test_computer_download(self, client):
+    async def test_computer_download(self, client: httpx.AsyncClient) -> None:
         """GET /computers/{id}/download returns file content."""
         async with managed_computer(client) as cid:
             # Create a file via exec
@@ -148,7 +148,7 @@ class TestT71AllEndpoints:
             resp.raise_for_status()
             assert resp.content.decode() == expected
 
-    async def test_computer_status(self, client):
+    async def test_computer_status(self, client: httpx.AsyncClient) -> None:
         """GET /computers/{id}/status returns expected fields."""
         async with managed_computer(client) as cid:
             resp = await client.get(f"/computers/{cid}/status")
@@ -161,7 +161,7 @@ class TestT71AllEndpoints:
             assert "manifest_hash" in body
             assert "created_at" in body
 
-    async def test_checkpoint_and_fork(self, long_client):
+    async def test_checkpoint_and_fork(self, long_client: httpx.AsyncClient) -> None:
         """POST checkpoint, then POST fork — full lifecycle."""
         async with managed_computer(long_client) as cid:
             # Write state
@@ -182,7 +182,7 @@ class TestT71AllEndpoints:
             finally:
                 await delete_checkpoint(long_client, cp_id)
 
-    async def test_checkpoint_list(self, long_client):
+    async def test_checkpoint_list(self, long_client: httpx.AsyncClient) -> None:
         """GET /checkpoints returns checkpoints with labels."""
         async with managed_computer(long_client) as cid:
             label_a = f"t71-list-a-{int(time.time())}"
@@ -207,7 +207,7 @@ class TestT71AllEndpoints:
                 await delete_checkpoint(long_client, cp_a)
                 await delete_checkpoint(long_client, cp_b)
 
-    async def test_checkpoint_delete(self, long_client):
+    async def test_checkpoint_delete(self, long_client: httpx.AsyncClient) -> None:
         """DELETE /checkpoints/{id} removes it from the list."""
         async with managed_computer(long_client) as cid:
             cp_id = await checkpoint_computer(long_client, cid, label="t71-delete-me")
@@ -225,7 +225,7 @@ class TestT71AllEndpoints:
             }
             assert cp_id not in ids_remaining
 
-    async def test_checkpoint_merge(self, long_client):
+    async def test_checkpoint_merge(self, long_client: httpx.AsyncClient) -> None:
         """POST /checkpoints/{parent_id}/merge merges two forks."""
         async with managed_computer(long_client) as cid:
             await exec_command(long_client, cid, "echo parent > /tmp/base.txt")
@@ -256,7 +256,7 @@ class TestT71AllEndpoints:
         await delete_checkpoint(long_client, body["checkpoint_id"])
         await delete_checkpoint(long_client, parent_ckpt)
 
-    async def test_checkpoint_resolve_conflicts(self, long_client):
+    async def test_checkpoint_resolve_conflicts(self, long_client: httpx.AsyncClient) -> None:
         """Conflicts are returned in merge response; no separate endpoint needed."""
         async with managed_computer(long_client) as cid:
             await exec_command(long_client, cid, "echo parent > /tmp/conflict.txt")
@@ -295,7 +295,7 @@ class TestT71AllEndpoints:
 class TestT72UploadDownloadStress:
     """Larger payloads, binary content, and error paths."""
 
-    async def test_upload_download_1mb_sha256(self, client):
+    async def test_upload_download_1mb_sha256(self, client: httpx.AsyncClient) -> None:
         """Upload 1MB, download, verify SHA256 matches."""
         async with managed_computer(client) as cid:
             # Generate 1MB of pseudo-random but deterministic content
@@ -326,7 +326,7 @@ class TestT72UploadDownloadStress:
                 f"SHA256 mismatch: expected {expected_sha}, got {actual_sha}"
             )
 
-    async def test_upload_download_binary_with_nulls(self, client):
+    async def test_upload_download_binary_with_nulls(self, client: httpx.AsyncClient) -> None:
         """Upload binary content containing null bytes, round-trip intact."""
         async with managed_computer(client) as cid:
             # Content with null bytes, high bytes, etc.
@@ -350,7 +350,7 @@ class TestT72UploadDownloadStress:
             dl_resp.raise_for_status()
             assert dl_resp.content == content
 
-    async def test_download_nonexistent_file(self, client):
+    async def test_download_nonexistent_file(self, client: httpx.AsyncClient) -> None:
         """Download a file that doesn't exist — should get an error."""
         async with managed_computer(client) as cid:
             resp = await client.get(
@@ -371,7 +371,7 @@ class TestT72UploadDownloadStress:
 class TestT73BackgroundProcessLifecycle:
     """Full lifecycle of background processes: start, logs, kill."""
 
-    async def test_exec_bg_kill_lifecycle(self, client):
+    async def test_exec_bg_kill_lifecycle(self, client: httpx.AsyncClient) -> None:
         """Start bg process, kill it, verify killed."""
         async with managed_computer(client) as cid:
             # Start
@@ -387,7 +387,7 @@ class TestT73BackgroundProcessLifecycle:
             kill_resp.raise_for_status()
             assert kill_resp.json().get("status") == "killed"
 
-    async def test_kill_already_killed_process(self, client):
+    async def test_kill_already_killed_process(self, client: httpx.AsyncClient) -> None:
         """Kill a process twice — second should return not_found or error."""
         async with managed_computer(client) as cid:
             resp = await client.post(
@@ -417,7 +417,7 @@ class TestT73BackgroundProcessLifecycle:
                     f"Double-kill returned 5xx: {kill2.status_code} {kill2.text}"
                 )
 
-    async def test_bg_process_with_output_and_logs(self, client):
+    async def test_bg_process_with_output_and_logs(self, client: httpx.AsyncClient) -> None:
         """Start bg process that produces output, tail logs, verify content."""
         async with managed_computer(client) as cid:
             resp = await client.post(
@@ -464,7 +464,7 @@ class TestT73BackgroundProcessLifecycle:
 class TestT74DoubleDestroy:
     """Destroying a computer twice should not crash the server."""
 
-    async def test_double_destroy(self, client):
+    async def test_double_destroy(self, client: httpx.AsyncClient) -> None:
         """Destroy, then destroy again — second should return error, not 500.
 
         Known bug: double destroy raises ValueError (computer not found in DB),
@@ -499,7 +499,7 @@ class TestT74DoubleDestroy:
 class TestT75ExecOnDestroyed:
     """Exec on a destroyed computer must return a clean error."""
 
-    async def test_exec_after_destroy(self, client):
+    async def test_exec_after_destroy(self, client: httpx.AsyncClient) -> None:
         """Destroy, then exec — must return 400, not 500."""
         cid = await create_computer(client)
         await destroy_computer(client, cid)
@@ -525,7 +525,7 @@ class TestT75ExecOnDestroyed:
 class TestT76CheckpointDestroyed:
     """Checkpointing a destroyed computer must return a clean error."""
 
-    async def test_checkpoint_after_destroy(self, client):
+    async def test_checkpoint_after_destroy(self, client: httpx.AsyncClient) -> None:
         """Destroy, then checkpoint — must return 400."""
         cid = await create_computer(client)
         await destroy_computer(client, cid)
@@ -549,7 +549,7 @@ class TestT76CheckpointDestroyed:
 class TestT77ForkNonexistent:
     """Forking a bogus checkpoint ID must return 404."""
 
-    async def test_fork_bogus_checkpoint(self, client):
+    async def test_fork_bogus_checkpoint(self, client: httpx.AsyncClient) -> None:
         """fork_checkpoint('bogus-id') returns 404."""
         resp = await client.post(
             "/checkpoints/bogus-nonexistent-id-12345/fork",
@@ -569,7 +569,7 @@ class TestT77ForkNonexistent:
 class TestT78MergeSelf:
     """Merging a checkpoint with itself should be rejected."""
 
-    async def test_merge_checkpoint_with_itself(self, long_client):
+    async def test_merge_checkpoint_with_itself(self, long_client: httpx.AsyncClient) -> None:
         """Merging a checkpoint with itself should return 400."""
         async with managed_computer(long_client) as cid:
             await exec_command(long_client, cid, "echo data > /tmp/test.txt")

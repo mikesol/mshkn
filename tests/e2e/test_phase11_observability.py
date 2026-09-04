@@ -6,6 +6,8 @@ Most are xfail because observability infrastructure is not yet implemented.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from .conftest import (
@@ -18,6 +20,9 @@ from .conftest import (
     managed_computer,
 )
 
+if TYPE_CHECKING:
+    import httpx
+
 # ---------------------------------------------------------------------------
 # T11.1 — Prometheus Endpoint
 # ---------------------------------------------------------------------------
@@ -26,7 +31,7 @@ from .conftest import (
 class TestT111PrometheusEndpoint:
     """Verify /metrics endpoint exposes Prometheus-format metrics."""
 
-    async def test_metrics_endpoint_exists(self, client):
+    async def test_metrics_endpoint_exists(self, client: httpx.AsyncClient) -> None:
         """GET /metrics should return Prometheus text format.
 
         Expected metrics:
@@ -51,7 +56,7 @@ class TestT111PrometheusEndpoint:
 class TestT112StructuredLogs:
     """Verify the server emits structured JSON logs."""
 
-    async def test_logs_are_json(self):
+    async def test_logs_are_json(self) -> None:
         """Server logs should be structured JSON with standard fields.
 
         Expected fields per log line:
@@ -72,7 +77,7 @@ class TestT112StructuredLogs:
 class TestT113ComputerStatus:
     """Verify /computers/{id}/status returns accurate data."""
 
-    async def test_status_returns_expected_fields(self, client):
+    async def test_status_returns_expected_fields(self, client: httpx.AsyncClient) -> None:
         """GET /computers/{id}/status should return machine state.
 
         Expected fields: computer_id, status, created_at, vm_ip, url
@@ -100,7 +105,7 @@ class TestT113ComputerStatus:
 class TestT114RequestTracing:
     """Verify requests have trace IDs for debugging."""
 
-    async def test_response_includes_request_id(self, client):
+    async def test_response_includes_request_id(self, client: httpx.AsyncClient) -> None:
         """Responses should include an X-Request-ID header.
 
         This enables correlating client requests with server logs.
@@ -122,7 +127,7 @@ class TestT114RequestTracing:
 class TestT115ErrorResponseFormat:
     """Verify error responses have consistent JSON structure."""
 
-    async def test_404_returns_structured_error(self, client):
+    async def test_404_returns_structured_error(self, client: httpx.AsyncClient) -> None:
         """GET /computers/nonexistent should return structured JSON error.
 
         Expected format:
@@ -146,7 +151,7 @@ class TestT115ErrorResponseFormat:
 class TestT116HealthCheck:
     """Verify the health check endpoint reports system status."""
 
-    async def test_health_check_subsystems(self, client):
+    async def test_health_check_subsystems(self, client: httpx.AsyncClient) -> None:
         """GET /health should report status of each subsystem.
 
         Expected subsystems: database, firecracker, storage, network
@@ -169,7 +174,7 @@ class TestT116HealthCheck:
 class TestT117AuditLog:
     """Verify that security-relevant operations are audit-logged."""
 
-    async def test_create_destroy_logged(self):
+    async def test_create_destroy_logged(self) -> None:
         """Create and destroy operations should appear in an audit log.
 
         The audit log should capture:
@@ -189,7 +194,7 @@ class TestT117AuditLog:
 class TestT118CheckpointDag:
     """Verify checkpoint list includes parent_id for lineage tracking."""
 
-    async def test_fork_checkpoint_has_parent_id(self, long_client):
+    async def test_fork_checkpoint_has_parent_id(self, long_client: httpx.AsyncClient) -> None:
         """Create -> checkpoint A -> fork -> checkpoint B; B should have parent_id=A.
 
         The checkpoint DAG enables navigating the full history of forks
@@ -246,7 +251,7 @@ class TestT118CheckpointDag:
 class TestT119ResourceUsage:
     """T11.5 — Verify computer_status returns accurate live VM metrics."""
 
-    async def test_status_includes_resource_usage(self, client):
+    async def test_status_includes_resource_usage(self, client: httpx.AsyncClient) -> None:
         """GET /computers/{id}/status should include CPU, memory, disk usage.
 
         Maps to spec T11.5: ram_usage_mb is sane, disk_usage_mb reflects reality,
@@ -281,7 +286,7 @@ class TestT119ResourceUsage:
             assert "pid" in proc
             assert "command" in proc
 
-    async def test_disk_usage_reflects_writes(self, client):
+    async def test_disk_usage_reflects_writes(self, client: httpx.AsyncClient) -> None:
         """Write data to disk, verify status reflects increased usage."""
         async with managed_computer(client) as computer_id:
             # Get baseline
@@ -311,7 +316,7 @@ class TestT119ResourceUsage:
 class TestT1110StatusConsistency:
     """T11.6 — Verify computer_status metrics match exec output."""
 
-    async def test_ram_matches_free(self, client):
+    async def test_ram_matches_free(self, client: httpx.AsyncClient) -> None:
         """computer_status ram_usage_mb should roughly match `free -m`."""
         async with managed_computer(client) as computer_id:
             # Get status
@@ -336,7 +341,7 @@ class TestT1110StatusConsistency:
                 f"RAM mismatch: status={status_ram}MB, free={exec_ram}MB, diff={diff}MB"
             )
 
-    async def test_disk_matches_df(self, client):
+    async def test_disk_matches_df(self, client: httpx.AsyncClient) -> None:
         """computer_status disk_usage_mb should roughly match `df`."""
         async with managed_computer(client) as computer_id:
             # Get status
@@ -370,14 +375,14 @@ class TestT1110StatusConsistency:
 class TestT114Alerting:
     """T11.4 — Verify the alerting endpoint exists and returns structured data."""
 
-    async def test_alerts_endpoint_exists(self, client):
+    async def test_alerts_endpoint_exists(self, client: httpx.AsyncClient) -> None:
         """GET /alerts should return a list (possibly empty on a healthy system)."""
         resp = await client.get("/alerts")
         assert resp.status_code == 200
         body = resp.json()
         assert isinstance(body, list)
 
-    async def test_alert_structure(self, client):
+    async def test_alert_structure(self, client: httpx.AsyncClient) -> None:
         """If any alerts exist, they should have the expected fields."""
         resp = await client.get("/alerts")
         resp.raise_for_status()

@@ -27,7 +27,7 @@ from .conftest import (
 class TestT51ConcurrentComputers:
     """Create, exec, and destroy 10 computers concurrently."""
 
-    async def test_10_concurrent_create_exec_destroy(self, client):
+    async def test_10_concurrent_create_exec_destroy(self, client: httpx.AsyncClient) -> None:
         """Create 10 computers in parallel, exec on all, destroy all."""
         n = 10
         computer_ids: list[str] = []
@@ -83,7 +83,7 @@ class TestT51ConcurrentComputers:
 class TestT52ConcurrentCheckpoints:
     """Checkpoint multiple computers concurrently."""
 
-    async def test_3_concurrent_checkpoints(self, client):
+    async def test_3_concurrent_checkpoints(self, client: httpx.AsyncClient) -> None:
         """Create 3 computers, checkpoint all 3 concurrently."""
         n = 3
         computer_ids: list[str] = []
@@ -131,7 +131,9 @@ class TestT52ConcurrentCheckpoints:
 class TestT53ConcurrentCreatesAndDestroys:
     """Mix creates and destroys while other computers are running."""
 
-    async def test_concurrent_create_and_destroy_with_running_vms(self, client):
+    async def test_concurrent_create_and_destroy_with_running_vms(
+        self, client: httpx.AsyncClient
+    ) -> None:
         """While 3 computers are running, create 2 more and destroy 1 concurrently."""
         running_ids: list[str] = []
         new_ids: list[str] = []
@@ -205,7 +207,7 @@ class TestT54MemoryPressure:
     """Create computers until memory limit is hit."""
 
     @pytest.mark.skip(reason="Dangerous: could OOM the host")
-    async def test_memory_pressure(self, client):
+    async def test_memory_pressure(self, client: httpx.AsyncClient) -> None:
         """Create computers until we run out of memory or hit a limit.
 
         This test is skipped to prevent accidental OOM.
@@ -256,7 +258,7 @@ class TestT55NvmePressure:
     """Create computers and fill disk inside each."""
 
     @pytest.mark.skip(reason="Dangerous: could fill production disk")
-    async def test_nvme_pressure(self, client):
+    async def test_nvme_pressure(self, client: httpx.AsyncClient) -> None:
         """Write large files inside VMs to stress the thin pool.
 
         Skipped to prevent accidental disk exhaustion. The test creates
@@ -300,7 +302,7 @@ class TestT55NvmePressure:
 class TestT56ResourceAllocation:
     """Request specific resource amounts for a computer."""
 
-    async def test_custom_ram_allocation(self, client):
+    async def test_custom_ram_allocation(self, client: httpx.AsyncClient) -> None:
         """Create a computer with 8GB RAM, verify it has ~8GB."""
         resp = await client.post(
             "/computers",
@@ -331,7 +333,7 @@ class TestT56ResourceAllocation:
 class TestT57PerAccountVmLimit:
     """Enforce a maximum number of VMs per account."""
 
-    async def test_vm_limit_enforced(self, client):
+    async def test_vm_limit_enforced(self, client: httpx.AsyncClient) -> None:
         """Creating more VMs than the per-account limit should be rejected."""
         computer_ids: list[str] = []
         limit = 20  # Expected per-account limit
@@ -368,7 +370,7 @@ class TestT57PerAccountVmLimit:
 class TestT58IdleTimeout:
     """Computers should be automatically destroyed after an idle period."""
 
-    async def test_idle_computer_destroyed(self, client):
+    async def test_idle_computer_destroyed(self, client: httpx.AsyncClient) -> None:
         """A computer left idle should be auto-destroyed after the timeout.
 
         The server idle timeout is assumed to be ~60s for testing. The reaper
@@ -409,7 +411,7 @@ class TestT58IdleTimeout:
 class TestT59ApiRateLimiting:
     """The API should enforce rate limits on requests."""
 
-    async def test_rapid_requests_throttled(self, client):
+    async def test_rapid_requests_throttled(self, client: httpx.AsyncClient) -> None:
         """Sending many rapid requests should eventually get rate-limited."""
         computer_id = await create_computer(client)
 

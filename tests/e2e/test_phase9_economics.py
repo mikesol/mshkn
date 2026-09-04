@@ -17,7 +17,7 @@ import pytest
 class TestT91S3Costs:
     """Verify checkpoint storage costs stay within budget."""
 
-    async def test_checkpoint_storage_cost_per_gb(self):
+    async def test_checkpoint_storage_cost_per_gb(self) -> None:
         """Measure the per-GB cost of checkpoint storage on Cloudflare R2.
 
         Test plan:
@@ -40,7 +40,7 @@ class TestT92NvmeWear:
     """Verify NVMe write amplification stays sustainable."""
 
     @pytest.mark.skip(reason="Requires week-long NVMe wear measurement")
-    async def test_nvme_tbw_projection(self):
+    async def test_nvme_tbw_projection(self) -> None:
         """Project NVMe Total Bytes Written over expected device lifetime.
 
         Test plan:
@@ -66,7 +66,7 @@ class TestT93ZeroDollarSleep:
     """Verify that sleeping (checkpointed) computers cost $0 in compute."""
 
     @pytest.mark.skip(reason="Requires 30-day wait to measure sleep cost")
-    async def test_sleeping_computer_zero_compute_cost(self):
+    async def test_sleeping_computer_zero_compute_cost(self) -> None:
         """A checkpointed computer should consume zero compute resources.
 
         Test plan:

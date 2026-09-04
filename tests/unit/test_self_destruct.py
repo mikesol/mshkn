@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosqlite
@@ -344,9 +345,9 @@ async def test_callback_url_fires_on_self_destruct(tmp_path: Path) -> None:
     app.state.vm_manager = vm_mgr
     app.state.ssh_pool = None
 
-    captured_payload: dict | None = None
+    captured_payload: dict[str, Any] | None = None
 
-    async def fake_deliver(url: str, payload: dict, max_retries: int = 3) -> None:
+    async def fake_deliver(url: str, payload: dict[str, Any], max_retries: int = 3) -> None:
         nonlocal captured_payload
         captured_payload = payload
 

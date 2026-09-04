@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import aiosqlite
@@ -232,7 +233,7 @@ def test_execute_transform_fork() -> None:
 
 def test_execute_transform_returns_none() -> None:
     source = "def transform(req):\n  return None"
-    req = {
+    req: dict[str, Any] = {
         "method": "GET",
         "path": "/",
         "headers": {},
@@ -248,7 +249,7 @@ def test_execute_transform_returns_none() -> None:
 
 def test_execute_transform_runtime_error() -> None:
     source = 'def transform(req):\n  return req["nonexistent"]["key"]'
-    req = {
+    req: dict[str, Any] = {
         "method": "GET",
         "path": "/",
         "headers": {},

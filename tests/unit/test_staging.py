@@ -8,7 +8,7 @@ from mshkn.vm.staging import (
 )
 
 
-def test_staging_constants():
+def test_staging_constants() -> None:
     assert STAGING_SLOT == 254
     assert STAGING_TAP == "tap254"
     assert STAGING_HOST_IP == "172.16.254.1"

@@ -18,6 +18,8 @@ from .conftest import (
 )
 
 if TYPE_CHECKING:
+    from typing import Any
+
     import httpx
 
 # ---------------------------------------------------------------------------
@@ -561,13 +563,14 @@ async def test_concurrent_merges_shared_parent(long_client: httpx.AsyncClient) -
         ckpt_a, ckpt_b, ckpt_c, ckpt_d = fork_ids
 
         # Issue two merges concurrently
-        async def do_merge(ca: str, cb: str) -> dict:
+        async def do_merge(ca: str, cb: str) -> dict[str, Any]:
             resp = await long_client.post(
                 f"/checkpoints/{ckpt_base}/merge",
                 json={"checkpoint_a": ca, "checkpoint_b": cb},
             )
             resp.raise_for_status()
-            return resp.json()
+            result: dict[str, Any] = resp.json()
+            return result
 
         merge_ab, merge_cd = await asyncio.gather(
             do_merge(ckpt_a, ckpt_b),
