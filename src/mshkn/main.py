@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request
 
 from mshkn.api.checkpoints import router as checkpoints_router
 from mshkn.api.computers import router as computers_router
+from mshkn.api.errors import install_error_handlers
 from mshkn.api.ingress import router as ingress_router
 from mshkn.api.metrics import router as metrics_router
 from mshkn.api.recipes import router as recipes_router
@@ -76,6 +77,7 @@ app.include_router(checkpoints_router)
 app.include_router(ingress_router)
 app.include_router(metrics_router)
 app.include_router(recipes_router)
+install_error_handlers(app)
 
 
 @app.middleware("http")

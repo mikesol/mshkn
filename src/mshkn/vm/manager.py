@@ -19,6 +19,7 @@ from mshkn.db import (
     list_all_computers,
     update_computer_status,
 )
+from mshkn.errors import Conflict, NotFound
 from mshkn.models import Checkpoint, Computer, Recipe
 from mshkn.shell import run
 from mshkn.vm.firecracker import (
@@ -408,11 +409,11 @@ class VMManager:
 
             recipe = await get_recipe(self.db, recipe_id)
             if recipe is None:
-                raise ValueError(f"Recipe {recipe_id} not found")
+                raise NotFound(f"Recipe {recipe_id} not found")
             if recipe.status != "ready":
-                raise ValueError(f"Recipe {recipe_id} is not ready (status={recipe.status})")
+                raise Conflict(f"Recipe {recipe_id} is not ready (status={recipe.status})")
             if recipe.base_volume_id is None:
-                raise ValueError(f"Recipe {recipe_id} has no base volume")
+                raise Conflict(f"Recipe {recipe_id} has no base volume")
             source_volume_id = recipe.base_volume_id
         else:
             recipe = None
@@ -583,7 +584,7 @@ class VMManager:
         """
         if checkpoint.thin_volume_id is None:
             msg = f"Checkpoint {checkpoint.id} has no disk snapshot (created before this fix)"
-            raise ValueError(msg)
+            raise Conflict(msg)
 
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
         async with self._alloc_lock:
@@ -687,7 +688,7 @@ class VMManager:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
         if not checkpoint.r2_prefix:
-            raise ValueError(f"Checkpoint {checkpoint.id} has no R2 prefix")
+            raise Conflict(f"Checkpoint {checkpoint.id} has no R2 prefix")
 
         for filename in ("vmstate", "memory"):
             local_path = ckpt_dir / filename
@@ -699,7 +700,7 @@ class VMManager:
     async def destroy(self, computer_id: str) -> None:
         computer = await get_computer(self.db, computer_id)
         if computer is None:
-            raise ValueError(f"Computer {computer_id} not found")
+            raise NotFound(f"Computer {computer_id} not found")
         if computer.status == "destroyed":
             logger.warning("Computer %s already destroyed, skipping", computer_id)
             return
