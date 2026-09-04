@@ -32,7 +32,7 @@ This is an early experiment. The idea: give agents cheap, fast VMs they can chec
 
 ## Running locally (you probably can't)
 
-This needs a bare metal Linux box with `/dev/kvm`, Firecracker installed, dm-thin kernel module, and a prepared rootfs. It's not containerizable. See `deploy.sh` for what the server setup looks like.
+This needs a bare metal Linux box with `/dev/kvm`, Firecracker installed, dm-thin kernel module, and a prepared rootfs. It's not containerizable. See `scripts/deploy.sh` for what the server setup looks like.
 
 ## Contributing
 

@@ -9,7 +9,7 @@ mshkn's unit and flow tests run anywhere. The E2E suite (`tests/e2e/`, 157 tests
 | Virtualization | Bare-metal x86_64 with `/dev/kvm`, or a VM whose provider exposes nested virtualization | Firecracker needs KVM. Hetzner Cloud VPSes do not expose it; Hetzner dedicated servers (including the server auction) do. |
 | OS | Ubuntu 24.04 LTS, root SSH | DEPLOY.md is written against it; systemd, dm-thin, and Docker packages are current. |
 | CPU | 4 cores (6 or more recommended) | Concurrency tests boot up to 20 VMs at once; recipe builds run `docker build` pinned to 2 cores. |
-| RAM | 16 GB (32 GB or more recommended) | 20 VMs × 256 MiB plus a 4 GB Docker build plus the L3 template memory files. |
+| RAM | 16 GB (32 GB or more recommended) | 20 VMs × 256 MiB plus a 4 GB Docker build plus the L3 template memory files. T5.6 additionally boots a single 8 GB VM. |
 | Disk | 250 GB NVMe | 100 GB sparse thin-pool file, Docker image cache, local checkpoint snapshots (vmstate + 256 MiB memory each). SATA works but latency targets are calibrated on NVMe. |
 | Network | Public IPv4, outbound internet | VMs reach the internet through host NAT; tests fetch packages inside VMs; Caddy answers on 80/443. |
 | Kernel | `dm_thin_pool` module and `thin-provisioning-tools` | dm-thin copy-on-write snapshots are how fork is O(1). |

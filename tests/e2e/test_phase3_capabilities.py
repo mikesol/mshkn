@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import httpx
-
 from .conftest import (
     create_computer,
     create_recipe,

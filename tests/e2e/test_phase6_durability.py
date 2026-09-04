@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,8 @@ from .conftest import (
 
 if TYPE_CHECKING:
     import httpx
+
+MSHKN_SERVER = os.environ.get("MSHKN_SERVER")
 
 # ---------------------------------------------------------------------------
 # T6.1 — Orchestrator Crash Recovery
@@ -207,6 +210,9 @@ class TestT65LitestreamReplication:
         """Verify the Litestream systemd service is active and running."""
         import subprocess
 
+        if MSHKN_SERVER is None:
+            pytest.skip("MSHKN_SERVER not set; host-side check needs SSH access to the live server")
+
         result = subprocess.run(
             [
                 "ssh",
@@ -218,7 +224,7 @@ class TestT65LitestreamReplication:
                 "StrictHostKeyChecking=no",
                 "-i",
                 str(Path("~/.ssh/id_ed25519").expanduser()),
-                "root@135.181.6.215",
+                MSHKN_SERVER,
                 "systemctl is-active litestream",
             ],
             capture_output=True,
@@ -233,6 +239,9 @@ class TestT65LitestreamReplication:
         """Verify Litestream has created at least one generation in R2."""
         import subprocess
 
+        if MSHKN_SERVER is None:
+            pytest.skip("MSHKN_SERVER not set; host-side check needs SSH access to the live server")
+
         result = subprocess.run(
             [
                 "ssh",
@@ -244,7 +253,7 @@ class TestT65LitestreamReplication:
                 "StrictHostKeyChecking=no",
                 "-i",
                 str(Path("~/.ssh/id_ed25519").expanduser()),
-                "root@135.181.6.215",
+                MSHKN_SERVER,
                 "litestream generations -config /etc/litestream.yml /opt/mshkn/mshkn.db",
             ],
             capture_output=True,
@@ -277,6 +286,9 @@ class TestT66StaleVMCleanup:
         import subprocess
         import time
 
+        if MSHKN_SERVER is None:
+            pytest.skip("MSHKN_SERVER not set; host-side check needs SSH access to the live server")
+
         # Create a computer
         resp = await client.post("/computers", json={})
         resp.raise_for_status()
@@ -295,7 +307,7 @@ class TestT66StaleVMCleanup:
                     "StrictHostKeyChecking=no",
                     "-i",
                     str(Path("~/.ssh/id_ed25519").expanduser()),
-                    "root@135.181.6.215",
+                    MSHKN_SERVER,
                     f"pgrep -f 'fc-{computer_id}' | xargs -r kill -9",
                 ],
                 capture_output=True,

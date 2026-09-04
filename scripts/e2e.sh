@@ -8,6 +8,7 @@ SERVER_IP="${MSHKN_SERVER#*@}"
 API_URL="${MSHKN_API_URL:-http://${SERVER_IP}:8000}"
 API_KEY="${MSHKN_API_KEY:-mk-test-key-2026}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+cd "$HERE/.."
 
 git push
 "$HERE/deploy.sh"
@@ -27,7 +28,7 @@ for vol in \$(dmsetup ls --target thin | awk '{print \$1}' | grep -E '^mshkn-(co
 done
 sqlite3 /opt/mshkn/mshkn.db "INSERT OR IGNORE INTO accounts (id, api_key, vm_limit) VALUES ('acct-mike', '${API_KEY}', 20);"
 systemctl start mshkn litestream
-for _ in \$(seq 1 20); do
+for _ in \$(seq 1 120); do
   curl -fsS http://localhost:8000/health >/dev/null 2>&1 && break
   sleep 0.5
 done
