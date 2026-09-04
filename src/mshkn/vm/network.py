@@ -70,16 +70,3 @@ async def destroy_tap(slot: int) -> None:
         logger.warning("Failed to delete tap %s: %s", tap, e.stderr.strip())
     else:
         logger.info("Destroyed tap device %s", tap)
-
-
-async def ensure_nat(interface: str = "enp35s0") -> None:
-    result = await run(
-        f"iptables -t nat -C POSTROUTING -o {interface} -j MASQUERADE",
-        check=False,
-    )
-    if "No chain" in result or result == "":
-        pass
-    await run(
-        f"iptables -t nat -A POSTROUTING -o {interface} -j MASQUERADE",
-        check=False,
-    )

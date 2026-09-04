@@ -28,14 +28,3 @@ async def delete_checkpoint_r2(
     """Delete checkpoint files from R2."""
     await run(f"rclone purge r2:{bucket}/{r2_prefix}/", check=False)
     logger.info("Deleted checkpoint from r2:%s/%s", bucket, r2_prefix)
-
-
-async def download_checkpoint(
-    r2_prefix: str,
-    bucket: str,
-    local_dir: Path,
-) -> None:
-    """Download checkpoint files from R2."""
-    local_dir.mkdir(parents=True, exist_ok=True)
-    await run(f"rclone copy r2:{bucket}/{r2_prefix}/ {local_dir}/")
-    logger.info("Downloaded checkpoint from r2:%s/%s", bucket, r2_prefix)

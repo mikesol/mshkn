@@ -164,38 +164,6 @@ async def count_active_computers_by_account(
     return row[0] if row else 0
 
 
-async def list_computers_by_account(
-    db: aiosqlite.Connection, account_id: str
-) -> list[Computer]:
-    cursor = await db.execute(
-        "SELECT id, account_id, thin_volume_id, tap_device, vm_ip, socket_path, "
-        "firecracker_pid, manifest_hash, manifest_json, status, created_at, last_exec_at, "
-        "source_checkpoint_id, recipe_id "
-        "FROM computers WHERE account_id = ? AND status != 'destroyed'",
-        (account_id,),
-    )
-    rows = await cursor.fetchall()
-    return [
-        Computer(
-            id=r[0],
-            account_id=r[1],
-            thin_volume_id=r[2],
-            tap_device=r[3],
-            vm_ip=r[4],
-            socket_path=r[5],
-            firecracker_pid=r[6],
-            manifest_hash=r[7],
-            manifest_json=r[8],
-            status=r[9],
-            created_at=r[10],
-            last_exec_at=r[11],
-            source_checkpoint_id=r[12],
-            recipe_id=r[13],
-        )
-        for r in rows
-    ]
-
-
 async def update_computer_status(
     db: aiosqlite.Connection, computer_id: str, status: str
 ) -> None:
