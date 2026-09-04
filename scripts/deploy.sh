@@ -3,10 +3,10 @@
 # Usage: MSHKN_SERVER=root@<ip> scripts/deploy.sh
 set -euo pipefail
 
-: "${MSHKN_SERVER:?set MSHKN_SERVER to root@<ip> of the live KVM server}"
+: "${MSHKN_SERVER:?set MSHKN_SERVER to root@<ip> (or an ssh config alias) of the live KVM server}"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
-ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 "$MSHKN_SERVER" bash -s <<REMOTE
+ssh "$MSHKN_SERVER" bash -s <<REMOTE
 set -euo pipefail
 cd /opt/mshkn
 git fetch origin

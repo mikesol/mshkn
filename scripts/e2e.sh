@@ -3,7 +3,7 @@
 # Usage: MSHKN_SERVER=root@<ip> scripts/e2e.sh [extra pytest args]
 set -euo pipefail
 
-: "${MSHKN_SERVER:?set MSHKN_SERVER to root@<ip> of the live KVM server}"
+: "${MSHKN_SERVER:?set MSHKN_SERVER to root@<ip> (or an ssh config alias) of the live KVM server}"
 SERVER_IP="${MSHKN_SERVER#*@}"
 API_URL="${MSHKN_API_URL:-http://${SERVER_IP}:8000}"
 API_KEY="${MSHKN_API_KEY:-mk-test-key-2026}"
@@ -15,7 +15,7 @@ git push
 
 # Stop the service, kill leftover VMs, remove orphaned taps and computer/staging thin
 # devices (checkpoint and recipe volumes are persistent and must survive), then start.
-ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 "$MSHKN_SERVER" bash -s <<REMOTE
+ssh "$MSHKN_SERVER" bash -s <<REMOTE
 set -euo pipefail
 systemctl stop mshkn litestream
 pkill -x firecracker || true
