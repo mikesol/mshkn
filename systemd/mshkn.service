@@ -1,7 +1,8 @@
 [Unit]
 Description=mshkn orchestrator
-After=network.target
-Wants=litestream.service
+After=network.target mshkn-pool.service caddy.service
+Requires=mshkn-pool.service
+Wants=litestream.service caddy.service
 
 [Service]
 Type=simple
