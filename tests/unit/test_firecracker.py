@@ -1,4 +1,4 @@
-from mshkn.vm.firecracker import FirecrackerConfig
+from mshkn.host.firecracker import FirecrackerConfig
 
 
 def test_firecracker_config_to_api_calls() -> None:

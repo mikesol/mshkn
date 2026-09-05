@@ -1,4 +1,4 @@
-from mshkn.vm.staging import (
+from mshkn.host.firecracker import (
     STAGING_DRIVE_NAME,
     STAGING_HOST_IP,
     STAGING_MAC,
