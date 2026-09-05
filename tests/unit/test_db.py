@@ -26,6 +26,7 @@ async def test_migrations_apply(tmp_path: Path) -> None:
     assert "accounts" in tables
     assert "computers" in tables
     assert "checkpoints" in tables
+    assert "deferred_queue" in tables
 
 
 async def test_migrations_idempotent(tmp_path: Path) -> None:

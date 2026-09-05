@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 from mshkn.api.auth import require_account
 from mshkn.api.ratelimit import RateLimiter
-from mshkn.ingress.db import (
+from mshkn.db.ingress import (
     delete_ingress_rule,
     get_ingress_rule_by_id,
     insert_ingress_log,

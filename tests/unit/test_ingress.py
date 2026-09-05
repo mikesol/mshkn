@@ -11,7 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from mshkn.api.ingress import _validate_transform_result
 from mshkn.db import run_migrations
-from mshkn.ingress.db import (
+from mshkn.db.ingress import (
     delete_ingress_rule,
     get_ingress_rule_by_id,
     insert_ingress_log,
@@ -519,7 +519,7 @@ async def test_trigger_disabled_rule_404(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
         # Insert a disabled rule directly
-        from mshkn.ingress.db import insert_ingress_rule as _ins
+        from mshkn.db.ingress import insert_ingress_rule as _ins
 
         rule = IngressRule(
             internal_id="int-dis",
@@ -547,7 +547,7 @@ async def test_trigger_disabled_rule_404(tmp_path: Path) -> None:
 async def test_trigger_none_returns_204(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        from mshkn.ingress.db import insert_ingress_rule as _ins
+        from mshkn.db.ingress import insert_ingress_rule as _ins
 
         rule = IngressRule(
             internal_id="int-none",
@@ -575,7 +575,7 @@ async def test_trigger_none_returns_204(tmp_path: Path) -> None:
 async def test_trigger_starlark_error_502(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        from mshkn.ingress.db import insert_ingress_rule as _ins
+        from mshkn.db.ingress import insert_ingress_rule as _ins
 
         rule = IngressRule(
             internal_id="int-err",
@@ -603,7 +603,7 @@ async def test_trigger_starlark_error_502(tmp_path: Path) -> None:
 async def test_trigger_invalid_action_502(tmp_path: Path) -> None:
     db = await _setup_app_db(tmp_path)
     try:
-        from mshkn.ingress.db import insert_ingress_rule as _ins
+        from mshkn.db.ingress import insert_ingress_rule as _ins
 
         rule = IngressRule(
             internal_id="int-bad",
