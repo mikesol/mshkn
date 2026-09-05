@@ -937,14 +937,19 @@ from mshkn.host.ssh import SshGuest
 
 
 class FakeReader:
-    def __init__(self, lines: list[tuple[float, str]]) -> None:
+    """Yields (delay, line) pairs; with hang_after=True it then blocks like an fd held open."""
+
+    def __init__(self, lines: list[tuple[float, str]], *, hang_after: bool = False) -> None:
         self._lines = lines
+        self._hang_after = hang_after
 
     def __aiter__(self) -> FakeReader:
         return self
 
     async def __anext__(self) -> str:
         if not self._lines:
+            if self._hang_after:
+                await asyncio.sleep(3600)
             raise StopAsyncIteration
         delay, line = self._lines.pop(0)
         await asyncio.sleep(delay)
@@ -952,9 +957,9 @@ class FakeReader:
 
 
 class FakeProcess:
-    def __init__(self, stdout: list[tuple[float, str]], stderr: list[tuple[float, str]], exit_after: float, code: int = 0) -> None:
-        self.stdout = FakeReader(stdout)
-        self.stderr = FakeReader(stderr)
+    def __init__(self, stdout: list[tuple[float, str]], stderr: list[tuple[float, str]], exit_after: float, code: int = 0, *, hang: bool = False) -> None:
+        self.stdout = FakeReader(stdout, hang_after=hang)
+        self.stderr = FakeReader(stderr, hang_after=hang)
         self._exit_after = exit_after
         self.exit_status = code
         self.killed = False
@@ -1012,12 +1017,14 @@ async def test_stream_yields_lines_before_the_process_exits() -> None:
     assert seen[1][0] < 0.25
 
 
-async def test_stream_kills_on_timeout_and_still_reports_exit() -> None:
-    process = FakeProcess(stdout=[(0.0, "x\n")], stderr=[], exit_after=10, code=0)
+async def test_stream_kills_on_timeout_and_still_reports_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ssh_module, "STREAM_GRACE_SECONDS", 0.1)
+    # readers stay open (a background child holds the fds) and the process never exits
+    process = FakeProcess(stdout=[(0.0, "x\n")], stderr=[], exit_after=10, code=0, hang=True)
     guest = make_guest(process)
     items = [item async for item in guest.stream("172.16.1.2", "cmd", timeout=0.1)]
     assert process.killed
-    assert items[-1][0] == "exit"
+    assert items == [("stdout", "x"), ("exit", "0")]
 
 
 async def test_stream_grace_drains_lines_after_exit(monkeypatch: pytest.MonkeyPatch) -> None:
