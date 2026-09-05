@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -52,6 +53,8 @@ if TYPE_CHECKING:
     from mshkn.vm.manager import VMManager
 
 logger = logging.getLogger(__name__)
+
+STATUS_METRICS_TIMEOUT_SECONDS = 15.0
 
 router = APIRouter(prefix="/computers", tags=["computers"])
 
@@ -473,11 +476,14 @@ async def computer_status(
     # Enrich with live VM metrics if the VM is running
     if computer.status == ComputerStatus.RUNNING and computer.vm_ip:
         try:
-            metrics = await ssh_gather_metrics(
-                computer.vm_ip,
-                config.ssh_key_path,
-                timeout=10.0,
-                pool=rt.ssh_pool,
+            metrics = await asyncio.wait_for(
+                ssh_gather_metrics(
+                    computer.vm_ip,
+                    config.ssh_key_path,
+                    timeout=10.0,
+                    pool=rt.ssh_pool,
+                ),
+                timeout=STATUS_METRICS_TIMEOUT_SECONDS,
             )
             result["cpu_pct"] = metrics.cpu_pct
             result["ram_usage_mb"] = metrics.ram_usage_mb
@@ -485,8 +491,8 @@ async def computer_status(
             result["disk_usage_mb"] = metrics.disk_usage_mb
             result["disk_total_mb"] = metrics.disk_total_mb
             result["processes"] = metrics.processes
-        except Exception:
-            logger.warning("Failed to gather metrics for %s", computer_id)
+        except Exception as exc:
+            logger.warning("Failed to gather metrics for %s: %s", computer_id, type(exc).__name__)
     return result
 
 

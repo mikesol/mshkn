@@ -14,6 +14,10 @@ import asyncssh
 
 logger = logging.getLogger(__name__)
 
+# TCP connect to a VM that was just killed otherwise hangs for the kernel's
+# SYN retry budget, ~2 minutes.
+CONNECT_TIMEOUT_SECONDS = 10.0
+
 
 class SSHPool:
     """Per-VM SSH connection pool. Reuses connections to avoid handshake overhead."""
@@ -56,13 +60,16 @@ class SSHPool:
                     conn.close()
                 del self._conns[vm_ip]
 
-            conn = await asyncssh.connect(
-                vm_ip,
-                username="root",
-                client_keys=[self._key_path],
-                known_hosts=None,
-                keepalive_interval=15,
-                login_timeout=10,
+            conn = await asyncio.wait_for(
+                asyncssh.connect(
+                    vm_ip,
+                    username="root",
+                    client_keys=[self._key_path],
+                    known_hosts=None,
+                    keepalive_interval=15,
+                    login_timeout=10,
+                ),
+                timeout=CONNECT_TIMEOUT_SECONDS,
             )
             self._conns[vm_ip] = conn
             self._last_used[vm_ip] = asyncio.get_event_loop().time()
@@ -102,11 +109,14 @@ async def _get_conn(
     """Get an SSH connection, either from pool or new. Returns (conn, owned)."""
     if pool is not None:
         return await pool.get(vm_ip), False
-    conn = await asyncssh.connect(
-        vm_ip,
-        username="root",
-        client_keys=[str(ssh_key_path)],
-        known_hosts=None,
+    conn = await asyncio.wait_for(
+        asyncssh.connect(
+            vm_ip,
+            username="root",
+            client_keys=[str(ssh_key_path)],
+            known_hosts=None,
+        ),
+        timeout=CONNECT_TIMEOUT_SECONDS,
     )
     return conn, True
 
@@ -172,12 +182,16 @@ async def ssh_exec_stream(
     """
     log = logging.getLogger("mshkn.ssh")
 
-    async with asyncssh.connect(
-        vm_ip,
-        username="root",
-        client_keys=[str(ssh_key_path)],
-        known_hosts=None,
-    ) as conn:
+    conn = await asyncio.wait_for(
+        asyncssh.connect(
+            vm_ip,
+            username="root",
+            client_keys=[str(ssh_key_path)],
+            known_hosts=None,
+        ),
+        timeout=CONNECT_TIMEOUT_SECONDS,
+    )
+    async with conn:
         process = await conn.create_process(command)
 
         collected: list[tuple[str, str]] = []
