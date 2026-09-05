@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-if TYPE_CHECKING:
-    from mshkn.vm.manager import VMManager
+from mshkn.api.deps import get_runtime
 
 router = APIRouter(tags=["system"])
 
@@ -27,5 +25,4 @@ async def metrics() -> Response:
 @router.get("/alerts")
 async def alerts(request: Request) -> list[dict[str, object]]:
     """Return recent resource alerts."""
-    vm_manager: VMManager = request.app.state.vm_manager
-    return [asdict(a) for a in vm_manager.alerts]
+    return [asdict(a) for a in get_runtime(request).vm_manager.alerts]

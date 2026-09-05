@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
     from mshkn.config import Config
     from mshkn.proxy.caddy import CaddyClient
+    from mshkn.runtime import BackgroundTasks
     from mshkn.vm.ssh import SSHPool
 
 logger = logging.getLogger(__name__)
@@ -59,9 +60,14 @@ class VMManager:
         self,
         config: Config,
         db: aiosqlite.Connection,
+        *,
         caddy: CaddyClient | None = None,
         ssh_pool: SSHPool | None = None,
+        tasks: BackgroundTasks | None = None,
     ) -> None:
+        # runtime imports vm.manager; import here to avoid a cycle until PR 4
+        from mshkn.runtime import BackgroundTasks as _BackgroundTasks
+
         self.config = config
         self.db = db
         self.caddy = caddy
@@ -71,7 +77,7 @@ class VMManager:
         self._next_volume_id = 100  # volume 0 is base; start high to avoid conflicts
         self._alloc_lock = asyncio.Lock()
         self.alerts: deque[Alert] = deque(maxlen=_ALERT_HISTORY_SIZE)
-        self._bg_tasks: set[asyncio.Task[None]] = set()
+        self.tasks = tasks if tasks is not None else _BackgroundTasks()
 
     async def initialize(self) -> None:
         """Load state from DB and actual pool to set counters correctly."""
@@ -916,17 +922,17 @@ class VMManager:
             await insert_checkpoint(self.db, ckpt)
 
             # Upload to R2 in background (best-effort, don't block reaper)
-            task = asyncio.create_task(
+            self.tasks.spawn(
                 self._upload_checkpoint_bg(
                     upload_checkpoint,
                     snapshot_dir,
                     r2_prefix,
                     self.config.r2_bucket,
                     checkpoint_id,
-                )
+                ),
+                name=f"upload:{checkpoint_id}",
+                key=f"upload:{checkpoint_id}",
             )
-            self._bg_tasks.add(task)
-            task.add_done_callback(self._bg_tasks.discard)
 
             logger.info("Auto-checkpoint %s created for idle VM %s", checkpoint_id, computer.id)
         except Exception:
@@ -947,7 +953,7 @@ class VMManager:
 
             account = await get_account_by_id(self.db, computer.account_id)
             if account is not None:
-                task = asyncio.create_task(
+                self.tasks.spawn(
                     _process_deferred(
                         label=effective_label,
                         deferred_items=deferred,
@@ -955,10 +961,10 @@ class VMManager:
                         config=self.config,
                         vm_mgr=self,
                         account=account,
-                    )
+                        tasks=self.tasks,
+                    ),
+                    name=f"deferred:{effective_label}",
                 )
-                self._bg_tasks.add(task)
-                task.add_done_callback(self._bg_tasks.discard)
                 logger.info(
                     "Draining %d deferred item(s) for label '%s' after idle reap",
                     len(deferred),

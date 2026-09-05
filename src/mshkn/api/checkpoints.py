@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from mshkn.api.auth import require_account
+from mshkn.api.deps import get_runtime, require_account
 from mshkn.db import delete_checkpoint as db_delete_checkpoint
 from mshkn.db import (
     get_active_computer_for_label,
@@ -22,8 +22,6 @@ from mshkn.db import (
 from mshkn.observability.metrics import timed
 
 if TYPE_CHECKING:
-    import aiosqlite
-
     from mshkn.models import Account
 
 logger = logging.getLogger(__name__)
@@ -58,7 +56,8 @@ async def fork_checkpoint(
     body: ForkRequest | None = None,
     account: Account = _require_account,
 ) -> ForkResponse | JSONResponse:
-    db: aiosqlite.Connection = request.app.state.db
+    rt = get_runtime(request)
+    db = rt.db
 
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account.id:
@@ -99,7 +98,7 @@ async def fork_checkpoint(
                     content={"deferred_id": deferred_id, "status": "queued"},
                 )
 
-    vm_mgr = request.app.state.vm_manager
+    vm_mgr = rt.vm_manager
     async with timed("fork"):
         computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, recipe_id=fork_recipe_id)
 
@@ -110,11 +109,11 @@ async def fork_checkpoint(
 
     # Exec on fork
     if body and body.exec is not None:
-        from mshkn.api.computers import _get_pool, _self_destruct
+        from mshkn.api.computers import _self_destruct
         from mshkn.vm.ssh import ssh_exec
 
-        config = request.app.state.config
-        pool = _get_pool(request)
+        config = rt.config
+        pool = rt.ssh_pool
         result = await ssh_exec(
             computer.vm_ip,
             body.exec,
@@ -142,6 +141,7 @@ async def fork_checkpoint(
                 config=config,
                 vm_mgr=vm_mgr,
                 pool=pool,
+                tasks=rt.tasks,
             )
 
     return ForkResponse(
@@ -174,9 +174,10 @@ async def merge_checkpoints(
     from mshkn.models import Checkpoint
     from mshkn.vm.storage import create_snapshot, mount_volume, umount_volume
 
-    db: aiosqlite.Connection = request.app.state.db
-    config = request.app.state.config
-    vm_mgr = request.app.state.vm_manager
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
+    vm_mgr = rt.vm_manager
 
     # Validate parent checkpoint
     ckpt_parent = await get_checkpoint(db, parent_id)
@@ -341,7 +342,7 @@ async def list_checkpoints(
     label: str | None = None,
     account: Account = _require_account,
 ) -> list[dict[str, object]]:
-    db: aiosqlite.Connection = request.app.state.db
+    db = get_runtime(request).db
     checkpoints = await list_checkpoints_by_account(db, account.id, label=label)
     return [
         {
@@ -369,18 +370,18 @@ async def delete_checkpoint(
 ) -> dict[str, str]:
     import shutil
 
-    from mshkn.api.computers import cancel_upload_task
     from mshkn.checkpoint.r2 import delete_checkpoint_r2
     from mshkn.vm.storage import remove_volume
 
-    db: aiosqlite.Connection = request.app.state.db
-    config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account.id:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
 
     # Cancel any in-flight R2 upload before deleting local files
-    await cancel_upload_task(checkpoint_id)
+    await rt.tasks.cancel(f"upload:{checkpoint_id}")
 
     # Clean up dm-thin volume if one was allocated
     if ckpt.thin_volume_id is not None:

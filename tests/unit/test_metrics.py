@@ -1,21 +1,26 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from httpx import ASGITransport, AsyncClient
 
-from mshkn.main import app
+from tests.unit.conftest import make_app, make_runtime
+
+if TYPE_CHECKING:
+    import aiosqlite
 
 
-async def test_metrics_endpoint_returns_200() -> None:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+async def test_metrics_endpoint_returns_200(db: aiosqlite.Connection) -> None:
+    app = make_app(make_runtime(db))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/metrics")
     assert resp.status_code == 200
-    assert "text/plain" in resp.headers["content-type"] or "text/plain" in resp.headers.get(
-        "content-type", ""
-    )
+    assert "text/plain" in resp.headers.get("content-type", "")
 
 
-async def test_metrics_contains_expected_names() -> None:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+async def test_metrics_contains_expected_names(db: aiosqlite.Connection) -> None:
+    app = make_app(make_runtime(db))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/metrics")
     text = resp.text
     assert "mshkn_computers_active" in text

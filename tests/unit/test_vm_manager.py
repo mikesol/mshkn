@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from mshkn.config import Config
+from mshkn.runtime import BackgroundTasks
 from mshkn.vm import manager as vm_manager_module
 from mshkn.vm.manager import VMManager
 
@@ -20,6 +21,7 @@ def test_slot_allocation() -> None:
     manager._free_slots = set()
     manager._next_volume_id = 100
     manager._alloc_lock = asyncio.Lock()
+    manager.tasks = BackgroundTasks()
 
     assert manager._allocate_slot() == 1
     assert manager._allocate_slot() == 2
@@ -38,6 +40,7 @@ async def test_start_firecracker_with_snapshot_overlaps_snapshot_and_process_sta
 ) -> None:
     manager = VMManager.__new__(VMManager)
     manager.config = Config()
+    manager.tasks = BackgroundTasks()
 
     order: list[str] = []
     release_snapshot = asyncio.Event()
