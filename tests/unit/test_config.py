@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from mshkn.config import Config
+from mshkn.errors import ConfigError
+
+
+def test_defaults_when_env_is_empty() -> None:
+    cfg = Config.from_env({})
+    assert cfg == Config()
+
+
+def test_generic_names_map_every_field() -> None:
+    cfg = Config.from_env(
+        {
+            "MSHKN_PORT": "9000",
+            "MSHKN_DB_PATH": "/var/lib/mshkn/x.db",
+            "MSHKN_THIN_POOL_NAME": "pool2",
+            "MSHKN_THIN_VOLUME_SECTORS": "1234",
+            "MSHKN_SSH_KEY_PATH": "/root/.ssh/other",
+            "MSHKN_DOMAIN": "example.test",
+        }
+    )
+    assert cfg.port == 9000
+    assert cfg.db_path == Path("/var/lib/mshkn/x.db")
+    assert cfg.thin_pool_name == "pool2"
+    assert cfg.thin_volume_sectors == 1234
+    assert cfg.ssh_key_path == Path("/root/.ssh/other")
+    assert cfg.domain == "example.test"
+
+
+def test_aliases_keep_working_and_win() -> None:
+    cfg = Config.from_env(
+        {
+            "R2_ENDPOINT": "https://r2.example",
+            "R2_ACCESS_KEY_ID": "k",
+            "R2_SECRET_ACCESS_KEY": "s",
+            "R2_BUCKET": "b",
+            "MSHKN_IDLE_TIMEOUT": "120",
+            "MSHKN_IDLE_TIMEOUT_SECONDS": "999",
+            "MSHKN_CHECKPOINT_RETENTION": "5",
+        }
+    )
+    assert cfg.r2_endpoint == "https://r2.example"
+    assert cfg.r2_access_key_id == "k"
+    assert cfg.r2_secret_access_key == "s"
+    assert cfg.r2_bucket == "b"
+    assert cfg.idle_timeout_seconds == 120
+    assert cfg.checkpoint_retention_count == 5
+
+
+@pytest.mark.parametrize(
+    ("var", "value"),
+    [("MSHKN_PORT", "eighty"), ("MSHKN_IDLE_TIMEOUT", "1.5"), ("MSHKN_THIN_VOLUME_SECTORS", "")],
+)
+def test_bad_values_raise_config_error_naming_the_variable(var: str, value: str) -> None:
+    with pytest.raises(ConfigError, match=var):
+        Config.from_env({var: value})
+
+
+def test_unknown_mshkn_variables_are_ignored() -> None:
+    assert Config.from_env({"MSHKN_NOT_A_FIELD": "1"}) == Config()
