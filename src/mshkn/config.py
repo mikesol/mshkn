@@ -87,6 +87,8 @@ def _parse(var: str, raw: str, kind: object) -> object:
     try:
         if kind is int:
             return int(raw)
+        if kind is float:
+            return float(raw)
         if kind is bool:
             lowered = raw.strip().lower()
             if lowered in _TRUE:

@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mshkn.api.ratelimit import RateLimiter
 from mshkn.app import create_app
 from mshkn.config import Config
 from mshkn.db import connect, run_migrations
+from mshkn.ratelimit import RateLimiter
 from mshkn.runtime import BackgroundTasks, Runtime
 
 if TYPE_CHECKING:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from mshkn.config import Config
+from mshkn.config import Config, _parse
 from mshkn.errors import ConfigError
 
 
@@ -63,3 +63,12 @@ def test_bad_values_raise_config_error_naming_the_variable(var: str, value: str)
 
 def test_unknown_mshkn_variables_are_ignored() -> None:
     assert Config.from_env({"MSHKN_NOT_A_FIELD": "1"}) == Config()
+
+
+def test_parse_float_succeeds() -> None:
+    assert _parse("X", "1.5", float) == 1.5
+
+
+def test_parse_float_raises_config_error_naming_the_variable() -> None:
+    with pytest.raises(ConfigError, match="X"):
+        _parse("X", "one", float)

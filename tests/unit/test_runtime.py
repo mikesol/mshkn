@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
+import pytest
+
+from mshkn.app import create_app
 from mshkn.runtime import BackgroundTasks
-
-if TYPE_CHECKING:
-    import pytest
+from tests.unit.conftest import make_runtime
 
 
 async def _sleep_then(result: list[str], tag: str, seconds: float) -> None:
@@ -61,3 +62,18 @@ async def test_failed_task_is_logged_not_raised(caplog: pytest.LogCaptureFixture
     await asyncio.sleep(0.01)
     assert len(tasks) == 0
     assert any("boom" in r.getMessage() for r in caplog.records)
+
+
+async def test_lifespan_closes_runtime_even_when_start_fails() -> None:
+    """A failing start() (e.g. dm-thin pool missing) must not leak the db connection."""
+    vm_manager = AsyncMock()
+    vm_manager.initialize.side_effect = RuntimeError("pool missing")
+    rt = make_runtime(AsyncMock(), vm_manager=vm_manager)
+
+    app = create_app(rt)
+
+    with pytest.raises(RuntimeError, match="pool missing"):
+        async with app.router.lifespan_context(app):
+            pass
+
+    rt.db.close.assert_awaited_once()  # type: ignore[attr-defined]

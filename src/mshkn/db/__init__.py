@@ -112,16 +112,17 @@ __all__ = [
 async def connect(path: Path | str) -> aiosqlite.Connection:
     """Open the database with the pragmas the service relies on.
 
-    WAL for concurrent readers and Litestream; NORMAL sync is durable enough
-    under WAL and much faster; a busy timeout so concurrent writers wait
-    instead of failing. Foreign keys stay OFF on purpose: the schema has
+    A busy timeout so concurrent writers wait instead of failing, set before
+    the WAL switch since that is the one pragma that can need a lock; WAL for
+    concurrent readers and Litestream; NORMAL sync is durable enough under
+    WAL and much faster. Foreign keys stay OFF on purpose: the schema has
     REFERENCES without ON DELETE actions and destroyed rows are retained, so
     enforcement would break checkpoint deletion and pruning.
     """
     db = await aiosqlite.connect(path)
+    await db.execute("PRAGMA busy_timeout=5000")
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA synchronous=NORMAL")
-    await db.execute("PRAGMA busy_timeout=5000")
     return db
 
 

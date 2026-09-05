@@ -34,8 +34,8 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         rt = runtime if runtime is not None else await Runtime.from_env()
         app.state.runtime = rt
-        await rt.start()
         try:
+            await rt.start()
             yield
         finally:
             await rt.close()

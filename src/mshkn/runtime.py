@@ -13,10 +13,10 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from mshkn.api.ratelimit import RateLimiter
 from mshkn.config import Config
 from mshkn.db import connect, run_migrations
 from mshkn.proxy.caddy import CaddyClient
+from mshkn.ratelimit import RateLimiter
 from mshkn.vm.manager import VMManager
 from mshkn.vm.ssh import SSHPool
 
@@ -142,7 +142,10 @@ class Runtime:
 
     def build_lock(self, account_id: str) -> asyncio.Lock:
         """Per-account lock serializing recipe builds."""
-        return self.build_locks.setdefault(account_id, asyncio.Lock())
+        lock = self.build_locks.get(account_id)
+        if lock is None:
+            lock = self.build_locks[account_id] = asyncio.Lock()
+        return lock
 
     def rule_limiter(self, rule_id: str, rate_limit_rpm: int) -> RateLimiter:
         """Per-ingress-rule limiter, rebuilt when the rule's rpm changes."""

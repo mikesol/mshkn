@@ -21,6 +21,7 @@ from mshkn.db import (
 )
 from mshkn.errors import Conflict, NotFound
 from mshkn.models import Checkpoint, Computer, ComputerStatus, Recipe, RecipeStatus
+from mshkn.observability.metrics import host_ram_used_ratio
 from mshkn.resources import DEFAULT_RESOURCES, Resources
 from mshkn.shell import run
 from mshkn.vm.firecracker import (
@@ -1094,6 +1095,7 @@ class VMManager:
             available = meminfo.get("MemAvailable", 0)
             if total > 0:
                 used_pct = ((total - available) / total) * 100
+                host_ram_used_ratio.set(used_pct / 100.0)
                 if used_pct > 90:
                     alert = Alert(
                         level="critical",
