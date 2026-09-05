@@ -4,7 +4,6 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,30 +16,16 @@ from mshkn.api.checkpoints import router as checkpoints_router
 from mshkn.api.computers import router as computers_router
 from mshkn.api.errors import install_error_handlers
 from mshkn.api.ingress import router as ingress_router
-from mshkn.api.metrics import router as metrics_router
 from mshkn.api.recipes import router as recipes_router
+from mshkn.api.system import router as system_router
 from mshkn.config import Config
 from mshkn.db import run_migrations
-from mshkn.logging import JSONFormatter
+from mshkn.observability.logging import configure_logging, request_id_var
 from mshkn.proxy.caddy import CaddyClient
 from mshkn.vm.manager import VMManager
 from mshkn.vm.ssh import SSHPool
 
-
-def _configure_logging() -> None:
-    """Set up structured JSON logging for the application."""
-    handler = logging.StreamHandler()
-    handler.setFormatter(JSONFormatter())
-    logging.root.handlers = [handler]
-    logging.root.setLevel(logging.INFO)
-    # Ensure uvicorn loggers also use our formatter
-    for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
-        uv_logger = logging.getLogger(name)
-        uv_logger.handlers = [handler]
-        uv_logger.propagate = False
-
-
-_configure_logging()
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -75,27 +60,19 @@ app = FastAPI(title="mshkn", version="0.1.0", lifespan=lifespan)
 app.include_router(computers_router)
 app.include_router(checkpoints_router)
 app.include_router(ingress_router)
-app.include_router(metrics_router)
+app.include_router(system_router)
 app.include_router(recipes_router)
 install_error_handlers(app)
 
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
-    """Add X-Request-Id header to all responses."""
+    """Attach a request id to the response and to every log line during the request."""
     request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
-    response = await call_next(request)
+    token = request_id_var.set(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        request_id_var.reset(token)
     response.headers["X-Request-Id"] = request_id
     return response
-
-
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.get("/alerts")
-async def get_alerts(request: Request) -> list[dict[str, object]]:
-    """Return recent resource alerts."""
-    vm_manager: VMManager = request.app.state.vm_manager
-    return [asdict(a) for a in vm_manager.alerts]

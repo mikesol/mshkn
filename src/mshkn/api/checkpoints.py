@@ -19,6 +19,7 @@ from mshkn.db import (
     insert_deferred,
     list_checkpoints_by_account,
 )
+from mshkn.observability.metrics import timed
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -99,7 +100,8 @@ async def fork_checkpoint(
                 )
 
     vm_mgr = request.app.state.vm_manager
-    computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, recipe_id=fork_recipe_id)
+    async with timed("fork"):
+        computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, recipe_id=fork_recipe_id)
 
     exec_exit_code: int | None = None
     exec_stdout: str | None = None
@@ -231,63 +233,64 @@ async def merge_checkpoints(
     merged_volume_name = f"mshkn-ckpt-{checkpoint_id}"
 
     assert ckpt_parent.thin_volume_id is not None  # validated above
-    await create_snapshot(
-        pool_name=config.thin_pool_name,
-        source_volume_id=ckpt_parent.thin_volume_id,
-        new_volume_id=merged_volume_id,
-        new_volume_name=merged_volume_name,
-        sectors=config.thin_volume_sectors,
-    )
-
-    mounted: list[str] = []
-    try:
-        # Mount source volumes read-only
-        for vol, mnt in [(vol_parent, mount_parent), (vol_a, mount_a), (vol_b, mount_b)]:
-            await mount_volume(vol, mnt, readonly=True)
-            mounted.append(mnt)
-
-        # Mount merged output volume read-write
-        # Output starts as a snapshot of parent — we apply the merge diff on top
-        await mount_volume(merged_volume_name, mount_output)
-        mounted.append(mount_output)
-
-        # Run three-way merge to a temp directory first
-        merge_output = Path(f"{merge_dir}/merge_result")
-        result = three_way_merge(
-            parent=Path(mount_parent),
-            fork_a=Path(mount_a),
-            fork_b=Path(mount_b),
-            output=merge_output,
+    async with timed("merge"):
+        await create_snapshot(
+            pool_name=config.thin_pool_name,
+            source_volume_id=ckpt_parent.thin_volume_id,
+            new_volume_id=merged_volume_id,
+            new_volume_name=merged_volume_name,
+            sectors=config.thin_volume_sectors,
         )
 
-        # Apply merge result: sync changed/added files to output volume
-        # and remove files that were deleted (exist in parent but not in merge)
-        for rel in merge_output.rglob("*"):
-            if rel.is_file():
-                rel_path = rel.relative_to(merge_output)
-                dest = Path(mount_output) / rel_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(rel, dest)
+        mounted: list[str] = []
+        try:
+            # Mount source volumes read-only
+            for vol, mnt in [(vol_parent, mount_parent), (vol_a, mount_a), (vol_b, mount_b)]:
+                await mount_volume(vol, mnt, readonly=True)
+                mounted.append(mnt)
 
-        # Remove files that exist in parent but not in merge result (deletions)
-        for rel in Path(mount_parent).rglob("*"):
-            if rel.is_file():
-                rel_path = rel.relative_to(Path(mount_parent))
-                if not (merge_output / rel_path).exists():
-                    target = Path(mount_output) / rel_path
-                    if target.exists():
-                        target.unlink()
+            # Mount merged output volume read-write
+            # Output starts as a snapshot of parent — we apply the merge diff on top
+            await mount_volume(merged_volume_name, mount_output)
+            mounted.append(mount_output)
 
-    finally:
-        # Always unmount everything
-        for mnt in reversed(mounted):
-            try:
-                await umount_volume(mnt)
-            except Exception:
-                logger.warning("Failed to unmount %s during merge cleanup", mnt)
+            # Run three-way merge to a temp directory first
+            merge_output = Path(f"{merge_dir}/merge_result")
+            result = three_way_merge(
+                parent=Path(mount_parent),
+                fork_a=Path(mount_a),
+                fork_b=Path(mount_b),
+                output=merge_output,
+            )
 
-        # Clean up temp dir
-        shutil.rmtree(merge_dir, ignore_errors=True)
+            # Apply merge result: sync changed/added files to output volume
+            # and remove files that were deleted (exist in parent but not in merge)
+            for rel in merge_output.rglob("*"):
+                if rel.is_file():
+                    rel_path = rel.relative_to(merge_output)
+                    dest = Path(mount_output) / rel_path
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(rel, dest)
+
+            # Remove files that exist in parent but not in merge result (deletions)
+            for rel in Path(mount_parent).rglob("*"):
+                if rel.is_file():
+                    rel_path = rel.relative_to(Path(mount_parent))
+                    if not (merge_output / rel_path).exists():
+                        target = Path(mount_output) / rel_path
+                        if target.exists():
+                            target.unlink()
+
+        finally:
+            # Always unmount everything
+            for mnt in reversed(mounted):
+                try:
+                    await umount_volume(mnt)
+                except Exception:
+                    logger.warning("Failed to unmount %s during merge cleanup", mnt)
+
+            # Clean up temp dir
+            shutil.rmtree(merge_dir, ignore_errors=True)
 
     # Build conflict info for response
     conflicts = [{"path": c.path, "resolution": "fork_a"} for c in result.conflicts]

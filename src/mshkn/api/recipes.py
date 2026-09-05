@@ -21,6 +21,7 @@ from mshkn.db import (
     list_recipes_by_account,
 )
 from mshkn.models import Recipe, RecipeStatus
+from mshkn.observability.metrics import timed
 from mshkn.recipe.builder import build_recipe, dockerfile_content_hash
 from mshkn.vm.storage import remove_volume
 
@@ -123,7 +124,7 @@ async def create_recipe(
     build_lock = _get_build_lock(account.id)
 
     async def _run_build() -> None:
-        async with build_lock:
+        async with build_lock, timed("recipe_build"):
             await build_recipe(db, config, recipe_id, body.dockerfile, content_hash, volume_id)
 
     task = asyncio.create_task(_run_build())

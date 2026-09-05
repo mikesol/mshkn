@@ -11,12 +11,6 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from mshkn.api.auth import require_account
-from mshkn.api.metrics import (
-    checkpoints_total,
-    computers_active,
-    computers_created_total,
-    exec_duration_seconds,
-)
 from mshkn.api.ratelimit import rate_limiter
 from mshkn.callback import deliver_callback
 from mshkn.checkpoint.r2 import upload_checkpoint
@@ -32,6 +26,13 @@ from mshkn.db import (
     update_last_exec_at,
 )
 from mshkn.models import Checkpoint, ComputerStatus
+from mshkn.observability.metrics import (
+    checkpoints_total,
+    computers_active,
+    computers_created_total,
+    exec_duration_seconds,
+    timed,
+)
 from mshkn.resources import Resources
 from mshkn.vm.ssh import (
     SSHPool,
@@ -284,7 +285,8 @@ async def create_computer(
         raise HTTPException(status_code=429, detail="VM limit reached")
 
     resources = Resources.from_needs(body.needs)
-    computer = await vm_mgr.create(account.id, recipe_id=body.recipe_id, resources=resources)
+    async with timed("create"):
+        computer = await vm_mgr.create(account.id, recipe_id=body.recipe_id, resources=resources)
     computers_created_total.inc()
     computers_active.inc()
 
@@ -543,61 +545,62 @@ async def checkpoint_computer(
     checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
     snapshot_dir = config.checkpoint_local_dir / checkpoint_id
 
-    # Flush guest filesystem buffers to the block device so the disk
-    # snapshot captures all written data (guest page cache is not visible
-    # to dm-thin snapshots).
-    await ssh_exec(
-        computer.vm_ip,
-        "sync",
-        config.ssh_key_path,
-        timeout=10.0,
-        pool=_get_pool(request),
-    )
+    async with timed("checkpoint"):
+        # Flush guest filesystem buffers to the block device so the disk
+        # snapshot captures all written data (guest page cache is not visible
+        # to dm-thin snapshots).
+        await ssh_exec(
+            computer.vm_ip,
+            "sync",
+            config.ssh_key_path,
+            timeout=10.0,
+            pool=_get_pool(request),
+        )
 
-    # Pause/snapshot/resume (sub-1s for the agent)
-    await create_vm_snapshot(computer.socket_path, snapshot_dir)
+        # Pause/snapshot/resume (sub-1s for the agent)
+        await create_vm_snapshot(computer.socket_path, snapshot_dir)
 
-    # Evict SSH pool connection — pause/resume disrupts the TCP session
-    pool = _get_pool(request)
-    if pool is not None:
-        await pool.remove(computer.vm_ip)
+        # Evict SSH pool connection — pause/resume disrupts the TCP session
+        pool = _get_pool(request)
+        if pool is not None:
+            await pool.remove(computer.vm_ip)
 
-    # Freeze disk state: create a dm-thin CoW snapshot so fork gets the disk
-    # as it was at checkpoint time, not the computer's evolving state.
-    ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(
-        computer,
-        checkpoint_id,
-    )
+        # Freeze disk state: create a dm-thin CoW snapshot so fork gets the disk
+        # as it was at checkpoint time, not the computer's evolving state.
+        ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(
+            computer,
+            checkpoint_id,
+        )
 
-    # Determine parent_id for DAG lineage
-    latest = await get_latest_checkpoint_for_computer(db, computer_id)
-    if latest is not None:
-        parent_id = latest.id
-    elif computer.source_checkpoint_id is not None:
-        parent_id = computer.source_checkpoint_id
-    else:
-        parent_id = None
+        # Determine parent_id for DAG lineage
+        latest = await get_latest_checkpoint_for_computer(db, computer_id)
+        if latest is not None:
+            parent_id = latest.id
+        elif computer.source_checkpoint_id is not None:
+            parent_id = computer.source_checkpoint_id
+        else:
+            parent_id = None
 
-    # Record in DB
-    now = datetime.now(UTC).isoformat()
-    r2_prefix = f"{account.id}/{checkpoint_id}"
-    ckpt = Checkpoint(
-        id=checkpoint_id,
-        account_id=account.id,
-        parent_id=parent_id,
-        computer_id=computer_id,
-        thin_volume_id=ckpt_volume_id,
-        manifest_hash=computer.manifest_hash,
-        manifest_json=computer.manifest_json,
-        r2_prefix=r2_prefix,
-        disk_delta_size_bytes=None,
-        memory_size_bytes=None,
-        label=body.label if body else None,
-        pinned=body.pin if body else False,
-        created_at=now,
-        recipe_id=computer.recipe_id,
-    )
-    await insert_checkpoint(db, ckpt)
+        # Record in DB
+        now = datetime.now(UTC).isoformat()
+        r2_prefix = f"{account.id}/{checkpoint_id}"
+        ckpt = Checkpoint(
+            id=checkpoint_id,
+            account_id=account.id,
+            parent_id=parent_id,
+            computer_id=computer_id,
+            thin_volume_id=ckpt_volume_id,
+            manifest_hash=computer.manifest_hash,
+            manifest_json=computer.manifest_json,
+            r2_prefix=r2_prefix,
+            disk_delta_size_bytes=None,
+            memory_size_bytes=None,
+            label=body.label if body else None,
+            pinned=body.pin if body else False,
+            created_at=now,
+            recipe_id=computer.recipe_id,
+        )
+        await insert_checkpoint(db, ckpt)
     checkpoints_total.inc()
 
     # Async background upload to R2
@@ -731,7 +734,8 @@ async def destroy_computer(
     if computer.status == ComputerStatus.DESTROYED:
         raise HTTPException(status_code=404, detail="Computer not found")
     vm_mgr: VMManager = request.app.state.vm_manager
-    await vm_mgr.destroy(computer_id)
+    async with timed("destroy"):
+        await vm_mgr.destroy(computer_id)
     computers_active.dec()
 
     # Drain deferred queue: if this computer was serving a labeled checkpoint chain,
