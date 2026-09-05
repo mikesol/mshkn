@@ -247,12 +247,12 @@ One loop: dead VMs (via `hypervisor.is_alive`), idle VMs (checkpoint with `trigg
 
 ## 7. Data layer
 
-- `db.connect(path)` sets `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5000`, and `row_factory = aiosqlite.Row`.
+- `db.connect(path)` sets `busy_timeout=5000`, `journal_mode=WAL`, and `synchronous=NORMAL`. Two §7 items were dropped during PR 2 (2026-09-05): `foreign_keys` is deliberately left OFF, because the schema's `REFERENCES` clauses have no `ON DELETE` actions and destroyed computer rows are retained, so enforcement would make checkpoint deletion, pruning, and recipe deletion fail, and fixing that needs table rebuilds the additive-migration rule forbids; and `row_factory = aiosqlite.Row` is not set, because every mapper zips a `COLUMNS` tuple positionally and works on plain tuples, which lets tests open connections however they like.
 - Migrations are applied with `executescript` per file, no `;` splitting. Runner behavior (bootstrap `_migrations`, skip applied, commit per file) is unchanged.
 - Migration `010_indexes.sql`: `computers(account_id, status)`, `checkpoints(account_id, created_at)`, `checkpoints(computer_id, created_at)`, `checkpoints(label)`, `deferred_queue(label, created_at)`.
 - Vestigial columns `computers.manifest_hash`, `computers.manifest_json`, `checkpoints.manifest_hash`, `checkpoints.manifest_json` stay in the schema (additive rule) but disappear from the dataclasses. Inserts write `''` and `'{}'` as SQL constants. `capability_cache` and `snapshot_templates.manifest_hash` likewise stay; the bare template row keeps key `'bare'`.
 - Each table module has one `COLUMNS` tuple and one `from_row`. `DeferredRequest` is a dataclass, not a dict.
-- Statuses are `StrEnum`s: `ComputerStatus {creating, running, destroyed}`, `RecipeStatus {pending, building, exporting, injecting, ready, failed}`, `IngressLogStatus {accepted, completed, failed}`, `CheckpointTrigger {api, self_destruct, idle}`.
+- Statuses are `StrEnum`s: `ComputerStatus {creating, running, destroyed}`, `RecipeStatus {pending, building, exporting, injecting, ready, failed}`, `IngressLogStatus {accepted, completed, failed}`. `CheckpointTrigger {api, self_destruct, idle}` lands in PR 4, together with the `trigger` label on `mshkn_checkpoints_total`; it is not implemented in PR 2.
 
 ## 8. Config and resources
 
