@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -10,14 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from mshkn.api.auth import require_account
-from mshkn.api.metrics import (
-    checkpoints_total,
-    computers_active,
-    computers_created_total,
-    exec_duration_seconds,
-)
-from mshkn.api.ratelimit import rate_limiter
+from mshkn.api.deps import get_runtime, require_account
 from mshkn.callback import deliver_callback
 from mshkn.checkpoint.r2 import upload_checkpoint
 from mshkn.checkpoint.snapshot import create_vm_snapshot
@@ -31,7 +23,15 @@ from mshkn.db import (
     list_deferred_by_label,
     update_last_exec_at,
 )
-from mshkn.models import Checkpoint
+from mshkn.models import Checkpoint, ComputerStatus
+from mshkn.observability.metrics import (
+    checkpoints_total,
+    computers_active,
+    computers_created_total,
+    exec_duration_seconds,
+    timed,
+)
+from mshkn.resources import Resources
 from mshkn.vm.ssh import (
     SSHPool,
     ssh_download,
@@ -44,56 +44,19 @@ from mshkn.vm.ssh import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-    from pathlib import Path
 
     import aiosqlite
 
     from mshkn.config import Config
-    from mshkn.models import Account, Computer
+    from mshkn.models import Account, Computer, DeferredRequest
+    from mshkn.runtime import BackgroundTasks, Runtime
     from mshkn.vm.manager import VMManager
 
 logger = logging.getLogger(__name__)
 
+STATUS_METRICS_TIMEOUT_SECONDS = 15.0
+
 router = APIRouter(prefix="/computers", tags=["computers"])
-
-
-def _get_pool(request: Request) -> SSHPool | None:
-    return getattr(request.app.state, "ssh_pool", None)
-
-
-# Hold references to background tasks to prevent GC
-_background_tasks: set[asyncio.Task[None]] = set()
-
-# Track upload tasks per checkpoint ID so deletion can cancel/await them
-_upload_tasks: dict[str, asyncio.Task[None]] = {}
-
-
-def _start_upload_task(
-    checkpoint_id: str,
-    snapshot_dir: Path,
-    r2_prefix: str,
-    r2_bucket: str,
-) -> None:
-    """Start a background R2 upload and track it by checkpoint ID."""
-    task = asyncio.create_task(upload_checkpoint(snapshot_dir, r2_prefix, r2_bucket))
-    _background_tasks.add(task)
-    _upload_tasks[checkpoint_id] = task
-
-    def _on_done(t: asyncio.Task[None]) -> None:
-        _background_tasks.discard(t)
-        _upload_tasks.pop(checkpoint_id, None)
-
-    task.add_done_callback(_on_done)
-
-
-async def cancel_upload_task(checkpoint_id: str) -> None:
-    """Cancel and await any in-flight upload for a checkpoint."""
-    task = _upload_tasks.pop(checkpoint_id, None)
-    if task is not None and not task.done():
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
-        _background_tasks.discard(task)
 
 
 _require_account = Depends(require_account)
@@ -123,10 +86,10 @@ class ExecRequest(BaseModel):
     command: str
 
 
-def _check_rate_limit(request: Request) -> None:
+def _check_rate_limit(rt: Runtime, request: Request) -> None:
     """Check per-API-key rate limit; raise 429 if exceeded."""
     api_key = request.headers.get("Authorization", "")[7:]
-    if not rate_limiter.check(api_key):
+    if not rt.rate_limiter.check(api_key):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
@@ -144,6 +107,7 @@ async def _self_destruct(
     config: Config,
     vm_mgr: VMManager,
     pool: SSHPool | None,
+    tasks: BackgroundTasks,
 ) -> str:
     """Auto-checkpoint, destroy computer, and fire callback.
 
@@ -209,7 +173,11 @@ async def _self_destruct(
     checkpoints_total.inc()
 
     # Background R2 upload
-    _start_upload_task(checkpoint_id, snapshot_dir, r2_prefix, config.r2_bucket)
+    tasks.spawn(
+        upload_checkpoint(snapshot_dir, r2_prefix, config.r2_bucket),
+        name=f"upload:{checkpoint_id}",
+        key=f"upload:{checkpoint_id}",
+    )
 
     # Destroy the computer
     await vm_mgr.destroy(computer.id)
@@ -225,9 +193,10 @@ async def _self_destruct(
             "exec_stderr": exec_stderr,
             "created_checkpoint_id": checkpoint_id,
         }
-        cb_task = asyncio.create_task(deliver_callback(callback_url, payload))
-        _background_tasks.add(cb_task)
-        cb_task.add_done_callback(_background_tasks.discard)
+        tasks.spawn(
+            deliver_callback(callback_url, payload),
+            name=f"callback:{computer.id}",
+        )
 
     logger.info(
         "Self-destruct: computer %s checkpointed as %s and destroyed",
@@ -240,7 +209,7 @@ async def _self_destruct(
         deferred = await list_deferred_by_label(db, label)
         if deferred:
             await delete_deferred_by_label(db, label)
-            task = asyncio.create_task(
+            tasks.spawn(
                 _process_deferred(
                     label=label,
                     deferred_items=deferred,
@@ -248,10 +217,10 @@ async def _self_destruct(
                     config=config,
                     vm_mgr=vm_mgr,
                     account=account,
-                )
+                    tasks=tasks,
+                ),
+                name=f"deferred:{label}",
             )
-            _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
 
     return checkpoint_id
 
@@ -263,7 +232,7 @@ async def _get_running_computer(
     computer = await get_computer(db, computer_id)
     if computer is None or computer.account_id != account.id:
         raise HTTPException(status_code=404, detail="Computer not found")
-    if computer.status != "running":
+    if computer.status != ComputerStatus.RUNNING:
         raise HTTPException(status_code=400, detail=f"Computer is {computer.status}")
     return computer
 
@@ -274,15 +243,18 @@ async def create_computer(
     body: CreateRequest,
     account: Account = _require_account,
 ) -> CreateResponse:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
-    vm_mgr: VMManager = request.app.state.vm_manager
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
+    vm_mgr = rt.vm_manager
 
     active_count = await count_active_computers_by_account(db, account.id)
     if active_count >= account.vm_limit:
         raise HTTPException(status_code=429, detail="VM limit reached")
 
-    computer = await vm_mgr.create(account.id, recipe_id=body.recipe_id, needs=body.needs)
+    resources = Resources.from_needs(body.needs)
+    async with timed("create"):
+        computer = await vm_mgr.create(account.id, recipe_id=body.recipe_id, resources=resources)
     computers_created_total.inc()
     computers_active.inc()
 
@@ -293,7 +265,7 @@ async def create_computer(
 
     # Exec on create
     if body.exec is not None:
-        pool = _get_pool(request)
+        pool = rt.ssh_pool
         result = await ssh_exec(
             computer.vm_ip,
             body.exec,
@@ -319,6 +291,7 @@ async def create_computer(
                 config=config,
                 vm_mgr=vm_mgr,
                 pool=pool,
+                tasks=rt.tasks,
             )
             computers_active.dec()
 
@@ -340,10 +313,11 @@ async def exec_command(
     request: Request,
     account: Account = _require_account,
 ) -> EventSourceResponse:
-    _check_rate_limit(request)
+    rt = get_runtime(request)
+    _check_rate_limit(rt, request)
 
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    db = rt.db
+    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
 
     from datetime import UTC, datetime
@@ -370,8 +344,9 @@ async def exec_bg(
     request: Request,
     account: Account = _require_account,
 ) -> dict[str, object]:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
 
     from datetime import UTC, datetime
@@ -381,7 +356,7 @@ async def exec_bg(
         computer.vm_ip,
         body.command,
         config.ssh_key_path,
-        pool=_get_pool(request),
+        pool=rt.ssh_pool,
     )
     return {"pid": pid}
 
@@ -393,11 +368,12 @@ async def exec_logs(
     request: Request,
     account: Account = _require_account,
 ) -> EventSourceResponse:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
 
-    pool = _get_pool(request)
+    pool = rt.ssh_pool
 
     async def event_stream() -> AsyncIterator[dict[str, str]]:
         result = await ssh_exec(
@@ -421,14 +397,15 @@ async def exec_kill(
     request: Request,
     account: Account = _require_account,
 ) -> dict[str, str]:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
     result = await ssh_exec(
         computer.vm_ip,
         f"kill {pid}",
         config.ssh_key_path,
-        pool=_get_pool(request),
+        pool=rt.ssh_pool,
     )
     if result.exit_code != 0:
         return {"status": "not_found", "stderr": result.stderr}
@@ -442,11 +419,12 @@ async def upload_file(
     path: str = Query(..., description="Remote file path"),
     account: Account = _require_account,
 ) -> dict[str, str]:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
     data = await request.body()
-    await ssh_upload(computer.vm_ip, path, data, config.ssh_key_path, pool=_get_pool(request))
+    await ssh_upload(computer.vm_ip, path, data, config.ssh_key_path, pool=rt.ssh_pool)
     return {"status": "uploaded", "path": path}
 
 
@@ -457,14 +435,15 @@ async def download_file(
     path: str = Query(..., description="Remote file path"),
     account: Account = _require_account,
 ) -> Response:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
     data = await ssh_download(
         computer.vm_ip,
         path,
         config.ssh_key_path,
-        pool=_get_pool(request),
+        pool=rt.ssh_pool,
     )
     return Response(content=data, media_type="application/octet-stream")
 
@@ -475,10 +454,15 @@ async def computer_status(
     request: Request,
     account: Account = _require_account,
 ) -> dict[str, object]:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     computer = await get_computer(db, computer_id)
-    if computer is None or computer.account_id != account.id or computer.status == "destroyed":
+    if (
+        computer is None
+        or computer.account_id != account.id
+        or computer.status == ComputerStatus.DESTROYED
+    ):
         raise HTTPException(status_code=404, detail="Computer not found")
     result: dict[str, object] = {
         "computer_id": computer.id,
@@ -490,13 +474,16 @@ async def computer_status(
         "last_exec_at": computer.last_exec_at,
     }
     # Enrich with live VM metrics if the VM is running
-    if computer.status == "running" and computer.vm_ip:
+    if computer.status == ComputerStatus.RUNNING and computer.vm_ip:
         try:
-            metrics = await ssh_gather_metrics(
-                computer.vm_ip,
-                config.ssh_key_path,
-                timeout=10.0,
-                pool=_get_pool(request),
+            metrics = await asyncio.wait_for(
+                ssh_gather_metrics(
+                    computer.vm_ip,
+                    config.ssh_key_path,
+                    timeout=10.0,
+                    pool=rt.ssh_pool,
+                ),
+                timeout=STATUS_METRICS_TIMEOUT_SECONDS,
             )
             result["cpu_pct"] = metrics.cpu_pct
             result["ram_usage_mb"] = metrics.ram_usage_mb
@@ -504,8 +491,8 @@ async def computer_status(
             result["disk_usage_mb"] = metrics.disk_usage_mb
             result["disk_total_mb"] = metrics.disk_total_mb
             result["processes"] = metrics.processes
-        except Exception:
-            logger.warning("Failed to gather metrics for %s", computer_id)
+        except Exception as exc:
+            logger.warning("Failed to gather metrics for %s: %s", computer_id, type(exc).__name__)
     return result
 
 
@@ -529,73 +516,79 @@ async def checkpoint_computer(
     import uuid
     from datetime import UTC, datetime
 
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
-    vm_mgr: VMManager = request.app.state.vm_manager
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
+    vm_mgr = rt.vm_manager
     computer = await _get_running_computer(db, computer_id, account)
 
     checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
     snapshot_dir = config.checkpoint_local_dir / checkpoint_id
 
-    # Flush guest filesystem buffers to the block device so the disk
-    # snapshot captures all written data (guest page cache is not visible
-    # to dm-thin snapshots).
-    await ssh_exec(
-        computer.vm_ip,
-        "sync",
-        config.ssh_key_path,
-        timeout=10.0,
-        pool=_get_pool(request),
-    )
+    async with timed("checkpoint"):
+        # Flush guest filesystem buffers to the block device so the disk
+        # snapshot captures all written data (guest page cache is not visible
+        # to dm-thin snapshots).
+        await ssh_exec(
+            computer.vm_ip,
+            "sync",
+            config.ssh_key_path,
+            timeout=10.0,
+            pool=rt.ssh_pool,
+        )
 
-    # Pause/snapshot/resume (sub-1s for the agent)
-    await create_vm_snapshot(computer.socket_path, snapshot_dir)
+        # Pause/snapshot/resume (sub-1s for the agent)
+        await create_vm_snapshot(computer.socket_path, snapshot_dir)
 
-    # Evict SSH pool connection — pause/resume disrupts the TCP session
-    pool = _get_pool(request)
-    if pool is not None:
-        await pool.remove(computer.vm_ip)
+        # Evict SSH pool connection — pause/resume disrupts the TCP session
+        pool = rt.ssh_pool
+        if pool is not None:
+            await pool.remove(computer.vm_ip)
 
-    # Freeze disk state: create a dm-thin CoW snapshot so fork gets the disk
-    # as it was at checkpoint time, not the computer's evolving state.
-    ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(
-        computer,
-        checkpoint_id,
-    )
+        # Freeze disk state: create a dm-thin CoW snapshot so fork gets the disk
+        # as it was at checkpoint time, not the computer's evolving state.
+        ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(
+            computer,
+            checkpoint_id,
+        )
 
-    # Determine parent_id for DAG lineage
-    latest = await get_latest_checkpoint_for_computer(db, computer_id)
-    if latest is not None:
-        parent_id = latest.id
-    elif computer.source_checkpoint_id is not None:
-        parent_id = computer.source_checkpoint_id
-    else:
-        parent_id = None
+        # Determine parent_id for DAG lineage
+        latest = await get_latest_checkpoint_for_computer(db, computer_id)
+        if latest is not None:
+            parent_id = latest.id
+        elif computer.source_checkpoint_id is not None:
+            parent_id = computer.source_checkpoint_id
+        else:
+            parent_id = None
 
-    # Record in DB
-    now = datetime.now(UTC).isoformat()
-    r2_prefix = f"{account.id}/{checkpoint_id}"
-    ckpt = Checkpoint(
-        id=checkpoint_id,
-        account_id=account.id,
-        parent_id=parent_id,
-        computer_id=computer_id,
-        thin_volume_id=ckpt_volume_id,
-        manifest_hash=computer.manifest_hash,
-        manifest_json=computer.manifest_json,
-        r2_prefix=r2_prefix,
-        disk_delta_size_bytes=None,
-        memory_size_bytes=None,
-        label=body.label if body else None,
-        pinned=body.pin if body else False,
-        created_at=now,
-        recipe_id=computer.recipe_id,
-    )
-    await insert_checkpoint(db, ckpt)
+        # Record in DB
+        now = datetime.now(UTC).isoformat()
+        r2_prefix = f"{account.id}/{checkpoint_id}"
+        ckpt = Checkpoint(
+            id=checkpoint_id,
+            account_id=account.id,
+            parent_id=parent_id,
+            computer_id=computer_id,
+            thin_volume_id=ckpt_volume_id,
+            manifest_hash=computer.manifest_hash,
+            manifest_json=computer.manifest_json,
+            r2_prefix=r2_prefix,
+            disk_delta_size_bytes=None,
+            memory_size_bytes=None,
+            label=body.label if body else None,
+            pinned=body.pin if body else False,
+            created_at=now,
+            recipe_id=computer.recipe_id,
+        )
+        await insert_checkpoint(db, ckpt)
     checkpoints_total.inc()
 
     # Async background upload to R2
-    _start_upload_task(checkpoint_id, snapshot_dir, r2_prefix, config.r2_bucket)
+    rt.tasks.spawn(
+        upload_checkpoint(snapshot_dir, r2_prefix, config.r2_bucket),
+        name=f"upload:{checkpoint_id}",
+        key=f"upload:{checkpoint_id}",
+    )
 
     return CheckpointResponse(
         checkpoint_id=checkpoint_id,
@@ -605,11 +598,12 @@ async def checkpoint_computer(
 
 async def _process_deferred(
     label: str,
-    deferred_items: list[dict[str, str]],
+    deferred_items: list[DeferredRequest],
     db: aiosqlite.Connection,
     config: Config,
     vm_mgr: VMManager,
     account: Account,
+    tasks: BackgroundTasks,
 ) -> None:
     """Boot a new computer from the latest checkpoint for a label and process deferred forks.
 
@@ -631,7 +625,7 @@ async def _process_deferred(
         latest_ckpt = all_ckpts[0]  # sorted by created_at DESC
 
         # Parse all deferred payloads
-        payloads = [json.loads(d["request_payload"]) for d in deferred_items]
+        payloads = [json.loads(d.request_payload) for d in deferred_items]
 
         # Fork from latest checkpoint
         computer = await vm_mgr.fork_from_checkpoint(
@@ -700,6 +694,7 @@ async def _process_deferred(
                     config=config,
                     vm_mgr=vm_mgr,
                     pool=None,
+                    tasks=tasks,
                 )
 
         logger.info(
@@ -718,19 +713,21 @@ async def destroy_computer(
     computer_id: str,
     account: Account = _require_account,
 ) -> dict[str, str]:
-    db: aiosqlite.Connection = request.app.state.db
+    rt = get_runtime(request)
+    db = rt.db
     computer = await get_computer(db, computer_id)
     if computer is None or computer.account_id != account.id:
         raise HTTPException(status_code=404, detail="Computer not found")
-    if computer.status == "destroyed":
+    if computer.status == ComputerStatus.DESTROYED:
         raise HTTPException(status_code=404, detail="Computer not found")
-    vm_mgr: VMManager = request.app.state.vm_manager
-    await vm_mgr.destroy(computer_id)
+    vm_mgr = rt.vm_manager
+    async with timed("destroy"):
+        await vm_mgr.destroy(computer_id)
     computers_active.dec()
 
     # Drain deferred queue: if this computer was serving a labeled checkpoint chain,
     # process any queued fork requests.
-    config: Config = request.app.state.config
+    config = rt.config
     if computer.source_checkpoint_id:
         source_ckpt = await get_checkpoint(db, computer.source_checkpoint_id)
         if source_ckpt and source_ckpt.label:
@@ -738,7 +735,7 @@ async def destroy_computer(
             if deferred:
                 await delete_deferred_by_label(db, source_ckpt.label)
                 # Process deferred requests in background
-                task = asyncio.create_task(
+                rt.tasks.spawn(
                     _process_deferred(
                         label=source_ckpt.label,
                         deferred_items=deferred,
@@ -746,9 +743,9 @@ async def destroy_computer(
                         config=config,
                         vm_mgr=vm_mgr,
                         account=account,
-                    )
+                        tasks=rt.tasks,
+                    ),
+                    name=f"deferred:{source_ckpt.label}",
                 )
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
 
-    return {"status": "destroyed"}
+    return {"status": ComputerStatus.DESTROYED}

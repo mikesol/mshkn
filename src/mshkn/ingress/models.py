@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 # --- DB dataclasses ---
+
+
+class IngressLogStatus(StrEnum):
+    ACCEPTED = "accepted"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 @dataclass
@@ -27,7 +34,7 @@ class IngressRule:
 class IngressLog:
     id: str
     rule_internal_id: str
-    status: str  # "accepted" | "completed" | "failed" | "rejected"
+    status: IngressLogStatus
     starlark_result: str | None
     error_message: str | None
     created_at: str

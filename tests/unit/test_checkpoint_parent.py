@@ -9,7 +9,7 @@ from mshkn.db import (
     insert_computer,
     run_migrations,
 )
-from mshkn.models import Account, Checkpoint, Computer
+from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
 
 
 async def _setup_db(tmp_path: Path) -> aiosqlite.Connection:
@@ -36,7 +36,7 @@ def _make_computer(
         firecracker_pid=999,
         manifest_hash="abc",
         manifest_json='{"uses": []}',
-        status="running",
+        status=ComputerStatus.RUNNING,
         created_at="2026-03-08T00:00:00",
         last_exec_at=None,
         source_checkpoint_id=source_checkpoint_id,

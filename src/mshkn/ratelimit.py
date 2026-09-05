@@ -30,7 +30,3 @@ class RateLimiter:
             timestamps.append(now)
             self._timestamps[key] = timestamps
             return True
-
-
-# Global rate limiter instance
-rate_limiter = RateLimiter(max_requests=80, window_seconds=10.0)

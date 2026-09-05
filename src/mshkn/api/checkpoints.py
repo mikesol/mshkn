@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from mshkn.api.auth import require_account
+from mshkn.api.deps import get_runtime, require_account
 from mshkn.db import delete_checkpoint as db_delete_checkpoint
 from mshkn.db import (
     get_active_computer_for_label,
@@ -19,10 +19,9 @@ from mshkn.db import (
     insert_deferred,
     list_checkpoints_by_account,
 )
+from mshkn.observability.metrics import timed
 
 if TYPE_CHECKING:
-    import aiosqlite
-
     from mshkn.models import Account
 
 logger = logging.getLogger(__name__)
@@ -57,7 +56,8 @@ async def fork_checkpoint(
     body: ForkRequest | None = None,
     account: Account = _require_account,
 ) -> ForkResponse | JSONResponse:
-    db: aiosqlite.Connection = request.app.state.db
+    rt = get_runtime(request)
+    db = rt.db
 
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account.id:
@@ -98,8 +98,9 @@ async def fork_checkpoint(
                     content={"deferred_id": deferred_id, "status": "queued"},
                 )
 
-    vm_mgr = request.app.state.vm_manager
-    computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, recipe_id=fork_recipe_id)
+    vm_mgr = rt.vm_manager
+    async with timed("fork"):
+        computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, recipe_id=fork_recipe_id)
 
     exec_exit_code: int | None = None
     exec_stdout: str | None = None
@@ -108,11 +109,11 @@ async def fork_checkpoint(
 
     # Exec on fork
     if body and body.exec is not None:
-        from mshkn.api.computers import _get_pool, _self_destruct
+        from mshkn.api.computers import _self_destruct
         from mshkn.vm.ssh import ssh_exec
 
-        config = request.app.state.config
-        pool = _get_pool(request)
+        config = rt.config
+        pool = rt.ssh_pool
         result = await ssh_exec(
             computer.vm_ip,
             body.exec,
@@ -140,6 +141,7 @@ async def fork_checkpoint(
                 config=config,
                 vm_mgr=vm_mgr,
                 pool=pool,
+                tasks=rt.tasks,
             )
 
     return ForkResponse(
@@ -172,9 +174,10 @@ async def merge_checkpoints(
     from mshkn.models import Checkpoint
     from mshkn.vm.storage import create_snapshot, mount_volume, umount_volume
 
-    db: aiosqlite.Connection = request.app.state.db
-    config = request.app.state.config
-    vm_mgr = request.app.state.vm_manager
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
+    vm_mgr = rt.vm_manager
 
     # Validate parent checkpoint
     ckpt_parent = await get_checkpoint(db, parent_id)
@@ -231,63 +234,64 @@ async def merge_checkpoints(
     merged_volume_name = f"mshkn-ckpt-{checkpoint_id}"
 
     assert ckpt_parent.thin_volume_id is not None  # validated above
-    await create_snapshot(
-        pool_name=config.thin_pool_name,
-        source_volume_id=ckpt_parent.thin_volume_id,
-        new_volume_id=merged_volume_id,
-        new_volume_name=merged_volume_name,
-        sectors=config.thin_volume_sectors,
-    )
-
-    mounted: list[str] = []
-    try:
-        # Mount source volumes read-only
-        for vol, mnt in [(vol_parent, mount_parent), (vol_a, mount_a), (vol_b, mount_b)]:
-            await mount_volume(vol, mnt, readonly=True)
-            mounted.append(mnt)
-
-        # Mount merged output volume read-write
-        # Output starts as a snapshot of parent — we apply the merge diff on top
-        await mount_volume(merged_volume_name, mount_output)
-        mounted.append(mount_output)
-
-        # Run three-way merge to a temp directory first
-        merge_output = Path(f"{merge_dir}/merge_result")
-        result = three_way_merge(
-            parent=Path(mount_parent),
-            fork_a=Path(mount_a),
-            fork_b=Path(mount_b),
-            output=merge_output,
+    async with timed("merge"):
+        await create_snapshot(
+            pool_name=config.thin_pool_name,
+            source_volume_id=ckpt_parent.thin_volume_id,
+            new_volume_id=merged_volume_id,
+            new_volume_name=merged_volume_name,
+            sectors=config.thin_volume_sectors,
         )
 
-        # Apply merge result: sync changed/added files to output volume
-        # and remove files that were deleted (exist in parent but not in merge)
-        for rel in merge_output.rglob("*"):
-            if rel.is_file():
-                rel_path = rel.relative_to(merge_output)
-                dest = Path(mount_output) / rel_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(rel, dest)
+        mounted: list[str] = []
+        try:
+            # Mount source volumes read-only
+            for vol, mnt in [(vol_parent, mount_parent), (vol_a, mount_a), (vol_b, mount_b)]:
+                await mount_volume(vol, mnt, readonly=True)
+                mounted.append(mnt)
 
-        # Remove files that exist in parent but not in merge result (deletions)
-        for rel in Path(mount_parent).rglob("*"):
-            if rel.is_file():
-                rel_path = rel.relative_to(Path(mount_parent))
-                if not (merge_output / rel_path).exists():
-                    target = Path(mount_output) / rel_path
-                    if target.exists():
-                        target.unlink()
+            # Mount merged output volume read-write
+            # Output starts as a snapshot of parent — we apply the merge diff on top
+            await mount_volume(merged_volume_name, mount_output)
+            mounted.append(mount_output)
 
-    finally:
-        # Always unmount everything
-        for mnt in reversed(mounted):
-            try:
-                await umount_volume(mnt)
-            except Exception:
-                logger.warning("Failed to unmount %s during merge cleanup", mnt)
+            # Run three-way merge to a temp directory first
+            merge_output = Path(f"{merge_dir}/merge_result")
+            result = three_way_merge(
+                parent=Path(mount_parent),
+                fork_a=Path(mount_a),
+                fork_b=Path(mount_b),
+                output=merge_output,
+            )
 
-        # Clean up temp dir
-        shutil.rmtree(merge_dir, ignore_errors=True)
+            # Apply merge result: sync changed/added files to output volume
+            # and remove files that were deleted (exist in parent but not in merge)
+            for rel in merge_output.rglob("*"):
+                if rel.is_file():
+                    rel_path = rel.relative_to(merge_output)
+                    dest = Path(mount_output) / rel_path
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(rel, dest)
+
+            # Remove files that exist in parent but not in merge result (deletions)
+            for rel in Path(mount_parent).rglob("*"):
+                if rel.is_file():
+                    rel_path = rel.relative_to(Path(mount_parent))
+                    if not (merge_output / rel_path).exists():
+                        target = Path(mount_output) / rel_path
+                        if target.exists():
+                            target.unlink()
+
+        finally:
+            # Always unmount everything
+            for mnt in reversed(mounted):
+                try:
+                    await umount_volume(mnt)
+                except Exception:
+                    logger.warning("Failed to unmount %s during merge cleanup", mnt)
+
+            # Clean up temp dir
+            shutil.rmtree(merge_dir, ignore_errors=True)
 
     # Build conflict info for response
     conflicts = [{"path": c.path, "resolution": "fork_a"} for c in result.conflicts]
@@ -338,7 +342,7 @@ async def list_checkpoints(
     label: str | None = None,
     account: Account = _require_account,
 ) -> list[dict[str, object]]:
-    db: aiosqlite.Connection = request.app.state.db
+    db = get_runtime(request).db
     checkpoints = await list_checkpoints_by_account(db, account.id, label=label)
     return [
         {
@@ -366,18 +370,18 @@ async def delete_checkpoint(
 ) -> dict[str, str]:
     import shutil
 
-    from mshkn.api.computers import cancel_upload_task
     from mshkn.checkpoint.r2 import delete_checkpoint_r2
     from mshkn.vm.storage import remove_volume
 
-    db: aiosqlite.Connection = request.app.state.db
-    config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account.id:
         raise HTTPException(status_code=404, detail="Checkpoint not found")
 
     # Cancel any in-flight R2 upload before deleting local files
-    await cancel_upload_task(checkpoint_id)
+    await rt.tasks.cancel(f"upload:{checkpoint_id}")
 
     # Clean up dm-thin volume if one was allocated
     if ckpt.thin_volume_id is not None:

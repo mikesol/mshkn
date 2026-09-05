@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mshkn.db import update_recipe_build_result, update_recipe_status
+from mshkn.models import RecipeStatus
 from mshkn.shell import run
 from mshkn.vm.storage import create_snapshot, mount_volume, umount_volume
 
@@ -62,7 +63,7 @@ async def build_recipe(
 
     try:
         # ── Phase 1: Docker Build ─────────────────────────────────────────────
-        await update_recipe_status(db, recipe_id, "building")
+        await update_recipe_status(db, recipe_id, RecipeStatus.BUILDING)
         logger.info("recipe %s: starting docker build", recipe_id)
 
         build_dir.mkdir(parents=True, exist_ok=True)
@@ -100,7 +101,7 @@ async def build_recipe(
         logger.info("recipe %s: docker build complete", recipe_id)
 
         # ── Phase 2: Export ───────────────────────────────────────────────────
-        await update_recipe_status(db, recipe_id, "exporting")
+        await update_recipe_status(db, recipe_id, RecipeStatus.EXPORTING)
         logger.info("recipe %s: exporting filesystem", recipe_id)
 
         await run(f"docker create --name {container_name} {image_tag}")
@@ -110,7 +111,7 @@ async def build_recipe(
         logger.info("recipe %s: export complete (%d bytes)", recipe_id, tar_path.stat().st_size)
 
         # ── Phase 3: Inject into dm-thin ─────────────────────────────────────
-        await update_recipe_status(db, recipe_id, "injecting")
+        await update_recipe_status(db, recipe_id, RecipeStatus.INJECTING)
         logger.info("recipe %s: injecting into dm-thin vol %d", recipe_id, allocate_volume_id)
 
         await create_snapshot(
@@ -145,7 +146,7 @@ async def build_recipe(
         await update_recipe_build_result(
             db,
             recipe_id,
-            status="ready",
+            status=RecipeStatus.READY,
             build_log="\n".join(build_log_lines),
             base_volume_id=allocate_volume_id,
             built_at=built_at,
@@ -159,7 +160,7 @@ async def build_recipe(
         await update_recipe_build_result(
             db,
             recipe_id,
-            status="failed",
+            status=RecipeStatus.FAILED,
             build_log="\n".join(build_log_lines),
         )
 

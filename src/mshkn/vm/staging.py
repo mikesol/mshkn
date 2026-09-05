@@ -299,12 +299,18 @@ async def _ssh_add_ip(connect_ip: str, final_vm_ip: str, final_host_ip: str) -> 
     """
     import asyncssh
 
-    async with asyncssh.connect(
-        connect_ip,
-        username="root",
-        known_hosts=None,
-        client_keys=["/root/.ssh/id_ed25519"],
-    ) as conn:
+    from mshkn.vm.ssh import CONNECT_TIMEOUT_SECONDS
+
+    conn = await asyncio.wait_for(
+        asyncssh.connect(
+            connect_ip,
+            username="root",
+            known_hosts=None,
+            client_keys=["/root/.ssh/id_ed25519"],
+        ),
+        timeout=CONNECT_TIMEOUT_SECONDS,
+    )
+    async with conn:
         # ip addr add may fail with EEXIST if the fork VM already has
         # this IP (happens when fork reuses the parent's slot).
         await conn.run(

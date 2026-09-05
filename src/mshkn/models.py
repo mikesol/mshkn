@@ -1,6 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
+
+
+class ComputerStatus(StrEnum):
+    CREATING = "creating"
+    RUNNING = "running"
+    DESTROYED = "destroyed"
+
+
+class RecipeStatus(StrEnum):
+    PENDING = "pending"
+    BUILDING = "building"
+    EXPORTING = "exporting"
+    INJECTING = "injecting"
+    READY = "ready"
+    FAILED = "failed"
 
 
 @dataclass
@@ -17,7 +33,7 @@ class Recipe:
     account_id: str
     dockerfile: str
     content_hash: str
-    status: str  # pending | building | ready | failed
+    status: RecipeStatus
     build_log: str | None
     base_volume_id: int | None
     template_vmstate: str | None
@@ -37,7 +53,7 @@ class Computer:
     firecracker_pid: int | None
     manifest_hash: str
     manifest_json: str
-    status: str
+    status: ComputerStatus
     created_at: str
     last_exec_at: str | None
     source_checkpoint_id: str | None = None
@@ -60,3 +76,12 @@ class Checkpoint:
     pinned: bool
     created_at: str
     recipe_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DeferredRequest:
+    id: str
+    label: str
+    account_id: str
+    request_payload: str
+    created_at: str

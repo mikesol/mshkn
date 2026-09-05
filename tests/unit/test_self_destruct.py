@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, patch
 
-import aiosqlite
 from httpx import ASGITransport, AsyncClient
 
 from mshkn.db import (
@@ -14,11 +13,15 @@ from mshkn.db import (
     insert_checkpoint,
     insert_computer,
     list_checkpoints_by_account,
-    run_migrations,
 )
-from mshkn.main import app
-from mshkn.models import Account, Checkpoint, Computer
+from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
 from mshkn.vm.ssh import ExecResult
+from tests.unit.conftest import make_app, make_runtime
+
+if TYPE_CHECKING:
+    import aiosqlite
+
+AUTH = {"Authorization": "Bearer test-key"}
 
 
 def _account() -> Account:
@@ -30,7 +33,7 @@ def _account() -> Account:
     )
 
 
-def _computer(n: int = 1, status: str = "running") -> Computer:
+def _computer(n: int = 1, status: ComputerStatus = ComputerStatus.RUNNING) -> Computer:
     return Computer(
         id=f"comp-{n}",
         account_id="acct-1",
@@ -70,36 +73,13 @@ def _checkpoint(
     )
 
 
-async def _setup(tmp_path: Path) -> aiosqlite.Connection:
-    db_path = tmp_path / "test.db"
-    db = await aiosqlite.connect(db_path)
-    await run_migrations(db, Path("migrations"))
-    await insert_account(db, _account())
-    return db
-
-
-def _mock_config() -> MagicMock:
-    cfg = MagicMock()
-    cfg.domain = "test.dev"
-    cfg.ssh_key_path = Path("/tmp/test-key")
-    cfg.checkpoint_local_dir = Path("/tmp/test-ckpts")
-    cfg.thin_pool_name = "test-pool"
-    cfg.thin_volume_sectors = 16777216
-    cfg.r2_bucket = "test-bucket"
-    return cfg
-
-
-async def test_create_with_exec_returns_exec_result(tmp_path: Path) -> None:
+async def test_create_with_exec_returns_exec_result(db: aiosqlite.Connection) -> None:
     """Create with exec runs the command and returns the result."""
-    db = await _setup(tmp_path)
-    computer = _computer()
-
+    await insert_account(db, _account())
     vm_mgr = AsyncMock()
-    vm_mgr.create.return_value = computer
+    vm_mgr.create.return_value = _computer()
 
-    app.state.db = db
-    app.state.config = _mock_config()
-    app.state.vm_manager = vm_mgr
+    app = make_app(make_runtime(db, vm_manager=vm_mgr))
 
     with patch("mshkn.api.computers.ssh_exec", new_callable=AsyncMock) as mock_exec:
         mock_exec.return_value = ExecResult(exit_code=0, stdout="hello\n", stderr="")
@@ -109,7 +89,7 @@ async def test_create_with_exec_returns_exec_result(tmp_path: Path) -> None:
             resp = await client.post(
                 "/computers",
                 json={"uses": [], "exec": "echo hello"},
-                headers={"Authorization": "Bearer test-key"},
+                headers=AUTH,
             )
 
     assert resp.status_code == 200
@@ -118,28 +98,18 @@ async def test_create_with_exec_returns_exec_result(tmp_path: Path) -> None:
     assert data["exec_stdout"] == "hello\n"
     assert data["exec_stderr"] == ""
     assert data["created_checkpoint_id"] is None  # no self_destruct
-    await db.close()
 
 
-async def test_create_without_exec_returns_none_fields(tmp_path: Path) -> None:
+async def test_create_without_exec_returns_none_fields(db: aiosqlite.Connection) -> None:
     """Create without exec returns null exec fields."""
-    db = await _setup(tmp_path)
-    computer = _computer()
-
+    await insert_account(db, _account())
     vm_mgr = AsyncMock()
-    vm_mgr.create.return_value = computer
+    vm_mgr.create.return_value = _computer()
 
-    app.state.db = db
-    app.state.config = _mock_config()
-    app.state.vm_manager = vm_mgr
-
+    app = make_app(make_runtime(db, vm_manager=vm_mgr))
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/computers",
-            json={"uses": []},
-            headers={"Authorization": "Bearer test-key"},
-        )
+        resp = await client.post("/computers", json={"uses": []}, headers=AUTH)
 
     assert resp.status_code == 200
     data = resp.json()
@@ -147,12 +117,11 @@ async def test_create_without_exec_returns_none_fields(tmp_path: Path) -> None:
     assert data["exec_stdout"] is None
     assert data["exec_stderr"] is None
     assert data["created_checkpoint_id"] is None
-    await db.close()
 
 
-async def test_self_destruct_creates_checkpoint_and_destroys(tmp_path: Path) -> None:
+async def test_self_destruct_creates_checkpoint_and_destroys(db: aiosqlite.Connection) -> None:
     """Self-destruct creates a checkpoint, destroys computer, and returns checkpoint ID."""
-    db = await _setup(tmp_path)
+    await insert_account(db, _account())
     computer = _computer()
     await insert_computer(db, computer)
 
@@ -161,10 +130,7 @@ async def test_self_destruct_creates_checkpoint_and_destroys(tmp_path: Path) -> 
     vm_mgr.snapshot_disk_for_checkpoint.return_value = 99
     vm_mgr.destroy.return_value = None
 
-    app.state.db = db
-    app.state.config = _mock_config()
-    app.state.vm_manager = vm_mgr
-    app.state.ssh_pool = None
+    app = make_app(make_runtime(db, vm_manager=vm_mgr))
 
     with (
         patch("mshkn.api.computers.ssh_exec", new_callable=AsyncMock) as mock_exec,
@@ -183,7 +149,7 @@ async def test_self_destruct_creates_checkpoint_and_destroys(tmp_path: Path) -> 
                     "self_destruct": True,
                     "label": "test-chain",
                 },
-                headers={"Authorization": "Bearer test-key"},
+                headers=AUTH,
             )
 
     assert resp.status_code == 200
@@ -199,27 +165,21 @@ async def test_self_destruct_creates_checkpoint_and_destroys(tmp_path: Path) -> 
 
     # Verify destroy was called
     vm_mgr.destroy.assert_called_once_with(computer.id)
-    await db.close()
 
 
-async def test_self_destruct_without_exec_is_noop(tmp_path: Path) -> None:
+async def test_self_destruct_without_exec_is_noop(db: aiosqlite.Connection) -> None:
     """Self-destruct without exec does nothing (no completion event)."""
-    db = await _setup(tmp_path)
-    computer = _computer()
-
+    await insert_account(db, _account())
     vm_mgr = AsyncMock()
-    vm_mgr.create.return_value = computer
+    vm_mgr.create.return_value = _computer()
 
-    app.state.db = db
-    app.state.config = _mock_config()
-    app.state.vm_manager = vm_mgr
-
+    app = make_app(make_runtime(db, vm_manager=vm_mgr))
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/computers",
             json={"uses": [], "self_destruct": True},  # no exec!
-            headers={"Authorization": "Bearer test-key"},
+            headers=AUTH,
         )
 
     assert resp.status_code == 200
@@ -227,12 +187,11 @@ async def test_self_destruct_without_exec_is_noop(tmp_path: Path) -> None:
     assert data["created_checkpoint_id"] is None
     # destroy should NOT have been called
     vm_mgr.destroy.assert_not_called()
-    await db.close()
 
 
-async def test_self_destruct_on_nonzero_exit(tmp_path: Path) -> None:
+async def test_self_destruct_on_nonzero_exit(db: aiosqlite.Connection) -> None:
     """Self-destruct fires even on non-zero exit (preserves error state)."""
-    db = await _setup(tmp_path)
+    await insert_account(db, _account())
     computer = _computer()
     await insert_computer(db, computer)
 
@@ -241,10 +200,7 @@ async def test_self_destruct_on_nonzero_exit(tmp_path: Path) -> None:
     vm_mgr.snapshot_disk_for_checkpoint.return_value = 99
     vm_mgr.destroy.return_value = None
 
-    app.state.db = db
-    app.state.config = _mock_config()
-    app.state.vm_manager = vm_mgr
-    app.state.ssh_pool = None
+    app = make_app(make_runtime(db, vm_manager=vm_mgr))
 
     with (
         patch("mshkn.api.computers.ssh_exec", new_callable=AsyncMock) as mock_exec,
@@ -258,7 +214,7 @@ async def test_self_destruct_on_nonzero_exit(tmp_path: Path) -> None:
             resp = await client.post(
                 "/computers",
                 json={"uses": [], "exec": "false", "self_destruct": True},
-                headers={"Authorization": "Bearer test-key"},
+                headers=AUTH,
             )
 
     assert resp.status_code == 200
@@ -267,14 +223,12 @@ async def test_self_destruct_on_nonzero_exit(tmp_path: Path) -> None:
     assert data["exec_stderr"] == "error!\n"
     assert data["created_checkpoint_id"] is not None
     vm_mgr.destroy.assert_called_once()
-    await db.close()
 
 
-async def test_fork_with_exec_and_self_destruct(tmp_path: Path) -> None:
+async def test_fork_with_exec_and_self_destruct(db: aiosqlite.Connection) -> None:
     """Fork with exec + self_destruct creates checkpoint, destroys, returns results."""
-    db = await _setup(tmp_path)
-    source_ckpt = _checkpoint(ckpt_id="ckpt-source", label="my-chain")
-    await insert_checkpoint(db, source_ckpt)
+    await insert_account(db, _account())
+    await insert_checkpoint(db, _checkpoint(ckpt_id="ckpt-source", label="my-chain"))
 
     forked_computer = _computer(n=2)
     forked_computer.source_checkpoint_id = "ckpt-source"
@@ -285,12 +239,7 @@ async def test_fork_with_exec_and_self_destruct(tmp_path: Path) -> None:
     vm_mgr.snapshot_disk_for_checkpoint.return_value = 99
     vm_mgr.destroy.return_value = None
 
-    cfg = _mock_config()
-    app.state.db = db
-    app.state.config = cfg
-    app.state.vm_manager = vm_mgr
-    app.state.ssh_pool = None
-
+    app = make_app(make_runtime(db, vm_manager=vm_mgr))
     exec_result = ExecResult(exit_code=0, stdout="forked\n", stderr="")
 
     with (
@@ -309,7 +258,7 @@ async def test_fork_with_exec_and_self_destruct(tmp_path: Path) -> None:
             resp = await client.post(
                 "/checkpoints/ckpt-source/fork",
                 json={"exec": "echo forked", "self_destruct": True},
-                headers={"Authorization": "Bearer test-key"},
+                headers=AUTH,
             )
 
     assert resp.status_code == 200
@@ -326,12 +275,11 @@ async def test_fork_with_exec_and_self_destruct(tmp_path: Path) -> None:
     assert new_ckpts[0].label == "my-chain"  # inherited from source
 
     vm_mgr.destroy.assert_called_once()
-    await db.close()
 
 
-async def test_callback_url_fires_on_self_destruct(tmp_path: Path) -> None:
+async def test_callback_url_fires_on_self_destruct(db: aiosqlite.Connection) -> None:
     """Callback URL receives correct payload on self-destruct."""
-    db = await _setup(tmp_path)
+    await insert_account(db, _account())
     computer = _computer()
     await insert_computer(db, computer)
 
@@ -340,10 +288,7 @@ async def test_callback_url_fires_on_self_destruct(tmp_path: Path) -> None:
     vm_mgr.snapshot_disk_for_checkpoint.return_value = 99
     vm_mgr.destroy.return_value = None
 
-    app.state.db = db
-    app.state.config = _mock_config()
-    app.state.vm_manager = vm_mgr
-    app.state.ssh_pool = None
+    app = make_app(make_runtime(db, vm_manager=vm_mgr))
 
     captured_payload: dict[str, Any] | None = None
 
@@ -370,15 +315,13 @@ async def test_callback_url_fires_on_self_destruct(tmp_path: Path) -> None:
                     "callback_url": "http://example.com/cb",
                     "label": "test-label",
                 },
-                headers={"Authorization": "Bearer test-key"},
+                headers=AUTH,
             )
 
-    assert resp.status_code == 200
+        assert resp.status_code == 200
 
-    # Wait for background task to complete
-    import asyncio
-
-    await asyncio.sleep(0.1)
+        # Wait for the background callback task to complete
+        await asyncio.sleep(0.1)
 
     assert captured_payload is not None
     assert captured_payload["computer_id"] == computer.id
@@ -388,4 +331,3 @@ async def test_callback_url_fires_on_self_destruct(tmp_path: Path) -> None:
     assert captured_payload["exec_stdout"] == "out\n"
     assert captured_payload["exec_stderr"] == "err\n"
     assert captured_payload["created_checkpoint_id"].startswith("ckpt-")
-    await db.close()

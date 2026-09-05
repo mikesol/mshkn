@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import logging
@@ -15,9 +14,8 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from mshkn.api.auth import require_account
-from mshkn.api.ratelimit import RateLimiter
-from mshkn.ingress.db import (
+from mshkn.api.deps import get_runtime, require_account
+from mshkn.db.ingress import (
     delete_ingress_rule,
     get_ingress_rule_by_id,
     insert_ingress_log,
@@ -30,6 +28,7 @@ from mshkn.ingress.db import (
 from mshkn.ingress.models import (
     IngressLog,
     IngressLogResponse,
+    IngressLogStatus,
     IngressRule,
     IngressRuleCreateRequest,
     IngressRuleResponse,
@@ -44,6 +43,7 @@ if TYPE_CHECKING:
 
     from mshkn.config import Config
     from mshkn.models import Account
+    from mshkn.runtime import BackgroundTasks
     from mshkn.vm.manager import VMManager
 
 logger = logging.getLogger(__name__)
@@ -51,22 +51,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ingress"])
 
 _require_account = Depends(require_account)
-
-# Hold references to background tasks to prevent GC
-_background_tasks: set[asyncio.Task[None]] = set()
-
-# --- Per-rule rate limiting ---
-
-_rule_rate_limiters: dict[str, RateLimiter] = {}
-
-
-def _get_rule_rate_limiter(rule_id: str, rate_limit_rpm: int) -> RateLimiter:
-    limiter = _rule_rate_limiters.get(rule_id)
-    if limiter is None or limiter.max_requests != rate_limit_rpm:
-        limiter = RateLimiter(max_requests=rate_limit_rpm, window_seconds=60.0)
-        _rule_rate_limiters[rule_id] = limiter
-    return limiter
-
 
 # --- Validation helpers ---
 
@@ -149,8 +133,9 @@ async def create_rule(
     body: IngressRuleCreateRequest,
     account: Account = _require_account,
 ) -> IngressRuleResponse:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
 
     # Validate starlark
     errors = validate_starlark(body.starlark_source)
@@ -181,8 +166,9 @@ async def list_rules(
     request: Request,
     account: Account = _require_account,
 ) -> list[IngressRuleResponse]:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     rules = await list_ingress_rules_by_account(db, account.id)
     return [_rule_to_response(r, config.domain) for r in rules]
 
@@ -193,8 +179,9 @@ async def get_rule(
     request: Request,
     account: Account = _require_account,
 ) -> dict[str, object]:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     rule = await get_ingress_rule_by_id(db, rule_id)
     if rule is None or rule.account_id != account.id:
         raise HTTPException(status_code=404, detail="Ingress rule not found")
@@ -210,8 +197,9 @@ async def update_rule(
     body: IngressRuleUpdateRequest,
     account: Account = _require_account,
 ) -> IngressRuleResponse:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     rule = await get_ingress_rule_by_id(db, rule_id)
     if rule is None or rule.account_id != account.id:
         raise HTTPException(status_code=404, detail="Ingress rule not found")
@@ -245,13 +233,14 @@ async def delete_rule_endpoint(
     request: Request,
     account: Account = _require_account,
 ) -> Response:
-    db: aiosqlite.Connection = request.app.state.db
+    rt = get_runtime(request)
+    db = rt.db
     rule = await get_ingress_rule_by_id(db, rule_id)
     if rule is None or rule.account_id != account.id:
         raise HTTPException(status_code=404, detail="Ingress rule not found")
     await delete_ingress_rule(db, rule_id)
     # Clean up cached rate limiter
-    _rule_rate_limiters.pop(rule_id, None)
+    rt.rule_limiters.pop(rule_id, None)
     return Response(status_code=204)
 
 
@@ -261,8 +250,9 @@ async def rotate_rule(
     request: Request,
     account: Account = _require_account,
 ) -> IngressRuleResponse:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     rule = await get_ingress_rule_by_id(db, rule_id)
     if rule is None or rule.account_id != account.id:
         raise HTTPException(status_code=404, detail="Ingress rule not found")
@@ -271,9 +261,9 @@ async def rotate_rule(
     await rotate_ingress_rule_id(db, rule.internal_id, new_id)
 
     # Move rate limiter to new key
-    old_limiter = _rule_rate_limiters.pop(rule_id, None)
+    old_limiter = rt.rule_limiters.pop(rule_id, None)
     if old_limiter is not None:
-        _rule_rate_limiters[new_id] = old_limiter
+        rt.rule_limiters[new_id] = old_limiter
 
     rule.id = new_id
     rule.updated_at = datetime.now(UTC).isoformat()
@@ -287,7 +277,7 @@ async def test_rule(
     body: IngressTestRequest,
     account: Account = _require_account,
 ) -> IngressTestResponse:
-    db: aiosqlite.Connection = request.app.state.db
+    db = get_runtime(request).db
     rule = await get_ingress_rule_by_id(db, rule_id)
     if rule is None or rule.account_id != account.id:
         raise HTTPException(status_code=404, detail="Ingress rule not found")
@@ -333,7 +323,7 @@ async def get_rule_logs(
     request: Request,
     account: Account = _require_account,
 ) -> list[IngressLogResponse]:
-    db: aiosqlite.Connection = request.app.state.db
+    db = get_runtime(request).db
     rule = await get_ingress_rule_by_id(db, rule_id)
     if rule is None or rule.account_id != account.id:
         raise HTTPException(status_code=404, detail="Ingress rule not found")
@@ -429,6 +419,7 @@ async def _do_create(
     vm_manager: VMManager,
     config: Config,
     account_id: str,
+    tasks: BackgroundTasks,
     exec_cmd: str | None = None,
     self_destruct: bool = False,
     callback_url: str | None = None,
@@ -475,6 +466,7 @@ async def _do_create(
                 config=config,
                 vm_mgr=vm_manager,
                 pool=None,
+                tasks=tasks,
             )
 
     return {
@@ -494,6 +486,7 @@ async def _do_fork(
     config: Config,
     account_id: str,
     checkpoint_id: str,
+    tasks: BackgroundTasks,
     exec_cmd: str | None = None,
     self_destruct: bool = False,
     callback_url: str | None = None,
@@ -569,6 +562,7 @@ async def _do_fork(
                 config=config,
                 vm_mgr=vm_manager,
                 pool=None,
+                tasks=tasks,
             )
 
     return {
@@ -597,8 +591,9 @@ async def _get_account(db: aiosqlite.Connection, account_id: str) -> Account:
 @router.api_route("/ingress/{rule_id}", methods=["GET", "POST", "PUT", "PATCH"])
 async def handle_ingress(rule_id: str, request: Request) -> Response:
     """Unauthenticated ingress trigger endpoint."""
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
 
     # 1. Look up rule
     rule = await get_ingress_rule_by_id(db, rule_id)
@@ -606,7 +601,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         raise HTTPException(status_code=404, detail="Ingress rule not found")
 
     # 2. Per-rule rate limit
-    limiter = _get_rule_rate_limiter(rule_id, rule.rate_limit_rpm)
+    limiter = rt.rule_limiter(rule_id, rule.rate_limit_rpm)
     if not limiter.check(rule_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
@@ -627,7 +622,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         result = execute_transform(rule.starlark_source, request_dict)
     except StarlarkError as exc:
         # Log the failure
-        await _log_invocation(db, rule.internal_id, "failed", None, str(exc))
+        await _log_invocation(db, rule.internal_id, IngressLogStatus.FAILED, None, str(exc))
         raise HTTPException(
             status_code=502,
             detail=f"Starlark execution error: {exc}",
@@ -635,7 +630,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
 
     # 5. Validate result
     if result is None:
-        await _log_invocation(db, rule.internal_id, "completed", None, None)
+        await _log_invocation(db, rule.internal_id, IngressLogStatus.COMPLETED, None, None)
         return Response(status_code=204)
 
     validation_errors = _validate_transform_result(result)
@@ -643,7 +638,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         await _log_invocation(
             db,
             rule.internal_id,
-            "failed",
+            IngressLogStatus.FAILED,
             json.dumps(result),
             "; ".join(validation_errors),
         )
@@ -653,12 +648,12 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         )
 
     # 6. Execute action
-    vm_mgr: VMManager = request.app.state.vm_manager
+    vm_mgr = rt.vm_manager
     action = result["action"]
 
     if rule.response_mode == "async":
         # Fire-and-forget
-        task = asyncio.create_task(
+        rt.tasks.spawn(
             _execute_action_and_log(
                 db=db,
                 vm_mgr=vm_mgr,
@@ -666,19 +661,19 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
                 rule=rule,
                 action=action,
                 result=result,
-            )
+                tasks=rt.tasks,
+            ),
+            name=f"ingress:{rule.id}",
         )
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
 
         await _log_invocation(
             db,
             rule.internal_id,
-            "accepted",
+            IngressLogStatus.ACCEPTED,
             json.dumps(result),
             None,
         )
-        return JSONResponse(status_code=202, content={"status": "accepted"})
+        return JSONResponse(status_code=202, content={"status": IngressLogStatus.ACCEPTED})
 
     # Sync: wait and return
     try:
@@ -689,11 +684,12 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
             account_id=rule.account_id,
             action=action,
             result=result,
+            tasks=rt.tasks,
         )
         await _log_invocation(
             db,
             rule.internal_id,
-            "completed",
+            IngressLogStatus.COMPLETED,
             json.dumps(result),
             None,
         )
@@ -702,7 +698,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         await _log_invocation(
             db,
             rule.internal_id,
-            "failed",
+            IngressLogStatus.FAILED,
             json.dumps(result),
             str(exc.detail),
         )
@@ -711,7 +707,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         await _log_invocation(
             db,
             rule.internal_id,
-            "failed",
+            IngressLogStatus.FAILED,
             json.dumps(result),
             str(exc),
         )
@@ -721,7 +717,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
 async def _log_invocation(
     db: aiosqlite.Connection,
     rule_internal_id: str,
-    status: str,
+    status: IngressLogStatus,
     starlark_result: str | None,
     error_message: str | None,
 ) -> None:
@@ -747,6 +743,7 @@ async def _execute_action(
     account_id: str,
     action: str,
     result: dict[str, Any],
+    tasks: BackgroundTasks,
 ) -> dict[str, object]:
     """Execute a fork or create action from a Starlark transform result."""
     if action == "fork":
@@ -775,6 +772,7 @@ async def _execute_action(
             config=config,
             account_id=account_id,
             checkpoint_id=checkpoint_id,
+            tasks=tasks,
             exec_cmd=result.get("exec"),
             self_destruct=result.get("self_destruct", False),
             callback_url=result.get("callback_url"),
@@ -787,6 +785,7 @@ async def _execute_action(
             vm_manager=vm_mgr,
             config=config,
             account_id=account_id,
+            tasks=tasks,
             exec_cmd=result.get("exec"),
             self_destruct=result.get("self_destruct", False),
             callback_url=result.get("callback_url"),
@@ -803,6 +802,7 @@ async def _execute_action_and_log(
     rule: IngressRule,
     action: str,
     result: dict[str, Any],
+    tasks: BackgroundTasks,
 ) -> None:
     """Execute action in background and log the outcome."""
     try:
@@ -813,6 +813,7 @@ async def _execute_action_and_log(
             account_id=rule.account_id,
             action=action,
             result=result,
+            tasks=tasks,
         )
     except Exception as exc:
         logger.warning(

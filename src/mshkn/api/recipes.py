@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -10,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from mshkn.api.auth import require_account
+from mshkn.api.deps import get_runtime, require_account
 from mshkn.db import (
     count_recipe_references,
     delete_failed_recipes_by_hash,
@@ -20,32 +19,19 @@ from mshkn.db import (
     insert_recipe,
     list_recipes_by_account,
 )
-from mshkn.models import Recipe
+from mshkn.models import Recipe, RecipeStatus
+from mshkn.observability.metrics import timed
 from mshkn.recipe.builder import build_recipe, dockerfile_content_hash
 from mshkn.vm.storage import remove_volume
 
 if TYPE_CHECKING:
-    import aiosqlite
-
-    from mshkn.config import Config
     from mshkn.models import Account
-    from mshkn.vm.manager import VMManager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
 
 _require_account = Depends(require_account)
-
-# Per-account build serialization locks
-_build_locks: dict[str, asyncio.Lock] = {}
-
-
-def _get_build_lock(account_id: str) -> asyncio.Lock:
-    """Lazily create and return a per-account asyncio.Lock."""
-    if account_id not in _build_locks:
-        _build_locks[account_id] = asyncio.Lock()
-    return _build_locks[account_id]
 
 
 class CreateRecipeRequest(BaseModel):
@@ -80,9 +66,10 @@ async def create_recipe(
     body: CreateRecipeRequest,
     account: Account = _require_account,
 ) -> JSONResponse:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
-    vm_mgr: VMManager = request.app.state.vm_manager
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
+    vm_mgr = rt.vm_manager
 
     content_hash = dockerfile_content_hash(body.dockerfile)
 
@@ -105,7 +92,7 @@ async def create_recipe(
         account_id=account.id,
         dockerfile=body.dockerfile,
         content_hash=content_hash,
-        status="pending",
+        status=RecipeStatus.PENDING,
         build_log=None,
         base_volume_id=None,
         template_vmstate=None,
@@ -120,15 +107,13 @@ async def create_recipe(
         volume_id = vm_mgr._allocate_volume_id()
 
     # Start background build task, serialized per account
-    build_lock = _get_build_lock(account.id)
+    build_lock = rt.build_lock(account.id)
 
     async def _run_build() -> None:
-        async with build_lock:
+        async with build_lock, timed("recipe_build"):
             await build_recipe(db, config, recipe_id, body.dockerfile, content_hash, volume_id)
 
-    task = asyncio.create_task(_run_build())
-    vm_mgr._bg_tasks.add(task)
-    task.add_done_callback(vm_mgr._bg_tasks.discard)
+    rt.tasks.spawn(_run_build(), name=f"recipe_build:{recipe_id}")
 
     return JSONResponse(
         status_code=202,
@@ -142,7 +127,7 @@ async def get_recipe_endpoint(
     request: Request,
     account: Account = _require_account,
 ) -> RecipeResponse:
-    db: aiosqlite.Connection = request.app.state.db
+    db = get_runtime(request).db
     recipe = await get_recipe(db, recipe_id)
     if recipe is None or recipe.account_id != account.id:
         raise HTTPException(status_code=404, detail="Recipe not found")
@@ -154,7 +139,7 @@ async def list_recipes(
     request: Request,
     account: Account = _require_account,
 ) -> list[RecipeResponse]:
-    db: aiosqlite.Connection = request.app.state.db
+    db = get_runtime(request).db
     recipes = await list_recipes_by_account(db, account.id)
     return [_recipe_to_response(r) for r in recipes]
 
@@ -165,8 +150,9 @@ async def delete_recipe_endpoint(
     request: Request,
     account: Account = _require_account,
 ) -> dict[str, str]:
-    db: aiosqlite.Connection = request.app.state.db
-    config: Config = request.app.state.config
+    rt = get_runtime(request)
+    db = rt.db
+    config = rt.config
     recipe = await get_recipe(db, recipe_id)
     if recipe is None or recipe.account_id != account.id:
         raise HTTPException(status_code=404, detail="Recipe not found")

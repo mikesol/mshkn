@@ -19,7 +19,10 @@ from mshkn.db import (
     list_all_computers,
     update_computer_status,
 )
-from mshkn.models import Checkpoint, Computer, Recipe
+from mshkn.errors import Conflict, NotFound
+from mshkn.models import Checkpoint, Computer, ComputerStatus, Recipe, RecipeStatus
+from mshkn.observability.metrics import host_ram_used_ratio
+from mshkn.resources import DEFAULT_RESOURCES, Resources
 from mshkn.shell import run
 from mshkn.vm.firecracker import (
     FirecrackerClient,
@@ -35,11 +38,11 @@ if TYPE_CHECKING:
 
     from mshkn.config import Config
     from mshkn.proxy.caddy import CaddyClient
+    from mshkn.runtime import BackgroundTasks
     from mshkn.vm.ssh import SSHPool
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MEM_MIB = 256
 _ALERT_HISTORY_SIZE = 100
 
 
@@ -53,42 +56,19 @@ class Alert:
     timestamp: str  # ISO 8601
 
 
-_DEFAULT_VCPU = 2
-
-
-def parse_needs(needs: dict[str, object] | None) -> tuple[int, int]:
-    """Parse a needs dict into (mem_size_mib, vcpu_count)."""
-    if not needs:
-        return _DEFAULT_MEM_MIB, _DEFAULT_VCPU
-
-    mem_size_mib = _DEFAULT_MEM_MIB
-    vcpu_count = _DEFAULT_VCPU
-
-    ram = needs.get("ram")
-    if isinstance(ram, str):
-        raw = ram.strip().upper()
-        if raw.endswith("GB"):
-            mem_size_mib = int(float(raw[:-2]) * 1024)
-        elif raw.endswith("MB"):
-            mem_size_mib = int(float(raw[:-2]))
-
-    cores = needs.get("cores")
-    if isinstance(cores, int):
-        vcpu_count = cores
-    elif isinstance(cores, str):
-        vcpu_count = int(cores)
-
-    return mem_size_mib, vcpu_count
-
-
 class VMManager:
     def __init__(
         self,
         config: Config,
         db: aiosqlite.Connection,
+        *,
         caddy: CaddyClient | None = None,
         ssh_pool: SSHPool | None = None,
+        tasks: BackgroundTasks | None = None,
     ) -> None:
+        # runtime imports vm.manager; import here to avoid a cycle until PR 4
+        from mshkn.runtime import BackgroundTasks as _BackgroundTasks
+
         self.config = config
         self.db = db
         self.caddy = caddy
@@ -98,7 +78,7 @@ class VMManager:
         self._next_volume_id = 100  # volume 0 is base; start high to avoid conflicts
         self._alloc_lock = asyncio.Lock()
         self.alerts: deque[Alert] = deque(maxlen=_ALERT_HISTORY_SIZE)
-        self._bg_tasks: set[asyncio.Task[None]] = set()
+        self.tasks = tasks if tasks is not None else _BackgroundTasks()
 
     async def initialize(self) -> None:
         """Load state from DB and actual pool to set counters correctly."""
@@ -106,7 +86,7 @@ class VMManager:
         max_vol = 99  # start at 100 by default
         if computers:
             max_vol = max(max_vol, max(c.thin_volume_id for c in computers))
-            running = [c for c in computers if c.status == "running"]
+            running = [c for c in computers if c.status == ComputerStatus.RUNNING]
             if running:
                 active_slots = {int(c.tap_device.replace("tap", "")) for c in running}
                 self._next_slot = min(max(active_slots) + 1, 256)
@@ -396,10 +376,9 @@ class VMManager:
         self,
         account_id: str,
         recipe_id: str | None = None,
-        needs: dict[str, object] | None = None,
+        resources: Resources = DEFAULT_RESOURCES,
     ) -> Computer:
-        mem_size_mib, vcpu_count = parse_needs(needs)
-        custom_resources = mem_size_mib != _DEFAULT_MEM_MIB or vcpu_count != _DEFAULT_VCPU
+        custom_resources = not resources.is_default
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
 
         # Resolve recipe to source volume
@@ -408,11 +387,11 @@ class VMManager:
 
             recipe = await get_recipe(self.db, recipe_id)
             if recipe is None:
-                raise ValueError(f"Recipe {recipe_id} not found")
-            if recipe.status != "ready":
-                raise ValueError(f"Recipe {recipe_id} is not ready (status={recipe.status})")
+                raise NotFound(f"Recipe {recipe_id} not found")
+            if recipe.status != RecipeStatus.READY:
+                raise Conflict(f"Recipe {recipe_id} is not ready (status={recipe.status})")
             if recipe.base_volume_id is None:
-                raise ValueError(f"Recipe {recipe_id} has no base volume")
+                raise Conflict(f"Recipe {recipe_id} has no base volume")
             source_volume_id = recipe.base_volume_id
         else:
             recipe = None
@@ -433,8 +412,8 @@ class VMManager:
 
             logger.info(
                 "Cold-booting with custom resources: mem=%dMiB, vcpu=%d",
-                mem_size_mib,
-                vcpu_count,
+                resources.mem_mib,
+                resources.vcpus,
             )
             result = await cold_boot_from_disk(
                 disk_volume_id=volume_id,
@@ -443,8 +422,8 @@ class VMManager:
                 thin_volume_sectors=self.config.thin_volume_sectors,
                 final_volume_name=volume_name,
                 kernel_path=str(self.config.kernel_path),
-                mem_size_mib=mem_size_mib,
-                vcpu_count=vcpu_count,
+                mem_size_mib=resources.mem_mib,
+                vcpu_count=resources.vcpus,
                 socket_path=f"/tmp/fc-{computer_id}.socket",
             )
         else:
@@ -527,7 +506,7 @@ class VMManager:
             firecracker_pid=result.pid,
             manifest_hash="none",
             manifest_json="{}",
-            status="running",
+            status=ComputerStatus.RUNNING,
             created_at=now,
             last_exec_at=None,
             recipe_id=recipe_id,
@@ -583,7 +562,7 @@ class VMManager:
         """
         if checkpoint.thin_volume_id is None:
             msg = f"Checkpoint {checkpoint.id} has no disk snapshot (created before this fix)"
-            raise ValueError(msg)
+            raise Conflict(msg)
 
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
         async with self._alloc_lock:
@@ -660,7 +639,7 @@ class VMManager:
             firecracker_pid=result.pid,
             manifest_hash="none",
             manifest_json="{}",
-            status="running",
+            status=ComputerStatus.RUNNING,
             created_at=now,
             last_exec_at=None,
             source_checkpoint_id=checkpoint.id,
@@ -687,7 +666,7 @@ class VMManager:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
         if not checkpoint.r2_prefix:
-            raise ValueError(f"Checkpoint {checkpoint.id} has no R2 prefix")
+            raise Conflict(f"Checkpoint {checkpoint.id} has no R2 prefix")
 
         for filename in ("vmstate", "memory"):
             local_path = ckpt_dir / filename
@@ -699,8 +678,8 @@ class VMManager:
     async def destroy(self, computer_id: str) -> None:
         computer = await get_computer(self.db, computer_id)
         if computer is None:
-            raise ValueError(f"Computer {computer_id} not found")
-        if computer.status == "destroyed":
+            raise NotFound(f"Computer {computer_id} not found")
+        if computer.status == ComputerStatus.DESTROYED:
             logger.warning("Computer %s already destroyed, skipping", computer_id)
             return
 
@@ -731,7 +710,7 @@ class VMManager:
             await self.ssh_pool.remove(computer.vm_ip)
 
         # Update DB
-        await update_computer_status(self.db, computer_id, "destroyed")
+        await update_computer_status(self.db, computer_id, ComputerStatus.DESTROYED)
         logger.info("Destroyed computer %s", computer_id)
 
     # ── Stale VM Reaper ───────────────────────────────────────────────────
@@ -752,7 +731,7 @@ class VMManager:
         Returns the number of VMs reaped.
         """
         computers = await list_all_computers(self.db)
-        running = [c for c in computers if c.status == "running"]
+        running = [c for c in computers if c.status == ComputerStatus.RUNNING]
         reaped = 0
 
         for computer in running:
@@ -804,7 +783,7 @@ class VMManager:
             self._release_slot(slot)
 
         # Mark destroyed in DB
-        await update_computer_status(self.db, computer.id, "destroyed")
+        await update_computer_status(self.db, computer.id, ComputerStatus.DESTROYED)
         logger.info("Reaped dead VM %s", computer.id)
 
     async def reap_idle_vms(self) -> int:
@@ -816,7 +795,7 @@ class VMManager:
             return 0
 
         computers = await list_all_computers(self.db)
-        running = [c for c in computers if c.status == "running"]
+        running = [c for c in computers if c.status == ComputerStatus.RUNNING]
         now = datetime.now(UTC)
 
         idle_vms: list[Computer] = []
@@ -944,17 +923,17 @@ class VMManager:
             await insert_checkpoint(self.db, ckpt)
 
             # Upload to R2 in background (best-effort, don't block reaper)
-            task = asyncio.create_task(
+            self.tasks.spawn(
                 self._upload_checkpoint_bg(
                     upload_checkpoint,
                     snapshot_dir,
                     r2_prefix,
                     self.config.r2_bucket,
                     checkpoint_id,
-                )
+                ),
+                name=f"upload:{checkpoint_id}",
+                key=f"upload:{checkpoint_id}",
             )
-            self._bg_tasks.add(task)
-            task.add_done_callback(self._bg_tasks.discard)
 
             logger.info("Auto-checkpoint %s created for idle VM %s", checkpoint_id, computer.id)
         except Exception:
@@ -975,7 +954,7 @@ class VMManager:
 
             account = await get_account_by_id(self.db, computer.account_id)
             if account is not None:
-                task = asyncio.create_task(
+                self.tasks.spawn(
                     _process_deferred(
                         label=effective_label,
                         deferred_items=deferred,
@@ -983,10 +962,10 @@ class VMManager:
                         config=self.config,
                         vm_mgr=self,
                         account=account,
-                    )
+                        tasks=self.tasks,
+                    ),
+                    name=f"deferred:{effective_label}",
                 )
-                self._bg_tasks.add(task)
-                task.add_done_callback(self._bg_tasks.discard)
                 logger.info(
                     "Draining %d deferred item(s) for label '%s' after idle reap",
                     len(deferred),
@@ -1116,6 +1095,7 @@ class VMManager:
             available = meminfo.get("MemAvailable", 0)
             if total > 0:
                 used_pct = ((total - available) / total) * 100
+                host_ram_used_ratio.set(used_pct / 100.0)
                 if used_pct > 90:
                     alert = Alert(
                         level="critical",

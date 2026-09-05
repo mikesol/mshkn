@@ -13,7 +13,7 @@ from mshkn.db import (
     run_migrations,
     update_computer_status,
 )
-from mshkn.models import Account, Checkpoint, Computer
+from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
 
 
 async def test_migrations_apply(tmp_path: Path) -> None:
@@ -26,6 +26,7 @@ async def test_migrations_apply(tmp_path: Path) -> None:
     assert "accounts" in tables
     assert "computers" in tables
     assert "checkpoints" in tables
+    assert "deferred_queue" in tables
 
 
 async def test_migrations_idempotent(tmp_path: Path) -> None:
@@ -77,7 +78,7 @@ async def test_computer_roundtrip(tmp_path: Path) -> None:
             firecracker_pid=999,
             manifest_hash="abc",
             manifest_json='{"uses": []}',
-            status="running",
+            status=ComputerStatus.RUNNING,
             created_at="2026-03-08T00:00:00",
             last_exec_at=None,
         )
@@ -85,7 +86,7 @@ async def test_computer_roundtrip(tmp_path: Path) -> None:
         result = await get_computer(db, "comp-1")
     assert result is not None
     assert result.vm_ip == "172.16.1.2"
-    assert result.status == "running"
+    assert result.status == ComputerStatus.RUNNING
 
 
 async def test_update_computer_status(tmp_path: Path) -> None:
@@ -111,15 +112,15 @@ async def test_update_computer_status(tmp_path: Path) -> None:
             firecracker_pid=999,
             manifest_hash="abc",
             manifest_json='{"uses": []}',
-            status="running",
+            status=ComputerStatus.RUNNING,
             created_at="2026-03-08T00:00:00",
             last_exec_at=None,
         )
         await insert_computer(db, comp)
-        await update_computer_status(db, "comp-1", "destroyed")
+        await update_computer_status(db, "comp-1", ComputerStatus.DESTROYED)
         result = await get_computer(db, "comp-1")
     assert result is not None
-    assert result.status == "destroyed"
+    assert result.status == ComputerStatus.DESTROYED
 
 
 async def test_count_active_computers(tmp_path: Path) -> None:
@@ -151,7 +152,7 @@ async def test_count_active_computers(tmp_path: Path) -> None:
                 firecracker_pid=999,
                 manifest_hash="abc",
                 manifest_json='{"uses": []}',
-                status="running",
+                status=ComputerStatus.RUNNING,
                 created_at="2026-03-08T00:00:00",
                 last_exec_at=None,
             ),
@@ -171,7 +172,7 @@ async def test_count_active_computers(tmp_path: Path) -> None:
                 firecracker_pid=1000,
                 manifest_hash="abc",
                 manifest_json='{"uses": []}',
-                status="destroyed",
+                status=ComputerStatus.DESTROYED,
                 created_at="2026-03-08T00:00:00",
                 last_exec_at=None,
             ),
