@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -29,3 +30,9 @@ async def run(cmd: str, check: bool = True) -> str:
         raise ShellError(cmd, proc.returncode or -1, stderr)
 
     return stdout
+
+
+class RunFn(Protocol):
+    """Signature of shell.run, so implementations can take an injected runner."""
+
+    async def __call__(self, cmd: str, check: bool = True) -> str: ...

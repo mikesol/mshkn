@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from mshkn.shell import run
+from mshkn.host.shell import run
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -12,14 +12,14 @@ import contextlib
 import logging
 from dataclasses import dataclass
 
-from mshkn.shell import run
+from mshkn.host.network import create_tap, destroy_tap, slot_to_ip, slot_to_tap
+from mshkn.host.shell import run
 from mshkn.vm.firecracker import (
     FirecrackerClient,
     FirecrackerConfig,
     kill_firecracker_process,
     start_firecracker_process,
 )
-from mshkn.vm.network import create_tap, destroy_tap, slot_to_ip, slot_to_tap
 
 logger = logging.getLogger(__name__)
 

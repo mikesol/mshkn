@@ -20,17 +20,17 @@ from mshkn.db import (
     update_computer_status,
 )
 from mshkn.errors import Conflict, NotFound
+from mshkn.host.network import create_tap, destroy_tap, slot_to_ip
+from mshkn.host.shell import run
 from mshkn.models import Checkpoint, Computer, ComputerStatus, Recipe, RecipeStatus
 from mshkn.observability.metrics import host_ram_used_ratio
 from mshkn.resources import DEFAULT_RESOURCES, Resources
-from mshkn.shell import run
 from mshkn.vm.firecracker import (
     FirecrackerClient,
     FirecrackerConfig,
     kill_firecracker_process,
     start_firecracker_process,
 )
-from mshkn.vm.network import create_tap, destroy_tap, slot_to_ip
 from mshkn.vm.storage import create_snapshot, pool_create_snap, remove_volume
 
 if TYPE_CHECKING:
@@ -124,7 +124,7 @@ class VMManager:
         (e.g. checkpoint volumes whose DB rows were deleted but whose
         thin volumes were never removed from the pool).
         """
-        from mshkn.shell import ShellError, run
+        from mshkn.host.shell import ShellError, run
 
         try:
             # dmsetup ls --target thin outputs lines like:

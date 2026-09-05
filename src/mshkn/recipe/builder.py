@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mshkn.db import update_recipe_build_result, update_recipe_status
+from mshkn.host.shell import run
 from mshkn.models import RecipeStatus
-from mshkn.shell import run
 from mshkn.vm.storage import create_snapshot, mount_volume, umount_volume
 
 if TYPE_CHECKING:

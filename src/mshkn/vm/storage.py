@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from mshkn.shell import ShellError, run
+from mshkn.host.shell import ShellError, run
 
 logger = logging.getLogger(__name__)
 
