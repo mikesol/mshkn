@@ -105,9 +105,8 @@ async def test_healthy_reflects_admin_api() -> None:
 
 
 async def test_close_makes_the_proxy_unusable() -> None:
-    """close() releases the admin client; httpx then refuses to send on it."""
+    """close() releases the admin client; healthy() reports it, rather than raising."""
     proxy = make_proxy(httpx.MockTransport(lambda _: httpx.Response(200)))
     assert await proxy.healthy()
     await proxy.close()
-    with pytest.raises(RuntimeError, match="client has been closed"):
-        await proxy.healthy()
+    assert await proxy.healthy() is False
