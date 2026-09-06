@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from httpx import ASGITransport, AsyncClient
 
 from mshkn.db import insert_account
-from mshkn.models import Account
+from tests.support import account_row
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
@@ -15,10 +15,7 @@ if TYPE_CHECKING:
 
 
 async def _account(db: aiosqlite.Connection) -> None:
-    await insert_account(
-        db,
-        Account(id="acct-1", api_key="test-key-123", vm_limit=10, created_at="2026-03-08T00:00:00"),
-    )
+    await insert_account(db, account_row(api_key="test-key-123"))
 
 
 async def test_no_auth_returns_401(db: aiosqlite.Connection, runtime_config: Config) -> None:

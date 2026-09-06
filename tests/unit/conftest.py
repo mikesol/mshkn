@@ -50,3 +50,14 @@ def make_runtime(
 
 def make_app(runtime: Runtime) -> FastAPI:
     return create_app(runtime)
+
+
+@pytest.fixture
+async def runtime(db: aiosqlite.Connection, runtime_config: Config) -> AsyncIterator[Runtime]:
+    """A Runtime on a FakeHost whose http client and tasks are closed on teardown."""
+    rt = make_runtime(db, config=runtime_config)
+    try:
+        yield rt
+    finally:
+        await rt.tasks.drain(timeout=2.0)
+        await rt.http.aclose()

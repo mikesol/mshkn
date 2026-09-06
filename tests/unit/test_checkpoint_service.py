@@ -11,7 +11,7 @@ from mshkn.db import get_checkpoint, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, Conflict, NotFound
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
-from mshkn.models import Account, Checkpoint, CheckpointTrigger, Computer, ExecSpec
+from mshkn.models import CheckpointTrigger, Computer, ExecSpec
 from mshkn.observability.metrics import checkpoints_total
 from mshkn.resources import DEFAULT_RESOURCES
 from mshkn.runtime import BackgroundTasks
@@ -19,36 +19,18 @@ from mshkn.services.allocator import SlotAllocator
 from mshkn.services.checkpoints import CheckpointService, Deferred
 from mshkn.services.computers import ComputerService
 from mshkn.services.recipes import RecipeService
+from tests.support import account_row, checkpoint_row
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     import aiosqlite
 
-ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=10, created_at="t")
-OTHER = Account(id="acct-2", api_key="k2", vm_limit=10, created_at="t")
+ACCOUNT = account_row(api_key="k")
+OTHER = account_row(id="acct-2", api_key="k2")
 SPEC = ExecSpec(
     command="echo hi", self_destruct=True, callback_url=None, label=None, meta_exec=None
 )
-
-
-def _row(
-    ckpt_id: str, *, account_id: str, parent_id: str | None, volume_id: int | None
-) -> Checkpoint:
-    """A checkpoint row built by hand, for the validation branches create() cannot reach."""
-    return Checkpoint(
-        id=ckpt_id,
-        account_id=account_id,
-        parent_id=parent_id,
-        computer_id=None,
-        thin_volume_id=volume_id,
-        r2_prefix=f"{account_id}/{ckpt_id}",
-        disk_delta_size_bytes=None,
-        memory_size_bytes=None,
-        label=None,
-        pinned=False,
-        created_at="2026-09-06T00:00:00",
-    )
 
 
 async def _services(
@@ -199,7 +181,13 @@ async def test_merge_rejects_missing_foreign_and_diskless_checkpoints(
     # Each of the three operands is checked against the calling account.
     with pytest.raises(NotFound, match="Parent checkpoint not found"):
         await checkpoints.merge(OTHER, parent.id, a.id, b.id)
-    foreign = _row("ckpt-foreign", account_id=OTHER.id, parent_id=parent.id, volume_id=901)
+    foreign = checkpoint_row(
+        "ckpt-foreign",
+        account_id=OTHER.id,
+        computer_id=None,
+        parent_id=parent.id,
+        thin_volume_id=901,
+    )
     await insert_checkpoint(db, foreign)
     with pytest.raises(NotFound, match="Checkpoint A not found"):
         await checkpoints.merge(ACCOUNT, parent.id, foreign.id, b.id)
@@ -207,7 +195,13 @@ async def test_merge_rejects_missing_foreign_and_diskless_checkpoints(
         await checkpoints.merge(ACCOUNT, parent.id, a.id, foreign.id)
 
     # Owned, a child of the right parent, but never given a disk snapshot.
-    diskless = _row("ckpt-diskless", account_id=ACCOUNT.id, parent_id=parent.id, volume_id=None)
+    diskless = checkpoint_row(
+        "ckpt-diskless",
+        account_id=ACCOUNT.id,
+        computer_id=None,
+        parent_id=parent.id,
+        thin_volume_id=None,
+    )
     await insert_checkpoint(db, diskless)
     with pytest.raises(BadRequest, match="A checkpoint has no disk snapshot"):
         await checkpoints.merge(ACCOUNT, parent.id, diskless.id, b.id)

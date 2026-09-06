@@ -22,12 +22,9 @@ from mshkn.db import (
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import (
-    Account,
     CheckpointTrigger,
     ComputerStatus,
     ExecSpec,
-    Recipe,
-    RecipeStatus,
 )
 from mshkn.observability.metrics import checkpoints_total
 from mshkn.resources import DEFAULT_RESOURCES
@@ -37,30 +34,15 @@ from mshkn.services.checkpoints import CheckpointService
 from mshkn.services.computers import ComputerService
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.recipes import RecipeService
+from tests.support import account_row, recipe_row
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     import aiosqlite
 
-ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=10, created_at="t")
-OTHER = Account(id="acct-2", api_key="k2", vm_limit=10, created_at="t")
-
-
-def _ready_recipe(recipe_id: str) -> Recipe:
-    return Recipe(
-        id=recipe_id,
-        account_id=ACCOUNT.id,
-        dockerfile="FROM debian",
-        content_hash=f"hash-{recipe_id}",
-        status=RecipeStatus.READY,
-        build_log=None,
-        base_volume_id=7,
-        template_vmstate=None,
-        template_memory=None,
-        created_at="t",
-        built_at="t",
-    )
+ACCOUNT = account_row(api_key="k")
+OTHER = account_row(id="acct-2", api_key="k2")
 
 
 def _receiver() -> tuple[FastAPI, list[dict[str, Any]]]:
@@ -206,7 +188,7 @@ async def test_drain_forks_with_the_recipe_id_from_the_payload(
 ) -> None:
     """The deferred payload's recipe_id wins over the checkpoint's own."""
     lifecycle, computers, checkpoints, _host, _ = await _lifecycle(db, tmp_path)
-    await insert_recipe(db, _ready_recipe("rec-1"))
+    await insert_recipe(db, recipe_row("rec-1"))
     base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
     source = await checkpoints.create(base, label="chain", trigger=CheckpointTrigger.API)
     assert source.recipe_id is None  # so the payload is the only source of the id

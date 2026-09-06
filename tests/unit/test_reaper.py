@@ -10,7 +10,7 @@ from mshkn.config import Config
 from mshkn.db import claim_deferred_by_label, get_computer, insert_account, insert_deferred
 from mshkn.host import PoolUsage
 from mshkn.host.fake import FakeHost, FakeHostInstance
-from mshkn.models import Account, Alert, CheckpointTrigger, ComputerStatus
+from mshkn.models import Alert, CheckpointTrigger, ComputerStatus
 from mshkn.observability.metrics import checkpoints_total, thin_pool_used_ratio
 from mshkn.resources import DEFAULT_RESOURCES
 from mshkn.runtime import BackgroundTasks
@@ -20,13 +20,14 @@ from mshkn.services.computers import ComputerService
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.reaper import IDLE_LABEL, Reaper
 from mshkn.services.recipes import RecipeService
+from tests.support import account_row
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     import aiosqlite
 
-ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=10, created_at="t")
+ACCOUNT = account_row(api_key="k")
 
 
 class _Usage:

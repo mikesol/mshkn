@@ -9,17 +9,18 @@ from mshkn.config import Config
 from mshkn.db import get_recipe, insert_account, insert_computer
 from mshkn.errors import Conflict, NotFound
 from mshkn.host.fake import FakeHost, FakeHostInstance
-from mshkn.models import Account, Computer, ComputerStatus, RecipeStatus
+from mshkn.models import RecipeStatus
 from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.recipes import RecipeService, dockerfile_content_hash
+from tests.support import account_row, computer_row
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     import aiosqlite
 
-ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=10, created_at="t")
+ACCOUNT = account_row(api_key="k")
 
 
 class FakeShell:
@@ -155,22 +156,7 @@ async def test_delete_refuses_referenced_recipes_and_removes_the_volume(
     service, host, _ = _service(db, tmp_path)
     recipe, _ = await service.create(ACCOUNT, "FROM x")
     await service.tasks.wait(service.build_task_name(recipe.id))
-    await insert_computer(
-        db,
-        Computer(
-            id="comp-1",
-            account_id="acct-1",
-            thin_volume_id=101,
-            tap_device="tap1",
-            vm_ip="172.16.1.2",
-            socket_path="/tmp/s",
-            firecracker_pid=1,
-            status=ComputerStatus.RUNNING,
-            created_at="t",
-            last_exec_at=None,
-            recipe_id=recipe.id,
-        ),
-    )
+    await insert_computer(db, computer_row(recipe_id=recipe.id))
     with pytest.raises(Conflict):
         await service.delete(ACCOUNT, recipe.id)
     await db.execute("UPDATE computers SET status = 'destroyed'")
