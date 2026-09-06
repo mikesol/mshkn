@@ -60,7 +60,7 @@ class TestT61OrchestratorCrashRecovery:
             assert body["computer_id"] == computer_id
             assert body["status"] in ("running", "ready", "booting")
             assert "vm_ip" in body
-            assert "manifest_hash" in body
+            assert "recipe_id" in body
             assert "created_at" in body
 
 

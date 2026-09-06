@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mshkn.ingress.models import IngressLog, IngressLogStatus, IngressRule
+from mshkn.models import IngressLog, IngressLogStatus, IngressRule
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

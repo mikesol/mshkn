@@ -1,44 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-# --- DB dataclasses ---
-
-
-class IngressLogStatus(StrEnum):
-    ACCEPTED = "accepted"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-@dataclass
-class IngressRule:
-    internal_id: str
-    id: str
-    account_id: str
-    name: str
-    starlark_source: str
-    response_mode: str  # "async" | "sync"
-    max_body_bytes: int
-    rate_limit_rpm: int
-    enabled: bool
-    created_at: str
-    updated_at: str
-
-
-@dataclass
-class IngressLog:
-    id: str
-    rule_internal_id: str
-    status: IngressLogStatus
-    starlark_result: str | None
-    error_message: str | None
-    created_at: str
-
+from mshkn.models import IngressLog as IngressLog
+from mshkn.models import IngressLogStatus as IngressLogStatus
+from mshkn.models import IngressRule as IngressRule
 
 # --- Pydantic request/response models ---
 

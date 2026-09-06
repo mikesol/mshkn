@@ -12,13 +12,12 @@ from sse_starlette.sse import EventSourceResponse
 from mshkn.api.deps import get_runtime, require_account
 from mshkn.callback import deliver_callback
 from mshkn.db import (
+    claim_deferred_by_label,
     count_active_computers_by_account,
-    delete_deferred_by_label,
     get_checkpoint,
     get_computer,
     get_latest_checkpoint_for_computer,
     insert_checkpoint,
-    list_deferred_by_label,
     update_last_exec_at,
 )
 from mshkn.models import Checkpoint, ComputerStatus
@@ -142,8 +141,6 @@ async def _self_destruct(
         parent_id=parent_id,
         computer_id=computer.id,
         thin_volume_id=ckpt_volume_id,
-        manifest_hash=computer.manifest_hash,
-        manifest_json=computer.manifest_json,
         r2_prefix=r2_prefix,
         disk_delta_size_bytes=None,
         memory_size_bytes=None,
@@ -153,7 +150,7 @@ async def _self_destruct(
         recipe_id=computer.recipe_id,
     )
     await insert_checkpoint(db, ckpt)
-    checkpoints_total.inc()
+    checkpoints_total.labels(trigger="self_destruct").inc()
 
     # Background R2 upload
     tasks.spawn(
@@ -189,9 +186,8 @@ async def _self_destruct(
 
     # Drain deferred queue for this label
     if label:
-        deferred = await list_deferred_by_label(db, label)
+        deferred = await claim_deferred_by_label(db, label)
         if deferred:
-            await delete_deferred_by_label(db, label)
             tasks.spawn(
                 _process_deferred(
                     label=label,
@@ -239,7 +235,7 @@ async def create_computer(
     resources = Resources.from_needs(body.needs)
     async with timed("create"):
         computer = await vm_mgr.create(account.id, recipe_id=body.recipe_id, resources=resources)
-    computers_created_total.inc()
+    computers_created_total.labels(source="create").inc()
     computers_active.inc()
 
     exec_exit_code: int | None = None
@@ -424,7 +420,7 @@ async def computer_status(
         "status": computer.status,
         "url": f"https://{computer.id}.{config.domain}",
         "vm_ip": computer.vm_ip,
-        "manifest_hash": computer.manifest_hash,
+        "recipe_id": computer.recipe_id,
         "created_at": computer.created_at,
         "last_exec_at": computer.last_exec_at,
     }
@@ -512,8 +508,6 @@ async def checkpoint_computer(
             parent_id=parent_id,
             computer_id=computer_id,
             thin_volume_id=ckpt_volume_id,
-            manifest_hash=computer.manifest_hash,
-            manifest_json=computer.manifest_json,
             r2_prefix=r2_prefix,
             disk_delta_size_bytes=None,
             memory_size_bytes=None,
@@ -523,7 +517,7 @@ async def checkpoint_computer(
             recipe_id=computer.recipe_id,
         )
         await insert_checkpoint(db, ckpt)
-    checkpoints_total.inc()
+    checkpoints_total.labels(trigger="api").inc()
 
     # Async background upload to R2
     rt.tasks.spawn(
@@ -664,9 +658,8 @@ async def destroy_computer(
     if computer.source_checkpoint_id:
         source_ckpt = await get_checkpoint(db, computer.source_checkpoint_id)
         if source_ckpt and source_ckpt.label:
-            deferred = await list_deferred_by_label(db, source_ckpt.label)
+            deferred = await claim_deferred_by_label(db, source_ckpt.label)
             if deferred:
-                await delete_deferred_by_label(db, source_ckpt.label)
                 # Process deferred requests in background
                 rt.tasks.spawn(
                     _process_deferred(

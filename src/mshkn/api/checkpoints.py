@@ -19,7 +19,7 @@ from mshkn.db import (
     insert_deferred,
     list_checkpoints_by_account,
 )
-from mshkn.observability.metrics import timed
+from mshkn.observability.metrics import computers_created_total, timed
 
 if TYPE_CHECKING:
     from mshkn.models import Account
@@ -101,6 +101,7 @@ async def fork_checkpoint(
     vm_mgr = rt.vm_manager
     async with timed("fork"):
         computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, recipe_id=fork_recipe_id)
+    computers_created_total.labels(source="fork").inc()
 
     exec_exit_code: int | None = None
     exec_stdout: str | None = None
@@ -266,15 +267,13 @@ async def merge_checkpoints(
     # Create checkpoint record
     now = datetime.now(UTC).isoformat()
     r2_prefix = f"{account.id}/{checkpoint_id}"
-    # Merged checkpoint inherits parent's manifest and recipe
+    # Merged checkpoint inherits parent's recipe
     ckpt = Checkpoint(
         id=checkpoint_id,
         account_id=account.id,
         parent_id=parent_id,
         computer_id=None,  # merge has no source computer
         thin_volume_id=merged_volume_id,
-        manifest_hash=ckpt_parent.manifest_hash,
-        manifest_json=ckpt_parent.manifest_json,
         r2_prefix=r2_prefix,
         disk_delta_size_bytes=None,
         memory_size_bytes=None,
@@ -317,7 +316,7 @@ async def list_checkpoints(
             "checkpoint_id": c.id,
             "parent_id": c.parent_id,
             "computer_id": c.computer_id,
-            "manifest_hash": c.manifest_hash,
+            "recipe_id": c.recipe_id,
             "r2_prefix": c.r2_prefix,
             "disk_delta_size_bytes": c.disk_delta_size_bytes,
             "memory_size_bytes": c.memory_size_bytes,

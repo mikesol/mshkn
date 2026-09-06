@@ -17,8 +17,6 @@ COLUMNS: tuple[str, ...] = (
     "parent_id",
     "computer_id",
     "thin_volume_id",
-    "manifest_hash",
-    "manifest_json",
     "r2_prefix",
     "disk_delta_size_bytes",
     "memory_size_bytes",
@@ -38,8 +36,6 @@ def _row_to_checkpoint(row: Sequence[object]) -> Checkpoint:
         parent_id=None if d["parent_id"] is None else str(d["parent_id"]),
         computer_id=None if d["computer_id"] is None else str(d["computer_id"]),
         thin_volume_id=None if d["thin_volume_id"] is None else int(d["thin_volume_id"]),  # type: ignore[call-overload]
-        manifest_hash=str(d["manifest_hash"]),
-        manifest_json=str(d["manifest_json"]),
         r2_prefix=str(d["r2_prefix"]),
         disk_delta_size_bytes=(
             None if d["disk_delta_size_bytes"] is None else int(d["disk_delta_size_bytes"])  # type: ignore[call-overload]
@@ -56,16 +52,14 @@ def _row_to_checkpoint(row: Sequence[object]) -> Checkpoint:
 
 async def insert_checkpoint(db: aiosqlite.Connection, checkpoint: Checkpoint) -> None:
     await db.execute(
-        "INSERT INTO checkpoints (" + ", ".join(COLUMNS) + ") "
-        "VALUES (" + ", ".join("?" for _ in COLUMNS) + ")",
+        "INSERT INTO checkpoints (" + ", ".join(COLUMNS) + ", manifest_hash, manifest_json) "
+        "VALUES (" + ", ".join("?" for _ in COLUMNS) + ", '', '{}')",
         (
             checkpoint.id,
             checkpoint.account_id,
             checkpoint.parent_id,
             checkpoint.computer_id,
             checkpoint.thin_volume_id,
-            checkpoint.manifest_hash,
-            checkpoint.manifest_json,
             checkpoint.r2_prefix,
             checkpoint.disk_delta_size_bytes,
             checkpoint.memory_size_bytes,

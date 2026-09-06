@@ -8,12 +8,15 @@ from typing import TYPE_CHECKING
 from fastapi.responses import JSONResponse
 
 from mshkn.errors import (
+    BadRequest,
     Conflict,
     HostError,
     InvalidInput,
     LimitExceeded,
     MshknError,
     NotFound,
+    PayloadTooLarge,
+    TransformError,
 )
 
 if TYPE_CHECKING:
@@ -24,8 +27,11 @@ logger = logging.getLogger(__name__)
 _STATUS_BY_TYPE: tuple[tuple[type[MshknError], int], ...] = (
     (NotFound, 404),
     (Conflict, 409),
+    (BadRequest, 400),
     (InvalidInput, 422),
+    (PayloadTooLarge, 413),
     (LimitExceeded, 429),
+    (TransformError, 502),
     (HostError, 502),
 )
 
@@ -45,7 +51,8 @@ async def _handle_domain_error(request: Request, exc: MshknError) -> JSONRespons
     if status == 500:
         logger.error("unmapped domain error: %s", exc.message, extra={"path": request.url.path})
         return JSONResponse(status_code=500, content={"detail": "internal error"})
-    return JSONResponse(status_code=status, content={"detail": exc.message})
+    detail = exc.detail if exc.detail is not None else exc.message
+    return JSONResponse(status_code=status, content={"detail": detail})
 
 
 def install_error_handlers(app: FastAPI) -> None:

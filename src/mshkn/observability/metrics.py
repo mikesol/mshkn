@@ -15,9 +15,11 @@ if TYPE_CHECKING:
 
 computers_active = Gauge("mshkn_computers_active", "Number of currently running VMs")
 computers_created_total = Counter(
-    "mshkn_computers_created_total", "Total number of computers created"
+    "mshkn_computers_created_total", "Computers created, by source", ["source"]
 )
-checkpoints_total = Counter("mshkn_checkpoints_total", "Total number of checkpoints created")
+checkpoints_total = Counter(
+    "mshkn_checkpoints_total", "Checkpoints created, by trigger", ["trigger"]
+)
 exec_duration_seconds = Histogram(
     "mshkn_exec_duration_seconds", "Duration of exec commands in seconds"
 )

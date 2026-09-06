@@ -61,8 +61,6 @@ async def test_reaper_releases_every_host_resource_of_a_dead_vm(
         vm_ip="172.16.7.2",
         socket_path="/tmp/fc-mshkn-comp-dead.socket",
         firecracker_pid=DEAD_PID,
-        manifest_hash="abc",
-        manifest_json="{}",
         status=ComputerStatus.RUNNING,
         created_at="2026-03-08T00:00:00",
         last_exec_at=None,

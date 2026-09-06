@@ -4,9 +4,11 @@ import pytest
 
 from mshkn.models import (
     Checkpoint,
+    CheckpointTrigger,
     Computer,
     ComputerStatus,
     DeferredRequest,
+    ExecSpec,
     Recipe,
     RecipeStatus,
 )
@@ -21,8 +23,6 @@ def test_computer_creation() -> None:
         vm_ip="172.16.5.2",
         socket_path="/tmp/fc-comp-abc.socket",
         firecracker_pid=1234,
-        manifest_hash="abc123",
-        manifest_json='{"uses": []}',
         status=ComputerStatus.RUNNING,
         created_at="2026-03-08T12:00:00",
         last_exec_at=None,
@@ -62,8 +62,6 @@ def test_computer_recipe_id() -> None:
         vm_ip="172.16.5.2",
         socket_path="/tmp/fc-comp-abc.socket",
         firecracker_pid=1234,
-        manifest_hash="abc123",
-        manifest_json='{"uses": []}',
         status=ComputerStatus.RUNNING,
         created_at="2026-03-13T00:00:00Z",
         last_exec_at=None,
@@ -79,8 +77,6 @@ def test_checkpoint_recipe_id() -> None:
         parent_id=None,
         computer_id="comp-abc",
         thin_volume_id=5,
-        manifest_hash="abc123",
-        manifest_json='{"uses": []}',
         r2_prefix="checkpoints/ckpt-abc",
         disk_delta_size_bytes=None,
         memory_size_bytes=None,
@@ -116,3 +112,21 @@ def test_deferred_request_is_frozen() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         d.label = "other"  # type: ignore[misc]
+
+
+def test_computer_and_checkpoint_have_no_manifest_fields() -> None:
+    assert "manifest_hash" not in Computer.__dataclass_fields__
+    assert "manifest_json" not in Checkpoint.__dataclass_fields__
+
+
+def test_checkpoint_trigger_values() -> None:
+    assert [t.value for t in CheckpointTrigger] == ["api", "self_destruct", "idle"]
+    assert CheckpointTrigger.IDLE == "idle"  # type: ignore[comparison-overlap]
+
+
+def test_exec_spec_is_frozen() -> None:
+    spec = ExecSpec(
+        command="ls", self_destruct=False, callback_url=None, label=None, meta_exec=None
+    )
+    with pytest.raises(FrozenInstanceError):
+        spec.command = "rm"  # type: ignore[misc]

@@ -20,7 +20,7 @@ from mshkn.db import (
 from mshkn.errors import Conflict, NotFound
 from mshkn.host import SnapshotFiles
 from mshkn.models import Checkpoint, Computer, ComputerStatus, Recipe, RecipeStatus
-from mshkn.observability.metrics import host_ram_used_ratio
+from mshkn.observability.metrics import checkpoints_total, host_ram_used_ratio
 from mshkn.resources import DEFAULT_RESOURCES, Resources
 
 if TYPE_CHECKING:
@@ -241,8 +241,6 @@ class VMManager:
             vm_ip=vm.vm_ip,
             socket_path=vm.socket_path,
             firecracker_pid=vm.pid,
-            manifest_hash="none",
-            manifest_json="{}",
             status=ComputerStatus.RUNNING,
             created_at=now,
             last_exec_at=None,
@@ -361,8 +359,6 @@ class VMManager:
             vm_ip=vm.vm_ip,
             socket_path=vm.socket_path,
             firecracker_pid=vm.pid,
-            manifest_hash="none",
-            manifest_json="{}",
             status=ComputerStatus.RUNNING,
             created_at=now,
             last_exec_at=None,
@@ -545,11 +541,10 @@ class VMManager:
         import uuid as _uuid
 
         from mshkn.db import (
-            delete_deferred_by_label,
+            claim_deferred_by_label,
             get_checkpoint,
             get_latest_checkpoint_for_computer,
             insert_checkpoint,
-            list_deferred_by_label,
         )
         from mshkn.models import Checkpoint
 
@@ -601,8 +596,6 @@ class VMManager:
                 parent_id=parent_id,
                 computer_id=computer.id,
                 thin_volume_id=ckpt_volume_id,
-                manifest_hash=computer.manifest_hash,
-                manifest_json=computer.manifest_json,
                 r2_prefix=r2_prefix,
                 disk_delta_size_bytes=0,
                 memory_size_bytes=0,
@@ -611,6 +604,7 @@ class VMManager:
                 created_at=now,
             )
             await insert_checkpoint(self.db, ckpt)
+            checkpoints_total.labels(trigger="idle").inc()
 
             # Upload to R2 in background (best-effort, don't block reaper)
             self.tasks.spawn(
@@ -630,9 +624,8 @@ class VMManager:
         # Drain deferred queue for the original label (must happen AFTER
         # destroy so the new fork doesn't conflict with this computer).
         effective_label = original_label or "auto-idle-timeout"
-        deferred = await list_deferred_by_label(self.db, effective_label)
+        deferred = await claim_deferred_by_label(self.db, effective_label)
         if deferred:
-            await delete_deferred_by_label(self.db, effective_label)
             from mshkn.api.computers import _process_deferred
             from mshkn.db import get_account_by_id
 

@@ -49,16 +49,19 @@ async def insert_deferred(
     await db.commit()
 
 
-async def list_deferred_by_label(db: aiosqlite.Connection, label: str) -> list[DeferredRequest]:
-    """Return all deferred requests for a label, ordered by created_at ASC."""
+async def claim_deferred_by_label(db: aiosqlite.Connection, label: str) -> list[DeferredRequest]:
+    """Atomically take every queued request for a label, oldest first.
+
+    One statement, so two drains racing on the same label (a destroy and an
+    idle reap, say) cannot both receive the batch: SQLite serialises writers
+    and the second DELETE finds nothing.
+    """
     cursor = await db.execute(
-        _SELECT + " WHERE label = ? ORDER BY created_at ASC",
+        "DELETE FROM deferred_queue WHERE label = ? RETURNING " + ", ".join(COLUMNS),
         (label,),
     )
-    return [_row_to_deferred(r) for r in await cursor.fetchall()]
-
-
-async def delete_deferred_by_label(db: aiosqlite.Connection, label: str) -> None:
-    """Delete all deferred requests for a label."""
-    await db.execute("DELETE FROM deferred_queue WHERE label = ?", (label,))
+    rows = await cursor.fetchall()
     await db.commit()
+    items = [_row_to_deferred(r) for r in rows]
+    items.sort(key=lambda d: (d.created_at, d.id))
+    return items
