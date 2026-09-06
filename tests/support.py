@@ -93,6 +93,10 @@ class ShellRecorder:
     `calls` holds `(cmd, check)` pairs. `ip link show <tap>` reports the taps in
     `taps` as present; every other command is matched against `responses` by
     substring, returning the value or raising it, and otherwise returns "".
+
+    Pass `timeline` to interleave the commands with the caller's own events:
+    every call appends `run:<cmd>` to that list, so a test can assert an
+    ordering that spans shell commands and API or process activity.
     """
 
     def __init__(
@@ -100,13 +104,16 @@ class ShellRecorder:
         *,
         taps: set[str] | None = None,
         responses: dict[str, str | Exception] | None = None,
+        timeline: list[str] | None = None,
     ) -> None:
         self.calls: list[tuple[str, bool]] = []
         self.taps = set() if taps is None else taps
         self.responses = {} if responses is None else responses
+        self.timeline = [] if timeline is None else timeline
 
     async def __call__(self, cmd: str, check: bool = True) -> str:
         self.calls.append((cmd, check))
+        self.timeline.append(f"run:{cmd}")
         for key, resp in self.responses.items():
             if key in cmd:
                 if isinstance(resp, Exception):

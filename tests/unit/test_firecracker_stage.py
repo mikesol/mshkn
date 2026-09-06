@@ -31,10 +31,16 @@ CONFIG = Config(
 
 
 class FakeClient:
-    """Stands in for FirecrackerClient; records API calls per instance."""
+    """Stands in for FirecrackerClient; records API calls per instance.
+
+    Every call also lands on the shared `timeline`, so a test can assert that
+    the client is closed before the port wait rather than merely that it ends
+    up closed.
+    """
 
     instances: ClassVar[list[FakeClient]] = []
     fail_on: ClassVar[str | None] = None
+    timeline: ClassVar[list[str]] = []
 
     def __init__(self, socket_path: str, *, transport: Any = None) -> None:
         self.socket_path = socket_path
@@ -45,22 +51,31 @@ class FakeClient:
     async def configure_and_boot(self, config: fc.FirecrackerConfig) -> None:
         self._maybe_fail("configure_and_boot")
         self.calls.append(("configure_and_boot", config))
+        self._record("boot")
 
     async def load_snapshot(self, vmstate: str, memory: str, resume_vm: bool = True) -> None:
         self._maybe_fail("load_snapshot")
         self.calls.append(("load_snapshot", (vmstate, memory, resume_vm)))
+        self._record("load")
 
     async def pause(self) -> None:
         self.calls.append(("pause", None))
+        self._record("pause")
 
     async def resume(self) -> None:
         self.calls.append(("resume", None))
+        self._record("resume")
 
     async def create_snapshot(self, vmstate: str, memory: str) -> None:
         self.calls.append(("create_snapshot", (vmstate, memory)))
+        self._record("snapshot")
 
     async def close(self) -> None:
         self.closed = True
+        self._record("close")
+
+    def _record(self, event: str) -> None:
+        FakeClient.timeline.append(f"{event}:{self.socket_path}")
 
     def _maybe_fail(self, name: str) -> None:
         if FakeClient.fail_on == name:
@@ -75,22 +90,26 @@ Staged = tuple[FirecrackerHypervisor, ShellRecorder, list[str]]
 def staged(monkeypatch: pytest.MonkeyPatch) -> Staged:
     """A hypervisor whose process, port wait, SSH hop, and API client are all fakes.
 
-    `events` records the cross-cutting order: process start, port wait, ssh hop, kill.
+    Every stream writes to one `timeline`: shell commands as `run:<cmd>`, API
+    calls as `boot:`/`load:`/`pause:`/`snapshot:`/`resume:`/`close:<socket>`, and
+    the process helpers as `start:`/`wait:`/`kill:`. Orderings that span those
+    streams are then ordinary index comparisons.
     """
     FakeClient.instances = []
     FakeClient.fail_on = None
-    events: list[str] = []
-    run = ShellRecorder(taps={"tap254"})
+    timeline: list[str] = []
+    FakeClient.timeline = timeline
+    run = ShellRecorder(taps={"tap254"}, timeline=timeline)
 
     async def start(socket_path: str, **kwargs: Any) -> int:
-        events.append(f"start:{socket_path}")
+        timeline.append(f"start:{socket_path}")
         return 4242
 
     async def wait(ip: str, port: int, *, timeout: float, interval: float = 0.01) -> None:
-        events.append(f"wait:{ip}:{port}:{timeout}")
+        timeline.append(f"wait:{ip}:{port}:{timeout}")
 
     async def kill(pid: int) -> None:
-        events.append(f"kill:{pid}")
+        timeline.append(f"kill:{pid}")
 
     monkeypatch.setattr(fc, "start_firecracker_process", start)
     monkeypatch.setattr(fc, "wait_for_port", wait)
@@ -99,11 +118,29 @@ def staged(monkeypatch: pytest.MonkeyPatch) -> Staged:
     hv = FirecrackerHypervisor(CONFIG, run=run)
 
     async def ssh_add_ip(final_vm_ip: str, final_host_ip: str) -> None:
-        events.append(f"ssh:{final_vm_ip}:{final_host_ip}")
+        timeline.append(f"ssh:{final_vm_ip}:{final_host_ip}")
 
     monkeypatch.setattr(hv, "_ssh_add_ip", ssh_add_ip)
-    return hv, run, events
+    return hv, run, timeline
 
+
+def _lifecycle(timeline: list[str]) -> list[str]:
+    """The timeline with the shell commands filtered out."""
+    return [e for e in timeline if not e.startswith("run:")]
+
+
+def _first(timeline: list[str], entry: str) -> int:
+    assert entry in timeline, f"{entry!r} missing from {timeline}"
+    return timeline.index(entry)
+
+
+def _last(timeline: list[str], entry: str) -> int:
+    """Staging commands repeat across cleanup, so the tail one is the interesting one."""
+    assert entry in timeline, f"{entry!r} missing from {timeline}"
+    return len(timeline) - 1 - timeline[::-1].index(entry)
+
+
+SOCKET = "/tmp/fc-mshkn-comp-a.socket"
 
 STAGING_TABLE = (
     f"dmsetup create {STAGING_DRIVE_NAME} --table '0 16777216 thin /dev/mapper/mshkn-pool 7'"
@@ -123,7 +160,7 @@ def _rename_chain(slot: int) -> str:
 
 
 async def test_boot_runs_the_staging_chain_in_order(staged: Staged) -> None:
-    hv, run, events = staged
+    hv, run, timeline = staged
     vm = await hv.boot(
         slot=3,
         disk_volume_id=7,
@@ -144,11 +181,18 @@ async def test_boot_runs_the_staging_chain_in_order(staged: Staged) -> None:
     assert f"ip tuntap add dev {STAGING_TAP} mode tap" in cmds
     assert cmds.index("ip link del tap3") < cmds.index(_rename_chain(3))
     assert _rename_chain(3) in cmds
-    assert events == [
-        "start:/tmp/fc-mshkn-comp-a.socket",
+    # The API client is closed before the port wait, and the rename chain only
+    # runs once the guest has taken its final IP over SSH.
+    assert _lifecycle(timeline) == [
+        f"start:{SOCKET}",
+        f"boot:{SOCKET}",
+        f"close:{SOCKET}",
         f"wait:{STAGING_VM_IP}:22:30.0",
         "ssh:172.16.3.2:172.16.3.1",
     ]
+    assert _first(timeline, "ssh:172.16.3.2:172.16.3.1") < _first(
+        timeline, f"run:{_rename_chain(3)}"
+    )
     (client,) = FakeClient.instances
     assert client.closed
     (name, config) = client.calls[0]
@@ -166,23 +210,31 @@ async def test_boot_runs_the_staging_chain_in_order(staged: Staged) -> None:
 
 
 async def test_restore_loads_the_snapshot_with_the_short_ssh_timeout(staged: Staged) -> None:
-    hv, run, events = staged
+    hv, run, timeline = staged
     files = SnapshotFiles(vmstate=Path("/c/vmstate"), memory=Path("/c/memory"))
     vm = await hv.restore(slot=9, disk_volume_id=7, disk_name="mshkn-comp-a", snapshot=files)
     assert vm.slot == 9
     assert vm.tap_device == "tap9"
     (client,) = FakeClient.instances
     assert client.calls == [("load_snapshot", ("/c/vmstate", "/c/memory", True))]
-    assert events[1] == f"wait:{STAGING_VM_IP}:22:5.0"
+    assert _lifecycle(timeline) == [
+        f"start:{SOCKET}",
+        f"load:{SOCKET}",
+        f"close:{SOCKET}",
+        f"wait:{STAGING_VM_IP}:22:5.0",
+        "ssh:172.16.9.2:172.16.9.1",
+    ]
     assert _rename_chain(9) in [c for c, _ in run.calls]
 
 
 async def test_activate_failure_cleans_staging_and_raises_host_error(staged: Staged) -> None:
-    hv, run, events = staged
+    hv, run, timeline = staged
     FakeClient.fail_on = "configure_and_boot"
     with pytest.raises(HostError):
         await hv.boot(slot=3, disk_volume_id=7, disk_name="mshkn-comp-a", resources=Resources())
-    assert "kill:4242" in events, "the staged process is killed"
+    assert "kill:4242" in timeline, "the staged process is killed"
+    assert f"close:{SOCKET}" in timeline, "the client is closed even when activate raises"
+    assert _first(timeline, f"close:{SOCKET}") < _first(timeline, "kill:4242")
     cmds = [c for c, _ in run.calls]
     assert cmds.count(f"dmsetup remove {STAGING_DRIVE_NAME}") == 2, (
         "cleanup ran once before and once after"
@@ -191,33 +243,59 @@ async def test_activate_failure_cleans_staging_and_raises_host_error(staged: Sta
     assert not any("dmsetup rename" in c for c in cmds)
 
 
-async def test_mapping_failure_cancels_the_process_start(staged: Staged) -> None:
-    hv, run, events = staged
+async def test_mapping_failure_cancels_the_process_start(
+    staged: Staged, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hv, run, timeline = staged
+    blocked = asyncio.Event()  # never set: the start only ends by cancellation
+
+    async def blocking_start(socket_path: str, **kwargs: Any) -> int:
+        timeline.append(f"start:{socket_path}")
+        try:
+            await blocked.wait()
+        except asyncio.CancelledError:
+            timeline.append("start-cancelled")
+            raise
+        return 4242
+
+    monkeypatch.setattr(fc, "start_firecracker_process", blocking_start)
     run.responses[STAGING_TABLE] = ShellError(STAGING_TABLE, 1, "pool full")
     with pytest.raises(HostError):
         await hv.boot(slot=3, disk_volume_id=7, disk_name="mshkn-comp-a", resources=Resources())
+    assert "start-cancelled" in timeline, "the in-flight Firecracker start is cancelled"
     assert FakeClient.instances == [], "no API client is ever built"
-    assert not any(e.startswith("ssh:") for e in events)
+    assert not any(e.startswith("ssh:") for e in timeline)
 
 
 async def test_build_template_boots_snapshots_and_tears_down_staging(
     staged: Staged, tmp_path: Path
 ) -> None:
-    hv, run, events = staged
+    hv, run, timeline = staged
     files = await hv.build_template(disk_volume_id=0, dest_dir=tmp_path / "t")
     assert files == SnapshotFiles(
         vmstate=tmp_path / "t" / "vmstate", memory=tmp_path / "t" / "memory"
     )
     boot_client, snap_client = FakeClient.instances
-    assert boot_client.closed and snap_client.closed, (
-        "two clients; the boot one is closed before the port wait"
-    )
+    assert boot_client.closed and snap_client.closed
     assert [n for n, _ in snap_client.calls] == ["pause", "create_snapshot"]
-    assert events == [
-        "start:/tmp/fc-template-0.socket",
+    # The boot client is closed before the port wait, so no idle keep-alive is
+    # held across the cold boot; a second client is opened for the snapshot.
+    template = "/tmp/fc-template-0.socket"
+    assert _lifecycle(timeline) == [
+        f"start:{template}",
+        f"boot:{template}",
+        f"close:{template}",
         f"wait:{STAGING_VM_IP}:22:30.0",
+        f"pause:{template}",
+        f"snapshot:{template}",
+        f"close:{template}",
         "kill:4242",
     ]
+    # The process dies before the tap and the volume go, so it releases the fd first.
+    assert _first(timeline, "kill:4242") < _last(timeline, f"run:ip link del {STAGING_TAP}")
+    assert _first(timeline, "kill:4242") < _last(
+        timeline, f"run:dmsetup remove {STAGING_DRIVE_NAME}"
+    )
     cmds = [c for c, _ in run.calls]
     assert cmds[-1] == f"dmsetup remove {STAGING_DRIVE_NAME}"
     assert f"ip link del {STAGING_TAP}" in cmds[-4:]
