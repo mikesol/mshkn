@@ -107,6 +107,8 @@ class CaddyProxy:
         logger.info("Removed Caddy route for %s", computer_id)
 
     async def healthy(self) -> bool:
+        if self._client.is_closed:
+            return False
         try:
             resp = await self._client.get("/config/")
         except httpx.HTTPError:

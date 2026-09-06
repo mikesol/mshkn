@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from mshkn.checkpoint.merge import three_way_merge
+from mshkn.services.merge import three_way_merge
 
 
 def test_non_overlapping_files(tmp_path: Path) -> None:

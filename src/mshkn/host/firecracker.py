@@ -18,18 +18,33 @@ from typing import TYPE_CHECKING
 import asyncssh
 import httpx
 
+from mshkn.errors import HostError
 from mshkn.host import RunningVM, SnapshotFiles
 from mshkn.host.network import create_tap, destroy_tap, slot_to_ip, slot_to_tap
 from mshkn.host.shell import RunFn
 from mshkn.host.shell import run as shell_run
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from mshkn.config import Config
     from mshkn.resources import Resources
 
 logger = logging.getLogger(__name__)
+
+_WRAPPED = (httpx.HTTPError, TimeoutError, OSError, asyncssh.Error)
+
+
+@contextlib.asynccontextmanager
+async def _host_errors(what: str) -> AsyncIterator[None]:
+    """Turn transport-level failures into HostError; leave HostError alone."""
+    try:
+        yield
+    except HostError:
+        raise
+    except _WRAPPED as exc:
+        raise HostError(f"{what}: {type(exc).__name__}: {exc}") from exc
+
 
 BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/init root=/dev/vda rw"
 
@@ -245,13 +260,14 @@ class FirecrackerHypervisor:
                 )
             )
 
-        return await self._stage(
-            slot=slot,
-            disk_volume_id=disk_volume_id,
-            disk_name=disk_name,
-            activate=activate,
-            ssh_timeout=self._BOOT_SSH_TIMEOUT,
-        )
+        async with _host_errors("boot"):
+            return await self._stage(
+                slot=slot,
+                disk_volume_id=disk_volume_id,
+                disk_name=disk_name,
+                activate=activate,
+                ssh_timeout=self._BOOT_SSH_TIMEOUT,
+            )
 
     async def restore(
         self, *, slot: int, disk_volume_id: int, disk_name: str, snapshot: SnapshotFiles
@@ -259,76 +275,79 @@ class FirecrackerHypervisor:
         async def activate(client: FirecrackerClient, socket_path: str) -> None:  # noqa: ARG001
             await client.load_snapshot(str(snapshot.vmstate), str(snapshot.memory), resume_vm=True)
 
-        return await self._stage(
-            slot=slot,
-            disk_volume_id=disk_volume_id,
-            disk_name=disk_name,
-            activate=activate,
-            ssh_timeout=self._RESTORE_SSH_TIMEOUT,
-        )
+        async with _host_errors("restore"):
+            return await self._stage(
+                slot=slot,
+                disk_volume_id=disk_volume_id,
+                disk_name=disk_name,
+                activate=activate,
+                ssh_timeout=self._RESTORE_SSH_TIMEOUT,
+            )
 
     async def snapshot(self, socket_path: str, dest_dir: Path) -> SnapshotFiles:
         """Pause, write vmstate+memory into dest_dir, resume."""
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        files = SnapshotFiles(vmstate=dest_dir / "vmstate", memory=dest_dir / "memory")
-        client = FirecrackerClient(socket_path)
-        try:
-            await client.pause()
-            await client.create_snapshot(str(files.vmstate), str(files.memory))
-            await client.resume()
-        finally:
-            await client.close()
-        logger.info("VM snapshot created at %s", dest_dir)
-        return files
+        async with _host_errors("snapshot"):
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            files = SnapshotFiles(vmstate=dest_dir / "vmstate", memory=dest_dir / "memory")
+            client = FirecrackerClient(socket_path)
+            try:
+                await client.pause()
+                await client.create_snapshot(str(files.vmstate), str(files.memory))
+                await client.resume()
+            finally:
+                await client.close()
+            logger.info("VM snapshot created at %s", dest_dir)
+            return files
 
     async def build_template(self, *, disk_volume_id: int, dest_dir: Path) -> SnapshotFiles:
         """Cold-boot the given disk on the staging slot, snapshot it there, and tear it down."""
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        files = SnapshotFiles(vmstate=dest_dir / "vmstate", memory=dest_dir / "memory")
-        socket_path = f"/tmp/fc-template-{disk_volume_id}.socket"
-        pid: int | None = None
-        async with self._staging_lock:
-            try:
-                await self._ensure_staging_clean()
-                await asyncio.gather(
-                    self._map_staging_disk(disk_volume_id),
-                    create_tap(STAGING_SLOT, run=self._run),
-                )
-                pid = await start_firecracker_process(socket_path)
-                client = FirecrackerClient(socket_path)
+        async with _host_errors("build_template"):
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            files = SnapshotFiles(vmstate=dest_dir / "vmstate", memory=dest_dir / "memory")
+            socket_path = f"/tmp/fc-template-{disk_volume_id}.socket"
+            pid: int | None = None
+            async with self._staging_lock:
                 try:
-                    await client.configure_and_boot(
-                        FirecrackerConfig(
-                            socket_path=socket_path,
-                            kernel_path=str(self._config.kernel_path),
-                            rootfs_path=f"/dev/mapper/{STAGING_DRIVE_NAME}",
-                            tap_device=STAGING_TAP,
-                            guest_mac=STAGING_MAC,
-                        )
+                    await self._ensure_staging_clean()
+                    await asyncio.gather(
+                        self._map_staging_disk(disk_volume_id),
+                        create_tap(STAGING_SLOT, run=self._run),
                     )
-                finally:
-                    await client.close()
-                # The cold boot can take tens of seconds; do not hold an idle
-                # keep-alive connection to the Firecracker socket across it.
-                await wait_for_port(
-                    STAGING_VM_IP, 22, timeout=self._BOOT_SSH_TIMEOUT, interval=0.025
-                )
-                client = FirecrackerClient(socket_path)
-                try:
-                    await client.pause()
-                    await client.create_snapshot(str(files.vmstate), str(files.memory))
-                finally:
-                    await client.close()
-                await kill_firecracker_process(pid)
-                pid = None
-                await destroy_tap(STAGING_SLOT, run=self._run)
-                await self._run(f"dmsetup remove {STAGING_DRIVE_NAME}")
-            except Exception:
-                logger.exception("Template build on volume %d failed", disk_volume_id)
-                await self._cleanup_staging(pid)
-                raise
-        logger.info("Built template from volume %d at %s", disk_volume_id, dest_dir)
-        return files
+                    pid = await start_firecracker_process(socket_path)
+                    client = FirecrackerClient(socket_path)
+                    try:
+                        await client.configure_and_boot(
+                            FirecrackerConfig(
+                                socket_path=socket_path,
+                                kernel_path=str(self._config.kernel_path),
+                                rootfs_path=f"/dev/mapper/{STAGING_DRIVE_NAME}",
+                                tap_device=STAGING_TAP,
+                                guest_mac=STAGING_MAC,
+                            )
+                        )
+                    finally:
+                        await client.close()
+                    # The cold boot can take tens of seconds; do not hold an idle
+                    # keep-alive connection to the Firecracker socket across it.
+                    await wait_for_port(
+                        STAGING_VM_IP, 22, timeout=self._BOOT_SSH_TIMEOUT, interval=0.025
+                    )
+                    client = FirecrackerClient(socket_path)
+                    try:
+                        await client.pause()
+                        await client.create_snapshot(str(files.vmstate), str(files.memory))
+                    finally:
+                        await client.close()
+                    await kill_firecracker_process(pid)
+                    pid = None
+                    await destroy_tap(STAGING_SLOT, run=self._run)
+                    await self._run(f"dmsetup remove {STAGING_DRIVE_NAME}")
+                except Exception:
+                    logger.exception("Template build on volume %d failed", disk_volume_id)
+                    await self._cleanup_staging(pid)
+                    raise
+            logger.info("Built template from volume %d at %s", disk_volume_id, dest_dir)
+            return files
 
     async def kill(self, pid: int) -> None:
         await kill_firecracker_process(pid)

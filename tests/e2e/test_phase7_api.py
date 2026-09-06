@@ -158,7 +158,7 @@ class TestT71AllEndpoints:
             assert body["computer_id"] == cid
             assert "status" in body
             assert "vm_ip" in body
-            assert "manifest_hash" in body
+            assert "recipe_id" in body
             assert "created_at" in body
 
     async def test_checkpoint_and_fork(self, long_client: httpx.AsyncClient) -> None:

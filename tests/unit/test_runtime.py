@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
 
 from mshkn.app import create_app
+from mshkn.host.fake import FakeHost
 from mshkn.runtime import BackgroundTasks
 from tests.unit.conftest import make_runtime
+
+if TYPE_CHECKING:
+    import aiosqlite
+
+    from mshkn.config import Config
 
 
 async def _sleep_then(result: list[str], tag: str, seconds: float) -> None:
@@ -53,6 +60,22 @@ async def test_drain_waits_then_cancels_stragglers() -> None:
     assert len(tasks) == 0
 
 
+async def test_drain_awaits_tasks_spawned_while_draining() -> None:
+    """A deferred drain spawns more work as it runs; drain must follow it."""
+    tasks = BackgroundTasks()
+    out: list[str] = []
+
+    async def parent() -> None:
+        await asyncio.sleep(0.01)
+        out.append("parent")
+        tasks.spawn(_sleep_then(out, "child", 0.01), name="child")
+
+    tasks.spawn(parent(), name="parent")
+    await tasks.drain(timeout=2.0)
+    assert out == ["parent", "child"]
+    assert len(tasks) == 0
+
+
 async def test_failed_task_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
     async def boom() -> None:
         raise RuntimeError("kaboom")
@@ -64,11 +87,21 @@ async def test_failed_task_is_logged_not_raised(caplog: pytest.LogCaptureFixture
     assert any("boom" in r.getMessage() for r in caplog.records)
 
 
-async def test_lifespan_closes_runtime_even_when_start_fails() -> None:
+async def test_lifespan_closes_runtime_even_when_start_fails(
+    db: aiosqlite.Connection,
+    runtime_config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A failing start() (e.g. dm-thin pool missing) must not leak the db connection."""
-    vm_manager = AsyncMock()
-    vm_manager.initialize.side_effect = RuntimeError("pool missing")
-    rt = make_runtime(AsyncMock(), vm_manager=vm_manager)
+    host = FakeHost()
+
+    async def boom() -> int | None:
+        raise RuntimeError("pool missing")
+
+    monkeypatch.setattr(host.blocks, "max_volume_id", boom)
+    rt = make_runtime(db, config=runtime_config, host=host)
+    spy = AsyncMock(wraps=rt.db.close)
+    monkeypatch.setattr(rt.db, "close", spy)
 
     app = create_app(rt)
 
@@ -76,4 +109,4 @@ async def test_lifespan_closes_runtime_even_when_start_fails() -> None:
         async with app.router.lifespan_context(app):
             pass
 
-    rt.db.close.assert_awaited_once()  # type: ignore[attr-defined]
+    spy.assert_awaited_once()

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import aiosqlite
 
-from mshkn.db.accounts import get_account_by_id, get_account_by_key, insert_account
+from mshkn.db.accounts import get_account_by_id, get_account_by_key, insert_account, list_accounts
 from mshkn.db.checkpoints import (
     delete_checkpoint,
     get_checkpoint,
@@ -22,6 +22,7 @@ from mshkn.db.checkpoints import (
     list_prunable_checkpoints,
 )
 from mshkn.db.computers import (
+    count_active_computers,
     count_active_computers_by_account,
     get_active_computer_for_label,
     get_computer,
@@ -30,7 +31,7 @@ from mshkn.db.computers import (
     update_computer_status,
     update_last_exec_at,
 )
-from mshkn.db.deferred import delete_deferred_by_label, insert_deferred, list_deferred_by_label
+from mshkn.db.deferred import claim_deferred_by_label, insert_deferred
 from mshkn.db.ingress import (
     delete_ingress_rule,
     get_ingress_rule_by_id,
@@ -38,7 +39,6 @@ from mshkn.db.ingress import (
     insert_ingress_rule,
     list_ingress_logs,
     list_ingress_rules_by_account,
-    prune_old_ingress_logs,
     rotate_ingress_rule_id,
     update_ingress_rule,
 )
@@ -62,11 +62,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "cache_bare_template",
+    "claim_deferred_by_label",
     "connect",
+    "count_active_computers",
     "count_active_computers_by_account",
     "count_recipe_references",
     "delete_checkpoint",
-    "delete_deferred_by_label",
     "delete_failed_recipes_by_hash",
     "delete_ingress_rule",
     "delete_recipe",
@@ -90,14 +91,13 @@ __all__ = [
     "insert_ingress_rule",
     "insert_recipe",
     "list_account_ids_with_checkpoints",
+    "list_accounts",
     "list_all_computers",
     "list_checkpoints_by_account",
-    "list_deferred_by_label",
     "list_ingress_logs",
     "list_ingress_rules_by_account",
     "list_prunable_checkpoints",
     "list_recipes_by_account",
-    "prune_old_ingress_logs",
     "rotate_ingress_rule_id",
     "run_migrations",
     "update_computer_status",

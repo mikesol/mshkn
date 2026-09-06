@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 
 from mshkn.api.errors import install_error_handlers
 from mshkn.errors import (
+    BadRequest,
     ConfigError,
     Conflict,
     HostError,
@@ -12,6 +13,8 @@ from mshkn.errors import (
     LimitExceeded,
     MshknError,
     NotFound,
+    PayloadTooLarge,
+    TransformError,
 )
 
 
@@ -37,6 +40,19 @@ def _app() -> FastAPI:
 async def _get(kind: str) -> tuple[int, dict[str, str]]:
     async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://t") as c:
         resp = await c.get(f"/raise/{kind}")
+    return resp.status_code, resp.json()
+
+
+async def _status(exc: MshknError) -> tuple[int, dict[str, object]]:
+    app = FastAPI()
+    install_error_handlers(app)
+
+    @app.get("/raise")
+    async def _raise() -> dict[str, str]:
+        raise exc
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        resp = await c.get("/raise")
     return resp.status_code, resp.json()
 
 
@@ -73,3 +89,20 @@ def test_message_attribute_and_str() -> None:
     assert err.message == "x"
     assert str(err) == "x"
     assert isinstance(err, MshknError)
+
+
+async def test_bad_request_maps_to_400() -> None:
+    assert await _status(BadRequest("nope")) == (400, {"detail": "nope"})
+
+
+async def test_payload_too_large_maps_to_413() -> None:
+    assert await _status(PayloadTooLarge("too big")) == (413, {"detail": "too big"})
+
+
+async def test_transform_error_keeps_its_structured_detail() -> None:
+    exc = TransformError("bad transform", detail={"errors": ["x"], "starlark_result": {"a": 1}})
+    assert await _status(exc) == (502, {"detail": {"errors": ["x"], "starlark_result": {"a": 1}}})
+
+
+def test_detail_defaults_to_none() -> None:
+    assert NotFound("x").detail is None

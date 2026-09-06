@@ -1,27 +1,28 @@
-"""Flow tier: the real app and VMManager against the in-memory fake host."""
+"""Flow tier: the real app and services against the in-memory fake host."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from mshkn.app import create_app
 from mshkn.config import Config
 from mshkn.db import connect, insert_account, run_migrations
-from mshkn.host.fake import FakeHost, FakeHostInstance
+from mshkn.host.fake import FakeHost
 from mshkn.models import Account
-from mshkn.ratelimit import RateLimiter
-from mshkn.runtime import BackgroundTasks, Runtime
-from mshkn.vm.manager import VMManager
+from mshkn.runtime import Runtime
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
+    from contextlib import AbstractAsyncContextManager
 
-    from fastapi import FastAPI
+    from mshkn.host.fake import FakeHostInstance
 
 AUTH = {"Authorization": "Bearer test-key"}
 
@@ -32,6 +33,52 @@ class Flow:
     runtime: Runtime
     host: FakeHostInstance
     client: AsyncClient
+    received: list[dict[str, Any]]
+
+
+def _receiver(received: list[dict[str, Any]]) -> FastAPI:
+    """The callback target: POST /cb records the JSON body it was sent."""
+    app = FastAPI()
+
+    @app.post("/cb")
+    async def receive(payload: dict[str, Any]) -> dict[str, str]:
+        received.append(payload)
+        return {"status": "ok"}
+
+    return app
+
+
+@asynccontextmanager
+async def _build_flow(config: Config, tmp_path: Path) -> AsyncIterator[Flow]:
+    """The shared body of both fixtures: a migrated database, a fake host, a
+    Runtime whose callback client posts into an in-process receiver, and the
+    real ASGI app in front of it."""
+    config.ssh_key_path.parent.mkdir(parents=True, exist_ok=True)
+    config.ssh_key_path.with_suffix(".pub").write_text("ssh-ed25519 AAAAflowtest mshkn@flow\n")
+    db = await connect(tmp_path / "flow.db")
+    await run_migrations(db, Path("migrations"))
+    await insert_account(
+        db,
+        Account(id="acct-1", api_key="test-key", vm_limit=10, created_at="2026-09-05T00:00:00"),
+    )
+    host = FakeHost()
+    received: list[dict[str, Any]] = []
+    callbacks = AsyncClient(
+        transport=ASGITransport(app=_receiver(received)), base_url="http://receiver"
+    )
+    runtime = Runtime.build(config, db, host, http=callbacks)
+    # start() would also spawn the reaper loop; the flow tier drives everything
+    # explicitly, so only the allocator's startup recovery runs here.
+    await runtime.allocator.initialize(db, host.blocks)
+    app = create_app(runtime)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://flow", headers=AUTH) as client:
+        try:
+            yield Flow(app=app, runtime=runtime, host=host, client=client, received=received)
+        finally:
+            await runtime.tasks.drain(timeout=2.0)
+            await runtime.http.aclose()
+            await db.close()
 
 
 @pytest.fixture
@@ -40,30 +87,26 @@ async def flow(tmp_path: Path) -> AsyncIterator[Flow]:
         domain="test.dev",
         checkpoint_local_dir=tmp_path / "checkpoints",
         idle_timeout_seconds=0,
+        ssh_key_path=tmp_path / "id_ed25519",
     )
-    db = await connect(tmp_path / "flow.db")
-    await run_migrations(db, Path("migrations"))
-    await insert_account(
-        db,
-        Account(id="acct-1", api_key="test-key", vm_limit=10, created_at="2026-09-05T00:00:00"),
-    )
-    host = FakeHost()
-    tasks = BackgroundTasks()
-    vm_manager = VMManager(config, db, host=host, tasks=tasks)
-    runtime = Runtime(
-        config=config,
-        db=db,
-        host=host,
-        vm_manager=vm_manager,
-        tasks=tasks,
-        rate_limiter=RateLimiter(80, 10.0),
-    )
-    await vm_manager.initialize()
-    app = create_app(runtime)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://flow", headers=AUTH) as client:
-        try:
-            yield Flow(app=app, runtime=runtime, host=host, client=client)
-        finally:
-            await tasks.drain(timeout=2.0)
-            await db.close()
+    async with _build_flow(config, tmp_path) as built:
+        yield built
+
+
+@pytest.fixture
+def flow_factory(tmp_path: Path) -> Callable[..., AbstractAsyncContextManager[Flow]]:
+    """Build a Flow with Config overrides (idle_timeout_seconds, checkpoint_retention_count)."""
+
+    @asynccontextmanager
+    async def make(**overrides: Any) -> AsyncIterator[Flow]:
+        config = Config(
+            domain="test.dev",
+            checkpoint_local_dir=tmp_path / "checkpoints",
+            idle_timeout_seconds=0,
+            ssh_key_path=tmp_path / "id_ed25519",
+        )
+        config = replace(config, **overrides)
+        async with _build_flow(config, tmp_path) as built:
+            yield built
+
+    return make

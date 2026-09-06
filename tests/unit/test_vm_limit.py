@@ -1,97 +1,39 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
 
 from httpx import ASGITransport, AsyncClient
 
-from mshkn.db import insert_account, insert_computer
-from mshkn.models import Account, Computer, ComputerStatus
+from mshkn.db import insert_account
+from mshkn.models import Account
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
     import aiosqlite
 
+    from mshkn.config import Config
 
-async def _account(db: aiosqlite.Connection, vm_limit: int = 2) -> None:
+AUTH = {"Authorization": "Bearer test-key"}
+
+
+async def _account(db: aiosqlite.Connection, vm_limit: int) -> None:
     await insert_account(
-        db,
-        Account(
-            id="acct-1",
-            api_key="test-key",
-            vm_limit=vm_limit,
-            created_at="2026-03-08T00:00:00",
-        ),
+        db, Account(id="acct-1", api_key="test-key", vm_limit=vm_limit, created_at="t")
     )
 
 
-def _make_computer(n: int, status: ComputerStatus = ComputerStatus.RUNNING) -> Computer:
-    return Computer(
-        id=f"comp-{n}",
-        account_id="acct-1",
-        thin_volume_id=n,
-        tap_device=f"tap{n}",
-        vm_ip=f"172.16.1.{n + 1}",
-        socket_path=f"/tmp/fc-{n}.socket",
-        firecracker_pid=1000 + n,
-        manifest_hash="abc",
-        manifest_json='{"uses": []}',
-        status=status,
-        created_at="2026-03-08T00:00:00",
-        last_exec_at=None,
-    )
-
-
-async def test_create_succeeds_under_limit(db: aiosqlite.Connection) -> None:
+async def test_create_is_limited_and_destroyed_computers_do_not_count(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
     await _account(db, vm_limit=2)
-    await insert_computer(db, _make_computer(1))
-
-    vm_mgr = AsyncMock()
-    vm_mgr.create.return_value = _make_computer(99)
-
-    app = make_app(make_runtime(db, vm_manager=vm_mgr))
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/computers",
-            json={"uses": []},
-            headers={"Authorization": "Bearer test-key"},
-        )
-    assert resp.status_code == 200
-    vm_mgr.create.assert_called_once()
-
-
-async def test_create_rejected_at_limit(db: aiosqlite.Connection) -> None:
-    await _account(db, vm_limit=2)
-    await insert_computer(db, _make_computer(1))
-    await insert_computer(db, _make_computer(2))
-
-    app = make_app(make_runtime(db, vm_manager=AsyncMock()))
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/computers",
-            json={"uses": []},
-            headers={"Authorization": "Bearer test-key"},
-        )
-    assert resp.status_code == 429
-    assert resp.json()["detail"] == "VM limit reached"
-
-
-async def test_destroyed_computers_dont_count_toward_limit(db: aiosqlite.Connection) -> None:
-    await _account(db, vm_limit=1)
-    await insert_computer(db, _make_computer(1, status=ComputerStatus.DESTROYED))
-
-    vm_mgr = AsyncMock()
-    vm_mgr.create.return_value = _make_computer(99)
-
-    app = make_app(make_runtime(db, vm_manager=vm_mgr))
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/computers",
-            json={"uses": []},
-            headers={"Authorization": "Bearer test-key"},
-        )
-    assert resp.status_code == 200
-    vm_mgr.create.assert_called_once()
+    app = make_app(make_runtime(db, config=runtime_config))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await client.post("/computers", json={}, headers=AUTH)
+        second = await client.post("/computers", json={}, headers=AUTH)
+        assert first.status_code == 200 and second.status_code == 200
+        third = await client.post("/computers", json={}, headers=AUTH)
+        assert third.status_code == 429 and third.json()["detail"] == "VM limit reached"
+        gone = await client.delete(f"/computers/{first.json()['computer_id']}", headers=AUTH)
+        assert gone.status_code == 200
+        fourth = await client.post("/computers", json={}, headers=AUTH)
+        assert fourth.status_code == 200

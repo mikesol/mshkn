@@ -9,15 +9,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+import time
+from collections import deque
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
+
+import httpx
 
 from mshkn.config import Config
 from mshkn.db import connect, run_migrations
 from mshkn.host.firecracker_host import firecracker_host
 from mshkn.ratelimit import RateLimiter
-from mshkn.vm.manager import VMManager
+from mshkn.services.allocator import SlotAllocator
+from mshkn.services.checkpoints import CheckpointService
+from mshkn.services.computers import ComputerService
+from mshkn.services.ingress import IngressService
+from mshkn.services.lifecycle import Lifecycle
+from mshkn.services.reaper import Reaper
+from mshkn.services.recipes import RecipeService
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -25,10 +35,12 @@ if TYPE_CHECKING:
     import aiosqlite
 
     from mshkn.host import Host
+    from mshkn.models import Alert
 
 logger = logging.getLogger(__name__)
 
 _DRAIN_TIMEOUT_SECONDS = 30.0
+_ALERT_HISTORY_SIZE = 100
 
 
 class BackgroundTasks:
@@ -78,15 +90,24 @@ class BackgroundTasks:
             await asyncio.gather(task, return_exceptions=True)
 
     async def drain(self, timeout: float) -> None:
-        """Wait up to timeout for outstanding tasks, then cancel whatever is left."""
-        pending = [t for t in self._tasks if not t.done()]
-        if not pending:
-            return
-        _done, still_running = await asyncio.wait(pending, timeout=timeout)
-        for task in still_running:
+        """Wait up to timeout for outstanding tasks, then cancel whatever is left.
+
+        Tasks spawned while draining are awaited too: a deferred drain that
+        self-destructs spawns a callback and a further drain as it runs, and a
+        single snapshot of the set would tear those down mid-flight.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            pending = [t for t in self._tasks if not t.done()]
+            if not pending:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.wait(pending, timeout=remaining)
+        for task in [t for t in self._tasks if not t.done()]:
             task.cancel()
-        if still_running:
-            await asyncio.gather(*still_running, return_exceptions=True)
+        await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
     def __len__(self) -> int:
         return len(self._tasks)
@@ -94,14 +115,59 @@ class BackgroundTasks:
 
 @dataclass
 class Runtime:
+    """Everything the API needs, wired once and reached through api.deps.get_runtime()."""
+
     config: Config
     db: aiosqlite.Connection
     host: Host
-    vm_manager: VMManager
     tasks: BackgroundTasks
+    allocator: SlotAllocator
     rate_limiter: RateLimiter
-    rule_limiters: dict[str, RateLimiter] = field(default_factory=dict)
-    build_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    recipes: RecipeService
+    computers: ComputerService
+    checkpoints: CheckpointService
+    lifecycle: Lifecycle
+    ingress: IngressService
+    reaper: Reaper
+    alerts: deque[Alert]
+    http: httpx.AsyncClient
+
+    @classmethod
+    def build(
+        cls,
+        config: Config,
+        db: aiosqlite.Connection,
+        host: Host,
+        *,
+        http: httpx.AsyncClient | None = None,
+    ) -> Runtime:
+        """Wire the services once. Tests call this with a FakeHost."""
+        tasks = BackgroundTasks()
+        allocator = SlotAllocator()
+        client = http if http is not None else httpx.AsyncClient()
+        alerts: deque[Alert] = deque(maxlen=_ALERT_HISTORY_SIZE)
+        recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)
+        computers = ComputerService(config, db, host, allocator, recipes)
+        checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
+        lifecycle = Lifecycle(db, computers, checkpoints, tasks, client)
+        ingress = IngressService(db, computers, checkpoints, lifecycle, tasks)
+        reaper = Reaper(config, db, host, computers, checkpoints, lifecycle, alerts)
+        return cls(
+            config=config,
+            db=db,
+            host=host,
+            tasks=tasks,
+            allocator=allocator,
+            rate_limiter=RateLimiter(max_requests=80, window_seconds=10.0),
+            recipes=recipes,
+            computers=computers,
+            checkpoints=checkpoints,
+            lifecycle=lifecycle,
+            ingress=ingress,
+            reaper=reaper,
+            alerts=alerts,
+            http=client,
+        )
 
     @classmethod
     async def from_env(cls) -> Runtime:
@@ -109,44 +175,21 @@ class Runtime:
         config.db_path.parent.mkdir(parents=True, exist_ok=True)
         db = await connect(config.db_path)
         await run_migrations(db, config.migrations_dir)
-        host = firecracker_host(config)
-        tasks = BackgroundTasks()
-        vm_manager = VMManager(config, db, host=host, tasks=tasks)
-        return cls(
-            config=config,
-            db=db,
-            host=host,
-            vm_manager=vm_manager,
-            tasks=tasks,
-            rate_limiter=RateLimiter(max_requests=80, window_seconds=10.0),
-        )
+        return cls.build(config, db, firecracker_host(config))
 
     async def start(self) -> None:
         """Recover host state and start the reaper. Called from the app lifespan."""
-        await self.vm_manager.initialize()
-        reaped = await self.vm_manager.reap_dead_vms()
+        await self.allocator.initialize(self.db, self.host.blocks)
+        reaped = await self.reaper.reap_dead()
         if reaped:
             logger.info("Startup: reaped %d dead VM(s)", reaped)
-        self.tasks.spawn(self.vm_manager.run_reaper_loop(), name="reaper", key="reaper")
+        await self.computers.refresh_active_gauge()
+        self.tasks.spawn(self.reaper.run(), name="reaper", key="reaper")
 
     async def close(self) -> None:
         await self.tasks.cancel("reaper")
         await self.tasks.drain(_DRAIN_TIMEOUT_SECONDS)
+        await self.http.aclose()
         await self.host.guest.close()
         await self.host.proxy.close()
         await self.db.close()
-
-    def build_lock(self, account_id: str) -> asyncio.Lock:
-        """Per-account lock serializing recipe builds."""
-        lock = self.build_locks.get(account_id)
-        if lock is None:
-            lock = self.build_locks[account_id] = asyncio.Lock()
-        return lock
-
-    def rule_limiter(self, rule_id: str, rate_limit_rpm: int) -> RateLimiter:
-        """Per-ingress-rule limiter, rebuilt when the rule's rpm changes."""
-        limiter = self.rule_limiters.get(rule_id)
-        if limiter is None or limiter.max_requests != rate_limit_rpm:
-            limiter = RateLimiter(max_requests=rate_limit_rpm, window_seconds=60.0)
-            self.rule_limiters[rule_id] = limiter
-        return limiter

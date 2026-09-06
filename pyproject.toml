@@ -17,6 +17,9 @@ dependencies = [
     "starlark-go>=1.0.1,<2",
 ]
 
+[project.scripts]
+mshkn = "mshkn.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

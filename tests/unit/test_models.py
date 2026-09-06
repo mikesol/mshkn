@@ -4,11 +4,16 @@ import pytest
 
 from mshkn.models import (
     Checkpoint,
+    CheckpointTrigger,
     Computer,
     ComputerStatus,
     DeferredRequest,
+    ExecSpec,
     Recipe,
     RecipeStatus,
+    checkpoint_volume_name,
+    computer_volume_name,
+    recipe_volume_name,
 )
 
 
@@ -21,14 +26,13 @@ def test_computer_creation() -> None:
         vm_ip="172.16.5.2",
         socket_path="/tmp/fc-comp-abc.socket",
         firecracker_pid=1234,
-        manifest_hash="abc123",
-        manifest_json='{"uses": []}',
         status=ComputerStatus.RUNNING,
         created_at="2026-03-08T12:00:00",
         last_exec_at=None,
     )
     assert c.id == "comp-abc"
     assert c.status == ComputerStatus.RUNNING
+    assert c.volume_name == computer_volume_name("comp-abc")
 
 
 def test_recipe_dataclass() -> None:
@@ -51,6 +55,7 @@ def test_recipe_dataclass() -> None:
     assert r.build_log is None
     assert r.base_volume_id is None
     assert r.built_at is None
+    assert r.volume_name == recipe_volume_name("rcp-abc123")
 
 
 def test_computer_recipe_id() -> None:
@@ -62,8 +67,6 @@ def test_computer_recipe_id() -> None:
         vm_ip="172.16.5.2",
         socket_path="/tmp/fc-comp-abc.socket",
         firecracker_pid=1234,
-        manifest_hash="abc123",
-        manifest_json='{"uses": []}',
         status=ComputerStatus.RUNNING,
         created_at="2026-03-13T00:00:00Z",
         last_exec_at=None,
@@ -79,8 +82,6 @@ def test_checkpoint_recipe_id() -> None:
         parent_id=None,
         computer_id="comp-abc",
         thin_volume_id=5,
-        manifest_hash="abc123",
-        manifest_json='{"uses": []}',
         r2_prefix="checkpoints/ckpt-abc",
         disk_delta_size_bytes=None,
         memory_size_bytes=None,
@@ -90,6 +91,7 @@ def test_checkpoint_recipe_id() -> None:
         recipe_id="rcp-abc123",
     )
     assert cp.recipe_id == "rcp-abc123"
+    assert cp.volume_name == checkpoint_volume_name("ckpt-abc")
 
 
 def test_status_enums_are_strings() -> None:
@@ -116,3 +118,28 @@ def test_deferred_request_is_frozen() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         d.label = "other"  # type: ignore[misc]
+
+
+def test_computer_and_checkpoint_have_no_manifest_fields() -> None:
+    assert "manifest_hash" not in Computer.__dataclass_fields__
+    assert "manifest_json" not in Checkpoint.__dataclass_fields__
+
+
+def test_checkpoint_trigger_values() -> None:
+    assert [t.value for t in CheckpointTrigger] == ["api", "self_destruct", "idle"]
+    assert CheckpointTrigger.IDLE == "idle"  # type: ignore[comparison-overlap]
+
+
+def test_exec_spec_is_frozen() -> None:
+    spec = ExecSpec(
+        command="ls", self_destruct=False, callback_url=None, label=None, meta_exec=None
+    )
+    with pytest.raises(FrozenInstanceError):
+        spec.command = "rm"  # type: ignore[misc]
+
+
+def test_volume_name_helpers_and_the_properties_that_delegate() -> None:
+    """scripts/e2e.sh cleans orphans by these prefixes, so the formats are load-bearing."""
+    assert computer_volume_name("comp-abc") == "mshkn-comp-abc"
+    assert checkpoint_volume_name("ckpt-abc") == "mshkn-ckpt-ckpt-abc"
+    assert recipe_volume_name("rcp-abc") == "mshkn-recipe-rcp-abc"

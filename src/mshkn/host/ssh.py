@@ -11,15 +11,33 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import asyncssh
 
+from mshkn.errors import HostError
 from mshkn.host import ExecResult, VmMetrics
 from mshkn.host.firecracker import CONNECT_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 
     from mshkn.host import OutputLine, StreamName
 
 logger = logging.getLogger(__name__)
+
+_WRAPPED = (asyncssh.Error, OSError, TimeoutError)
+
+
+@contextlib.asynccontextmanager
+async def _host_errors(what: str) -> AsyncIterator[None]:
+    """Turn transport-level failures into HostError; leave HostError and a missing
+    remote file (FileNotFoundError, which download raises deliberately) alone."""
+    try:
+        yield
+    except HostError:
+        raise
+    except FileNotFoundError:
+        raise
+    except _WRAPPED as exc:
+        raise HostError(f"{what}: {type(exc).__name__}: {exc}") from exc
+
 
 # After the main process exits, keep draining output for this long: background
 # children that inherited the shell's fds can keep the streams open.
@@ -118,7 +136,8 @@ class SshGuest:
             return conn
 
     async def warm(self, vm_ip: str) -> None:
-        await self._pooled(vm_ip)
+        async with _host_errors("warm"):
+            await self._pooled(vm_ip)
 
     async def evict(self, vm_ip: str) -> None:
         self._gen[vm_ip] = self._gen.get(vm_ip, 0) + 1
@@ -151,28 +170,31 @@ class SshGuest:
     # -- Guest protocol ------------------------------------------------------
 
     async def exec(self, vm_ip: str, command: str, *, timeout: float = 300.0) -> ExecResult:
-        conn = await self._pooled(vm_ip)
-        try:
-            return await self._run_on(conn, command, timeout)
-        except asyncssh.ChannelOpenError as exc:
-            # The shared connection is out of channels (sshd MaxSessions), not
-            # dead. Closing it would take down every other task's channel, so
-            # run this command on a dedicated connection instead.
-            logger.warning("SSH channel limit for %s, using a dedicated connection: %s", vm_ip, exc)
-            dedicated = await self._fresh(vm_ip)
-            try:
-                return await self._run_on(dedicated, command, timeout)
-            finally:
-                dedicated.close()
-        except asyncssh.ConnectionLost as exc:
-            logger.warning("SSH connection lost for %s, reconnecting: %s", vm_ip, exc)
-            # Only evict the connection that failed. Another task may already
-            # have replaced it, and closing that one would cascade the failure
-            # through every exec in flight on this VM.
-            if self._conns.get(vm_ip) is conn:
-                await self.evict(vm_ip)
+        async with _host_errors("exec"):
             conn = await self._pooled(vm_ip)
-            return await self._run_on(conn, command, timeout)
+            try:
+                return await self._run_on(conn, command, timeout)
+            except asyncssh.ChannelOpenError as exc:
+                # The shared connection is out of channels (sshd MaxSessions), not
+                # dead. Closing it would take down every other task's channel, so
+                # run this command on a dedicated connection instead.
+                logger.warning(
+                    "SSH channel limit for %s, using a dedicated connection: %s", vm_ip, exc
+                )
+                dedicated = await self._fresh(vm_ip)
+                try:
+                    return await self._run_on(dedicated, command, timeout)
+                finally:
+                    dedicated.close()
+            except asyncssh.ConnectionLost as exc:
+                logger.warning("SSH connection lost for %s, reconnecting: %s", vm_ip, exc)
+                # Only evict the connection that failed. Another task may already
+                # have replaced it, and closing that one would cascade the failure
+                # through every exec in flight on this VM.
+                if self._conns.get(vm_ip) is conn:
+                    await self.evict(vm_ip)
+                conn = await self._pooled(vm_ip)
+                return await self._run_on(conn, command, timeout)
 
     @staticmethod
     async def _run_on(
@@ -193,35 +215,36 @@ class SshGuest:
         Uses the pooled connection; if the pooled connection cannot open
         another channel (sshd MaxSessions), falls back to a dedicated one.
         """
-        conn = await self._pooled(vm_ip)
-        owned = False
-        try:
-            process = await conn.create_process(command)
-        except asyncssh.ChannelOpenError:
-            conn = await self._fresh(vm_ip)
-            owned = True
+        async with _host_errors("stream"):
+            conn = await self._pooled(vm_ip)
+            owned = False
             try:
                 process = await conn.create_process(command)
-            except BaseException:
-                conn.close()
-                raise
-        emitted_exit = False
-        pump = self._pump(process, timeout)
-        try:
-            async for item in pump:
-                emitted_exit = emitted_exit or item[0] == "exit"
-                yield item
-        finally:
-            await pump.aclose()
-            if not emitted_exit:
-                # The consumer abandoned the stream, or a reader failed. Kill
-                # the remote process so its channel is released; on the pooled
-                # connection it would otherwise hold a MaxSessions slot until
-                # the command finished on its own.
-                with contextlib.suppress(Exception):
-                    process.kill()
-            if owned:
-                conn.close()
+            except asyncssh.ChannelOpenError:
+                conn = await self._fresh(vm_ip)
+                owned = True
+                try:
+                    process = await conn.create_process(command)
+                except BaseException:
+                    conn.close()
+                    raise
+            emitted_exit = False
+            pump = self._pump(process, timeout)
+            try:
+                async for item in pump:
+                    emitted_exit = emitted_exit or item[0] == "exit"
+                    yield item
+            finally:
+                await pump.aclose()
+                if not emitted_exit:
+                    # The consumer abandoned the stream, or a reader failed. Kill
+                    # the remote process so its channel is released; on the pooled
+                    # connection it would otherwise hold a MaxSessions slot until
+                    # the command finished on its own.
+                    with contextlib.suppress(Exception):
+                        process.kill()
+                if owned:
+                    conn.close()
 
     @staticmethod
     async def _pump(
@@ -313,37 +336,40 @@ class SshGuest:
         yield ("exit", str(process.exit_status or 0))
 
     async def exec_bg(self, vm_ip: str, command: str) -> int:
-        escaped = command.replace("'", "'\\''")
-        result = await self.exec(
-            vm_ip,
-            f"nohup bash -c '{escaped}' > /tmp/bg-tmp-$$.log 2>&1 & "
-            f"BG=$!; ln -sf /tmp/bg-tmp-$$.log /tmp/bg-$BG.log; echo $BG",
-        )
-        pid_str = result.stdout.strip()
-        if not pid_str:
-            msg = f"Failed to get PID for background command: stderr={result.stderr!r}"
-            raise RuntimeError(msg)
-        return int(pid_str)
+        async with _host_errors("exec_bg"):
+            escaped = command.replace("'", "'\\''")
+            result = await self.exec(
+                vm_ip,
+                f"nohup bash -c '{escaped}' > /tmp/bg-tmp-$$.log 2>&1 & "
+                f"BG=$!; ln -sf /tmp/bg-tmp-$$.log /tmp/bg-$BG.log; echo $BG",
+            )
+            pid_str = result.stdout.strip()
+            if not pid_str:
+                msg = f"Failed to get PID for background command: stderr={result.stderr!r}"
+                raise RuntimeError(msg)
+            return int(pid_str)
 
     async def upload(self, vm_ip: str, remote_path: str, data: bytes) -> None:
-        conn = await self._pooled(vm_ip)
-        await conn.run(f"mkdir -p {Path(remote_path).parent!s}", check=True)
-        async with conn.start_sftp_client() as sftp, sftp.open(remote_path, "wb") as f:
-            await f.write(data)
+        async with _host_errors("upload"):
+            conn = await self._pooled(vm_ip)
+            await conn.run(f"mkdir -p {Path(remote_path).parent!s}", check=True)
+            async with conn.start_sftp_client() as sftp, sftp.open(remote_path, "wb") as f:
+                await f.write(data)
 
     async def download(self, vm_ip: str, remote_path: str) -> bytes:
-        conn = await self._pooled(vm_ip)
-        async with conn.start_sftp_client() as sftp:
+        async with _host_errors("download"):
+            conn = await self._pooled(vm_ip)
             try:
-                async with sftp.open(remote_path, "rb") as f:
+                async with conn.start_sftp_client() as sftp, sftp.open(remote_path, "rb") as f:
                     data: bytes = await f.read()
                     return data
             except asyncssh.SFTPNoSuchFile:
                 raise FileNotFoundError(f"File not found: {remote_path}") from None
 
     async def metrics(self, vm_ip: str, *, timeout: float = 10.0) -> VmMetrics:
-        result = await self.exec(vm_ip, _METRICS_CMD, timeout=timeout)
-        return parse_metrics(result.stdout)
+        async with _host_errors("metrics"):
+            result = await self.exec(vm_ip, _METRICS_CMD, timeout=timeout)
+            return parse_metrics(result.stdout)
 
 
 def parse_metrics(stdout: str) -> VmMetrics:

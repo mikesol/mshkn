@@ -26,7 +26,8 @@ done
 for vol in \$(dmsetup ls --target thin | awk '{print \$1}' | grep -E '^mshkn-(comp-|restore-staging)' || true); do
   dmsetup remove "\$vol" || true
 done
-sqlite3 /opt/mshkn/mshkn.db "INSERT OR IGNORE INTO accounts (id, api_key, vm_limit) VALUES ('acct-mike', '${API_KEY}', 20);"
+cd /opt/mshkn && set -a; . /opt/mshkn/.env; set +a; (.venv/bin/python -m mshkn accounts list | grep -q '^acct-mike	' \
+  || .venv/bin/python -m mshkn accounts create --id acct-mike --api-key '${API_KEY}' --vm-limit 20)
 systemctl start mshkn litestream
 for _ in \$(seq 1 120); do
   curl -fsS http://localhost:8000/health >/dev/null 2>&1 && break

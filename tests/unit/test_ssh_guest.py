@@ -9,6 +9,7 @@ import asyncssh
 import pytest
 
 import mshkn.host.ssh as ssh_module
+from mshkn.errors import HostError
 from mshkn.host import ExecResult
 from mshkn.host.ssh import SshGuest, parse_metrics
 
@@ -242,9 +243,10 @@ async def test_exit_event_waits_for_the_exit_status_after_readers_hit_eof() -> N
 async def test_reader_failure_propagates_instead_of_a_clean_exit() -> None:
     process = LostConnectionProcess(asyncssh.ConnectionLost("boom"))
     guest = make_guest(process)
-    with pytest.raises(asyncssh.ConnectionLost):
+    with pytest.raises(HostError) as info:
         async for _item in guest.stream("172.16.1.2", "cmd", timeout=0.5):
             pass
+    assert isinstance(info.value.__cause__, asyncssh.ConnectionLost)
     assert process.killed, "a failed reader must still release the channel"
 
 
@@ -306,9 +308,10 @@ async def test_stream_closes_the_fallback_connection_when_the_retry_also_fails()
     pooled = FakeConn(FakeProcess([], [], 0), channel_error=True)
     dedicated = FakeConn(FakeProcess([], [], 0), channel_error=True)
     guest = make_guest_with([pooled, dedicated])
-    with pytest.raises(asyncssh.ChannelOpenError):
+    with pytest.raises(HostError) as info:
         async for _item in guest.stream("172.16.1.2", "cmd"):
             pass
+    assert isinstance(info.value.__cause__, asyncssh.ChannelOpenError)
     assert dedicated.closed, "the dedicated fallback must not leak when its channel also fails"
     assert not pooled.closed
 
@@ -376,8 +379,9 @@ async def test_evict_during_connect_discards_the_new_connection() -> None:
     pending = asyncio.create_task(guest.warm("172.16.1.2"))
     await asyncio.sleep(0.01)
     await guest.evict("172.16.1.2")
-    with pytest.raises(asyncssh.ConnectionLost):
+    with pytest.raises(HostError) as info:
         await pending
+    assert isinstance(info.value.__cause__, asyncssh.ConnectionLost)
     assert created[0].closed, "the raced connection must be closed, not leaked"
     # Nothing was stored, so the next warm has to connect again.
     await guest.warm("172.16.1.2")
@@ -473,8 +477,9 @@ async def test_connect_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
 
     guest = SshGuest(Path("/tmp/k"), connect=hanging)
     start = time.monotonic()
-    with pytest.raises(TimeoutError):
+    with pytest.raises(HostError) as info:
         await guest.warm("172.16.1.2")
+    assert isinstance(info.value.__cause__, TimeoutError)
     assert time.monotonic() - start < 1.0
     assert asyncssh is not None
 

@@ -68,8 +68,6 @@ def test_row_mapper_uses_column_order() -> None:
     row[COMPUTER_COLUMNS.index("tap_device")] = "tap1"
     row[COMPUTER_COLUMNS.index("vm_ip")] = "172.16.1.2"
     row[COMPUTER_COLUMNS.index("socket_path")] = "/tmp/s"
-    row[COMPUTER_COLUMNS.index("manifest_hash")] = "none"
-    row[COMPUTER_COLUMNS.index("manifest_json")] = "{}"
     row[COMPUTER_COLUMNS.index("status")] = "running"
     row[COMPUTER_COLUMNS.index("created_at")] = "t"
     computer = _row_to_computer(row)

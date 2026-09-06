@@ -33,8 +33,6 @@ def _make_checkpoint(checkpoint_id: str, label: str | None, created_at: str) -> 
         parent_id=None,
         computer_id="comp-1",
         thin_volume_id=1,
-        manifest_hash="abc",
-        manifest_json='{"uses":[]}',
         r2_prefix=f"acct-1/{checkpoint_id}",
         disk_delta_size_bytes=1024,
         memory_size_bytes=512000,

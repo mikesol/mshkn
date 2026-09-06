@@ -54,3 +54,8 @@ async def get_account_by_key(db: aiosqlite.Connection, api_key: str) -> Account 
     cursor = await db.execute(_SELECT + " WHERE api_key = ?", (api_key,))
     row = await cursor.fetchone()
     return None if row is None else _row_to_account(row)
+
+
+async def list_accounts(db: aiosqlite.Connection) -> list[Account]:
+    cursor = await db.execute(_SELECT + " ORDER BY id")
+    return [_row_to_account(r) for r in await cursor.fetchall()]

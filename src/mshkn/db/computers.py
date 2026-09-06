@@ -19,8 +19,6 @@ COLUMNS: tuple[str, ...] = (
     "vm_ip",
     "socket_path",
     "firecracker_pid",
-    "manifest_hash",
-    "manifest_json",
     "status",
     "created_at",
     "last_exec_at",
@@ -40,8 +38,6 @@ def _row_to_computer(row: Sequence[object]) -> Computer:
         vm_ip=str(d["vm_ip"]),
         socket_path=str(d["socket_path"]),
         firecracker_pid=None if d["firecracker_pid"] is None else int(d["firecracker_pid"]),  # type: ignore[call-overload]
-        manifest_hash=str(d["manifest_hash"]),
-        manifest_json=str(d["manifest_json"]),
         status=ComputerStatus(str(d["status"])),
         created_at=str(d["created_at"]),
         last_exec_at=None if d["last_exec_at"] is None else str(d["last_exec_at"]),
@@ -54,8 +50,8 @@ def _row_to_computer(row: Sequence[object]) -> Computer:
 
 async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
     await db.execute(
-        "INSERT INTO computers (" + ", ".join(COLUMNS) + ") "
-        "VALUES (" + ", ".join("?" for _ in COLUMNS) + ")",
+        "INSERT INTO computers (" + ", ".join(COLUMNS) + ", manifest_hash, manifest_json) "
+        "VALUES (" + ", ".join("?" for _ in COLUMNS) + ", '', '{}')",
         (
             computer.id,
             computer.account_id,
@@ -64,8 +60,6 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
             computer.vm_ip,
             computer.socket_path,
             computer.firecracker_pid,
-            computer.manifest_hash,
-            computer.manifest_json,
             computer.status,
             computer.created_at,
             computer.last_exec_at,
@@ -74,6 +68,13 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
         ),
     )
     await db.commit()
+
+
+async def count_active_computers(db: aiosqlite.Connection) -> int:
+    """Count non-destroyed computers across every account (feeds the gauge)."""
+    cursor = await db.execute("SELECT COUNT(*) FROM computers WHERE status != 'destroyed'")
+    row = await cursor.fetchone()
+    return int(row[0]) if row else 0
 
 
 async def get_computer(db: aiosqlite.Connection, computer_id: str) -> Computer | None:

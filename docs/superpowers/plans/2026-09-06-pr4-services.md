@@ -19,6 +19,8 @@
 7. **`deliver_callback(client, url, payload, *, max_retries, sleep)`** in `services/callback.py`, taking the shared `httpx.AsyncClient` from `Runtime.http` (spec §5) instead of building one per attempt.
 8. **Checkpoint `sync` is bounded uniformly.** The REST checkpoint path ran the guest `sync` with a 10 s exec timeout and no outer bound; the reaper path wrapped it in `wait_for(…, 15.0)`. The single implementation uses the reaper's bound everywhere.
 9. **`exec`, `stream`, and `exec_bg` all touch `last_exec_at`** (§6.2), where before only `stream` and `exec_bg` did.
+10. **`Runtime.close` closes the shared HTTP client.** The shutdown order of §5 is reaper → drain → guest → proxy → db; the branch adds `await self.http.aclose()` between the drain and the guest, because `Runtime.http` (§5) is created here and nothing else owns it. Callbacks in flight are drained first, so nothing is cut short.
+11. **`boot` and `restore` are observed inside `_bring_up`.** §10 lists both among the `op` values, but the only timers were on the outer operations. `timed("restore")`/`timed("boot")` now wrap the two hypervisor calls, nested inside `timed("create")`/`timed("fork")`: different labels, so a host failure counts once per op.
 
 ## Global Constraints
 

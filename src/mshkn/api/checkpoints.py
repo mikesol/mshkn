@@ -1,25 +1,28 @@
+"""Checkpoint endpoints: fork (with the exclusive-restore deferral), merge,
+list and delete. The work itself lives in mshkn.services.checkpoints."""
+
 from __future__ import annotations
 
-import json
 import logging
-import uuid
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
 from mshkn.api.deps import get_runtime, require_account
-from mshkn.db import delete_checkpoint as db_delete_checkpoint
-from mshkn.db import (
-    get_active_computer_for_label,
-    get_checkpoint,
-    insert_checkpoint,
-    insert_deferred,
-    list_checkpoints_by_account,
+from mshkn.api.schemas import (
+    CheckpointSummary,
+    DeferredResponse,
+    DeleteResponse,
+    ForkRequest,
+    ForkResponse,
+    MergeConflict,
+    MergeRequest,
+    MergeResponse,
+    fork_response,
 )
-from mshkn.observability.metrics import timed
+from mshkn.models import ExecSpec
+from mshkn.services.checkpoints import Deferred
 
 if TYPE_CHECKING:
     from mshkn.models import Account
@@ -31,25 +34,11 @@ router = APIRouter(prefix="/checkpoints", tags=["checkpoints"])
 _require_account = Depends(require_account)
 
 
-class ForkRequest(BaseModel):
-    recipe_id: str | None = None
-    exec: str | None = None
-    self_destruct: bool = False
-    callback_url: str | None = None
-    exclusive: Literal["error_on_conflict", "defer_on_conflict"] | None = None
-    meta_exec: str | None = None
-
-
-class ForkResponse(BaseModel):
-    computer_id: str
-    checkpoint_id: str
-    exec_exit_code: int | None = None
-    exec_stdout: str | None = None
-    exec_stderr: str | None = None
-    created_checkpoint_id: str | None = None
-
-
-@router.post("/{checkpoint_id}/fork", response_model=None)
+@router.post(
+    "/{checkpoint_id}/fork",
+    response_model=ForkResponse,
+    responses={202: {"model": DeferredResponse}},
+)
 async def fork_checkpoint(
     checkpoint_id: str,
     request: Request,
@@ -57,308 +46,76 @@ async def fork_checkpoint(
     account: Account = _require_account,
 ) -> ForkResponse | JSONResponse:
     rt = get_runtime(request)
-    db = rt.db
-
-    ckpt = await get_checkpoint(db, checkpoint_id)
-    if ckpt is None or ckpt.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
-
-    fork_recipe_id = body.recipe_id if body and body.recipe_id else None
-
-    # Exclusive restore: prevent concurrent computers on the same checkpoint chain
-    if body and body.exclusive and ckpt.label:
-        active = await get_active_computer_for_label(db, account.id, ckpt.label)
-        if active is not None:
-            if body.exclusive == "error_on_conflict":
-                raise HTTPException(
-                    status_code=409,
-                    detail="Checkpoint chain has active computer",
-                )
-            if body.exclusive == "defer_on_conflict":
-                deferred_id = f"def-{uuid.uuid4().hex[:12]}"
-                payload = {
-                    "checkpoint_id": checkpoint_id,
-                    "recipe_id": body.recipe_id if body else None,
-                    "exec": body.exec,
-                    "self_destruct": body.self_destruct,
-                    "callback_url": body.callback_url,
-                    "meta_exec": body.meta_exec,
-                }
-                now = datetime.now(UTC).isoformat()
-                await insert_deferred(
-                    db,
-                    deferred_id,
-                    ckpt.label,
-                    account.id,
-                    json.dumps(payload),
-                    now,
-                )
-                return JSONResponse(
-                    status_code=202,
-                    content={"deferred_id": deferred_id, "status": "queued"},
-                )
-
-    vm_mgr = rt.vm_manager
-    async with timed("fork"):
-        computer = await vm_mgr.fork_from_checkpoint(account.id, ckpt, recipe_id=fork_recipe_id)
-
-    exec_exit_code: int | None = None
-    exec_stdout: str | None = None
-    exec_stderr: str | None = None
-    created_checkpoint_id: str | None = None
-
-    # Exec on fork
-    if body and body.exec is not None:
-        from mshkn.api.computers import _self_destruct
-
-        config = rt.config
-        result = await rt.host.guest.exec(computer.vm_ip, body.exec)
-        exec_exit_code = result.exit_code
-        exec_stdout = result.stdout
-        exec_stderr = result.stderr
-
-        # Self-destruct: checkpoint + destroy
-        if body.self_destruct:
-            # Inherit label from source checkpoint
-            label = ckpt.label
-            created_checkpoint_id = await _self_destruct(
-                computer=computer,
-                account=account,
-                label=label,
-                source_checkpoint_id=checkpoint_id,
-                exec_exit_code=exec_exit_code,
-                exec_stdout=exec_stdout,
-                exec_stderr=exec_stderr,
-                callback_url=body.callback_url,
-                db=db,
-                config=config,
-                vm_mgr=vm_mgr,
-                host=rt.host,
-                tasks=rt.tasks,
-            )
-
-    return ForkResponse(
-        computer_id=computer.id,
-        checkpoint_id=checkpoint_id,
-        exec_exit_code=exec_exit_code,
-        exec_stdout=exec_stdout,
-        exec_stderr=exec_stderr,
-        created_checkpoint_id=created_checkpoint_id,
+    body = body or ForkRequest()
+    ckpt = await rt.checkpoints.get_owned(account, checkpoint_id)
+    spec = ExecSpec(
+        command=body.exec,
+        self_destruct=body.self_destruct,
+        callback_url=body.callback_url,
+        label=None,
+        meta_exec=body.meta_exec,
     )
+    forked = await rt.checkpoints.fork_or_defer(
+        account, ckpt, spec, recipe_id=body.recipe_id, exclusive=body.exclusive
+    )
+    if isinstance(forked, Deferred):
+        return JSONResponse(
+            status_code=202,
+            content=DeferredResponse(deferred_id=forked.deferred_id, status="queued").model_dump(),
+        )
+    outcome = await rt.lifecycle.run_ephemeral(account, forked, spec, source_checkpoint=ckpt)
+    return fork_response(forked, ckpt.id, outcome)
 
 
-class MergeRequest(BaseModel):
-    checkpoint_a: str
-    checkpoint_b: str
-
-
-@router.post("/{parent_id}/merge")
+@router.post("/{parent_id}/merge", response_model=MergeResponse)
 async def merge_checkpoints(
     parent_id: str,
     body: MergeRequest,
     request: Request,
     account: Account = _require_account,
-) -> dict[str, object]:
-    import shutil
-    import tempfile
-    from pathlib import Path
-
-    from mshkn.checkpoint.merge import three_way_merge
-    from mshkn.models import Checkpoint
-
+) -> MergeResponse:
     rt = get_runtime(request)
-    db = rt.db
-    vm_mgr = rt.vm_manager
-
-    # Validate parent checkpoint
-    ckpt_parent = await get_checkpoint(db, parent_id)
-    if ckpt_parent is None or ckpt_parent.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Parent checkpoint not found")
-
-    # Reject self-merge
-    if body.checkpoint_a == body.checkpoint_b:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot merge a checkpoint with itself",
-        )
-
-    # Validate fork checkpoints
-    ckpt_a = await get_checkpoint(db, body.checkpoint_a)
-    ckpt_b = await get_checkpoint(db, body.checkpoint_b)
-
-    if ckpt_a is None or ckpt_a.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Checkpoint A not found")
-    if ckpt_b is None or ckpt_b.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Checkpoint B not found")
-
-    # Verify both forks descend from the given parent
-    if ckpt_a.parent_id != parent_id or ckpt_b.parent_id != parent_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Both checkpoints must be children of the specified parent",
-        )
-
-    # All three must have thin volumes
-    for label, ckpt in [("Parent", ckpt_parent), ("A", ckpt_a), ("B", ckpt_b)]:
-        if ckpt.thin_volume_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{label} checkpoint has no disk snapshot",
-            )
-
-    # Volume names for the three existing checkpoints
-    vol_parent = f"mshkn-ckpt-{parent_id}"
-    vol_a = f"mshkn-ckpt-{body.checkpoint_a}"
-    vol_b = f"mshkn-ckpt-{body.checkpoint_b}"
-
-    # Create a new volume for the merged output (snapshot of parent)
-    checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
-    async with vm_mgr._alloc_lock:
-        merged_volume_id = vm_mgr._allocate_volume_id()
-    merged_volume_name = f"mshkn-ckpt-{checkpoint_id}"
-
-    assert ckpt_parent.thin_volume_id is not None  # validated above
-    async with timed("merge"):
-        await rt.host.blocks.snap(
-            source_volume_id=ckpt_parent.thin_volume_id,
-            new_volume_id=merged_volume_id,
-        )
-        await rt.host.blocks.activate(volume_id=merged_volume_id, name=merged_volume_name)
-
-        # Output starts as a snapshot of parent — we apply the merge diff on top
-        async with (
-            rt.host.blocks.mounted(vol_parent, readonly=True) as mount_parent,
-            rt.host.blocks.mounted(vol_a, readonly=True) as mount_a,
-            rt.host.blocks.mounted(vol_b, readonly=True) as mount_b,
-            rt.host.blocks.mounted(merged_volume_name) as mount_output,
-        ):
-            # Run three-way merge to a temp directory first
-            with tempfile.TemporaryDirectory(prefix="mshkn-merge-") as merge_dir:
-                merge_output = Path(merge_dir) / "merge_result"
-                result = three_way_merge(
-                    parent=mount_parent,
-                    fork_a=mount_a,
-                    fork_b=mount_b,
-                    output=merge_output,
-                )
-
-                # Apply merge result: sync changed/added files to output volume
-                # and remove files that were deleted (exist in parent but not in merge)
-                for rel in merge_output.rglob("*"):
-                    if rel.is_file():
-                        rel_path = rel.relative_to(merge_output)
-                        dest = mount_output / rel_path
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(rel, dest)
-
-                # Remove files that exist in parent but not in merge result (deletions)
-                for rel in mount_parent.rglob("*"):
-                    if rel.is_file():
-                        rel_path = rel.relative_to(mount_parent)
-                        if not (merge_output / rel_path).exists():
-                            target = mount_output / rel_path
-                            if target.exists():
-                                target.unlink()
-
-    # Build conflict info for response
-    conflicts = [{"path": c.path, "resolution": "fork_a"} for c in result.conflicts]
-
-    # Create checkpoint record
-    now = datetime.now(UTC).isoformat()
-    r2_prefix = f"{account.id}/{checkpoint_id}"
-    # Merged checkpoint inherits parent's manifest and recipe
-    ckpt = Checkpoint(
-        id=checkpoint_id,
-        account_id=account.id,
-        parent_id=parent_id,
-        computer_id=None,  # merge has no source computer
-        thin_volume_id=merged_volume_id,
-        manifest_hash=ckpt_parent.manifest_hash,
-        manifest_json=ckpt_parent.manifest_json,
-        r2_prefix=r2_prefix,
-        disk_delta_size_bytes=None,
-        memory_size_bytes=None,
-        label="merge",
-        pinned=False,
-        created_at=now,
-        recipe_id=ckpt_parent.recipe_id,
-    )
-    await insert_checkpoint(db, ckpt)
-
-    # Background upload to R2 (snapshot dir doesn't exist for merges,
-    # but the volume itself is the checkpoint — skip R2 for now)
-    logger.info(
-        "Merged checkpoint %s: auto_merged=%d, unchanged=%d, conflicts=%d",
-        checkpoint_id,
-        result.auto_merged,
-        result.unchanged,
-        len(result.conflicts),
+    outcome = await rt.checkpoints.merge(account, parent_id, body.checkpoint_a, body.checkpoint_b)
+    return MergeResponse(
+        checkpoint_id=outcome.checkpoint.id,
+        conflicts=[MergeConflict(path=p, resolution="fork_a") for p in outcome.conflicts],
+        auto_merged=outcome.auto_merged,
+        unchanged=outcome.unchanged,
     )
 
-    return {
-        "checkpoint_id": checkpoint_id,
-        "conflicts": conflicts,
-        "auto_merged": result.auto_merged,
-        "unchanged": result.unchanged,
-    }
 
-
-@router.get("")
+@router.get("", response_model=list[CheckpointSummary])
 async def list_checkpoints(
     request: Request,
     label: str | None = None,
     account: Account = _require_account,
-) -> list[dict[str, object]]:
-    db = get_runtime(request).db
-    checkpoints = await list_checkpoints_by_account(db, account.id, label=label)
+) -> list[CheckpointSummary]:
+    rt = get_runtime(request)
     return [
-        {
-            "id": c.id,
-            "checkpoint_id": c.id,
-            "parent_id": c.parent_id,
-            "computer_id": c.computer_id,
-            "manifest_hash": c.manifest_hash,
-            "r2_prefix": c.r2_prefix,
-            "disk_delta_size_bytes": c.disk_delta_size_bytes,
-            "memory_size_bytes": c.memory_size_bytes,
-            "label": c.label,
-            "pinned": c.pinned,
-            "created_at": c.created_at,
-        }
-        for c in checkpoints
+        CheckpointSummary(
+            id=c.id,
+            checkpoint_id=c.id,
+            parent_id=c.parent_id,
+            computer_id=c.computer_id,
+            recipe_id=c.recipe_id,
+            r2_prefix=c.r2_prefix,
+            disk_delta_size_bytes=c.disk_delta_size_bytes,
+            memory_size_bytes=c.memory_size_bytes,
+            label=c.label,
+            pinned=c.pinned,
+            created_at=c.created_at,
+        )
+        for c in await rt.checkpoints.list(account, label=label)
     ]
 
 
-@router.delete("/{checkpoint_id}")
+@router.delete("/{checkpoint_id}", response_model=DeleteResponse)
 async def delete_checkpoint(
     checkpoint_id: str,
     request: Request,
     account: Account = _require_account,
-) -> dict[str, str]:
-    import shutil
-
+) -> DeleteResponse:
     rt = get_runtime(request)
-    db = rt.db
-    config = rt.config
-    ckpt = await get_checkpoint(db, checkpoint_id)
-    if ckpt is None or ckpt.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
-
-    # Cancel any in-flight R2 upload before deleting local files
-    await rt.tasks.cancel(f"upload:{checkpoint_id}")
-
-    # Clean up dm-thin volume if one was allocated
-    if ckpt.thin_volume_id is not None:
-        volume_name = f"mshkn-ckpt-{checkpoint_id}"
-        await rt.host.blocks.remove(volume_id=ckpt.thin_volume_id, name=volume_name)
-
-    # Clean up local snapshot directory
-    local_dir = config.checkpoint_local_dir / checkpoint_id
-    if local_dir.exists():
-        shutil.rmtree(local_dir)
-
-    # Clean up R2 uploads
-    await rt.host.objects.delete_prefix(ckpt.r2_prefix)
-
-    await db_delete_checkpoint(db, checkpoint_id)
-    return {"status": "deleted"}
+    ckpt = await rt.checkpoints.get_owned(account, checkpoint_id)
+    await rt.checkpoints.delete(ckpt)
+    return DeleteResponse(status="deleted")
