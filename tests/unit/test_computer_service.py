@@ -10,7 +10,7 @@ from mshkn.errors import BadRequest, HostError, LimitExceeded, NotFound
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import Account, Checkpoint, ComputerStatus
-from mshkn.observability.metrics import computers_active
+from mshkn.observability.metrics import computers_active, operation_errors_total
 from mshkn.resources import DEFAULT_RESOURCES, Resources
 from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
@@ -23,6 +23,11 @@ if TYPE_CHECKING:
     import aiosqlite
 
 ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=2, created_at="t")
+
+
+async def _clear_last_exec_at(db: aiosqlite.Connection, computer_id: str) -> None:
+    await db.execute("UPDATE computers SET last_exec_at = NULL WHERE id = ?", (computer_id,))
+    await db.commit()
 
 
 async def _service(
@@ -71,9 +76,29 @@ async def test_create_unknown_recipe_leaves_no_host_state(
     db: aiosqlite.Connection, tmp_path: Path
 ) -> None:
     service, host = await _service(db, tmp_path)
+    domain_errors = operation_errors_total.labels(op="create", kind="domain")
+    before = domain_errors._value.get()
     with pytest.raises(NotFound):
         await service.create(ACCOUNT, recipe_id="rcp-nope", resources=DEFAULT_RESOURCES)
     assert host.blocks.volumes == {0: None} and service.allocator.free_slots == frozenset()
+    # resolve() runs inside timed("create"), so the rejection is counted
+    assert domain_errors._value.get() == before + 1
+
+
+async def test_abandon_survives_a_failing_volume_removal(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, host = await _service(db, tmp_path)
+
+    async def _explode(*, volume_id: int, name: str) -> None:
+        raise RuntimeError("dmsetup exploded")
+
+    monkeypatch.setattr(host.blocks, "remove", _explode)
+    host.hypervisor.fail_next("boot")
+    with pytest.raises(HostError):  # the cleanup failure must not replace it
+        await service.create(ACCOUNT, recipe_id=None, resources=Resources(mem_mib=512, vcpus=1))
+    assert service.allocator.free_slots == frozenset({1}), "the slot must not be stranded"
+    assert host.hypervisor.torn_down == [1], "later steps still run"
 
 
 async def test_boot_failure_after_snap_releases_volume_and_slot(
@@ -218,11 +243,17 @@ async def test_streaming_background_and_transfer_operations(
     service, host = await _service(db, tmp_path)
     computer = await service.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
     host.guest.stream_script["ls"] = [("stdout", "a")]
+    await _clear_last_exec_at(db, computer.id)
     assert [line async for line in service.stream(computer, "ls")] == [
         ("stdout", "a"),
         ("exit", "0"),
     ]
+    streamed = await get_computer(db, computer.id)
+    assert streamed is not None and streamed.last_exec_at is not None, "stream must touch"
+    await _clear_last_exec_at(db, computer.id)
     pid = await service.exec_bg(computer, "sleep 1")
+    backgrounded = await get_computer(db, computer.id)
+    assert backgrounded is not None and backgrounded.last_exec_at is not None, "exec_bg must touch"
     host.guest.script[f"cat /tmp/bg-{pid}.log 2>/dev/null || echo ''"] = ExecResult(0, "a\nb", "")
     assert await service.exec_logs(computer, pid) == ["a", "b"]
     assert (await service.exec_kill(computer, pid)).exit_code == 0

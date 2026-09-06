@@ -39,6 +39,14 @@ logger = logging.getLogger(__name__)
 STATUS_METRICS_TIMEOUT_SECONDS = 15.0
 
 
+async def _best_effort(what: str, action: Awaitable[object], computer_id: str) -> None:
+    """Await a cleanup step, swallowing and logging anything it raises."""
+    try:
+        await action
+    except Exception:
+        logger.debug("%s during abandon failed for %s", what, computer_id, exc_info=True)
+
+
 class ComputerService:
     def __init__(
         self,
@@ -90,14 +98,17 @@ class ComputerService:
     async def create(
         self, account: Account, *, recipe_id: str | None, resources: Resources
     ) -> Computer:
-        if await self.active_count(account.id) >= account.vm_limit:
-            raise LimitExceeded("VM limit reached")
-        recipe: Recipe | None = None
-        if recipe_id is not None:
-            recipe = await self.recipes.resolve(recipe_id)
-        source_volume_id = recipe.base_volume_id if recipe is not None else 0
-        assert source_volume_id is not None  # resolve() guarantees a base volume
+        # timed() wraps the preconditions too, so a rejected create still counts
+        # as an error of kind="domain".
         async with timed("create"):
+            if await self.active_count(account.id) >= account.vm_limit:
+                raise LimitExceeded("VM limit reached")
+            recipe: Recipe | None = None
+            if recipe_id is not None:
+                recipe = await self.recipes.resolve(recipe_id)
+            source_volume_id = recipe.base_volume_id if recipe is not None else 0
+            if source_volume_id is None:  # resolve() rejects this; belt and braces
+                raise Conflict(f"Recipe {recipe_id} has no base volume")
             computer = await self._bring_up(
                 account,
                 source_volume_id=source_volume_id,
@@ -115,10 +126,10 @@ class ComputerService:
     async def fork(
         self, account: Account, checkpoint: Checkpoint, *, recipe_id: str | None
     ) -> Computer:
-        if checkpoint.thin_volume_id is None:
-            raise Conflict(f"Checkpoint {checkpoint.id} has no disk snapshot")
-        effective_recipe_id = recipe_id if recipe_id is not None else checkpoint.recipe_id
         async with timed("fork"):
+            if checkpoint.thin_volume_id is None:
+                raise Conflict(f"Checkpoint {checkpoint.id} has no disk snapshot")
+            effective_recipe_id = recipe_id if recipe_id is not None else checkpoint.recipe_id
             computer = await self._bring_up(
                 account,
                 source_volume_id=checkpoint.thin_volume_id,
@@ -240,25 +251,32 @@ class ComputerService:
         vm: RunningVM | None,
         routed: bool,
     ) -> None:
-        """Best-effort release of everything _bring_up acquired. Never raises."""
+        """Best-effort release of everything _bring_up acquired. Never raises.
+
+        Every step is guarded individually and the slot is released in a
+        ``finally``, so one failing host call can neither strand the slot nor
+        replace the error the caller is about to raise.
+        """
         logger.warning("Abandoning computer %s after a failed bring-up", computer_id)
-        if routed:
-            await self.host.proxy.remove_route(computer_id)
-        if vm is not None:
-            try:
-                await self.host.hypervisor.kill(vm.pid)
-            except Exception:
-                logger.debug("kill during abandon failed for %s", computer_id, exc_info=True)
-            try:
-                await self.host.guest.evict(vm.vm_ip)
-            except Exception:
-                logger.debug("evict during abandon failed for %s", computer_id, exc_info=True)
-        await self.host.blocks.remove(volume_id=volume_id, name=volume_name)
         try:
-            await self.host.hypervisor.teardown_slot(slot)
-        except Exception:
-            logger.debug("teardown during abandon failed for slot %d", slot, exc_info=True)
-        await self.allocator.release_slot(slot)
+            if routed:
+                await _best_effort(
+                    "route removal", self.host.proxy.remove_route(computer_id), computer_id
+                )
+            if vm is not None:
+                await _best_effort("kill", self.host.hypervisor.kill(vm.pid), computer_id)
+                await _best_effort("evict", self.host.guest.evict(vm.vm_ip), computer_id)
+            await _best_effort(
+                "volume removal",
+                self.host.blocks.remove(volume_id=volume_id, name=volume_name),
+                computer_id,
+            )
+            await _best_effort("teardown", self.host.hypervisor.teardown_slot(slot), computer_id)
+        finally:
+            await _best_effort("slot release", self.allocator.release_slot(slot), computer_id)
+        await _best_effort("status update", self._mark_destroyed(computer_id), computer_id)
+
+    async def _mark_destroyed(self, computer_id: str) -> None:
         stored = await get_computer(self.db, computer_id)
         if stored is not None:
             await update_computer_status(self.db, computer_id, ComputerStatus.DESTROYED)
