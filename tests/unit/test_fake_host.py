@@ -25,8 +25,40 @@ async def test_blocks_track_volumes_and_fail_next() -> None:
         await blocks.snap(source_volume_id=0, new_volume_id=101)
     await blocks.remove(volume_id=100, name="mshkn-comp-a")
     assert 100 not in blocks.volumes and "mshkn-comp-a" not in blocks.active
+    await blocks.snap(source_volume_id=0, new_volume_id=102)
+    await blocks.activate(volume_id=102, name="x")
     async with blocks.mounted("x") as path:
         assert path.is_dir()
+
+
+async def test_blocks_refuse_what_dm_thin_refuses() -> None:
+    blocks = FakeHost().blocks
+    with pytest.raises(HostError):
+        await blocks.snap(source_volume_id=99, new_volume_id=100)
+    await blocks.snap(source_volume_id=0, new_volume_id=100)
+    with pytest.raises(HostError):
+        await blocks.snap(source_volume_id=0, new_volume_id=100)
+    with pytest.raises(HostError):
+        await blocks.activate(volume_id=7, name="mshkn-nope")
+    await blocks.activate(volume_id=100, name="mshkn-a")
+    with pytest.raises(HostError):
+        await blocks.activate(volume_id=100, name="mshkn-a")
+    with pytest.raises(HostError):
+        async with blocks.mounted("mshkn-unmapped"):
+            pass
+    with pytest.raises(HostError):
+        await blocks.deactivate("mshkn-unmapped")
+
+
+async def test_blocks_remove_is_best_effort_like_the_pool() -> None:
+    blocks = FakeHost().blocks
+    await blocks.snap(source_volume_id=0, new_volume_id=100)
+    await blocks.activate(volume_id=100, name="mshkn-a")
+    blocks.fail_next("remove")
+    await blocks.remove(volume_id=100, name="mshkn-a")  # does not raise
+    assert 100 in blocks.volumes and "mshkn-a" in blocks.active
+    await blocks.remove(volume_id=100, name="mshkn-a")
+    assert 100 not in blocks.volumes and "mshkn-a" not in blocks.active
 
 
 async def test_hypervisor_boots_restores_snapshots_kills(tmp_path: Path) -> None:

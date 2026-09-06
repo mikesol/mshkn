@@ -2,7 +2,9 @@
 
 Each fake records what was asked of it, keeps just enough state to make the
 orchestrator's bookkeeping observable, and can be told to fail its next call
-of a given method with `fail_next("<method>")`.
+of a given method with `fail_next("<method>")` where the real implementation
+can fail. Methods that the real code makes best-effort (never raising) stay
+best-effort here; the fake then leaves the state behind, as the host would.
 """
 
 from __future__ import annotations
@@ -54,21 +56,45 @@ class FakeBlockStore(_Failable):
         self.pool_usage = PoolUsage(data_used_ratio=0.1, metadata_used_ratio=0.05)
         self.calls: list[tuple[str, object]] = []
 
+    # dm-thin refuses unknown ids, duplicate ids, and duplicate device names;
+    # the fake does too, so ordering bugs in callers surface here instead of
+    # only on the live pool.
+
     async def snap(self, *, source_volume_id: int, new_volume_id: int) -> None:
         self._maybe_fail("snap")
+        if source_volume_id not in self.volumes:
+            msg = f"fake snap: source volume {source_volume_id} does not exist"
+            raise HostError(msg)
+        if new_volume_id in self.volumes:
+            msg = f"fake snap: volume {new_volume_id} already exists"
+            raise HostError(msg)
         self.calls.append(("snap", (source_volume_id, new_volume_id)))
         self.volumes[new_volume_id] = source_volume_id
 
     async def activate(self, *, volume_id: int, name: str) -> None:
         self._maybe_fail("activate")
+        if volume_id not in self.volumes:
+            msg = f"fake activate: volume {volume_id} does not exist"
+            raise HostError(msg)
+        if name in self.active:
+            msg = f"fake activate: device {name} already exists"
+            raise HostError(msg)
         self.active[name] = volume_id
 
     async def deactivate(self, name: str) -> None:
-        self.active.pop(name, None)
+        if name not in self.active:
+            msg = f"fake deactivate: device {name} is not active"
+            raise HostError(msg)
+        del self.active[name]
 
     async def remove(self, *, volume_id: int, name: str) -> None:
-        self._maybe_fail("remove")
+        # The real remove is best-effort and never raises: a failed dmsetup
+        # call is logged and the volume is left behind. fail_next("remove")
+        # models exactly that.
         self.calls.append(("remove", (volume_id, name)))
+        if "remove" in self._fail:
+            self._fail.discard("remove")
+            return
         self.active.pop(name, None)
         self.volumes.pop(volume_id, None)
 
@@ -77,6 +103,9 @@ class FakeBlockStore(_Failable):
 
     @contextlib.asynccontextmanager
     async def mounted(self, name: str, *, readonly: bool = False) -> AsyncIterator[Path]:  # noqa: ARG002
+        if name not in self.active:
+            msg = f"fake mounted: device {name} is not active"
+            raise HostError(msg)
         path = Path(tempfile.mkdtemp(prefix=f"fake-mnt-{name}-"))
         try:
             yield path
