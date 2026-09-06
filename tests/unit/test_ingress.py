@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -43,24 +44,23 @@ async def _app(db: aiosqlite.Connection, tmp_path: Path) -> FastAPI:
     return make_app(make_runtime(db, config=Config(checkpoint_local_dir=tmp_path / "ckpts")))
 
 
-def _make_rule(**overrides: object) -> IngressRule:
-    defaults = {
-        "internal_id": "int-001",
-        "id": "ir_test123",
-        "account_id": "acct-test",
-        "name": "test-rule",
-        "starlark_source": (
-            'def transform(req):\n  return {"action": "fork", "checkpoint_id": "cp_1"}'
-        ),
-        "response_mode": "async",
-        "max_body_bytes": 10485760,
-        "rate_limit_rpm": 60,
-        "enabled": True,
-        "created_at": "2026-01-01T00:00:00Z",
-        "updated_at": "2026-01-01T00:00:00Z",
-    }
-    defaults.update(overrides)
-    return IngressRule(**defaults)  # type: ignore[arg-type]
+_BASE_RULE = IngressRule(
+    internal_id="int-001",
+    id="ir_test123",
+    account_id="acct-test",
+    name="test-rule",
+    starlark_source=('def transform(req):\n  return {"action": "fork", "checkpoint_id": "cp_1"}'),
+    response_mode="async",
+    max_body_bytes=10485760,
+    rate_limit_rpm=60,
+    enabled=True,
+    created_at="2026-01-01T00:00:00Z",
+    updated_at="2026-01-01T00:00:00Z",
+)
+
+
+def _make_rule(**overrides: Any) -> IngressRule:
+    return replace(_BASE_RULE, **overrides)
 
 
 async def test_insert_and_get_rule(db: aiosqlite.Connection) -> None:

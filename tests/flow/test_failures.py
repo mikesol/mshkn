@@ -10,6 +10,8 @@ from mshkn.db import count_active_computers, get_computer
 from mshkn.observability.metrics import computers_active
 
 if TYPE_CHECKING:
+    import pytest
+
     from .conftest import Flow
 
 
@@ -39,7 +41,9 @@ async def test_domain_errors_keep_their_codes(flow: Flow) -> None:
     assert (await flow.client.delete(f"/computers/{cid}")).status_code == 404
 
 
-async def test_abandon_after_the_insert_refreshes_the_active_gauge(flow: Flow) -> None:
+async def test_abandon_after_the_insert_refreshes_the_active_gauge(
+    flow: Flow, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A create that dies after its row is inserted must leave the gauge on the db count.
 
     The stale gauge is only observable if something refreshes it between the
@@ -58,7 +62,7 @@ async def test_abandon_after_the_insert_refreshes_the_active_gauge(flow: Flow) -
             flow.host.proxy.fail_next("add_route")
         await add_route(computer_id, vm_ip)
 
-    flow.host.proxy.add_route = gated  # type: ignore[method-assign]
+    monkeypatch.setattr(flow.host.proxy, "add_route", gated)
     doomed = asyncio.create_task(flow.client.post("/computers", json={}))
     await asyncio.wait_for(reached.wait(), timeout=5.0)
     live = await flow.client.post("/computers", json={})

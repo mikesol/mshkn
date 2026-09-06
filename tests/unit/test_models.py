@@ -95,7 +95,8 @@ def test_checkpoint_recipe_id() -> None:
 
 
 def test_status_enums_are_strings() -> None:
-    assert ComputerStatus.RUNNING == "running"  # type: ignore[comparison-overlap]
+    assert ComputerStatus.RUNNING.value == "running"
+    assert str(ComputerStatus.RUNNING) == "running"
     assert str(ComputerStatus.DESTROYED) == "destroyed"
     assert ComputerStatus("running") is ComputerStatus.RUNNING
     assert {s.value for s in RecipeStatus} == {
@@ -127,7 +128,8 @@ def test_computer_and_checkpoint_have_no_manifest_fields() -> None:
 
 def test_checkpoint_trigger_values() -> None:
     assert [t.value for t in CheckpointTrigger] == ["api", "self_destruct", "idle"]
-    assert CheckpointTrigger.IDLE == "idle"  # type: ignore[comparison-overlap]
+    assert CheckpointTrigger.IDLE.value == "idle"
+    assert str(CheckpointTrigger.IDLE) == "idle"
 
 
 def test_exec_spec_is_frozen() -> None:
