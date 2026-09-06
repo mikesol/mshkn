@@ -50,3 +50,22 @@ async def test_4xx_is_final_and_transport_errors_are_retried() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         await deliver_callback(client, "http://cb/x", {}, sleep=fake_sleep)
     assert calls == 2
+
+
+async def test_an_unparseable_url_never_escapes() -> None:
+    """httpx.InvalidURL is not an HTTPError, and callback_url is unvalidated user input."""
+    calls = 0
+    slept: list[float] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200)
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await deliver_callback(client, "http://[::1", {}, sleep=fake_sleep)
+    assert calls == 0  # the URL never reaches the transport
+    assert slept == [1, 2]  # retried like any other failure, then gave up

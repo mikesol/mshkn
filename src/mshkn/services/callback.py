@@ -6,10 +6,10 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-import httpx
-
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ async def deliver_callback(
     max_retries: int = 3,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
-    """POST payload to url. Retries 5xx and transport errors; never raises."""
+    """POST payload to url. Retries 5xx and any delivery failure; never raises."""
     for attempt in range(max_retries):
         try:
             resp = await client.post(url, json=payload, timeout=10)
@@ -36,7 +36,9 @@ async def deliver_callback(
                 attempt + 1,
                 max_retries,
             )
-        except httpx.HTTPError as exc:
+        # Bare Exception, not httpx.HTTPError: callback_url is unvalidated user
+        # input and httpx.InvalidURL derives straight from Exception.
+        except Exception as exc:
             logger.warning(
                 "Callback to %s failed (%s), retrying (%d/%d)",
                 url,

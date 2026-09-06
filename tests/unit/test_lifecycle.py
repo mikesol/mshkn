@@ -2,16 +2,33 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from fastapi import FastAPI, Request
 
 from mshkn.config import Config
-from mshkn.db import claim_deferred_by_label, get_computer, insert_account, insert_deferred
+from mshkn.db import (
+    claim_deferred_by_label,
+    delete_checkpoint,
+    get_computer,
+    insert_account,
+    insert_checkpoint,
+    insert_deferred,
+    insert_recipe,
+    list_all_computers,
+)
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
-from mshkn.models import Account, CheckpointTrigger, ComputerStatus, ExecSpec
+from mshkn.models import (
+    Account,
+    CheckpointTrigger,
+    ComputerStatus,
+    ExecSpec,
+    Recipe,
+    RecipeStatus,
+)
 from mshkn.observability.metrics import checkpoints_total
 from mshkn.resources import DEFAULT_RESOURCES
 from mshkn.runtime import BackgroundTasks
@@ -27,6 +44,23 @@ if TYPE_CHECKING:
     import aiosqlite
 
 ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=10, created_at="t")
+OTHER = Account(id="acct-2", api_key="k2", vm_limit=10, created_at="t")
+
+
+def _ready_recipe(recipe_id: str) -> Recipe:
+    return Recipe(
+        id=recipe_id,
+        account_id=ACCOUNT.id,
+        dockerfile="FROM debian",
+        content_hash=f"hash-{recipe_id}",
+        status=RecipeStatus.READY,
+        build_log=None,
+        base_volume_id=7,
+        template_vmstate=None,
+        template_memory=None,
+        created_at="t",
+        built_at="t",
+    )
 
 
 def _receiver() -> tuple[FastAPI, list[dict[str, Any]]]:
@@ -129,7 +163,7 @@ async def test_drain_forks_once_writes_exec_files_and_self_destructs(
     await computers.destroy(base.id)
     for i, payload in enumerate(
         [
-            {"checkpoint_id": source.id, "exec": "echo one", "self_destruct": False},
+            {"checkpoint_id": source.id, "exec": "echo 'hi'", "self_destruct": False},
             {
                 "checkpoint_id": source.id,
                 "exec": "echo two",
@@ -146,7 +180,12 @@ async def test_drain_forks_once_writes_exec_files_and_self_destructs(
     forks = [c for c in host.hypervisor.restored if c[0] != base.thin_volume_id]
     assert len(forks) == 1, "two concurrent drains must fork exactly once"
     commands = [cmd for _, cmd in host.guest.commands if cmd not in ("sync",)]
-    assert commands[-2].startswith("mkdir -p /tmp/exec && printf '%s' 'echo one' > /tmp/exec/0.txt")
+    # Every claimed exec is written verbatim, with single quotes escaped the shell's way.
+    assert commands[-2] == (
+        "mkdir -p /tmp/exec"
+        " && printf '%s' 'echo '\\''hi'\\''' > /tmp/exec/0.txt"
+        " && printf '%s' 'echo two' > /tmp/exec/1.txt"
+    )
     assert commands[-1] == "bash /tmp/exec/1.txt"  # last meta_exec wins
     await lifecycle.tasks.drain(timeout=2.0)
     assert len(received) == 1 and received[0]["label"] == "chain"
@@ -160,3 +199,88 @@ async def test_drain_with_no_labelled_checkpoint_logs_and_returns(
     await insert_deferred(db, "def-x", "orphan", "acct-1", "{}", "t")
     await lifecycle.drain_deferred(ACCOUNT, "orphan")
     assert host.hypervisor.restored == [] and host.hypervisor.booted == []
+
+
+async def test_drain_forks_with_the_recipe_id_from_the_payload(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """The deferred payload's recipe_id wins over the checkpoint's own."""
+    lifecycle, computers, checkpoints, _host, _ = await _lifecycle(db, tmp_path)
+    await insert_recipe(db, _ready_recipe("rec-1"))
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    source = await checkpoints.create(base, label="chain", trigger=CheckpointTrigger.API)
+    assert source.recipe_id is None  # so the payload is the only source of the id
+    payload = {"checkpoint_id": source.id, "exec": "echo hi", "recipe_id": "rec-1"}
+    await insert_deferred(db, "def-0", "chain", "acct-1", json.dumps(payload), "t0")
+    await lifecycle.drain_deferred(ACCOUNT, "chain")
+    forked = [c for c in await list_all_computers(db) if c.id != base.id]
+    assert len(forked) == 1 and forked[0].recipe_id == "rec-1"
+
+
+async def test_spawn_drain_defers_the_work_to_the_background(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    lifecycle, computers, checkpoints, host, _ = await _lifecycle(db, tmp_path)
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    await checkpoints.create(base, label="chain", trigger=CheckpointTrigger.API)
+    await insert_deferred(db, "def-0", "chain", "acct-1", json.dumps({"exec": "echo q"}), "t0")
+    restored_before = len(host.hypervisor.restored)
+    lifecycle.spawn_drain(ACCOUNT, "chain")
+    assert len(host.hypervisor.restored) == restored_before  # nothing ran synchronously
+    await lifecycle.tasks.drain(timeout=2.0)
+    assert len(host.hypervisor.restored) == restored_before + 1
+    assert await claim_deferred_by_label(db, "chain") == []
+
+
+async def test_drain_after_destroy_drains_the_source_label(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    lifecycle, computers, checkpoints, host, _ = await _lifecycle(db, tmp_path)
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    source = await checkpoints.create(base, label="chain", trigger=CheckpointTrigger.API)
+    fork = await computers.fork(ACCOUNT, source, recipe_id=None)
+    await computers.destroy(fork.id)
+    await insert_deferred(db, "def-0", "chain", "acct-1", json.dumps({"exec": "echo q"}), "t0")
+    restored_before = len(host.hypervisor.restored)
+    await lifecycle.drain_after_destroy(ACCOUNT, fork)
+    await lifecycle.tasks.drain(timeout=2.0)
+    assert len(host.hypervisor.restored) == restored_before + 1
+    assert await claim_deferred_by_label(db, "chain") == []
+
+
+async def test_drain_after_destroy_tolerates_a_pruned_source_checkpoint(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """prune() deletes checkpoints without checking for live forks, so a destroy
+    must not turn into a NotFound just because the source row is gone."""
+    lifecycle, computers, checkpoints, host, _ = await _lifecycle(db, tmp_path)
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    source = await checkpoints.create(base, label="chain", trigger=CheckpointTrigger.API)
+    fork = await computers.fork(ACCOUNT, source, recipe_id=None)
+    await computers.destroy(fork.id)
+    await insert_deferred(db, "def-0", "chain", "acct-1", json.dumps({"exec": "echo q"}), "t0")
+    await delete_checkpoint(db, source.id)
+    restored_before = len(host.hypervisor.restored)
+    await lifecycle.drain_after_destroy(ACCOUNT, fork)
+    await lifecycle.tasks.drain(timeout=2.0)
+    assert len(host.hypervisor.restored) == restored_before
+    assert [d.id for d in await claim_deferred_by_label(db, "chain")] == ["def-0"]
+
+
+async def test_drain_after_destroy_ignores_a_source_checkpoint_of_another_account(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    lifecycle, computers, checkpoints, host, _ = await _lifecycle(db, tmp_path)
+    await insert_account(db, OTHER)
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    source = await checkpoints.create(base, label="chain", trigger=CheckpointTrigger.API)
+    fork = await computers.fork(ACCOUNT, source, recipe_id=None)
+    await computers.destroy(fork.id)
+    await insert_deferred(db, "def-0", "chain", "acct-1", json.dumps({"exec": "echo q"}), "t0")
+    await delete_checkpoint(db, source.id)
+    await insert_checkpoint(db, replace(source, account_id=OTHER.id))
+    restored_before = len(host.hypervisor.restored)
+    await lifecycle.drain_after_destroy(ACCOUNT, fork)
+    await lifecycle.tasks.drain(timeout=2.0)
+    assert len(host.hypervisor.restored) == restored_before
+    assert [d.id for d in await claim_deferred_by_label(db, "chain")] == ["def-0"]
