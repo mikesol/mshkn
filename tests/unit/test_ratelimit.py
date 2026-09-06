@@ -48,7 +48,8 @@ def test_rejected_requests_do_not_extend_the_window() -> None:
     assert limiter.check("k") is True
 
 
-def test_the_default_clock_is_the_monotonic_one() -> None:
+def test_the_default_clock_is_a_real_one() -> None:
+    """Covers the default-argument path; any working clock satisfies this."""
     limiter = RateLimiter(max_requests=1, window_seconds=10.0)
     assert limiter.check("k") is True
     assert limiter.check("k") is False

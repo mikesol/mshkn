@@ -186,4 +186,4 @@ async def test_idle_reap_of_an_orphaned_account_skips_the_drain(
     await db.commit()
 
     assert await reaper.reap_idle() == 1
-    assert not any(t.get_name().startswith("deferred:") for t in reaper.lifecycle.tasks._tasks)
+    assert not any(n.startswith("deferred:") for n in reaper.lifecycle.tasks.names())

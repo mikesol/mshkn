@@ -151,6 +151,29 @@ async def test_a_non_domain_failure_during_bring_up_becomes_a_host_error(
     assert host.proxy.routes == {}
 
 
+async def test_abandon_clears_a_route_a_failing_add_left_behind(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """add_route can apply the route and then fail; abandon has to undo it.
+
+    The fake fails add_route before it records anything, so fail_next cannot
+    produce this state; only a proxy that half-applies can.
+    """
+    _, computers, host = await _services(db, tmp_path)
+    original = host.proxy.add_route
+
+    async def half_applied(computer_id: str, vm_ip: str) -> None:
+        await original(computer_id, vm_ip)
+        raise RuntimeError("caddy accepted then reset")
+
+    monkeypatch.setattr(host.proxy, "add_route", half_applied)
+
+    with pytest.raises(HostError):
+        await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+
+    assert host.proxy.routes == {}
+
+
 async def test_destroy_of_a_computer_without_a_pid_or_ip_still_releases_it(
     db: aiosqlite.Connection, tmp_path: Path
 ) -> None:

@@ -153,7 +153,7 @@ async def test_start_spawns_the_reaper_and_close_tears_everything_down(
     monkeypatch.setattr(runtime.db, "close", db_close)
 
     await runtime.start()
-    assert "reaper" in {t.get_name() for t in runtime.tasks._tasks}
+    assert "reaper" in runtime.tasks.names()
 
     await runtime.close()
     assert closed == ["guest", "proxy", "db"]
