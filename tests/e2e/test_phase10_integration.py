@@ -1,8 +1,8 @@
 """Phase 10: Integration — "Real Agent Workflows"
 
 These tests run against a LIVE server with real Firecracker VMs.
-Some tests are xfail (require capabilities not yet implemented),
-but Parallel Exploration and Failure Recovery work with bare VMs.
+Every test here runs against bare VMs; the capability system was
+replaced by Docker recipes.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ class TestT101WebAppDevelopment:
     async def test_nextjs_scaffold_and_run(self, client: httpx.AsyncClient) -> None:
         """Scaffold a Next.js app, install deps, start dev server, hit it.
 
-        Workflow:
-        1. computer_create(uses: ['node-20()'])
+        Intended workflow (not yet implemented — this test is a stub):
+        1. Create a computer from a recipe that installs Node.js 20
         2. exec 'npx create-next-app@latest myapp --yes'
         3. exec 'cd myapp && npm run dev &'
         4. exec 'curl http://localhost:3000' -> HTML response
@@ -53,8 +53,8 @@ class TestT102DataScienceWorkflow:
     async def test_pandas_analysis_checkpoint_resume(self, client: httpx.AsyncClient) -> None:
         """Install pandas, create a dataset, analyze it, checkpoint mid-work.
 
-        Workflow:
-        1. computer_create(uses: ['python-3.12()'])
+        Intended workflow (not yet implemented — this test is a stub):
+        1. Create a computer, then install Python 3.12 via apt/pip inside it
         2. exec 'pip install pandas numpy'
         3. exec python script that generates CSV and computes stats
         4. Checkpoint after data generation
@@ -72,7 +72,7 @@ class TestT102DataScienceWorkflow:
 class TestT103ParallelExploration:
     """Fork multiple times and explore different paths in parallel.
 
-    NOT xfail — this works with bare VMs using checkpoint/fork.
+    Uses checkpoint/fork on bare VMs.
     """
 
     async def test_fork_three_ways_different_content(self, long_client: httpx.AsyncClient) -> None:
@@ -151,10 +151,7 @@ class TestT103ParallelExploration:
 
 
 class TestT104FailureRecovery:
-    """Checkpoint before risky operation, recover from failure by forking.
-
-    NOT xfail — this works with bare VMs.
-    """
+    """Checkpoint before risky operation, recover from failure by forking, on a bare VM."""
 
     async def test_recover_deleted_file_from_checkpoint(
         self, long_client: httpx.AsyncClient
@@ -220,9 +217,9 @@ class TestT105DumbAgentTest:
     async def test_agent_explores_and_checkpoints(self, client: httpx.AsyncClient) -> None:
         """An LLM agent should be able to use the full computer lifecycle.
 
-        Workflow:
+        Intended workflow (not yet implemented — this test is a stub):
         1. Agent receives task: "Find the largest file in /etc"
-        2. Agent calls computer_create(uses: [])
+        2. Agent calls POST /computers with an empty body
         3. Agent calls exec('find /etc -type f -exec du -b {} + | sort -rn | head -5')
         4. Agent checkpoints after exploration
         5. Agent forks to try two different approaches

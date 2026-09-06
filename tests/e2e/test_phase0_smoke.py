@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 
 class TestT01ColdCreateNoCapabilities:
-    """computer_create(uses: []) — the absolute bare minimum."""
+    """POST /computers with an empty body — the absolute bare minimum."""
 
     async def test_create_returns_computer_id_and_url(self, client: httpx.AsyncClient) -> None:
         """Create returns a computer_id and url."""
@@ -99,7 +99,7 @@ class TestT03ExecBasics:
     """Streaming, stderr, and exit code behavior."""
 
     async def test_streaming_sequential_output(self, client: httpx.AsyncClient) -> None:
-        """Run a loop that emits lines 1-5 with sleeps; verify all lines arrive."""
+        """Five lines 100 ms apart arrive as they are produced, not in one batch at the end."""
         async with managed_computer(client) as computer_id:
             result = await exec_command(
                 client,
@@ -109,6 +109,16 @@ class TestT03ExecBasics:
             )
             lines = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
             assert lines == ["1", "2", "3", "4", "5"], f"Expected lines 1-5, got: {lines}"
+            stdout_arrivals = [
+                t
+                for (evt, _), t in zip(result.events, result.arrivals, strict=True)
+                if evt == "stdout"
+            ]
+            assert len(stdout_arrivals) == 5
+            spread = stdout_arrivals[-1] - stdout_arrivals[0]
+            assert spread >= 0.3, (
+                f"lines arrived {spread:.3f}s apart; a buffered stream delivers them together"
+            )
 
     async def test_stderr_comes_through(self, client: httpx.AsyncClient) -> None:
         """echo to stderr arrives as stderr events."""
@@ -131,32 +141,11 @@ class TestT03ExecBasics:
             assert "err_line" in result.stderr
 
     async def test_exit_code_nonzero(self, client: httpx.AsyncClient) -> None:
-        """A command that exits non-zero should indicate failure somehow.
-
-        The SSE stream may or may not include exit code information.
-        We check for any indication: an 'exit' event, an 'error' event,
-        or an HTTP-level error.
-        """
+        """`exit 42` ends the stream with an exit event carrying 42."""
         async with managed_computer(client) as computer_id:
             result = await exec_command(client, computer_id, "exit 42")
-
-            # Look for any exit code indication in the events
-            exit_events = [
-                (evt, data)
-                for evt, data in result.events
-                if evt in ("exit", "error", "exit_code", "done")
-            ]
-
-            # If there are exit-type events, check that exit code is non-zero
-            if exit_events:
-                for _evt, data in exit_events:
-                    if data.isdigit() or (data.startswith("-") and data[1:].isdigit()):
-                        assert int(data) != 0, "Expected non-zero exit code"
-                        return
-
-            # If no explicit exit event, the test still passes — we document
-            # that exit codes may not be surfaced yet
-            print(f"NOTE: No explicit exit code event found. Events were: {result.events}")
+            assert result.events[-1] == ("exit", "42"), f"events were: {result.events}"
+            assert not any(evt == "error" for evt, _ in result.events)
 
     async def test_multiline_stdout(self, client: httpx.AsyncClient) -> None:
         """Multiple lines of stdout are all captured."""

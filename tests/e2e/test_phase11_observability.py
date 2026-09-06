@@ -1,7 +1,8 @@
 """Phase 11: Observability — "Metrics, Logs, and Status"
 
 These tests run against a LIVE server with real Firecracker VMs.
-Most are xfail because observability infrastructure is not yet implemented.
+Nothing here is skipped: every test below exercises an observability
+endpoint that is already implemented.
 """
 
 from __future__ import annotations

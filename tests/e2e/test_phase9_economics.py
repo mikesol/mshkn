@@ -1,8 +1,10 @@
 """Phase 9: Economics — "Cost Targets and Resource Efficiency"
 
 These tests run against a LIVE server with real Firecracker VMs.
-ALL are xfail because they require long-running measurements or billing
-infrastructure that is not yet available.
+Two tests are skipped outright, with reasons, because they require a
+week- or month-long measurement window (NVMe wear, sleep-cost billing).
+The third is a stub: it documents a cost target but does not yet measure
+anything.
 """
 
 from __future__ import annotations

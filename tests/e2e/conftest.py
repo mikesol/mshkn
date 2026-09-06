@@ -69,6 +69,7 @@ class ExecResult:
     stdout: str
     stderr: str
     events: list[tuple[str, str]] = field(default_factory=list)
+    arrivals: list[float] = field(default_factory=list)
 
 
 async def exec_command(
@@ -78,6 +79,7 @@ async def exec_command(
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
     events: list[tuple[str, str]] = []
+    arrivals: list[float] = []
     current_event = "stdout"
 
     async with client.stream(
@@ -96,6 +98,7 @@ async def exec_command(
             elif line.startswith("data: "):
                 data = line[6:]
                 events.append((current_event, data))
+                arrivals.append(time.monotonic())
                 if current_event == "stdout":
                     stdout_lines.append(data)
                 elif current_event == "stderr":
@@ -105,6 +108,7 @@ async def exec_command(
         stdout="\n".join(stdout_lines),
         stderr="\n".join(stderr_lines),
         events=events,
+        arrivals=arrivals,
     )
 
 
