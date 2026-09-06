@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -14,7 +15,7 @@ from mshkn.host import ExecResult, VmMetrics
 from mshkn.host.firecracker import CONNECT_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
     from mshkn.host import OutputLine, StreamName
 
@@ -30,6 +31,13 @@ _METRICS_CMD = (
     'df -BM / | awk \'NR==2{gsub(/M/,"",$2); gsub(/M/,"",$3); print $2,$3}\'; '
     "ps -eo pid,comm --no-headers | head -50"
 )
+
+
+@dataclass(frozen=True)
+class _ReaderDone:
+    """Sentinel a reader task queues when it stops, carrying why it stopped."""
+
+    error: Exception | None
 
 
 class ConnectFn(Protocol):
@@ -63,15 +71,16 @@ class SshGuest:
         lock = self._locks.setdefault(vm_ip, asyncio.Lock())
         async with lock:
             conn = self._conns.get(vm_ip)
-            now = asyncio.get_running_loop().time()
+            loop = asyncio.get_running_loop()
             if conn is not None:
+                now = loop.time()
                 if now - self._last_used.get(vm_ip, 0.0) < _HEALTH_CHECK_INTERVAL:
                     self._last_used[vm_ip] = now
                     return conn
                 try:
                     result = await asyncio.wait_for(conn.run("true", check=False), timeout=3.0)
                     if result.exit_status == 0:
-                        self._last_used[vm_ip] = now
+                        self._last_used[vm_ip] = loop.time()
                         return conn
                 except Exception:
                     logger.debug("pooled SSH connection to %s failed its health check", vm_ip)
@@ -80,7 +89,9 @@ class SshGuest:
                 del self._conns[vm_ip]
             conn = await self._fresh(vm_ip, keepalive_interval=15, login_timeout=10)
             self._conns[vm_ip] = conn
-            self._last_used[vm_ip] = now
+            # The clock starts when the connection is usable, not when we asked
+            # for it: a handshake can eat a third of the health-check interval.
+            self._last_used[vm_ip] = loop.time()
             return conn
 
     async def warm(self, vm_ip: str) -> None:
@@ -91,7 +102,9 @@ class SshGuest:
         if conn is not None:
             with contextlib.suppress(Exception):
                 conn.close()
-        self._locks.pop(vm_ip, None)
+        # The per-IP lock stays: _pooled holds it across a connect that can run
+        # for CONNECT_TIMEOUT_SECONDS, and dropping it here would let a
+        # concurrent _pooled build a second connection behind a second lock.
         self._last_used.pop(vm_ip, None)
 
     async def close(self) -> None:
@@ -108,8 +121,18 @@ class SshGuest:
         conn = await self._pooled(vm_ip)
         try:
             return await self._run_on(conn, command, timeout)
-        except (asyncssh.ChannelOpenError, asyncssh.ConnectionLost) as exc:
-            logger.warning("SSH channel error for %s, reconnecting: %s", vm_ip, exc)
+        except asyncssh.ChannelOpenError as exc:
+            # The shared connection is out of channels (sshd MaxSessions), not
+            # dead. Closing it would take down every other task's channel, so
+            # run this command on a dedicated connection instead.
+            logger.warning("SSH channel limit for %s, using a dedicated connection: %s", vm_ip, exc)
+            dedicated = await self._fresh(vm_ip)
+            try:
+                return await self._run_on(dedicated, command, timeout)
+            finally:
+                dedicated.close()
+        except asyncssh.ConnectionLost as exc:
+            logger.warning("SSH connection lost for %s, reconnecting: %s", vm_ip, exc)
             await self.evict(vm_ip)
             conn = await self._pooled(vm_ip)
             return await self._run_on(conn, command, timeout)
@@ -125,7 +148,7 @@ class SshGuest:
 
     async def stream(
         self, vm_ip: str, command: str, *, timeout: float = 60.0
-    ) -> AsyncIterator[OutputLine]:
+    ) -> AsyncGenerator[OutputLine, None]:
         """Yield (stream, line) as lines arrive; ends with ("exit", code).
 
         Uses the pooled connection; if the pooled connection cannot open
@@ -138,24 +161,43 @@ class SshGuest:
         except asyncssh.ChannelOpenError:
             conn = await self._fresh(vm_ip)
             owned = True
-            process = await conn.create_process(command)
+            try:
+                process = await conn.create_process(command)
+            except BaseException:
+                conn.close()
+                raise
+        emitted_exit = False
+        pump = self._pump(process, timeout)
         try:
-            async for item in self._pump(process, timeout):
+            async for item in pump:
+                emitted_exit = item[0] == "exit"
                 yield item
         finally:
+            await pump.aclose()
+            if not emitted_exit:
+                # The consumer abandoned the stream, or a reader failed. Kill
+                # the remote process so its channel is released; on the pooled
+                # connection it would otherwise hold a MaxSessions slot until
+                # the command finished on its own.
+                with contextlib.suppress(Exception):
+                    process.kill()
             if owned:
                 conn.close()
 
     @staticmethod
-    async def _pump(process: Any, timeout: float) -> AsyncIterator[OutputLine]:
-        queue: asyncio.Queue[OutputLine | None] = asyncio.Queue()
+    async def _pump(process: Any, timeout: float) -> AsyncGenerator[OutputLine, None]:
+        queue: asyncio.Queue[OutputLine | _ReaderDone] = asyncio.Queue()
 
         async def read(reader: Any, name: StreamName) -> None:
             try:
                 async for line in reader:
-                    await queue.put((name, line.rstrip("\n")))
-            finally:
-                await queue.put(None)
+                    queue.put_nowait((name, line.rstrip("\n")))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                queue.put_nowait(_ReaderDone(exc))
+            else:
+                queue.put_nowait(_ReaderDone(None))
 
         pumps = [
             asyncio.create_task(read(process.stdout, "stdout")),
@@ -166,11 +208,19 @@ class SshGuest:
         hard_deadline = loop.time() + timeout
         grace_deadline: float | None = None
         finished_readers = 0
+        reader_error: Exception | None = None
         try:
-            while finished_readers < 2:
+            while True:
                 now = loop.time()
                 if grace_deadline is None and exit_task.done():
+                    # The exit status is known; drain stragglers briefly.
                     grace_deadline = now + STREAM_GRACE_SECONDS
+                if grace_deadline is not None and finished_readers >= 2:
+                    break
+                # Until the process exits we are bounded by the hard timeout,
+                # never by EOF on the readers: sshd sends channel EOF before
+                # the exit-status request, so stopping at EOF would report an
+                # exit status that has not arrived yet.
                 budget = (grace_deadline if grace_deadline is not None else hard_deadline) - now
                 if budget <= 0:
                     if grace_deadline is None:
@@ -190,8 +240,11 @@ class SshGuest:
                 )
                 if getter in done:
                     item = getter.result()
-                    if item is None:
+                    if isinstance(item, _ReaderDone):
                         finished_readers += 1
+                        if item.error is not None:
+                            reader_error = item.error
+                            break
                     else:
                         yield item
                 else:
@@ -204,6 +257,10 @@ class SshGuest:
             if not exit_task.done():
                 exit_task.cancel()
             await asyncio.gather(*pumps, exit_task, return_exceptions=True)
+        if reader_error is not None:
+            # A reader died mid-command. Reporting a clean exit here would make
+            # a dropped connection indistinguishable from a successful run.
+            raise reader_error
         yield ("exit", str(process.exit_status or 0))
 
     async def exec_bg(self, vm_ip: str, command: str) -> int:
@@ -247,14 +304,17 @@ def parse_metrics(stdout: str) -> VmMetrics:
     if lines:
         with contextlib.suppress(ValueError):
             cpu_pct = round(100.0 - float(lines[0].strip().replace(",", ".")), 1)
+    # Assign field by field, so a malformed second value keeps the first.
     ram_total_mb = ram_usage_mb = 0
     if len(lines) > 1 and len(parts := lines[1].split()) >= 2:
         with contextlib.suppress(ValueError):
-            ram_total_mb, ram_usage_mb = int(parts[0]), int(parts[1])
+            ram_total_mb = int(parts[0])
+            ram_usage_mb = int(parts[1])
     disk_total_mb = disk_usage_mb = 0
     if len(lines) > 2 and len(parts := lines[2].split()) >= 2:
         with contextlib.suppress(ValueError):
-            disk_total_mb, disk_usage_mb = int(parts[0]), int(parts[1])
+            disk_total_mb = int(parts[0])
+            disk_usage_mb = int(parts[1])
     processes: list[dict[str, object]] = []
     for line in lines[3:]:
         parts = line.strip().split(None, 1)
