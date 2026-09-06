@@ -566,10 +566,10 @@ async def test_exec_bg_returns_the_pid_and_rejects_an_empty_one() -> None:
     conn = FakeConn(FakeProcess([], [], 0), run_result=RunResult(0, "4321\n", ""))
     guest = make_guest_with([conn])
     assert await guest.exec_bg("172.16.1.2", "sleep 5; echo 'q'") == 4321
-    assert conn.runs[-1] == (
+    assert conn.runs == [
         "nohup bash -c 'sleep 5; echo '\\''q'\\''' > /tmp/bg-tmp-$$.log 2>&1 & "
         "BG=$!; ln -sf /tmp/bg-tmp-$$.log /tmp/bg-$BG.log; echo $BG"
-    )
+    ]
     empty = FakeConn(FakeProcess([], [], 0), run_result=RunResult(0, "", "boom"))
     with pytest.raises(RuntimeError, match="Failed to get PID"):
         await make_guest_with([empty]).exec_bg("172.16.1.2", "true")

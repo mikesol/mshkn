@@ -280,5 +280,9 @@ async def test_merge_copies_the_result_onto_the_output_volume_in_mount_order(
     assert (out / "base.txt").read_text() == "v1"
     assert (out / "conflict.txt").read_text() == "A"
     assert (out / "a_only.txt").read_text() == "a"
-    assert not (out / "doomed.txt").exists(), "deleted in A, unchanged in B -> removed from output"
+    # doomed.txt is deleted in A and unchanged in B, so the algorithm drops it. The
+    # output volume began as a copy of the parent, which had it, so only the
+    # copy-back's deletion loop can take it off; this is the sole test of that loop.
+    # (That the copy happens at all is pinned by test_snap_copies_the_source_volume_content.)
+    assert not (out / "doomed.txt").exists(), "the copy-back must delete what the merge dropped"
     host.close()

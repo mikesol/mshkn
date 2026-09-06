@@ -57,7 +57,9 @@ def _dirs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return parent, a, b
 
 
-def test_delete_vs_modify_is_a_conflict_resolved_toward_a(tmp_path: Path) -> None:
+def test_delete_vs_modify_is_a_conflict_that_falls_back_to_b_when_a_deleted(
+    tmp_path: Path,
+) -> None:
     parent, a, b = _dirs(tmp_path)
     (parent / "f").write_text("v0")
     (b / "f").write_text("v1")  # a deleted it, b modified it
@@ -85,12 +87,14 @@ def test_both_added_same_content_auto_merges(tmp_path: Path) -> None:
     assert result.auto_merged == 1
 
 
-def test_both_deleted_is_unchanged_and_absent(tmp_path: Path) -> None:
+def test_both_deleted_is_absent_and_counted_as_auto_merged(tmp_path: Path) -> None:
+    """Both sides deleting a file is not "unchanged": it lands on "changed the same way"."""
     parent, a, b = _dirs(tmp_path)
     (parent / "gone").write_text("x")
     result = three_way_merge(parent, a, b)
     assert result.conflicts == []
     assert not (result.merged_dir / "gone").exists()
+    assert (result.unchanged, result.auto_merged) == (0, 1)
 
 
 def test_nested_paths_and_counts(tmp_path: Path) -> None:
