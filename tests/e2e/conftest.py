@@ -137,11 +137,15 @@ async def create_recipe(client: httpx.AsyncClient, dockerfile: str, timeout: flo
 async def create_computer(
     client: httpx.AsyncClient,
     recipe_id: str | None = None,
+    *,
+    needs: dict[str, str] | None = None,
 ) -> str:
     """Create a computer, return computer_id."""
     body: dict[str, object] = {}
     if recipe_id:
         body["recipe_id"] = recipe_id
+    if needs:
+        body["needs"] = needs
     resp = await client.post("/computers", json=body)
     resp.raise_for_status()
     created: dict[str, Any] = resp.json()
@@ -188,9 +192,11 @@ async def delete_checkpoint(client: httpx.AsyncClient, checkpoint_id: str) -> No
 async def managed_computer(
     client: httpx.AsyncClient,
     recipe_id: str | None = None,
+    *,
+    needs: dict[str, str] | None = None,
 ) -> AsyncIterator[str]:
     """Context manager that creates and destroys a computer."""
-    comp_id = await create_computer(client, recipe_id=recipe_id)
+    comp_id = await create_computer(client, recipe_id=recipe_id, needs=needs)
     try:
         yield comp_id
     finally:

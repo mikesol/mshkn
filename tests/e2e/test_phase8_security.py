@@ -206,12 +206,18 @@ class TestT84ResourceLimits:
             assert "alive_after_fill" in result2.stdout
 
     async def test_memory_400mb_in_512mb_vm(self, client: httpx.AsyncClient) -> None:
-        """Allocating 400MB in a 512MB VM should work."""
-        async with managed_computer(client) as computer_id:
+        """Allocating 400MB in a VM created with 512MB of RAM works.
+
+        The default VM has 256MB, where a 400MB buffer is refused, so the
+        computer is created with `needs.ram = 512MB`. `dd` with a 400MB block
+        size allocates and touches a buffer of exactly that size; the base
+        image has no python3.
+        """
+        async with managed_computer(client, needs={"ram": "512MB"}) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
-                "python3 -c \"x = bytearray(400_000_000); print('allocated_400mb')\" 2>&1",
+                "dd if=/dev/zero of=/dev/null bs=400M count=1 2>&1 && echo allocated_400mb",
                 timeout=30.0,
             )
             combined = result.stdout + result.stderr
