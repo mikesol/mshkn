@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass
 from functools import partial
@@ -89,15 +90,24 @@ class BackgroundTasks:
             await asyncio.gather(task, return_exceptions=True)
 
     async def drain(self, timeout: float) -> None:
-        """Wait up to timeout for outstanding tasks, then cancel whatever is left."""
-        pending = [t for t in self._tasks if not t.done()]
-        if not pending:
-            return
-        _done, still_running = await asyncio.wait(pending, timeout=timeout)
-        for task in still_running:
+        """Wait up to timeout for outstanding tasks, then cancel whatever is left.
+
+        Tasks spawned while draining are awaited too: a deferred drain that
+        self-destructs spawns a callback and a further drain as it runs, and a
+        single snapshot of the set would tear those down mid-flight.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            pending = [t for t in self._tasks if not t.done()]
+            if not pending:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.wait(pending, timeout=remaining)
+        for task in [t for t in self._tasks if not t.done()]:
             task.cancel()
-        if still_running:
-            await asyncio.gather(*still_running, return_exceptions=True)
+        await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
     def __len__(self) -> int:
         return len(self._tasks)
@@ -140,7 +150,7 @@ class Runtime:
         computers = ComputerService(config, db, host, allocator, recipes)
         checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
         lifecycle = Lifecycle(db, computers, checkpoints, tasks, client)
-        ingress = IngressService(config, db, computers, checkpoints, lifecycle, tasks)
+        ingress = IngressService(db, computers, checkpoints, lifecycle, tasks)
         reaper = Reaper(config, db, host, computers, checkpoints, lifecycle, alerts)
         return cls(
             config=config,

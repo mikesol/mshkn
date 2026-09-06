@@ -25,7 +25,7 @@ from mshkn.db import (
     list_prunable_checkpoints,
 )
 from mshkn.errors import BadRequest, Conflict, NotFound
-from mshkn.models import Checkpoint, CheckpointTrigger, Computer
+from mshkn.models import Checkpoint, CheckpointTrigger, Computer, checkpoint_volume_name
 from mshkn.observability.metrics import checkpoints_total, timed
 from mshkn.services.merge import MergeResult, three_way_merge
 
@@ -93,6 +93,20 @@ class CheckpointService:
         ckpts = await list_checkpoints_by_account(self.db, account.id, label=label)
         return ckpts[0] if ckpts else None
 
+    async def source_label(self, account_id: str, computer: Computer) -> str | None:
+        """The label of the checkpoint a computer was forked from, if it still exists.
+
+        A tolerant lookup, not get_owned(): prune() deletes checkpoints without
+        checking for live forks, so a destroy or an idle reap must not turn into
+        a 404 just because the source row has since gone.
+        """
+        if not computer.source_checkpoint_id:
+            return None
+        source = await get_checkpoint(self.db, computer.source_checkpoint_id)
+        if source is None or source.account_id != account_id or not source.label:
+            return None
+        return source.label
+
     # -- create --------------------------------------------------------------
 
     async def create(
@@ -116,7 +130,7 @@ class CheckpointService:
             # pause/resume breaks the pooled TCP session
             await self.host.guest.evict(computer.vm_ip)
             volume_id = await self.allocator.acquire_volume_id()
-            volume_name = f"mshkn-ckpt-{checkpoint_id}"
+            volume_name = checkpoint_volume_name(checkpoint_id)
             await self.host.blocks.snap(
                 source_volume_id=computer.thin_volume_id, new_volume_id=volume_id
             )
@@ -217,7 +231,7 @@ class CheckpointService:
 
         checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
         merged_volume_id = await self.allocator.acquire_volume_id()
-        merged_volume_name = f"mshkn-ckpt-{checkpoint_id}"
+        merged_volume_name = checkpoint_volume_name(checkpoint_id)
         async with timed("merge"):
             await self.host.blocks.snap(
                 source_volume_id=parent.thin_volume_id, new_volume_id=merged_volume_id
@@ -279,6 +293,8 @@ class CheckpointService:
                     raise Conflict("Checkpoint chain has active computer")
                 deferred_id = f"def-{uuid.uuid4().hex[:12]}"
                 payload = {
+                    # Informational: the drain forks from the newest checkpoint
+                    # carrying the label, not from this one.
                     "checkpoint_id": checkpoint.id,
                     "recipe_id": recipe_id,
                     "exec": spec.command,

@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse
 
 from mshkn.api.deps import get_runtime, require_account
 from mshkn.api.schemas import (
+    AcceptedResponse,
+    DeferredResponse,
     IngressLogResponse,
     IngressRuleCreateRequest,
     IngressRuleDetail,
@@ -25,12 +27,19 @@ from mshkn.api.schemas import (
     IngressRuleUpdateRequest,
     IngressTestRequest,
     IngressTestResponse,
+    create_response,
+    fork_response,
 )
-from mshkn.db import get_ingress_rule_by_id
-from mshkn.errors import InvalidInput, NotFound, PayloadTooLarge
+from mshkn.errors import InvalidInput, PayloadTooLarge
+from mshkn.models import IngressLogStatus
+from mshkn.services.checkpoints import Deferred
+from mshkn.services.ingress import ForkOutcome
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from mshkn.models import Account, IngressRule
+    from mshkn.services.ingress import TriggerOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -250,11 +259,9 @@ async def _parse_ingress_body(request: Request, max_bytes: int) -> dict[str, obj
 async def handle_ingress(rule_id: str, request: Request) -> Response:
     """Unauthenticated ingress trigger endpoint."""
     rt = get_runtime(request)
-    # The body limit is per rule, so the rule has to be read before the body is.
-    # IngressService.trigger reads it again and owns the authoritative check.
-    rule = await get_ingress_rule_by_id(rt.db, rule_id)
-    if rule is None or not rule.enabled:
-        raise NotFound("Ingress rule not found")
+    # The body limit is per rule, so the rule is resolved before the body is read
+    # and handed to trigger() rather than looked up twice.
+    rule = await rt.ingress.enabled_rule(rule_id)
 
     try:
         request_dict = await _parse_ingress_body(request, rule.max_body_bytes)
@@ -264,7 +271,21 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         logger.warning("Failed to parse ingress body for %s: %s", rule_id, exc)
         raise InvalidInput("Failed to parse request body") from None
 
-    outcome = await rt.ingress.trigger(rule_id, request_dict)
-    if outcome.body is None:
-        return Response(status_code=outcome.status_code)
-    return JSONResponse(status_code=outcome.status_code, content=outcome.body)
+    outcome = await rt.ingress.trigger(rule, request_dict)
+    return _trigger_response(outcome, rt.config.domain)
+
+
+def _trigger_response(outcome: TriggerOutcome, domain: str) -> Response:
+    """The one place an ingress action turns into JSON, through the REST schemas."""
+    result = outcome.result
+    if result is None:
+        if outcome.status_code == 204:
+            return Response(status_code=204)
+        body: BaseModel = AcceptedResponse(status=IngressLogStatus.ACCEPTED.value)
+    elif isinstance(result, Deferred):
+        body = DeferredResponse(deferred_id=result.deferred_id, status="queued")
+    elif isinstance(result, ForkOutcome):
+        body = fork_response(result.computer, result.checkpoint.id, result.result)
+    else:
+        body = create_response(result.computer, result.result, domain=domain)
+    return JSONResponse(status_code=outcome.status_code, content=body.model_dump())

@@ -11,6 +11,9 @@ from mshkn.models import (
     ExecSpec,
     Recipe,
     RecipeStatus,
+    checkpoint_volume_name,
+    computer_volume_name,
+    recipe_volume_name,
 )
 
 
@@ -29,6 +32,7 @@ def test_computer_creation() -> None:
     )
     assert c.id == "comp-abc"
     assert c.status == ComputerStatus.RUNNING
+    assert c.volume_name == computer_volume_name("comp-abc")
 
 
 def test_recipe_dataclass() -> None:
@@ -51,6 +55,7 @@ def test_recipe_dataclass() -> None:
     assert r.build_log is None
     assert r.base_volume_id is None
     assert r.built_at is None
+    assert r.volume_name == recipe_volume_name("rcp-abc123")
 
 
 def test_computer_recipe_id() -> None:
@@ -86,6 +91,7 @@ def test_checkpoint_recipe_id() -> None:
         recipe_id="rcp-abc123",
     )
     assert cp.recipe_id == "rcp-abc123"
+    assert cp.volume_name == checkpoint_volume_name("ckpt-abc")
 
 
 def test_status_enums_are_strings() -> None:
@@ -130,3 +136,10 @@ def test_exec_spec_is_frozen() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         spec.command = "rm"  # type: ignore[misc]
+
+
+def test_volume_name_helpers_and_the_properties_that_delegate() -> None:
+    """scripts/e2e.sh cleans orphans by these prefixes, so the formats are load-bearing."""
+    assert computer_volume_name("comp-abc") == "mshkn-comp-abc"
+    assert checkpoint_volume_name("ckpt-abc") == "mshkn-ckpt-ckpt-abc"
+    assert recipe_volume_name("rcp-abc") == "mshkn-recipe-rcp-abc"

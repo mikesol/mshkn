@@ -30,7 +30,12 @@ def _recipe_to_response(recipe: Recipe) -> RecipeResponse:
     )
 
 
-@router.post("")
+@router.post(
+    "",
+    response_model=RecipeResponse,
+    status_code=202,
+    responses={200: {"model": RecipeResponse}},
+)
 async def create_recipe(
     request: Request,
     body: CreateRecipeRequest,

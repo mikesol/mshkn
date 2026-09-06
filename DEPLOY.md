@@ -140,7 +140,7 @@ The first start runs the migrations and creates `/opt/mshkn/mshkn.db`.
 ## 10. Test account
 
 ```bash
-cd /opt/mshkn && (.venv/bin/python -m mshkn accounts list | grep -q '^acct-mike	' \
+cd /opt/mshkn && set -a; . /opt/mshkn/.env; set +a; (.venv/bin/python -m mshkn accounts list | grep -q '^acct-mike	' \
   || .venv/bin/python -m mshkn accounts create --id acct-mike --api-key 'mk-test-key-2026' --vm-limit 20)
 ```
 

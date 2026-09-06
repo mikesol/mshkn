@@ -22,6 +22,7 @@ from mshkn.api.schemas import (
     ExecKillResponse,
     ExecRequest,
     UploadResponse,
+    create_response,
 )
 from mshkn.models import CheckpointTrigger, ComputerStatus, ExecSpec
 from mshkn.observability.metrics import exec_duration_seconds
@@ -64,15 +65,7 @@ async def create_computer(
         meta_exec=body.meta_exec,
     )
     outcome = await rt.lifecycle.run_ephemeral(account, computer, spec, source_checkpoint=None)
-    return CreateResponse(
-        computer_id=computer.id,
-        url=f"https://{computer.id}.{rt.config.domain}",
-        recipe_id=computer.recipe_id,
-        exec_exit_code=outcome.exec_exit_code,
-        exec_stdout=outcome.exec_stdout,
-        exec_stderr=outcome.exec_stderr,
-        created_checkpoint_id=outcome.created_checkpoint_id,
-    )
+    return create_response(computer, outcome, domain=rt.config.domain)
 
 
 @router.post("/{computer_id}/exec")

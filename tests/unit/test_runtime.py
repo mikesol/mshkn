@@ -60,6 +60,22 @@ async def test_drain_waits_then_cancels_stragglers() -> None:
     assert len(tasks) == 0
 
 
+async def test_drain_awaits_tasks_spawned_while_draining() -> None:
+    """A deferred drain spawns more work as it runs; drain must follow it."""
+    tasks = BackgroundTasks()
+    out: list[str] = []
+
+    async def parent() -> None:
+        await asyncio.sleep(0.01)
+        out.append("parent")
+        tasks.spawn(_sleep_then(out, "child", 0.01), name="child")
+
+    tasks.spawn(parent(), name="parent")
+    await tasks.drain(timeout=2.0)
+    assert out == ["parent", "child"]
+    assert len(tasks) == 0
+
+
 async def test_failed_task_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
     async def boom() -> None:
         raise RuntimeError("kaboom")

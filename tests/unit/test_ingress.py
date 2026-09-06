@@ -13,7 +13,6 @@ from mshkn.db.ingress import (
     insert_ingress_rule,
     list_ingress_logs,
     list_ingress_rules_by_account,
-    prune_old_ingress_logs,
     rotate_ingress_rule_id,
     update_ingress_rule,
 )
@@ -126,38 +125,6 @@ async def test_ingress_log_crud(db: aiosqlite.Connection) -> None:
     logs = await list_ingress_logs(db, "int-001")
     assert len(logs) == 1
     assert logs[0].status == IngressLogStatus.COMPLETED
-
-
-async def test_prune_old_logs(db: aiosqlite.Connection) -> None:
-    await _account(db, "test-key")
-    await insert_ingress_rule(db, _make_rule())
-    await insert_ingress_log(
-        db,
-        IngressLog(
-            id="old",
-            rule_internal_id="int-001",
-            status=IngressLogStatus.COMPLETED,
-            starlark_result=None,
-            error_message=None,
-            created_at="2020-01-01T00:00:00Z",
-        ),
-    )
-    await insert_ingress_log(
-        db,
-        IngressLog(
-            id="new",
-            rule_internal_id="int-001",
-            status=IngressLogStatus.COMPLETED,
-            starlark_result=None,
-            error_message=None,
-            created_at="2099-01-01T00:00:00Z",
-        ),
-    )
-    pruned = await prune_old_ingress_logs(db, "2026-01-01T00:00:00Z")
-    assert pruned == 1
-    logs = await list_ingress_logs(db, "int-001")
-    assert len(logs) == 1
-    assert logs[0].id == "new"
 
 
 # --- Starlark sandbox tests ---

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from mshkn.db import get_account_by_id, get_checkpoint, list_all_computers
+from mshkn.db import get_account_by_id, list_all_computers
 from mshkn.models import Alert, CheckpointTrigger, ComputerStatus
 from mshkn.observability.metrics import host_ram_used_ratio, thin_pool_used_ratio
 
@@ -144,11 +144,7 @@ class Reaper:
         return sum(results)
 
     async def _checkpoint_and_destroy(self, computer: Computer) -> None:
-        label: str | None = None
-        if computer.source_checkpoint_id:
-            source = await get_checkpoint(self.db, computer.source_checkpoint_id)
-            if source is not None:
-                label = source.label
+        label = await self.checkpoints.source_label(computer.account_id, computer)
         effective_label = label or IDLE_LABEL
         try:
             await self.checkpoints.create(

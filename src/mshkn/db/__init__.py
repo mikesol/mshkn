@@ -39,7 +39,6 @@ from mshkn.db.ingress import (
     insert_ingress_rule,
     list_ingress_logs,
     list_ingress_rules_by_account,
-    prune_old_ingress_logs,
     rotate_ingress_rule_id,
     update_ingress_rule,
 )
@@ -99,7 +98,6 @@ __all__ = [
     "list_ingress_rules_by_account",
     "list_prunable_checkpoints",
     "list_recipes_by_account",
-    "prune_old_ingress_logs",
     "rotate_ingress_rule_id",
     "run_migrations",
     "update_computer_status",

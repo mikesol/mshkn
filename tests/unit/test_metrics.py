@@ -4,7 +4,10 @@ from typing import TYPE_CHECKING
 
 from httpx import ASGITransport, AsyncClient
 
+from mshkn.db import insert_account
+from mshkn.models import Account
 from mshkn.observability.metrics import checkpoints_total, computers_created_total
+from mshkn.resources import DEFAULT_RESOURCES, Resources
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
@@ -52,3 +55,20 @@ async def test_labelled_counters_render_after_first_increment(
         text = (await client.get("/metrics")).text
     assert 'mshkn_checkpoints_total{trigger="api"}' in text
     assert 'mshkn_computers_created_total{source="fork"}' in text
+
+
+async def test_boot_and_restore_are_observed_as_operations(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
+    """Spec §10 lists boot and restore among the timed ops; _bring_up produces both."""
+    account = Account(id="acct-metrics", api_key="k", vm_limit=10, created_at="t")
+    await insert_account(db, account)
+    rt = make_runtime(db, config=runtime_config)
+    # Custom resources cold-boot; the defaults restore from the L3 template.
+    await rt.computers.create(account, recipe_id=None, resources=Resources(mem_mib=1024, vcpus=4))
+    await rt.computers.create(account, recipe_id=None, resources=DEFAULT_RESOURCES)
+    app = make_app(rt)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        text = (await client.get("/metrics")).text
+    assert 'mshkn_operation_duration_seconds_count{op="boot"}' in text
+    assert 'mshkn_operation_duration_seconds_count{op="restore"}' in text

@@ -6,9 +6,12 @@ nothing here knows how a computer is booted or a checkpoint is frozen.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from mshkn.models import Computer, EphemeralResult
 
 # --- computers ---------------------------------------------------------------
 
@@ -104,6 +107,10 @@ class ForkResponse(BaseModel):
 
 class DeferredResponse(BaseModel):
     deferred_id: str
+    status: str
+
+
+class AcceptedResponse(BaseModel):
     status: str
 
 
@@ -232,3 +239,33 @@ class AlertResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     subsystems: dict[str, str] = Field(default_factory=dict)
+
+
+# --- shared constructors -----------------------------------------------------
+# One body per concept: the REST routers and the ingress router build these
+# through the same functions, so the shapes cannot drift apart.
+
+
+def create_response(computer: Computer, result: EphemeralResult, *, domain: str) -> CreateResponse:
+    """The body of a create that ran. REST create and ingress create share it."""
+    return CreateResponse(
+        computer_id=computer.id,
+        url=f"https://{computer.id}.{domain}",
+        recipe_id=computer.recipe_id,
+        exec_exit_code=result.exec_exit_code,
+        exec_stdout=result.exec_stdout,
+        exec_stderr=result.exec_stderr,
+        created_checkpoint_id=result.created_checkpoint_id,
+    )
+
+
+def fork_response(computer: Computer, checkpoint_id: str, result: EphemeralResult) -> ForkResponse:
+    """The body of a fork that ran. REST fork and ingress fork share it."""
+    return ForkResponse(
+        computer_id=computer.id,
+        checkpoint_id=checkpoint_id,
+        exec_exit_code=result.exec_exit_code,
+        exec_stdout=result.exec_stdout,
+        exec_stderr=result.exec_stderr,
+        created_checkpoint_id=result.created_checkpoint_id,
+    )

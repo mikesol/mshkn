@@ -8,7 +8,7 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-from mshkn.db import claim_deferred_by_label, get_checkpoint
+from mshkn.db import claim_deferred_by_label
 from mshkn.models import CheckpointTrigger, EphemeralResult, ExecSpec
 from mshkn.services.callback import deliver_callback
 
@@ -91,18 +91,10 @@ class Lifecycle:
         self.tasks.spawn(self.drain_deferred(account, label), name=f"deferred:{label}")
 
     async def drain_after_destroy(self, account: Account, computer: Computer) -> None:
-        """Drain the source checkpoint's label, if the computer came from a labelled one.
-
-        A tolerant lookup, not get_owned(): prune() deletes checkpoints without
-        checking for live forks, so a destroy that has already happened must not
-        turn into a 404 just because the source row has since gone.
-        """
-        if not computer.source_checkpoint_id:
-            return
-        source = await get_checkpoint(self.db, computer.source_checkpoint_id)
-        if source is None or source.account_id != account.id or not source.label:
-            return
-        self.spawn_drain(account, source.label)
+        """Drain the source checkpoint's label, if the computer came from a labelled one."""
+        label = await self.checkpoints.source_label(account.id, computer)
+        if label:
+            self.spawn_drain(account, label)
 
     async def drain_deferred(self, account: Account, label: str) -> None:
         """Process every queued fork for a label on one new computer.

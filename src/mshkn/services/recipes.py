@@ -32,7 +32,7 @@ from mshkn.db import (
 from mshkn.errors import Conflict, NotFound
 from mshkn.host import SnapshotFiles
 from mshkn.host.shell import run as shell_run
-from mshkn.models import Recipe, RecipeStatus
+from mshkn.models import Recipe, RecipeStatus, recipe_volume_name
 from mshkn.observability.metrics import timed
 
 if TYPE_CHECKING:
@@ -155,9 +155,7 @@ class RecipeService:
         if refs > 0:
             raise Conflict(f"Recipe is referenced by {refs} computer(s)/checkpoint(s)")
         if recipe.base_volume_id is not None:
-            await self.blocks.remove(
-                volume_id=recipe.base_volume_id, name=f"mshkn-recipe-{recipe.id}"
-            )
+            await self.blocks.remove(volume_id=recipe.base_volume_id, name=recipe.volume_name)
         await delete_recipe(self.db, recipe_id)
 
     async def resolve(self, recipe_id: str) -> Recipe:
@@ -185,7 +183,11 @@ class RecipeService:
             cached = await self._cached_template(recipe)
             if cached is not None:
                 return cached
-            source_volume_id = recipe.base_volume_id or 0 if recipe is not None else 0
+            source_volume_id = 0
+            if recipe is not None:
+                if recipe.base_volume_id is None:  # resolve() rejects this; belt and braces
+                    raise Conflict(f"Recipe {recipe.id} has no base volume")
+                source_volume_id = recipe.base_volume_id
             dest_dir = self.config.checkpoint_local_dir / "templates" / key
             try:
                 files = await self.hypervisor.build_template(
@@ -225,7 +227,7 @@ class RecipeService:
         build_dir = Path(f"/tmp/mshkn-build-{content_hash}")
         tar_path = build_dir / "rootfs.tar"
         container_name = f"tmp-{recipe_id}"
-        volume_name = f"mshkn-recipe-{recipe_id}"
+        volume_name = recipe_volume_name(recipe_id)
         image_tag = f"mshkn-recipe-img-{recipe_id}"
         device_active = False
         build_log_lines: list[str] = []

@@ -15,9 +15,9 @@ from mshkn.models import Account, CheckpointTrigger, ComputerStatus, IngressLogS
 from mshkn.resources import DEFAULT_RESOURCES, Resources
 from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
-from mshkn.services.checkpoints import CheckpointService
+from mshkn.services.checkpoints import CheckpointService, Deferred
 from mshkn.services.computers import ComputerService
-from mshkn.services.ingress import IngressService, validate_transform_result
+from mshkn.services.ingress import CreateOutcome, IngressService, validate_transform_result
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.recipes import RecipeService
 
@@ -52,7 +52,7 @@ async def _ingress(
     checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
     lifecycle = Lifecycle(db, computers, checkpoints, tasks, httpx.AsyncClient())
     return (
-        IngressService(config, db, computers, checkpoints, lifecycle, tasks),
+        IngressService(db, computers, checkpoints, lifecycle, tasks),
         computers,
         checkpoints,
         host,
@@ -131,7 +131,7 @@ async def test_create_rule_validates_starlark(db: aiosqlite.Connection, tmp_path
 async def test_trigger_outcomes(db: aiosqlite.Connection, tmp_path: Path) -> None:
     ingress, _, _, _ = await _ingress(db, tmp_path)
     with pytest.raises(NotFound):
-        await ingress.trigger("ir_nope", REQ)
+        await ingress.enabled_rule("ir_nope")
     none_rule = await ingress.create_rule(
         ACCOUNT,
         name="none",
@@ -140,7 +140,7 @@ async def test_trigger_outcomes(db: aiosqlite.Connection, tmp_path: Path) -> Non
         max_body_bytes=1024,
         rate_limit_rpm=60,
     )
-    assert (await ingress.trigger(none_rule.id, REQ)).status_code == 204
+    assert (await ingress.trigger(none_rule, REQ)).status_code == 204
     boom = await ingress.create_rule(
         ACCOUNT,
         name="boom",
@@ -150,7 +150,7 @@ async def test_trigger_outcomes(db: aiosqlite.Connection, tmp_path: Path) -> Non
         rate_limit_rpm=60,
     )
     with pytest.raises(TransformError):
-        await ingress.trigger(boom.id, REQ)
+        await ingress.trigger(boom, REQ)
     logs = await ingress.logs(ACCOUNT, boom.id)
     assert logs and logs[0].status is IngressLogStatus.FAILED
     bad = await ingress.create_rule(
@@ -162,7 +162,7 @@ async def test_trigger_outcomes(db: aiosqlite.Connection, tmp_path: Path) -> Non
         rate_limit_rpm=60,
     )
     with pytest.raises(TransformError) as info:
-        await ingress.trigger(bad.id, REQ)
+        await ingress.trigger(bad, REQ)
     assert isinstance(info.value.detail, dict) and "errors" in info.value.detail
     limited = await ingress.create_rule(
         ACCOUNT,
@@ -172,9 +172,31 @@ async def test_trigger_outcomes(db: aiosqlite.Connection, tmp_path: Path) -> Non
         max_body_bytes=1024,
         rate_limit_rpm=1,
     )
-    assert (await ingress.trigger(limited.id, REQ)).status_code == 204
+    assert (await ingress.trigger(limited, REQ)).status_code == 204
     with pytest.raises(LimitExceeded):
-        await ingress.trigger(limited.id, REQ)
+        await ingress.trigger(limited, REQ)
+
+
+async def test_rotating_a_rule_keeps_its_rate_limit_window(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """The limiter follows the rule, not its public id: rotating is not a reset."""
+    ingress, _, _, _ = await _ingress(db, tmp_path)
+    rule = await ingress.create_rule(
+        ACCOUNT,
+        name="rotating",
+        starlark_source="def transform(req):\n  return None",
+        response_mode="async",
+        max_body_bytes=1024,
+        rate_limit_rpm=3,
+    )
+    for _ in range(2):
+        assert (await ingress.trigger(rule, REQ)).status_code == 204
+    rotated = await ingress.rotate_rule(ACCOUNT, rule.id)
+    assert rotated.id != rule.id and rotated.internal_id == rule.internal_id
+    assert (await ingress.trigger(rotated, REQ)).status_code == 204  # the third
+    with pytest.raises(LimitExceeded):
+        await ingress.trigger(rotated, REQ)
 
 
 async def test_sync_create_honours_recipe_id_and_needs_through_the_lifecycle(
@@ -194,13 +216,15 @@ async def test_sync_create_honours_recipe_id_and_needs_through_the_lifecycle(
         max_body_bytes=1024,
         rate_limit_rpm=60,
     )
-    outcome = await ingress.trigger(rule.id, REQ)
-    assert outcome.status_code == 200 and outcome.body is not None
-    assert outcome.body["exec_stdout"] == "hi\n" and outcome.body["created_checkpoint_id"]
+    outcome = await ingress.trigger(rule, REQ)
+    assert outcome.status_code == 200
+    assert isinstance(outcome.result, CreateOutcome)
+    assert outcome.result.result.exec_stdout == "hi\n"
+    assert outcome.result.result.created_checkpoint_id
     assert host.hypervisor.booted == [
         (host.hypervisor.booted[0][0], Resources(mem_mib=1024, vcpus=4))
     ]
-    stored = await get_computer(db, str(outcome.body["computer_id"]))
+    stored = await get_computer(db, outcome.result.computer.id)
     assert stored is not None and stored.status is ComputerStatus.DESTROYED
     logs = await ingress.logs(ACCOUNT, rule.id)
     assert logs[0].status is IngressLogStatus.COMPLETED
@@ -223,8 +247,8 @@ async def test_async_fork_by_label_runs_in_the_background(
         max_body_bytes=1024,
         rate_limit_rpm=60,
     )
-    outcome = await ingress.trigger(rule.id, REQ)
-    assert outcome.status_code == 202 and outcome.body == {"status": "accepted"}
+    outcome = await ingress.trigger(rule, REQ)
+    assert outcome.status_code == 202 and outcome.result is None
     await ingress.tasks.drain(timeout=2.0)
     assert len(host.hypervisor.restored) == 2  # base's template restore + the fork
     assert [log.status for log in await ingress.logs(ACCOUNT, rule.id)] == [
@@ -246,7 +270,7 @@ async def test_async_action_failure_logs_a_failed_row(
         max_body_bytes=1024,
         rate_limit_rpm=60,
     )
-    assert (await ingress.trigger(rule.id, REQ)).status_code == 202
+    assert (await ingress.trigger(rule, REQ)).status_code == 202
     await ingress.tasks.drain(timeout=2.0)
     logs = await ingress.logs(ACCOUNT, rule.id)
     assert sorted(log.status.value for log in logs) == ["accepted", "failed"]
@@ -275,10 +299,10 @@ async def test_fork_defers_when_the_label_already_has_a_running_computer(
         max_body_bytes=1024,
         rate_limit_rpm=60,
     )
-    outcome = await ingress.trigger(rule.id, REQ)
-    assert outcome.status_code == 200 and outcome.body is not None
-    assert outcome.body["status"] == "queued"
-    deferred_id = str(outcome.body["deferred_id"])
+    outcome = await ingress.trigger(rule, REQ)
+    assert outcome.status_code == 200
+    assert isinstance(outcome.result, Deferred)
+    deferred_id = outcome.result.deferred_id
     assert deferred_id.startswith("def-")
     assert len(host.hypervisor.restored) == restores_before  # nothing was forked
     queued = await claim_deferred_by_label(db, "busy")
@@ -351,9 +375,10 @@ async def test_update_rule(db: aiosqlite.Connection, tmp_path: Path) -> None:
     await ingress.update_rule(ACCOUNT, rule.id, enabled=False)
     assert not (await ingress.get_rule(ACCOUNT, rule.id)).enabled
     with pytest.raises(NotFound):
-        await ingress.trigger(rule.id, REQ)
-    await ingress.update_rule(ACCOUNT, rule.id, enabled=True)
-    assert (await ingress.trigger(rule.id, REQ)).status_code == 204
+        await ingress.enabled_rule(rule.id)
+    enabled = await ingress.update_rule(ACCOUNT, rule.id, enabled=True)
+    assert (await ingress.enabled_rule(rule.id)).id == enabled.id
+    assert (await ingress.trigger(enabled, REQ)).status_code == 204
 
 
 async def test_test_rule_reports_results_and_starlark_failures(

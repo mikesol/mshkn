@@ -53,7 +53,54 @@ async def test_async_fork_by_label_runs_in_the_background(flow: Flow) -> None:
         "async",
     )
     resp = await flow.client.post(f"/ingress/{rule}")
-    assert resp.status_code == 202
+    assert resp.status_code == 202 and resp.json() == {"status": "accepted"}
     await flow.runtime.tasks.drain(timeout=5.0)
     chain = (await flow.client.get("/checkpoints", params={"label": "chain"})).json()
     assert len(chain) == 2
+
+
+async def test_sync_bodies_have_the_same_shape_as_the_rest_endpoints(flow: Flow) -> None:
+    """Ingress serialises through the REST schemas, so the two agree key for key."""
+    flow.host.guest.script["sync"] = ExecResult(0, "", "")
+
+    rest_create = await flow.client.post("/computers", json={"exec": "true"})
+    assert rest_create.status_code == 200
+    create_rule = await _rule(
+        flow, 'def transform(req):\n  return {"action": "create", "exec": "true"}', "sync"
+    )
+    ing_create = await flow.client.post(f"/ingress/{create_rule}")
+    assert ing_create.status_code == 200
+    assert set(ing_create.json()) == set(rest_create.json())
+    assert ing_create.json()["url"].endswith(".test.dev")
+
+    cid = rest_create.json()["computer_id"]
+    ckpt = (await flow.client.post(f"/computers/{cid}/checkpoint", json={"label": "shape"})).json()[
+        "checkpoint_id"
+    ]
+    await flow.client.delete(f"/computers/{cid}")
+    rest_fork = await flow.client.post(f"/checkpoints/{ckpt}/fork", json={"exec": "true"})
+    assert rest_fork.status_code == 200
+    fork_rule = await _rule(
+        flow,
+        'def transform(req):\n  return {"action": "fork",'
+        f' "checkpoint_id": "{ckpt}", "exec": "true"}}',
+        "sync",
+    )
+    await flow.client.delete(f"/computers/{rest_fork.json()['computer_id']}")
+    ing_fork = await flow.client.post(f"/ingress/{fork_rule}")
+    assert ing_fork.status_code == 200
+    assert set(ing_fork.json()) == set(rest_fork.json())
+    assert ing_fork.json()["checkpoint_id"] == ckpt
+
+    # The forked computer is still running on the label, so this one queues.
+    deferred_rule = await _rule(
+        flow,
+        'def transform(req):\n  return {"action": "fork",'
+        f' "checkpoint_id": "{ckpt}", "exec": "true",'
+        ' "exclusive": "defer_on_conflict"}',
+        "sync",
+    )
+    queued = await flow.client.post(f"/ingress/{deferred_rule}")
+    assert queued.status_code == 200
+    assert set(queued.json()) == {"deferred_id", "status"}
+    assert queued.json()["status"] == "queued"

@@ -19,6 +19,7 @@ from mshkn.api.schemas import (
     MergeConflict,
     MergeRequest,
     MergeResponse,
+    fork_response,
 )
 from mshkn.models import ExecSpec
 from mshkn.services.checkpoints import Deferred
@@ -33,7 +34,11 @@ router = APIRouter(prefix="/checkpoints", tags=["checkpoints"])
 _require_account = Depends(require_account)
 
 
-@router.post("/{checkpoint_id}/fork", response_model=None)
+@router.post(
+    "/{checkpoint_id}/fork",
+    response_model=ForkResponse,
+    responses={202: {"model": DeferredResponse}},
+)
 async def fork_checkpoint(
     checkpoint_id: str,
     request: Request,
@@ -59,14 +64,7 @@ async def fork_checkpoint(
             content=DeferredResponse(deferred_id=forked.deferred_id, status="queued").model_dump(),
         )
     outcome = await rt.lifecycle.run_ephemeral(account, forked, spec, source_checkpoint=ckpt)
-    return ForkResponse(
-        computer_id=forked.id,
-        checkpoint_id=checkpoint_id,
-        exec_exit_code=outcome.exec_exit_code,
-        exec_stdout=outcome.exec_stdout,
-        exec_stderr=outcome.exec_stderr,
-        created_checkpoint_id=outcome.created_checkpoint_id,
-    )
+    return fork_response(forked, ckpt.id, outcome)
 
 
 @router.post("/{parent_id}/merge", response_model=MergeResponse)

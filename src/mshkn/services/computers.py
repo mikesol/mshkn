@@ -18,7 +18,7 @@ from mshkn.db import (
 )
 from mshkn.errors import BadRequest, Conflict, HostError, LimitExceeded, MshknError, NotFound
 from mshkn.host import SnapshotFiles
-from mshkn.models import Computer, ComputerStatus
+from mshkn.models import Computer, ComputerStatus, computer_volume_name
 from mshkn.observability.metrics import computers_active, computers_created_total, timed
 from mshkn.resources import DEFAULT_RESOURCES
 
@@ -133,7 +133,16 @@ class ComputerService:
             )
         computers_created_total.labels(source="create").inc()
         logger.info(
-            "Created computer %s (slot=%d, ip=%s)", computer.id, computer.slot, computer.vm_ip
+            "Created computer %s (slot=%d, ip=%s)",
+            computer.id,
+            computer.slot,
+            computer.vm_ip,
+            extra={
+                "op": "create",
+                "computer_id": computer.id,
+                "account_id": account.id,
+                "recipe_id": recipe_id,
+            },
         )
         return computer
 
@@ -159,6 +168,12 @@ class ComputerService:
             checkpoint.id,
             computer.slot,
             computer.vm_ip,
+            extra={
+                "op": "fork",
+                "computer_id": computer.id,
+                "account_id": account.id,
+                "recipe_id": effective_recipe_id,
+            },
         )
         return computer
 
@@ -209,7 +224,7 @@ class ComputerService:
         the slot released, and the error re-raised as HostError.
         """
         computer_id = f"comp-{uuid.uuid4().hex[:12]}"
-        volume_name = f"mshkn-{computer_id}"
+        volume_name = computer_volume_name(computer_id)
         slot, volume_id = await self.allocator.acquire()
         try:
             await self.host.blocks.snap(source_volume_id=source_volume_id, new_volume_id=volume_id)
@@ -220,14 +235,21 @@ class ComputerService:
         routed = False
         try:
             files = await files_for()
+            # Nested inside timed("create")/timed("fork"): different labels, so a
+            # hypervisor failure counts once per op, which is what §10 asks for.
             if files is not None:
-                vm = await self.host.hypervisor.restore(
-                    slot=slot, disk_volume_id=volume_id, disk_name=volume_name, snapshot=files
-                )
+                async with timed("restore"):
+                    vm = await self.host.hypervisor.restore(
+                        slot=slot, disk_volume_id=volume_id, disk_name=volume_name, snapshot=files
+                    )
             else:
-                vm = await self.host.hypervisor.boot(
-                    slot=slot, disk_volume_id=volume_id, disk_name=volume_name, resources=resources
-                )
+                async with timed("boot"):
+                    vm = await self.host.hypervisor.boot(
+                        slot=slot,
+                        disk_volume_id=volume_id,
+                        disk_name=volume_name,
+                        resources=resources,
+                    )
             await self.host.guest.warm(vm.vm_ip)
             computer = Computer(
                 id=computer_id,
@@ -294,6 +316,9 @@ class ComputerService:
         await step("volume removal", self.host.blocks.remove(volume_id=volume_id, name=volume_name))
         await step("teardown", self.host.hypervisor.teardown_slot(slot))
         await step("status update", self._mark_destroyed(computer_id))
+        # The row may already have been inserted, so the gauge has to be reset
+        # from the database like every other state change (spec §10).
+        await step("gauge", self.refresh_active_gauge())
         await step("slot release", self.allocator.release_slot(slot))
         if interrupted is not None:
             raise interrupted
@@ -325,7 +350,16 @@ class ComputerService:
                 await self.host.guest.evict(computer.vm_ip)
             await update_computer_status(self.db, computer_id, ComputerStatus.DESTROYED)
         await self.refresh_active_gauge()
-        logger.info("Destroyed computer %s", computer_id)
+        logger.info(
+            "Destroyed computer %s",
+            computer_id,
+            extra={
+                "op": "destroy",
+                "computer_id": computer_id,
+                "account_id": computer.account_id,
+                "recipe_id": computer.recipe_id,
+            },
+        )
 
     async def cleanup_dead(self, computer: Computer) -> None:
         """Release a VM whose Firecracker process is already gone. Every step is best-effort."""

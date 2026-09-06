@@ -35,6 +35,21 @@ class IngressLogStatus(StrEnum):
 ExclusiveMode = Literal["error_on_conflict", "defer_on_conflict"]
 
 
+# dm-thin device names. scripts/e2e.sh cleans orphans by these prefixes, and the
+# callers below need them before the row they belong to exists, so they are
+# functions of the id and the dataclass properties delegate to them.
+def computer_volume_name(computer_id: str) -> str:
+    return f"mshkn-{computer_id}"
+
+
+def checkpoint_volume_name(checkpoint_id: str) -> str:
+    return f"mshkn-ckpt-{checkpoint_id}"
+
+
+def recipe_volume_name(recipe_id: str) -> str:
+    return f"mshkn-recipe-{recipe_id}"
+
+
 @dataclass
 class Account:
     id: str
@@ -56,6 +71,10 @@ class Recipe:
     template_memory: str | None
     created_at: str
     built_at: str | None
+
+    @property
+    def volume_name(self) -> str:
+        return recipe_volume_name(self.id)
 
 
 @dataclass
@@ -79,7 +98,7 @@ class Computer:
 
     @property
     def volume_name(self) -> str:
-        return f"mshkn-{self.id}"
+        return computer_volume_name(self.id)
 
 
 @dataclass
@@ -99,7 +118,7 @@ class Checkpoint:
 
     @property
     def volume_name(self) -> str:
-        return f"mshkn-ckpt-{self.id}"
+        return checkpoint_volume_name(self.id)
 
 
 @dataclass(frozen=True)

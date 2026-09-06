@@ -30,7 +30,15 @@ from mshkn.db import (
     update_ingress_rule,
 )
 from mshkn.errors import InvalidInput, LimitExceeded, NotFound, TransformError
-from mshkn.models import ExecSpec, IngressLog, IngressLogStatus, IngressRule
+from mshkn.models import (
+    Checkpoint,
+    Computer,
+    EphemeralResult,
+    ExecSpec,
+    IngressLog,
+    IngressLogStatus,
+    IngressRule,
+)
 from mshkn.ratelimit import RateLimiter
 from mshkn.resources import Resources
 from mshkn.services.checkpoints import Deferred
@@ -40,7 +48,6 @@ if TYPE_CHECKING:
     import aiosqlite
     from pydantic_core import ErrorDetails
 
-    from mshkn.config import Config
     from mshkn.models import Account
     from mshkn.runtime import BackgroundTasks
     from mshkn.services.checkpoints import CheckpointService
@@ -127,22 +134,43 @@ def _describe(error: ErrorDetails) -> str:
 
 
 @dataclass(frozen=True)
+class ForkOutcome:
+    """A sync fork action that ran: the computer, what it forked from, what it did."""
+
+    computer: Computer
+    checkpoint: Checkpoint
+    result: EphemeralResult
+
+
+@dataclass(frozen=True)
+class CreateOutcome:
+    """A sync create action that ran."""
+
+    computer: Computer
+    result: EphemeralResult
+
+
+IngressResult = Deferred | ForkOutcome | CreateOutcome
+
+
+@dataclass(frozen=True)
 class TriggerOutcome:
+    """What the trigger produced. `result` is None for 204 (no action) and 202
+    (accepted, still running); the router owns every JSON shape."""
+
     status_code: int
-    body: dict[str, object] | None
+    result: IngressResult | None
 
 
 class IngressService:
     def __init__(
         self,
-        config: Config,
         db: aiosqlite.Connection,
         computers: ComputerService,
         checkpoints: CheckpointService,
         lifecycle: Lifecycle,
         tasks: BackgroundTasks,
     ) -> None:
-        self.config = config
         self.db = db
         self.computers = computers
         self.checkpoints = checkpoints
@@ -220,17 +248,14 @@ class IngressService:
         return rule
 
     async def delete_rule(self, account: Account, rule_id: str) -> None:
-        await self.get_rule(account, rule_id)
+        rule = await self.get_rule(account, rule_id)
         await delete_ingress_rule(self.db, rule_id)
-        self._limiters.pop(rule_id, None)
+        self._limiters.pop(rule.internal_id, None)
 
     async def rotate_rule(self, account: Account, rule_id: str) -> IngressRule:
         rule = await self.get_rule(account, rule_id)
         new_id = f"ir_{secrets.token_urlsafe(20)}"
         await rotate_ingress_rule_id(self.db, rule.internal_id, new_id)
-        limiter = self._limiters.pop(rule_id, None)
-        if limiter is not None:
-            self._limiters[new_id] = limiter
         rule.id = new_id
         rule.updated_at = datetime.now(UTC).isoformat()
         return rule
@@ -251,10 +276,15 @@ class IngressService:
         return result, validate_transform_result(result), elapsed_ms
 
     def limiter_for(self, rule: IngressRule) -> RateLimiter:
-        limiter = self._limiters.get(rule.id)
+        """The rule's limiter, keyed by its stable internal id.
+
+        The public id rotates; the window must not, or rotating a leaked URL
+        would hand the caller a fresh minute's worth of requests.
+        """
+        limiter = self._limiters.get(rule.internal_id)
         if limiter is None or limiter.max_requests != rule.rate_limit_rpm:
             limiter = RateLimiter(max_requests=rule.rate_limit_rpm, window_seconds=60.0)
-            self._limiters[rule.id] = limiter
+            self._limiters[rule.internal_id] = limiter
         return limiter
 
     @staticmethod
@@ -265,11 +295,19 @@ class IngressService:
 
     # -- trigger -------------------------------------------------------------
 
-    async def trigger(self, rule_id: str, request_dict: dict[str, object]) -> TriggerOutcome:
+    async def enabled_rule(self, rule_id: str) -> IngressRule:
+        """The rule a trigger URL points at. A disabled rule is as good as absent.
+
+        The router needs the rule before the body (the size limit is per rule),
+        so it resolves it here and hands it back to trigger().
+        """
         rule = await get_ingress_rule_by_id(self.db, rule_id)
         if rule is None or not rule.enabled:
             raise NotFound("Ingress rule not found")
-        if not self.limiter_for(rule).check(rule.id):
+        return rule
+
+    async def trigger(self, rule: IngressRule, request_dict: dict[str, object]) -> TriggerOutcome:
+        if not self.limiter_for(rule).check(rule.internal_id):
             raise LimitExceeded("Rate limit exceeded")
         try:
             result = execute_transform(rule.starlark_source, request_dict)
@@ -295,16 +333,16 @@ class IngressService:
                 self._execute_and_log(account, rule, result), name=f"ingress:{rule.id}"
             )
             await self._log(rule, IngressLogStatus.ACCEPTED, json.dumps(result), None)
-            return TriggerOutcome(202, {"status": IngressLogStatus.ACCEPTED.value})
+            return TriggerOutcome(202, None)
         try:
-            body = await self.execute(account, result)
+            executed = await self.execute(account, result)
         except Exception as exc:
             await self._log(rule, IngressLogStatus.FAILED, json.dumps(result), _error_text(exc))
             raise
         await self._log(rule, IngressLogStatus.COMPLETED, json.dumps(result), None)
-        return TriggerOutcome(200, body)
+        return TriggerOutcome(200, executed)
 
-    async def execute(self, account: Account, action: dict[str, Any]) -> dict[str, object]:
+    async def execute(self, account: Account, action: dict[str, Any]) -> IngressResult:
         if action["action"] == "fork":
             fork = ForkAction.model_validate(action)
             if fork.checkpoint_id is not None:
@@ -326,18 +364,11 @@ class IngressService:
                 account, checkpoint, spec, recipe_id=checkpoint.recipe_id, exclusive=fork.exclusive
             )
             if isinstance(forked, Deferred):
-                return {"deferred_id": forked.deferred_id, "status": "queued"}
+                return forked
             outcome = await self.lifecycle.run_ephemeral(
                 account, forked, spec, source_checkpoint=checkpoint
             )
-            return {
-                "computer_id": forked.id,
-                "checkpoint_id": checkpoint.id,
-                "exec_exit_code": outcome.exec_exit_code,
-                "exec_stdout": outcome.exec_stdout,
-                "exec_stderr": outcome.exec_stderr,
-                "created_checkpoint_id": outcome.created_checkpoint_id,
-            }
+            return ForkOutcome(computer=forked, checkpoint=checkpoint, result=outcome)
         create = CreateAction.model_validate(action)
         resources = Resources.from_needs(create.needs)
         computer = await self.computers.create(
@@ -353,15 +384,7 @@ class IngressService:
         outcome = await self.lifecycle.run_ephemeral(
             account, computer, spec, source_checkpoint=None
         )
-        return {
-            "computer_id": computer.id,
-            "url": f"https://{computer.id}.{self.config.domain}",
-            "recipe_id": computer.recipe_id,
-            "exec_exit_code": outcome.exec_exit_code,
-            "exec_stdout": outcome.exec_stdout,
-            "exec_stderr": outcome.exec_stderr,
-            "created_checkpoint_id": outcome.created_checkpoint_id,
-        }
+        return CreateOutcome(computer=computer, result=outcome)
 
     async def _execute_and_log(
         self, account: Account, rule: IngressRule, action: dict[str, Any]

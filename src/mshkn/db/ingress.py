@@ -164,9 +164,3 @@ async def list_ingress_logs(
         (rule_internal_id, limit),
     )
     return [_row_to_log(r) for r in await cursor.fetchall()]
-
-
-async def prune_old_ingress_logs(db: aiosqlite.Connection, before_timestamp: str) -> int:
-    cursor = await db.execute("DELETE FROM ingress_log WHERE created_at < ?", (before_timestamp,))
-    await db.commit()
-    return cursor.rowcount
