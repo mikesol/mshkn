@@ -425,6 +425,24 @@ async def test_health_check_tolerates_an_evict_during_the_probe(
     assert replacement.runs[-1] == "x"
 
 
+async def test_a_healthy_probe_does_not_resurrect_an_evicted_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """evict() during a *succeeding* probe must not hand back the closed connection."""
+    monkeypatch.setattr(ssh_module, "_HEALTH_CHECK_INTERVAL", 0.0)
+    stale = FakeConn(FakeProcess([], [], 0), run_delay=0.1)
+    replacement = FakeConn(FakeProcess([], [], 0))
+    guest = make_guest_with([stale, replacement])
+    await guest.warm("172.16.1.2")
+    racing = asyncio.create_task(guest.exec("172.16.1.2", "x"))
+    await asyncio.sleep(0.01)
+    await guest.evict("172.16.1.2")
+    await racing
+    assert stale.closed
+    assert stale.runs == ["true"], "nothing but the probe may run on the evicted connection"
+    assert replacement.runs[-1] == "x", "the evicted connection was handed back"
+
+
 async def test_a_slow_handshake_does_not_make_the_next_call_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

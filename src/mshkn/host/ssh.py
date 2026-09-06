@@ -83,6 +83,7 @@ class SshGuest:
         lock = self._locks.setdefault(vm_ip, asyncio.Lock())
         async with lock:
             pooled = self._conns.get(vm_ip)
+            seen_gen = self._gen.get(vm_ip, 0)
             loop = asyncio.get_running_loop()
             if pooled is not None:
                 now = loop.time()
@@ -91,9 +92,11 @@ class SshGuest:
                     return pooled
                 try:
                     result = await asyncio.wait_for(pooled.run("true", check=False), timeout=3.0)
-                    if result.exit_status == 0:
+                    if result.exit_status == 0 and self._gen.get(vm_ip, 0) == seen_gen:
                         self._last_used[vm_ip] = loop.time()
                         return pooled
+                    # A healthy probe on a connection evict() closed meanwhile
+                    # is still a dead connection; fall through and reconnect.
                 except Exception:
                     logger.debug("pooled SSH connection to %s failed its health check", vm_ip)
                 with contextlib.suppress(Exception):
