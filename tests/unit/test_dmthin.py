@@ -89,6 +89,26 @@ async def test_mounted_mounts_and_unmounts(tmp_path: Path, monkeypatch: pytest.M
     assert not (tmp_path / "mnt").exists()
 
 
+async def test_mounted_removes_its_directory_when_the_mount_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed mount must not leave the scratch mount point behind."""
+    mount_point = tmp_path / "mnt"
+    monkeypatch.setattr("tempfile.mkdtemp", lambda prefix: str(mount_point))  # noqa: ARG005
+    mount_point.mkdir()
+    failure = ShellError("mount", 32, "mount: wrong fs type")
+    run = Recorder({"mount /dev/mapper": failure})
+    store = DmThinBlockStore("mshkn-pool", 16777216, run=run)
+
+    with pytest.raises(ShellError):
+        async with store.mounted("mshkn-ckpt-a"):
+            raise AssertionError("body must not run when the mount fails")
+
+    assert not mount_point.exists()
+    # The mount failed, so nothing was unmounted.
+    assert not any(c.startswith("umount") for c, _ in run.calls)
+
+
 async def test_max_volume_id_parses_dmsetup_table() -> None:
     table = "mshkn-base: 0 16777216 thin 252:0 0\nmshkn-comp-a: 0 16777216 thin 252:0 745\n"
     run = Recorder({"dmsetup table": table})

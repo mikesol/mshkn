@@ -476,6 +476,14 @@ class VMManager:
         async with self._alloc_lock:
             self._release_slot(slot)
 
+        # Drop the pooled SSH connection: the slot is back in circulation, and the
+        # next VM to land on it would otherwise inherit a connection to a dead VM.
+        if computer.vm_ip:
+            try:
+                await self.host.guest.evict(computer.vm_ip)
+            except Exception:
+                logger.debug("SSH eviction failed for %s", computer.id)
+
         # Mark destroyed in DB
         await update_computer_status(self.db, computer.id, ComputerStatus.DESTROYED)
         logger.info("Reaped dead VM %s", computer.id)

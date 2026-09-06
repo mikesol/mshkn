@@ -107,7 +107,13 @@ class DmThinBlockStore:
     async def mounted(self, name: str, *, readonly: bool = False) -> AsyncIterator[Path]:
         mount_point = Path(tempfile.mkdtemp(prefix="mshkn-mnt-"))
         opts = " -o ro" if readonly else ""
-        await self._run(f"mount{opts} /dev/mapper/{name} {mount_point}")
+        try:
+            await self._run(f"mount{opts} /dev/mapper/{name} {mount_point}")
+        except BaseException:
+            # Nothing was mounted, so the scratch directory is ours to take back.
+            with contextlib.suppress(OSError):
+                mount_point.rmdir()
+            raise
         try:
             yield mount_point
         finally:
