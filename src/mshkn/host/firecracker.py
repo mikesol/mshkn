@@ -190,6 +190,14 @@ async def start_firecracker_process(
             break
         await asyncio.sleep(0.01)
     else:
+        # Leaving the child running would orphan a Firecracker that owns the
+        # staging tap; the caller only ever learns about a pid we return.
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+        logger.warning(
+            "Killed Firecracker PID=%d: API socket %s never appeared", proc.pid, socket_path
+        )
         raise TimeoutError(f"Firecracker socket {socket_path} not created within {socket_timeout}s")
     logger.info("Started Firecracker process PID=%d socket=%s", proc.pid, socket_path)
     return proc.pid

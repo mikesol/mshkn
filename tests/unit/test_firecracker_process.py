@@ -14,10 +14,11 @@ from mshkn.host.firecracker import (
 
 
 def _fake_binary(tmp_path: Path, *, creates_socket: bool) -> str:
+    """A stand-in firecracker that records its pid at <socket>.pid, then sleeps."""
     script = tmp_path / "fake-firecracker"
-    body = "#!/bin/bash\n"
+    body = '#!/bin/bash\nshift\necho $$ > "$1.pid"\n'  # argv: --api-sock <path>
     if creates_socket:
-        body += 'shift; touch "$1"\n'  # argv: --api-sock <path>
+        body += 'touch "$1"\n'
     body += "sleep 30\n"
     script.write_text(body)
     script.chmod(0o755)
@@ -43,6 +44,9 @@ async def test_start_times_out_when_the_socket_never_appears(tmp_path: Path) -> 
         await start_firecracker_process(
             socket_path, binary=_fake_binary(tmp_path, creates_socket=False), socket_timeout=0.2
         )
+    pid = int(Path(f"{socket_path}.pid").read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)  # the child is killed and reaped, never orphaned
 
 
 async def test_kill_of_a_dead_pid_is_a_no_op() -> None:
