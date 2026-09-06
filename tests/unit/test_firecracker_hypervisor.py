@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 from mshkn.config import Config
 from mshkn.host.firecracker import (
     STAGING_DRIVE_NAME,
-    STAGING_SLOT,
     STAGING_TAP,
     FirecrackerHypervisor,
 )
@@ -45,15 +46,14 @@ async def test_staging_clean_is_quiet_when_nothing_to_clean() -> None:
     await hv._ensure_staging_clean()
     assert not any(c == f"ip link del {STAGING_TAP}" for c in run.calls)
     assert f"dmsetup remove {STAGING_DRIVE_NAME}" in run.calls
-    assert STAGING_SLOT == 254
 
 
-def test_is_alive_for_own_pid_and_dead_pid() -> None:
-    import os
-
+def test_is_alive_for_own_pid_and_reaped_child() -> None:
     hv = FirecrackerHypervisor(Config(ssh_key_path=Path("/tmp/k")))
     assert hv.is_alive(os.getpid())
-    assert not hv.is_alive(2**22 - 1)
+    child = subprocess.Popen(["true"])
+    child.wait()
+    assert not hv.is_alive(child.pid)
 
 
 def test_staging_lock_is_per_instance() -> None:

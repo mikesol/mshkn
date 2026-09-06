@@ -215,7 +215,8 @@ class FirecrackerHypervisor:
     Every boot/restore goes through the staging slot (254): the VM comes up
     with the staging tap and IP baked into templates and checkpoints, then
     is moved to its final slot via SSH and a tap rename. One restore at a
-    time; the lock is an instance attribute.
+    time; the lock is an instance attribute, so a process must construct
+    exactly one FirecrackerHypervisor (the staging slot is host-global).
     """
 
     _RESTORE_SSH_TIMEOUT = 5.0
@@ -305,9 +306,15 @@ class FirecrackerHypervisor:
                             guest_mac=STAGING_MAC,
                         )
                     )
-                    await wait_for_port(
-                        STAGING_VM_IP, 22, timeout=self._BOOT_SSH_TIMEOUT, interval=0.025
-                    )
+                finally:
+                    await client.close()
+                # The cold boot can take tens of seconds; do not hold an idle
+                # keep-alive connection to the Firecracker socket across it.
+                await wait_for_port(
+                    STAGING_VM_IP, 22, timeout=self._BOOT_SSH_TIMEOUT, interval=0.025
+                )
+                client = FirecrackerClient(socket_path)
+                try:
                     await client.pause()
                     await client.create_snapshot(str(files.vmstate), str(files.memory))
                 finally:
@@ -406,10 +413,14 @@ class FirecrackerHypervisor:
 
     async def _ensure_staging_clean(self) -> None:
         """Remove stale staging resources from a previous failed restore, quietly."""
-        with contextlib.suppress(Exception):
+        try:
             await destroy_tap(STAGING_SLOT, run=self._run)
-        with contextlib.suppress(Exception):
+        except Exception:
+            logger.debug("Staging tap cleanup failed", exc_info=True)
+        try:
             await self._run(f"dmsetup remove {STAGING_DRIVE_NAME}", check=False)
+        except Exception:
+            logger.debug("Staging drive cleanup failed", exc_info=True)
 
     async def _cleanup_staging(self, pid: int | None) -> None:
         if pid is not None:
