@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -18,11 +17,13 @@ from mshkn.db.ingress import (
     rotate_ingress_rule_id,
     update_ingress_rule,
 )
-from mshkn.ingress.models import IngressLog, IngressLogStatus, IngressRule
+from mshkn.models import IngressLog, IngressLogStatus, IngressRule
 from mshkn.services.starlark import StarlarkError, execute_transform, validate_starlark
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import aiosqlite
     from fastapi import FastAPI
 
@@ -37,10 +38,10 @@ async def _account(db: aiosqlite.Connection, api_key: str = "test-key-123") -> N
     await db.commit()
 
 
-async def _app(db: aiosqlite.Connection) -> FastAPI:
+async def _app(db: aiosqlite.Connection, tmp_path: Path) -> FastAPI:
     """An app whose runtime uses the production default domain (mshkn.dev)."""
     await _account(db)
-    return make_app(make_runtime(db, vm_manager=AsyncMock(), config=Config()))
+    return make_app(make_runtime(db, config=Config(checkpoint_local_dir=tmp_path / "ckpts")))
 
 
 def _make_rule(**overrides: object) -> IngressRule:
@@ -234,8 +235,8 @@ def test_execute_transform_runtime_error() -> None:
 # --- API endpoint tests ---
 
 
-async def test_api_create_rule(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_api_create_rule(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post(
             "/ingress_rules",
@@ -255,8 +256,8 @@ async def test_api_create_rule(db: aiosqlite.Connection) -> None:
     assert data["ingress_url"] == f"https://mshkn.dev/ingress/{data['id']}"
 
 
-async def test_api_create_rule_invalid_starlark(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_api_create_rule_invalid_starlark(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post(
             "/ingress_rules",
@@ -270,8 +271,8 @@ async def test_api_create_rule_invalid_starlark(db: aiosqlite.Connection) -> Non
     assert "starlark_errors" in resp.json()["detail"]
 
 
-async def test_api_list_rules(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_api_list_rules(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         for name in ("rule-a", "rule-b"):
             await client.post(
@@ -287,8 +288,8 @@ async def test_api_list_rules(db: aiosqlite.Connection) -> None:
     assert len(resp.json()) == 2
 
 
-async def test_api_get_rule(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_api_get_rule(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         create_resp = await client.post(
             "/ingress_rules",
@@ -306,8 +307,8 @@ async def test_api_get_rule(db: aiosqlite.Connection) -> None:
     assert "starlark_source" in data
 
 
-async def test_api_delete_rule(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_api_delete_rule(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         create_resp = await client.post(
             "/ingress_rules",
@@ -326,8 +327,8 @@ async def test_api_delete_rule(db: aiosqlite.Connection) -> None:
         assert resp2.status_code == 404
 
 
-async def test_api_rotate_rule(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_api_rotate_rule(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         create_resp = await client.post(
             "/ingress_rules",
@@ -349,8 +350,8 @@ async def test_api_rotate_rule(db: aiosqlite.Connection) -> None:
         assert resp2.status_code == 404
 
 
-async def test_api_test_rule(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_api_test_rule(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         create_resp = await client.post(
             "/ingress_rules",
@@ -375,22 +376,22 @@ async def test_api_test_rule(db: aiosqlite.Connection) -> None:
     assert data["execution_time_ms"] >= 0
 
 
-async def test_api_requires_auth(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_api_requires_auth(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/ingress_rules")
     assert resp.status_code == 401
 
 
-async def test_trigger_404_unknown_rule(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_trigger_404_unknown_rule(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/ingress/ir_nonexistent")
     assert resp.status_code == 404
 
 
-async def test_trigger_disabled_rule_404(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_trigger_disabled_rule_404(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     await insert_ingress_rule(
         db,
         _make_rule(
@@ -406,8 +407,8 @@ async def test_trigger_disabled_rule_404(db: aiosqlite.Connection) -> None:
     assert resp.status_code == 404
 
 
-async def test_trigger_none_returns_204(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_trigger_none_returns_204(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     await insert_ingress_rule(
         db,
         _make_rule(
@@ -422,8 +423,8 @@ async def test_trigger_none_returns_204(db: aiosqlite.Connection) -> None:
     assert resp.status_code == 204
 
 
-async def test_trigger_starlark_error_502(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_trigger_starlark_error_502(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     await insert_ingress_rule(
         db,
         _make_rule(
@@ -438,8 +439,8 @@ async def test_trigger_starlark_error_502(db: aiosqlite.Connection) -> None:
     assert resp.status_code == 502
 
 
-async def test_trigger_invalid_action_502(db: aiosqlite.Connection) -> None:
-    app = await _app(db)
+async def test_trigger_invalid_action_502(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    app = await _app(db, tmp_path)
     await insert_ingress_rule(
         db,
         _make_rule(

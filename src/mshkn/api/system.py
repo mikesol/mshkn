@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from mshkn.api.deps import get_runtime
+from mshkn.api.schemas import AlertResponse
 
 router = APIRouter(tags=["system"])
 
@@ -22,7 +23,7 @@ async def metrics() -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@router.get("/alerts")
-async def alerts(request: Request) -> list[dict[str, object]]:
+@router.get("/alerts", response_model=list[AlertResponse])
+async def alerts(request: Request) -> list[AlertResponse]:
     """Return recent resource alerts."""
-    return [asdict(a) for a in get_runtime(request).vm_manager.alerts]
+    return [AlertResponse(**asdict(a)) for a in get_runtime(request).alerts]

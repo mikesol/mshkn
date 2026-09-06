@@ -8,28 +8,35 @@ event followed by `exit: 255` instead of raising through the response body.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
 
 from httpx import ASGITransport, AsyncClient
 
-from mshkn.db import insert_account, insert_computer
+from mshkn.db import insert_account
 from mshkn.host.fake import FakeHost
-from mshkn.models import Account, ComputerStatus
+from mshkn.models import Account
+from mshkn.resources import DEFAULT_RESOURCES
 from tests.unit.conftest import make_app, make_runtime
-from tests.unit.test_vm_limit import _make_computer
 
 if TYPE_CHECKING:
     import aiosqlite
 
+    from mshkn.config import Config
+    from mshkn.host.fake import FakeHostInstance
+    from mshkn.models import Computer
+    from mshkn.runtime import Runtime
+
 AUTH = {"Authorization": "Bearer test-key"}
 
+ACCOUNT = Account(id="acct-1", api_key="test-key", vm_limit=10, created_at="2026-03-08T00:00:00")
 
-async def _running_computer(db: aiosqlite.Connection) -> None:
-    await insert_account(
-        db,
-        Account(id="acct-1", api_key="test-key", vm_limit=10, created_at="2026-03-08T00:00:00"),
-    )
-    await insert_computer(db, _make_computer(1, status=ComputerStatus.RUNNING))
+
+async def _running_computer(
+    db: aiosqlite.Connection, config: Config, host: FakeHostInstance
+) -> tuple[Runtime, Computer]:
+    await insert_account(db, ACCOUNT)
+    rt = make_runtime(db, config=config, host=host)
+    computer = await rt.computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    return rt, computer
 
 
 def _events(body: str) -> list[tuple[str, str]]:
@@ -46,16 +53,18 @@ def _events(body: str) -> list[tuple[str, str]]:
     return events
 
 
-async def test_exec_streams_stdout_then_exit(db: aiosqlite.Connection) -> None:
-    await _running_computer(db)
+async def test_exec_streams_stdout_then_exit(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
     host = FakeHost()
     host.guest.stream_script["ls /"] = [("stdout", "bin"), ("stdout", "etc")]
+    rt, computer = await _running_computer(db, runtime_config, host)
 
-    app = make_app(make_runtime(db, vm_manager=AsyncMock(), host=host))
+    app = make_app(rt)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
-            "/computers/comp-1/exec",
+            f"/computers/{computer.id}/exec",
             json={"command": "ls /"},
             headers=AUTH,
         )
@@ -66,22 +75,22 @@ async def test_exec_streams_stdout_then_exit(db: aiosqlite.Connection) -> None:
         ("stdout", "etc"),
         ("exit", "0"),
     ]
-    assert host.guest.commands == [("172.16.1.2", "ls /")]
+    assert host.guest.commands == [(computer.vm_ip, "ls /")]
 
 
 async def test_exec_stream_failure_becomes_error_and_exit_events(
-    db: aiosqlite.Connection,
+    db: aiosqlite.Connection, runtime_config: Config
 ) -> None:
     """A guest failure after the response has started is reported in-band."""
-    await _running_computer(db)
     host = FakeHost()
+    rt, computer = await _running_computer(db, runtime_config, host)
     host.guest.fail_next("stream")
 
-    app = make_app(make_runtime(db, vm_manager=AsyncMock(), host=host))
+    app = make_app(rt)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
-            "/computers/comp-1/exec",
+            f"/computers/{computer.id}/exec",
             json={"command": "ls /"},
             headers=AUTH,
         )

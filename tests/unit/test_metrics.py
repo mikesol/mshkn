@@ -10,17 +10,23 @@ from tests.unit.conftest import make_app, make_runtime
 if TYPE_CHECKING:
     import aiosqlite
 
+    from mshkn.config import Config
 
-async def test_metrics_endpoint_returns_200(db: aiosqlite.Connection) -> None:
-    app = make_app(make_runtime(db))
+
+async def test_metrics_endpoint_returns_200(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
+    app = make_app(make_runtime(db, config=runtime_config))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/metrics")
     assert resp.status_code == 200
     assert "text/plain" in resp.headers.get("content-type", "")
 
 
-async def test_metrics_contains_expected_names(db: aiosqlite.Connection) -> None:
-    app = make_app(make_runtime(db))
+async def test_metrics_contains_expected_names(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
+    app = make_app(make_runtime(db, config=runtime_config))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/metrics")
     text = resp.text
@@ -36,10 +42,12 @@ async def test_metrics_contains_expected_names(db: aiosqlite.Connection) -> None
     assert "# TYPE" in text
 
 
-async def test_labelled_counters_render_after_first_increment(db: aiosqlite.Connection) -> None:
+async def test_labelled_counters_render_after_first_increment(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
     checkpoints_total.labels(trigger="api").inc()
     computers_created_total.labels(source="fork").inc()
-    app = make_app(make_runtime(db))
+    app = make_app(make_runtime(db, config=runtime_config))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         text = (await client.get("/metrics")).text
     assert 'mshkn_checkpoints_total{trigger="api"}' in text

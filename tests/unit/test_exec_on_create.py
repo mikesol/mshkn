@@ -3,193 +3,167 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
 
 from httpx import ASGITransport, AsyncClient
 
-from mshkn.db import insert_account, insert_checkpoint
+from mshkn.db import get_computer, insert_account
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost
-from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
+from mshkn.models import Account, CheckpointTrigger
+from mshkn.resources import DEFAULT_RESOURCES
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
     import aiosqlite
 
-
-async def _account(db: aiosqlite.Connection) -> None:
-    await insert_account(
-        db,
-        Account(
-            id="acct-1",
-            api_key="test-key",
-            vm_limit=10,
-            created_at="2026-03-08T00:00:00",
-        ),
-    )
-
-
-def _make_computer(n: int = 1) -> Computer:
-    return Computer(
-        id=f"comp-{n}",
-        account_id="acct-1",
-        thin_volume_id=n,
-        tap_device=f"tap{n}",
-        vm_ip=f"172.16.1.{n + 1}",
-        socket_path=f"/tmp/fc-{n}.socket",
-        firecracker_pid=1000 + n,
-        status=ComputerStatus.RUNNING,
-        created_at="2026-03-08T00:00:00",
-        last_exec_at=None,
-    )
-
-
-def _make_checkpoint(ckpt_id: str) -> Checkpoint:
-    return Checkpoint(
-        id=ckpt_id,
-        account_id="acct-1",
-        parent_id=None,
-        computer_id="comp-orig",
-        thin_volume_id=1,
-        r2_prefix=f"acct-1/{ckpt_id}",
-        disk_delta_size_bytes=None,
-        memory_size_bytes=None,
-        label=None,
-        pinned=False,
-        created_at="2026-03-08T00:00:00",
-    )
-
+    from mshkn.config import Config
+    from mshkn.models import Checkpoint
+    from mshkn.runtime import Runtime
 
 AUTH = {"Authorization": "Bearer test-key"}
 
+ACCOUNT = Account(id="acct-1", api_key="test-key", vm_limit=10, created_at="2026-03-08T00:00:00")
 
-async def test_create_without_exec_works_as_before(db: aiosqlite.Connection) -> None:
+
+async def _account(db: aiosqlite.Connection) -> None:
+    await insert_account(db, ACCOUNT)
+
+
+async def _checkpoint(rt: Runtime) -> Checkpoint:
+    """A real checkpoint of a real computer, so fork has a disk and snapshot files."""
+    computer = await rt.computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    return await rt.checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+
+
+async def _vm_ip(db: aiosqlite.Connection, computer_id: str) -> str:
+    computer = await get_computer(db, computer_id)
+    assert computer is not None
+    return computer.vm_ip
+
+
+async def test_create_without_exec_works_as_before(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
     """Create without exec field returns no exec results."""
     await _account(db)
-    vm_mgr = AsyncMock()
-    vm_mgr.create.return_value = _make_computer()
-
-    app = make_app(make_runtime(db, vm_manager=vm_mgr))
+    host = FakeHost()
+    app = make_app(make_runtime(db, config=runtime_config, host=host))
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/computers", json={"uses": []}, headers=AUTH)
+        resp = await client.post("/computers", json={}, headers=AUTH)
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["computer_id"] == "comp-1"
+    assert data["computer_id"].startswith("comp-")
     assert data["exec_exit_code"] is None
     assert data["exec_stdout"] is None
     assert data["exec_stderr"] is None
+    assert host.guest.commands == []
 
 
-async def test_create_with_exec_returns_results(db: aiosqlite.Connection) -> None:
+async def test_create_with_exec_returns_results(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
     """Create with exec runs the command and returns results."""
     await _account(db)
-    vm_mgr = AsyncMock()
-    vm_mgr.create.return_value = _make_computer()
-
     host = FakeHost()
     host.guest.script["echo hello world"] = ExecResult(
         exit_code=0, stdout="hello world\n", stderr=""
     )
-    app = make_app(make_runtime(db, vm_manager=vm_mgr, host=host))
+    app = make_app(make_runtime(db, config=runtime_config, host=host))
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/computers",
-            json={"uses": [], "exec": "echo hello world"},
+            json={"exec": "echo hello world"},
             headers=AUTH,
         )
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["computer_id"] == "comp-1"
+    assert data["computer_id"].startswith("comp-")
     assert data["exec_exit_code"] == 0
     assert data["exec_stdout"] == "hello world\n"
     assert data["exec_stderr"] == ""
-    assert host.guest.commands == [("172.16.1.2", "echo hello world")]
+    assert host.guest.commands == [
+        (await _vm_ip(db, data["computer_id"]), "echo hello world"),
+    ]
 
 
-async def test_create_with_exec_nonzero_exit(db: aiosqlite.Connection) -> None:
+async def test_create_with_exec_nonzero_exit(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
     """Create with exec that fails still returns the result (not an error)."""
     await _account(db)
-    vm_mgr = AsyncMock()
-    vm_mgr.create.return_value = _make_computer()
-
     host = FakeHost()
     host.guest.script["bad-command"] = ExecResult(
         exit_code=1, stdout="", stderr="command not found\n"
     )
-    app = make_app(make_runtime(db, vm_manager=vm_mgr, host=host))
+    app = make_app(make_runtime(db, config=runtime_config, host=host))
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/computers",
-            json={"uses": [], "exec": "bad-command"},
-            headers=AUTH,
-        )
+        resp = await client.post("/computers", json={"exec": "bad-command"}, headers=AUTH)
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["exec_exit_code"] == 1
     assert data["exec_stderr"] == "command not found\n"
-    assert host.guest.commands == [("172.16.1.2", "bad-command")]
+    assert host.guest.commands == [(await _vm_ip(db, data["computer_id"]), "bad-command")]
 
 
-async def test_fork_with_exec_returns_results(db: aiosqlite.Connection) -> None:
+async def test_fork_with_exec_returns_results(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
     """Fork with exec runs the command after restore and returns results."""
     await _account(db)
-    await insert_checkpoint(db, _make_checkpoint("ckpt-test1"))
-
-    vm_mgr = AsyncMock()
-    vm_mgr.fork_from_checkpoint.return_value = _make_computer(2)
-
     host = FakeHost()
     host.guest.script["echo forked output"] = ExecResult(
         exit_code=0, stdout="forked output\n", stderr=""
     )
-    app = make_app(make_runtime(db, vm_manager=vm_mgr, host=host))
+    rt = make_runtime(db, config=runtime_config, host=host)
+    ckpt = await _checkpoint(rt)
+    app = make_app(rt)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
-            "/checkpoints/ckpt-test1/fork",
+            f"/checkpoints/{ckpt.id}/fork",
             json={"exec": "echo forked output"},
             headers=AUTH,
         )
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["computer_id"] == "comp-2"
-    assert data["checkpoint_id"] == "ckpt-test1"
+    assert data["computer_id"].startswith("comp-")
+    assert data["checkpoint_id"] == ckpt.id
     assert data["exec_exit_code"] == 0
     assert data["exec_stdout"] == "forked output\n"
     assert data["exec_stderr"] == ""
-    assert host.guest.commands == [("172.16.1.3", "echo forked output")]
+    forked_ip = await _vm_ip(db, data["computer_id"])
+    assert host.guest.commands[-1] == (forked_ip, "echo forked output")
 
 
-async def test_fork_without_exec_works_as_before(db: aiosqlite.Connection) -> None:
+async def test_fork_without_exec_works_as_before(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
     """Fork without exec returns no exec results."""
     await _account(db)
-    await insert_checkpoint(db, _make_checkpoint("ckpt-test2"))
+    host = FakeHost()
+    rt = make_runtime(db, config=runtime_config, host=host)
+    ckpt = await _checkpoint(rt)
+    commands_before = list(host.guest.commands)
+    app = make_app(rt)
 
-    vm_mgr = AsyncMock()
-    vm_mgr.fork_from_checkpoint.return_value = _make_computer(3)
-
-    app = make_app(make_runtime(db, vm_manager=vm_mgr))
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/checkpoints/ckpt-test2/fork",
-            json={},
-            headers=AUTH,
-        )
+        resp = await client.post(f"/checkpoints/{ckpt.id}/fork", json={}, headers=AUTH)
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["computer_id"] == "comp-3"
+    assert data["computer_id"].startswith("comp-")
     assert data["exec_exit_code"] is None
     assert data["exec_stdout"] is None
     assert data["exec_stderr"] is None
+    assert host.guest.commands == commands_before

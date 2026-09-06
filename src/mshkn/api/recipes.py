@@ -1,48 +1,21 @@
+"""Recipe endpoints. The build pipeline lives in mshkn.services.recipes."""
+
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
 from mshkn.api.deps import get_runtime, require_account
-from mshkn.db import (
-    count_recipe_references,
-    delete_failed_recipes_by_hash,
-    delete_recipe,
-    get_recipe,
-    get_recipe_by_content_hash,
-    insert_recipe,
-    list_recipes_by_account,
-)
-from mshkn.models import Recipe, RecipeStatus
-from mshkn.observability.metrics import timed
-from mshkn.services.allocator import SlotAllocator
-from mshkn.services.recipes import RecipeService, dockerfile_content_hash
+from mshkn.api.schemas import CreateRecipeRequest, DeleteResponse, RecipeResponse
 
 if TYPE_CHECKING:
-    from mshkn.models import Account
+    from mshkn.models import Account, Recipe
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
 
 _require_account = Depends(require_account)
-
-
-class CreateRecipeRequest(BaseModel):
-    dockerfile: str
-
-
-class RecipeResponse(BaseModel):
-    recipe_id: str
-    status: str
-    content_hash: str
-    build_log: str | None = None
-    base_volume_id: int | None = None
-    created_at: str | None = None
-    built_at: str | None = None
 
 
 def _recipe_to_response(recipe: Recipe) -> RecipeResponse:
@@ -64,109 +37,38 @@ async def create_recipe(
     account: Account = _require_account,
 ) -> JSONResponse:
     rt = get_runtime(request)
-    db = rt.db
-    config = rt.config
-    vm_mgr = rt.vm_manager
-
-    content_hash = dockerfile_content_hash(body.dockerfile)
-
-    # Return existing non-failed recipe if it exists
-    existing = await get_recipe_by_content_hash(db, account.id, content_hash)
-    if existing is not None:
-        return JSONResponse(
-            status_code=200,
-            content=_recipe_to_response(existing).model_dump(),
-        )
-
-    # Clean up any prior failed attempts with this hash
-    await delete_failed_recipes_by_hash(db, account.id, content_hash)
-
-    # Create new pending recipe
-    recipe_id = f"rcp-{uuid.uuid4().hex[:12]}"
-    now = datetime.now(UTC).isoformat()
-    recipe = Recipe(
-        id=recipe_id,
-        account_id=account.id,
-        dockerfile=body.dockerfile,
-        content_hash=content_hash,
-        status=RecipeStatus.PENDING,
-        build_log=None,
-        base_volume_id=None,
-        template_vmstate=None,
-        template_memory=None,
-        created_at=now,
-        built_at=None,
-    )
-    await insert_recipe(db, recipe)
-
-    # Allocate a volume ID under the alloc lock
-    async with vm_mgr._alloc_lock:
-        volume_id = vm_mgr._allocate_volume_id()
-
-    # Start background build task, serialized per account
-    build_lock = rt.build_lock(account.id)
-
-    async def _run_build() -> None:
-        async with build_lock, timed("recipe_build"):
-            service = RecipeService(
-                config, db, rt.host.blocks, rt.host.hypervisor, SlotAllocator(), rt.tasks
-            )
-            await service.build(recipe_id, body.dockerfile, content_hash, volume_id)
-
-    rt.tasks.spawn(_run_build(), name=f"recipe_build:{recipe_id}")
-
+    recipe, created = await rt.recipes.create(account, body.dockerfile)
     return JSONResponse(
-        status_code=202,
+        status_code=202 if created else 200,
         content=_recipe_to_response(recipe).model_dump(),
     )
 
 
-@router.get("/{recipe_id}")
+@router.get("/{recipe_id}", response_model=RecipeResponse)
 async def get_recipe_endpoint(
     recipe_id: str,
     request: Request,
     account: Account = _require_account,
 ) -> RecipeResponse:
-    db = get_runtime(request).db
-    recipe = await get_recipe(db, recipe_id)
-    if recipe is None or recipe.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Recipe not found")
-    return _recipe_to_response(recipe)
+    rt = get_runtime(request)
+    return _recipe_to_response(await rt.recipes.get(account, recipe_id))
 
 
-@router.get("")
+@router.get("", response_model=list[RecipeResponse])
 async def list_recipes(
     request: Request,
     account: Account = _require_account,
 ) -> list[RecipeResponse]:
-    db = get_runtime(request).db
-    recipes = await list_recipes_by_account(db, account.id)
-    return [_recipe_to_response(r) for r in recipes]
+    rt = get_runtime(request)
+    return [_recipe_to_response(r) for r in await rt.recipes.list(account)]
 
 
-@router.delete("/{recipe_id}")
+@router.delete("/{recipe_id}", response_model=DeleteResponse)
 async def delete_recipe_endpoint(
     recipe_id: str,
     request: Request,
     account: Account = _require_account,
-) -> dict[str, str]:
+) -> DeleteResponse:
     rt = get_runtime(request)
-    db = rt.db
-    recipe = await get_recipe(db, recipe_id)
-    if recipe is None or recipe.account_id != account.id:
-        raise HTTPException(status_code=404, detail="Recipe not found")
-
-    ref_count = await count_recipe_references(db, recipe_id)
-    if ref_count > 0:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Recipe is referenced by {ref_count} computer(s)/checkpoint(s)",
-        )
-
-    if recipe.base_volume_id is not None:
-        # The builder creates the volume as mshkn-recipe-<recipe id>; remove that one.
-        volume_name = f"mshkn-recipe-{recipe.id}"
-        await rt.host.blocks.remove(volume_id=recipe.base_volume_id, name=volume_name)
-
-    await delete_recipe(db, recipe_id)
-    return {"status": "deleted"}
+    await rt.recipes.delete(account, recipe_id)
+    return DeleteResponse(status="deleted")
