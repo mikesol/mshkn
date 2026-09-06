@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from mshkn.api.ingress import _validate_transform_result
 from mshkn.config import Config
 from mshkn.db.ingress import (
     delete_ingress_rule,
@@ -20,7 +19,7 @@ from mshkn.db.ingress import (
     update_ingress_rule,
 )
 from mshkn.ingress.models import IngressLog, IngressLogStatus, IngressRule
-from mshkn.ingress.starlark import StarlarkError, execute_transform, validate_starlark
+from mshkn.services.starlark import StarlarkError, execute_transform, validate_starlark
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
@@ -233,47 +232,6 @@ def test_execute_transform_runtime_error() -> None:
 
 
 # --- API endpoint tests ---
-
-
-def test_validate_transform_result_none() -> None:
-    assert _validate_transform_result(None) == []
-
-
-def test_validate_transform_result_valid_fork() -> None:
-    result = {"action": "fork", "checkpoint_id": "cp_1"}
-    assert _validate_transform_result(result) == []
-
-
-def test_validate_transform_result_fork_missing_checkpoint() -> None:
-    result = {"action": "fork"}
-    errors = _validate_transform_result(result)
-    assert len(errors) == 1
-    assert "checkpoint_id" in errors[0]
-
-
-def test_validate_transform_result_unknown_action() -> None:
-    result = {"action": "restart"}
-    errors = _validate_transform_result(result)
-    assert len(errors) >= 1
-
-
-def test_validate_transform_result_unknown_fields() -> None:
-    result = {"action": "fork", "checkpoint_id": "cp_1", "bogus": True}
-    errors = _validate_transform_result(result)
-    assert len(errors) == 1
-    assert "bogus" in errors[0]
-
-
-def test_validate_transform_result_valid_create() -> None:
-    result = {"action": "create", "uses": ["python"]}
-    assert _validate_transform_result(result) == []
-
-
-def test_validate_transform_result_invalid_exclusive() -> None:
-    result = {"action": "fork", "checkpoint_id": "cp_1", "exclusive": "wrong"}
-    errors = _validate_transform_result(result)
-    assert len(errors) == 1
-    assert "exclusive" in errors[0]
 
 
 async def test_api_create_rule(db: aiosqlite.Connection) -> None:

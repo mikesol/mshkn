@@ -36,7 +36,8 @@ from mshkn.ingress.models import (
     IngressTestRequest,
     IngressTestResponse,
 )
-from mshkn.ingress.starlark import StarlarkError, execute_transform, validate_starlark
+from mshkn.services.ingress import validate_transform_result
+from mshkn.services.starlark import StarlarkError, execute_transform, validate_starlark
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -51,63 +52,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ingress"])
 
 _require_account = Depends(require_account)
-
-# --- Validation helpers ---
-
-VALID_FORK_FIELDS = {
-    "action",
-    "checkpoint_id",
-    "label",
-    "exec",
-    "self_destruct",
-    "exclusive",
-    "callback_url",
-    "meta_exec",
-}
-VALID_CREATE_FIELDS = {
-    "action",
-    "capabilities",
-    "uses",
-    "exec",
-    "self_destruct",
-    "callback_url",
-    "label",
-    "meta_exec",
-}
-VALID_EXCLUSIVE_VALUES = {"error_on_conflict", "defer_on_conflict"}
-
-
-def _validate_transform_result(result: dict[str, Any] | None) -> list[str]:
-    """Validate a Starlark transform result dict. Returns list of errors."""
-    if result is None:
-        return []
-
-    errors: list[str] = []
-
-    if not isinstance(result, dict):
-        return ["transform must return a dict or None"]
-
-    action = result.get("action")
-    if action not in ("fork", "create"):
-        errors.append(f"action must be 'fork' or 'create', got {action!r}")
-        return errors
-
-    if action == "fork":
-        if "checkpoint_id" not in result and "label" not in result:
-            errors.append("fork action requires 'checkpoint_id' or 'label'")
-        unknown = set(result.keys()) - VALID_FORK_FIELDS
-        if unknown:
-            errors.append(f"unknown fields for fork action: {unknown}")
-    elif action == "create":
-        unknown = set(result.keys()) - VALID_CREATE_FIELDS
-        if unknown:
-            errors.append(f"unknown fields for create action: {unknown}")
-
-    exclusive = result.get("exclusive")
-    if exclusive is not None and exclusive not in VALID_EXCLUSIVE_VALUES:
-        errors.append(f"exclusive must be one of {VALID_EXCLUSIVE_VALUES}, got {exclusive!r}")
-
-    return errors
 
 
 def _rule_to_response(rule: IngressRule, domain: str) -> IngressRuleResponse:
@@ -309,7 +253,7 @@ async def test_rule(
         )
     elapsed_ms = (time.monotonic() - t0) * 1000
 
-    validation_errors = _validate_transform_result(result)
+    validation_errors = validate_transform_result(result)
     return IngressTestResponse(
         starlark_result=result,
         validation_errors=validation_errors,
@@ -631,7 +575,7 @@ async def handle_ingress(rule_id: str, request: Request) -> Response:
         await _log_invocation(db, rule.internal_id, IngressLogStatus.COMPLETED, None, None)
         return Response(status_code=204)
 
-    validation_errors = _validate_transform_result(result)
+    validation_errors = validate_transform_result(result)
     if validation_errors:
         await _log_invocation(
             db,
