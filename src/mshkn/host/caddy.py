@@ -1,3 +1,5 @@
+"""Reverse proxy routing via the Caddy admin API."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,14 +8,22 @@ import re
 
 import httpx
 
+from mshkn.errors import HostError
+
 logger = logging.getLogger(__name__)
 
 
-class CaddyClient:
-    def __init__(self, admin_url: str = "http://localhost:2019", domain: str = "mshkn.dev") -> None:
+class CaddyProxy:
+    def __init__(
+        self,
+        admin_url: str,
+        domain: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.admin_url = admin_url
         self.domain = domain
-        self._client = httpx.AsyncClient(base_url=admin_url, timeout=10.0)
+        self._client = httpx.AsyncClient(base_url=admin_url, timeout=10.0, transport=transport)
 
     async def add_route(self, computer_id: str, vm_ip: str) -> None:
         """Add a reverse proxy route for a computer.
@@ -56,21 +66,37 @@ class CaddyClient:
                         resp.status_code,
                         resp.text,
                     )
-                    raise RuntimeError(f"Caddy add_route failed: {resp.status_code} {resp.text}")
+                    raise HostError(f"Caddy add_route failed: {resp.status_code} {resp.text}")
                 break
             except (httpx.RemoteProtocolError, httpx.ConnectError) as exc:
                 if attempt < 2:
                     await asyncio.sleep(0.1 * (attempt + 1))
                     continue
-                raise RuntimeError(f"Caddy add_route failed after retries: {exc}") from exc
+                raise HostError(f"Caddy add_route failed after retries: {exc}") from exc
+            except httpx.HTTPError as exc:
+                # Not one of the two transient errors worth retrying (a read or
+                # write timeout, say). Callers map HostError; a raw httpx
+                # exception would reach them as an unhandled 500.
+                raise HostError(f"Caddy add_route failed: {exc!r}") from exc
         logger.info("Added Caddy route: *-%s.%s -> %s", computer_id, self.domain, vm_ip)
 
     async def remove_route(self, computer_id: str) -> None:
-        """Remove a computer's reverse proxy route."""
+        """Remove a computer's reverse proxy route. Never raises.
+
+        A 404 means the route is already absent — the expected outcome when
+        two deletes of the same computer race — so it is treated as success
+        rather than logged as a failure.
+        """
         route_id = f"route-{computer_id}"
-        resp = await self._client.delete(f"/id/{route_id}")
+        try:
+            resp = await self._client.delete(f"/id/{route_id}")
+        except httpx.HTTPError as exc:
+            logger.warning("Failed to remove Caddy route for %s: %s", computer_id, exc)
+            return
+        if resp.status_code == 404:
+            logger.info("Caddy route for %s already absent", computer_id)
+            return
         if resp.status_code >= 400:
-            # Route may not exist (e.g. Caddy restarted) — log but don't fail
             logger.warning(
                 "Failed to remove Caddy route for %s: %s %s",
                 computer_id,
@@ -79,6 +105,13 @@ class CaddyClient:
             )
             return
         logger.info("Removed Caddy route for %s", computer_id)
+
+    async def healthy(self) -> bool:
+        try:
+            resp = await self._client.get("/config/")
+        except httpx.HTTPError:
+            return False
+        return resp.status_code == 200
 
     async def close(self) -> None:
         await self._client.aclose()

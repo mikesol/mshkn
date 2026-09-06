@@ -28,7 +28,13 @@ class LimitExceeded(MshknError):  # noqa: N818 -- name is part of the public API
 
 
 class HostError(MshknError):
-    """A host-side operation (dm-thin, tap, Firecracker, SSH, rclone) failed."""
+    """A host-side operation failed.
+
+    Raised today by the dm-thin, tap and rclone paths (as ``ShellError``), by
+    ``CaddyProxy``, and by the fake host. Firecracker (``httpx`` errors,
+    ``TimeoutError``) and SSH (``asyncssh`` errors) still surface their own
+    exception types; wrapping those is PR 4's error-mapping work.
+    """
 
 
 class ConfigError(MshknError):

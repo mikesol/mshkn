@@ -308,7 +308,10 @@ class TestT66StaleVMCleanup:
                     "-i",
                     str(Path("~/.ssh/id_ed25519").expanduser()),
                     MSHKN_SERVER,
-                    f"pgrep -f 'fc-{computer_id}' | xargs -r kill -9",
+                    # The Firecracker socket is /tmp/fc-<volume name>.socket and the
+                    # volume name is mshkn-<computer id>, so the command line reads
+                    # fc-mshkn-<computer id>.
+                    f"pgrep -f 'fc-mshkn-{computer_id}' | xargs -r kill -9",
                 ],
                 capture_output=True,
                 text=True,

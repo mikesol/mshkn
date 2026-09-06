@@ -7,6 +7,7 @@ import pytest
 from prometheus_client import generate_latest
 
 from mshkn.errors import HostError, NotFound
+from mshkn.host.shell import ShellError
 from mshkn.observability.logging import JSONFormatter, RequestIdFilter, request_id_var
 from mshkn.observability.metrics import (
     operation_duration_seconds,
@@ -72,3 +73,17 @@ async def test_timed_observes_duration_and_counts_domain_errors() -> None:
     assert _sample(text, "mshkn_operation_errors_total", 'kind="host",op="unit_test"') == 1
     assert _sample(text, "mshkn_operation_errors_total", 'kind="unexpected",op="unit_test"') == 1
     assert operation_duration_seconds is not None and operation_errors_total is not None
+
+
+async def test_timed_meters_a_shell_failure_as_a_host_error() -> None:
+    """A dm-thin/tap/rclone failure arrives as ShellError; it must count as host.
+
+    The fake host raises HostError for the same failures, so if ShellError were
+    metered as "unexpected" the fake and the real host would disagree.
+    """
+    with pytest.raises(ShellError):
+        async with timed("unit_shell"):
+            raise ShellError("dmsetup message ... create_snap", 1, "pool is full")
+    text = generate_latest().decode()
+    assert _sample(text, "mshkn_operation_errors_total", 'kind="host",op="unit_shell"') == 1
+    assert _sample(text, "mshkn_operation_errors_total", 'kind="unexpected",op="unit_shell"') == 0

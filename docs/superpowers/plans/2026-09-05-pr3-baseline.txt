@@ -1,0 +1,6 @@
+Baseline before PR 3 (main @ fdf9246, 2026-09-06)
+ruff check .: All checks passed!
+ruff format --check .: 95 files already formatted
+mypy: Success: no issues found in 95 source files
+pytest: 163 passed, 157 deselected in 19.80s
+coverage: TOTAL                               3093   1585    656     50    45%

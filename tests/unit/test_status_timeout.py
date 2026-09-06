@@ -1,7 +1,7 @@
 """Verify GET /computers/{id}/status doesn't hang when metrics gathering stalls.
 
 If the reaper kills a VM between the DB read and the SSH connect for metrics,
-ssh_gather_metrics can hang. The status endpoint bounds that call with
+the guest's metrics call can hang. The status endpoint bounds that call with
 STATUS_METRICS_TIMEOUT_SECONDS so the request still returns promptly with
 metrics omitted.
 """
@@ -17,6 +17,7 @@ from httpx import ASGITransport, AsyncClient
 
 import mshkn.api.computers as computers_module
 from mshkn.db import insert_account, insert_computer
+from mshkn.host.fake import FakeHost
 from mshkn.models import Account, ComputerStatus
 from tests.unit.conftest import make_app, make_runtime
 from tests.unit.test_vm_limit import _make_computer
@@ -24,6 +25,8 @@ from tests.unit.test_vm_limit import _make_computer
 if TYPE_CHECKING:
     import aiosqlite
     import pytest
+
+    from mshkn.host import VmMetrics
 
 
 async def _account(db: aiosqlite.Connection, vm_limit: int = 2) -> None:
@@ -47,12 +50,15 @@ async def test_status_endpoint_bounds_metrics_gather(
 
     monkeypatch.setattr(computers_module, "STATUS_METRICS_TIMEOUT_SECONDS", 0.05)
 
-    async def hanging_metrics(*a: object, **k: object) -> None:
+    host = FakeHost()
+
+    async def hanging_metrics(vm_ip: str, *, timeout: float = 10.0) -> VmMetrics:
         await asyncio.sleep(10)
+        raise AssertionError("unreachable")
 
-    monkeypatch.setattr(computers_module, "ssh_gather_metrics", hanging_metrics)
+    monkeypatch.setattr(host.guest, "metrics", hanging_metrics)
 
-    app = make_app(make_runtime(db, vm_manager=AsyncMock()))
+    app = make_app(make_runtime(db, vm_manager=AsyncMock(), host=host))
     transport = ASGITransport(app=app)
 
     start = time.monotonic()

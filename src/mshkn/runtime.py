@@ -15,15 +15,16 @@ from typing import TYPE_CHECKING, Any
 
 from mshkn.config import Config
 from mshkn.db import connect, run_migrations
-from mshkn.proxy.caddy import CaddyClient
+from mshkn.host.firecracker_host import firecracker_host
 from mshkn.ratelimit import RateLimiter
 from mshkn.vm.manager import VMManager
-from mshkn.vm.ssh import SSHPool
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
 
     import aiosqlite
+
+    from mshkn.host import Host
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +96,8 @@ class BackgroundTasks:
 class Runtime:
     config: Config
     db: aiosqlite.Connection
+    host: Host
     vm_manager: VMManager
-    caddy: CaddyClient | None
-    ssh_pool: SSHPool | None
     tasks: BackgroundTasks
     rate_limiter: RateLimiter
     rule_limiters: dict[str, RateLimiter] = field(default_factory=dict)
@@ -109,16 +109,14 @@ class Runtime:
         config.db_path.parent.mkdir(parents=True, exist_ok=True)
         db = await connect(config.db_path)
         await run_migrations(db, config.migrations_dir)
-        caddy = CaddyClient(admin_url=config.caddy_admin_url, domain=config.domain)
-        ssh_pool = SSHPool(config.ssh_key_path)
+        host = firecracker_host(config)
         tasks = BackgroundTasks()
-        vm_manager = VMManager(config, db, caddy=caddy, ssh_pool=ssh_pool, tasks=tasks)
+        vm_manager = VMManager(config, db, host=host, tasks=tasks)
         return cls(
             config=config,
             db=db,
+            host=host,
             vm_manager=vm_manager,
-            caddy=caddy,
-            ssh_pool=ssh_pool,
             tasks=tasks,
             rate_limiter=RateLimiter(max_requests=80, window_seconds=10.0),
         )
@@ -134,10 +132,8 @@ class Runtime:
     async def close(self) -> None:
         await self.tasks.cancel("reaper")
         await self.tasks.drain(_DRAIN_TIMEOUT_SECONDS)
-        if self.ssh_pool is not None:
-            await self.ssh_pool.close_all()
-        if self.caddy is not None:
-            await self.caddy.close()
+        await self.host.guest.close()
+        await self.host.proxy.close()
         await self.db.close()
 
     def build_lock(self, account_id: str) -> asyncio.Lock:

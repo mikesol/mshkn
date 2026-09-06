@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from mshkn.shell import ShellError, run
+from mshkn.host.shell import RunFn, ShellError
+from mshkn.host.shell import run as shell_run
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,11 @@ def slot_to_tap(slot: int) -> str:
     return f"tap{slot}"
 
 
-async def create_tap(slot: int) -> None:
+async def tap_exists(tap: str, *, run: RunFn = shell_run) -> bool:
+    return (await run(f"ip link show {tap} 2>/dev/null", check=False)).strip() != ""
+
+
+async def create_tap(slot: int, *, run: RunFn = shell_run) -> None:
     tap = slot_to_tap(slot)
     host_ip, vm_ip = slot_to_ip(slot)
     # Remove stale tap if it exists from a previous run.
@@ -51,7 +56,7 @@ async def create_tap(slot: int) -> None:
     logger.info("Created tap device %s at %s/30", tap, host_ip)
 
 
-async def destroy_tap(slot: int) -> None:
+async def destroy_tap(slot: int, *, run: RunFn = shell_run) -> None:
     tap = slot_to_tap(slot)
     _, vm_ip = slot_to_ip(slot)
     # Remove iptables rules (best-effort)
@@ -63,6 +68,9 @@ async def destroy_tap(slot: int) -> None:
         f"iptables -D FORWARD -i {tap} -s {vm_ip} -d 172.16.0.0/12 -j DROP",
         check=False,
     )
+    if not await tap_exists(tap, run=run):
+        logger.debug("Tap %s already gone", tap)
+        return
     try:
         await run(f"ip link del {tap}")
     except ShellError as e:

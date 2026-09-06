@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Protocol
+
+from mshkn.errors import HostError
 
 logger = logging.getLogger(__name__)
 
 
-class ShellError(Exception):
+class ShellError(HostError):
+    """A host command failed.
+
+    A HostError, so the metrics label and HTTP mapping the fake host's
+    HostError gets apply to the dm-thin, tap and rclone paths as well.
+    """
+
     def __init__(self, cmd: str, returncode: int, stderr: str) -> None:
         self.cmd = cmd
         self.returncode = returncode
@@ -29,3 +38,9 @@ async def run(cmd: str, check: bool = True) -> str:
         raise ShellError(cmd, proc.returncode or -1, stderr)
 
     return stdout
+
+
+class RunFn(Protocol):
+    """Signature of shell.run, so implementations can take an injected runner."""
+
+    async def __call__(self, cmd: str, check: bool = True) -> str: ...

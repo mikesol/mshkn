@@ -1,4 +1,4 @@
-from mshkn.vm.network import slot_to_ip, slot_to_mac, slot_to_tap
+from mshkn.host.network import slot_to_ip, slot_to_mac, slot_to_tap
 
 
 def test_slot_to_ip() -> None:
