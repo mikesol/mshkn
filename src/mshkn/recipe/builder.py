@@ -17,12 +17,12 @@ from typing import TYPE_CHECKING
 from mshkn.db import update_recipe_build_result, update_recipe_status
 from mshkn.host.shell import run
 from mshkn.models import RecipeStatus
-from mshkn.vm.storage import create_snapshot, mount_volume, umount_volume
 
 if TYPE_CHECKING:
     import aiosqlite
 
     from mshkn.config import Config
+    from mshkn.host import BlockStore
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ def dockerfile_content_hash(dockerfile: str) -> str:
 async def build_recipe(
     db: aiosqlite.Connection,
     config: Config,
+    blocks: BlockStore,
     recipe_id: str,
     dockerfile: str,
     content_hash: str,
@@ -55,7 +56,6 @@ async def build_recipe(
     tar_path = build_dir / "rootfs.tar"
     container_name = f"tmp-{recipe_id}"
     volume_name = f"mshkn-recipe-{recipe_id}"
-    mount_point: str | None = None
     volume_created = False
     image_tag = f"mshkn-recipe-img-{recipe_id}"
 
@@ -114,29 +114,17 @@ async def build_recipe(
         await update_recipe_status(db, recipe_id, RecipeStatus.INJECTING)
         logger.info("recipe %s: injecting into dm-thin vol %d", recipe_id, allocate_volume_id)
 
-        await create_snapshot(
-            config.thin_pool_name,
-            source_volume_id=0,
-            new_volume_id=allocate_volume_id,
-            new_volume_name=volume_name,
-            sectors=config.thin_volume_sectors,
-        )
+        await blocks.snap(source_volume_id=0, new_volume_id=allocate_volume_id)
+        await blocks.activate(volume_id=allocate_volume_id, name=volume_name)
         volume_created = True
 
-        await run(f"mkfs.ext4 -F /dev/mapper/{volume_name}")
+        await blocks.mkfs(volume_name)
 
-        mount_point = tempfile.mkdtemp(prefix="mshkn-recipe-mount-")
-        await mount_volume(volume_name, mount_point)
-
-        try:
+        async with blocks.mounted(volume_name) as mount_point:
             await run(f"tar xf {tar_path} -C {mount_point}")
-            await _post_process_rootfs(mount_point, config)
-        finally:
-            await umount_volume(mount_point)
-            Path(mount_point).rmdir()
-            mount_point = None
+            await _post_process_rootfs(str(mount_point), config)
 
-        await run(f"dmsetup remove {volume_name}")
+        await blocks.deactivate(volume_name)
         volume_created = False
 
         logger.info("recipe %s: injection complete", recipe_id)
@@ -166,17 +154,10 @@ async def build_recipe(
 
     finally:
         # ── Phase 3.5: Cleanup ────────────────────────────────────────────────
-        # Unmount if still mounted
-        if mount_point is not None:
-            with contextlib.suppress(Exception):
-                await umount_volume(mount_point)
-            with contextlib.suppress(Exception):
-                Path(mount_point).rmdir()
-
         # Remove dm-thin volume if still active
         if volume_created:
             with contextlib.suppress(Exception):
-                await run(f"dmsetup remove {volume_name}", check=False)
+                await blocks.deactivate(volume_name)
 
         # Remove build directory
         with contextlib.suppress(Exception):

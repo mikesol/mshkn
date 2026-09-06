@@ -110,16 +110,9 @@ async def fork_checkpoint(
     # Exec on fork
     if body and body.exec is not None:
         from mshkn.api.computers import _self_destruct
-        from mshkn.vm.ssh import ssh_exec
 
         config = rt.config
-        pool = rt.ssh_pool
-        result = await ssh_exec(
-            computer.vm_ip,
-            body.exec,
-            config.ssh_key_path,
-            pool=pool,
-        )
+        result = await rt.host.guest.exec(computer.vm_ip, body.exec)
         exec_exit_code = result.exit_code
         exec_stdout = result.stdout
         exec_stderr = result.stderr
@@ -140,7 +133,7 @@ async def fork_checkpoint(
                 db=db,
                 config=config,
                 vm_mgr=vm_mgr,
-                pool=pool,
+                host=rt.host,
                 tasks=rt.tasks,
             )
 
@@ -172,11 +165,9 @@ async def merge_checkpoints(
 
     from mshkn.checkpoint.merge import three_way_merge
     from mshkn.models import Checkpoint
-    from mshkn.vm.storage import create_snapshot, mount_volume, umount_volume
 
     rt = get_runtime(request)
     db = rt.db
-    config = rt.config
     vm_mgr = rt.vm_manager
 
     # Validate parent checkpoint
@@ -215,13 +206,6 @@ async def merge_checkpoints(
                 detail=f"{label} checkpoint has no disk snapshot",
             )
 
-    # Create mount points
-    merge_dir = tempfile.mkdtemp(prefix="mshkn-merge-")
-    mount_parent = f"{merge_dir}/parent"
-    mount_a = f"{merge_dir}/fork_a"
-    mount_b = f"{merge_dir}/fork_b"
-    mount_output = f"{merge_dir}/output"
-
     # Volume names for the three existing checkpoints
     vol_parent = f"mshkn-ckpt-{parent_id}"
     vol_a = f"mshkn-ckpt-{body.checkpoint_a}"
@@ -235,63 +219,46 @@ async def merge_checkpoints(
 
     assert ckpt_parent.thin_volume_id is not None  # validated above
     async with timed("merge"):
-        await create_snapshot(
-            pool_name=config.thin_pool_name,
+        await rt.host.blocks.snap(
             source_volume_id=ckpt_parent.thin_volume_id,
             new_volume_id=merged_volume_id,
-            new_volume_name=merged_volume_name,
-            sectors=config.thin_volume_sectors,
         )
+        await rt.host.blocks.activate(volume_id=merged_volume_id, name=merged_volume_name)
 
-        mounted: list[str] = []
-        try:
-            # Mount source volumes read-only
-            for vol, mnt in [(vol_parent, mount_parent), (vol_a, mount_a), (vol_b, mount_b)]:
-                await mount_volume(vol, mnt, readonly=True)
-                mounted.append(mnt)
-
-            # Mount merged output volume read-write
-            # Output starts as a snapshot of parent — we apply the merge diff on top
-            await mount_volume(merged_volume_name, mount_output)
-            mounted.append(mount_output)
-
+        # Output starts as a snapshot of parent — we apply the merge diff on top
+        async with (
+            rt.host.blocks.mounted(vol_parent, readonly=True) as mount_parent,
+            rt.host.blocks.mounted(vol_a, readonly=True) as mount_a,
+            rt.host.blocks.mounted(vol_b, readonly=True) as mount_b,
+            rt.host.blocks.mounted(merged_volume_name) as mount_output,
+        ):
             # Run three-way merge to a temp directory first
-            merge_output = Path(f"{merge_dir}/merge_result")
-            result = three_way_merge(
-                parent=Path(mount_parent),
-                fork_a=Path(mount_a),
-                fork_b=Path(mount_b),
-                output=merge_output,
-            )
+            with tempfile.TemporaryDirectory(prefix="mshkn-merge-") as merge_dir:
+                merge_output = Path(merge_dir) / "merge_result"
+                result = three_way_merge(
+                    parent=mount_parent,
+                    fork_a=mount_a,
+                    fork_b=mount_b,
+                    output=merge_output,
+                )
 
-            # Apply merge result: sync changed/added files to output volume
-            # and remove files that were deleted (exist in parent but not in merge)
-            for rel in merge_output.rglob("*"):
-                if rel.is_file():
-                    rel_path = rel.relative_to(merge_output)
-                    dest = Path(mount_output) / rel_path
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(rel, dest)
+                # Apply merge result: sync changed/added files to output volume
+                # and remove files that were deleted (exist in parent but not in merge)
+                for rel in merge_output.rglob("*"):
+                    if rel.is_file():
+                        rel_path = rel.relative_to(merge_output)
+                        dest = mount_output / rel_path
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(rel, dest)
 
-            # Remove files that exist in parent but not in merge result (deletions)
-            for rel in Path(mount_parent).rglob("*"):
-                if rel.is_file():
-                    rel_path = rel.relative_to(Path(mount_parent))
-                    if not (merge_output / rel_path).exists():
-                        target = Path(mount_output) / rel_path
-                        if target.exists():
-                            target.unlink()
-
-        finally:
-            # Always unmount everything
-            for mnt in reversed(mounted):
-                try:
-                    await umount_volume(mnt)
-                except Exception:
-                    logger.warning("Failed to unmount %s during merge cleanup", mnt)
-
-            # Clean up temp dir
-            shutil.rmtree(merge_dir, ignore_errors=True)
+                # Remove files that exist in parent but not in merge result (deletions)
+                for rel in mount_parent.rglob("*"):
+                    if rel.is_file():
+                        rel_path = rel.relative_to(mount_parent)
+                        if not (merge_output / rel_path).exists():
+                            target = mount_output / rel_path
+                            if target.exists():
+                                target.unlink()
 
     # Build conflict info for response
     conflicts = [{"path": c.path, "resolution": "fork_a"} for c in result.conflicts]
@@ -370,9 +337,6 @@ async def delete_checkpoint(
 ) -> dict[str, str]:
     import shutil
 
-    from mshkn.checkpoint.r2 import delete_checkpoint_r2
-    from mshkn.vm.storage import remove_volume
-
     rt = get_runtime(request)
     db = rt.db
     config = rt.config
@@ -386,7 +350,7 @@ async def delete_checkpoint(
     # Clean up dm-thin volume if one was allocated
     if ckpt.thin_volume_id is not None:
         volume_name = f"mshkn-ckpt-{checkpoint_id}"
-        await remove_volume(config.thin_pool_name, volume_name, ckpt.thin_volume_id)
+        await rt.host.blocks.remove(volume_id=ckpt.thin_volume_id, name=volume_name)
 
     # Clean up local snapshot directory
     local_dir = config.checkpoint_local_dir / checkpoint_id
@@ -394,7 +358,7 @@ async def delete_checkpoint(
         shutil.rmtree(local_dir)
 
     # Clean up R2 uploads
-    await delete_checkpoint_r2(ckpt.r2_prefix, config.r2_bucket)
+    await rt.host.objects.delete_prefix(ckpt.r2_prefix)
 
     await db_delete_checkpoint(db, checkpoint_id)
     return {"status": "deleted"}

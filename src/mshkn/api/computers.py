@@ -11,8 +11,6 @@ from sse_starlette.sse import EventSourceResponse
 
 from mshkn.api.deps import get_runtime, require_account
 from mshkn.callback import deliver_callback
-from mshkn.checkpoint.r2 import upload_checkpoint
-from mshkn.checkpoint.snapshot import create_vm_snapshot
 from mshkn.db import (
     count_active_computers_by_account,
     delete_deferred_by_label,
@@ -32,15 +30,6 @@ from mshkn.observability.metrics import (
     timed,
 )
 from mshkn.resources import Resources
-from mshkn.vm.ssh import (
-    SSHPool,
-    ssh_download,
-    ssh_exec,
-    ssh_exec_bg,
-    ssh_exec_stream,
-    ssh_gather_metrics,
-    ssh_upload,
-)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -48,6 +37,7 @@ if TYPE_CHECKING:
     import aiosqlite
 
     from mshkn.config import Config
+    from mshkn.host import Host
     from mshkn.models import Account, Computer, DeferredRequest
     from mshkn.runtime import BackgroundTasks, Runtime
     from mshkn.vm.manager import VMManager
@@ -106,7 +96,7 @@ async def _self_destruct(
     db: aiosqlite.Connection,
     config: Config,
     vm_mgr: VMManager,
-    pool: SSHPool | None,
+    host: Host,
     tasks: BackgroundTasks,
 ) -> str:
     """Auto-checkpoint, destroy computer, and fire callback.
@@ -120,20 +110,13 @@ async def _self_destruct(
     snapshot_dir = config.checkpoint_local_dir / checkpoint_id
 
     # Flush guest filesystem
-    await ssh_exec(
-        computer.vm_ip,
-        "sync",
-        config.ssh_key_path,
-        timeout=10.0,
-        pool=pool,
-    )
+    await host.guest.exec(computer.vm_ip, "sync", timeout=10.0)
 
     # Pause/snapshot/resume
-    await create_vm_snapshot(computer.socket_path, snapshot_dir)
+    await host.hypervisor.snapshot(computer.socket_path, snapshot_dir)
 
     # Evict SSH pool connection
-    if pool is not None:
-        await pool.remove(computer.vm_ip)
+    await host.guest.evict(computer.vm_ip)
 
     # Freeze disk
     ckpt_volume_id = await vm_mgr.snapshot_disk_for_checkpoint(
@@ -174,7 +157,7 @@ async def _self_destruct(
 
     # Background R2 upload
     tasks.spawn(
-        upload_checkpoint(snapshot_dir, r2_prefix, config.r2_bucket),
+        host.objects.upload_dir(snapshot_dir, r2_prefix),
         name=f"upload:{checkpoint_id}",
         key=f"upload:{checkpoint_id}",
     )
@@ -217,6 +200,7 @@ async def _self_destruct(
                     config=config,
                     vm_mgr=vm_mgr,
                     account=account,
+                    host=host,
                     tasks=tasks,
                 ),
                 name=f"deferred:{label}",
@@ -265,13 +249,7 @@ async def create_computer(
 
     # Exec on create
     if body.exec is not None:
-        pool = rt.ssh_pool
-        result = await ssh_exec(
-            computer.vm_ip,
-            body.exec,
-            config.ssh_key_path,
-            pool=pool,
-        )
+        result = await rt.host.guest.exec(computer.vm_ip, body.exec)
         exec_exit_code = result.exit_code
         exec_stdout = result.stdout
         exec_stderr = result.stderr
@@ -290,7 +268,7 @@ async def create_computer(
                 db=db,
                 config=config,
                 vm_mgr=vm_mgr,
-                pool=pool,
+                host=rt.host,
                 tasks=rt.tasks,
             )
             computers_active.dec()
@@ -317,7 +295,6 @@ async def exec_command(
     _check_rate_limit(rt, request)
 
     db = rt.db
-    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
 
     from datetime import UTC, datetime
@@ -327,10 +304,12 @@ async def exec_command(
     async def event_stream() -> AsyncIterator[dict[str, str]]:
         t0 = time.monotonic()
         try:
-            async for stream, line in ssh_exec_stream(
-                computer.vm_ip, body.command, config.ssh_key_path
-            ):
+            async for stream, line in rt.host.guest.stream(computer.vm_ip, body.command):
                 yield {"event": stream, "data": line}
+        except Exception as exc:
+            logger.warning("exec stream for %s failed: %s", computer_id, type(exc).__name__)
+            yield {"event": "error", "data": f"{type(exc).__name__}: {exc}"}
+            yield {"event": "exit", "data": "255"}
         finally:
             exec_duration_seconds.observe(time.monotonic() - t0)
 
@@ -346,18 +325,12 @@ async def exec_bg(
 ) -> dict[str, object]:
     rt = get_runtime(request)
     db = rt.db
-    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
 
     from datetime import UTC, datetime
 
     await update_last_exec_at(db, computer_id, datetime.now(UTC).isoformat())
-    pid = await ssh_exec_bg(
-        computer.vm_ip,
-        body.command,
-        config.ssh_key_path,
-        pool=rt.ssh_pool,
-    )
+    pid = await rt.host.guest.exec_bg(computer.vm_ip, body.command)
     return {"pid": pid}
 
 
@@ -370,18 +343,13 @@ async def exec_logs(
 ) -> EventSourceResponse:
     rt = get_runtime(request)
     db = rt.db
-    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
 
-    pool = rt.ssh_pool
-
     async def event_stream() -> AsyncIterator[dict[str, str]]:
-        result = await ssh_exec(
+        result = await rt.host.guest.exec(
             computer.vm_ip,
             f"cat /tmp/bg-{pid}.log 2>/dev/null || echo ''",
-            config.ssh_key_path,
             timeout=10.0,
-            pool=pool,
         )
         for line in result.stdout.splitlines():
             yield {"event": "stdout", "data": line}
@@ -399,14 +367,8 @@ async def exec_kill(
 ) -> dict[str, str]:
     rt = get_runtime(request)
     db = rt.db
-    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
-    result = await ssh_exec(
-        computer.vm_ip,
-        f"kill {pid}",
-        config.ssh_key_path,
-        pool=rt.ssh_pool,
-    )
+    result = await rt.host.guest.exec(computer.vm_ip, f"kill {pid}")
     if result.exit_code != 0:
         return {"status": "not_found", "stderr": result.stderr}
     return {"status": "killed"}
@@ -421,10 +383,9 @@ async def upload_file(
 ) -> dict[str, str]:
     rt = get_runtime(request)
     db = rt.db
-    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
     data = await request.body()
-    await ssh_upload(computer.vm_ip, path, data, config.ssh_key_path, pool=rt.ssh_pool)
+    await rt.host.guest.upload(computer.vm_ip, path, data)
     return {"status": "uploaded", "path": path}
 
 
@@ -437,14 +398,8 @@ async def download_file(
 ) -> Response:
     rt = get_runtime(request)
     db = rt.db
-    config = rt.config
     computer = await _get_running_computer(db, computer_id, account)
-    data = await ssh_download(
-        computer.vm_ip,
-        path,
-        config.ssh_key_path,
-        pool=rt.ssh_pool,
-    )
+    data = await rt.host.guest.download(computer.vm_ip, path)
     return Response(content=data, media_type="application/octet-stream")
 
 
@@ -477,12 +432,7 @@ async def computer_status(
     if computer.status == ComputerStatus.RUNNING and computer.vm_ip:
         try:
             metrics = await asyncio.wait_for(
-                ssh_gather_metrics(
-                    computer.vm_ip,
-                    config.ssh_key_path,
-                    timeout=10.0,
-                    pool=rt.ssh_pool,
-                ),
+                rt.host.guest.metrics(computer.vm_ip, timeout=10.0),
                 timeout=STATUS_METRICS_TIMEOUT_SECONDS,
             )
             result["cpu_pct"] = metrics.cpu_pct
@@ -529,21 +479,13 @@ async def checkpoint_computer(
         # Flush guest filesystem buffers to the block device so the disk
         # snapshot captures all written data (guest page cache is not visible
         # to dm-thin snapshots).
-        await ssh_exec(
-            computer.vm_ip,
-            "sync",
-            config.ssh_key_path,
-            timeout=10.0,
-            pool=rt.ssh_pool,
-        )
+        await rt.host.guest.exec(computer.vm_ip, "sync", timeout=10.0)
 
         # Pause/snapshot/resume (sub-1s for the agent)
-        await create_vm_snapshot(computer.socket_path, snapshot_dir)
+        await rt.host.hypervisor.snapshot(computer.socket_path, snapshot_dir)
 
         # Evict SSH pool connection — pause/resume disrupts the TCP session
-        pool = rt.ssh_pool
-        if pool is not None:
-            await pool.remove(computer.vm_ip)
+        await rt.host.guest.evict(computer.vm_ip)
 
         # Freeze disk state: create a dm-thin CoW snapshot so fork gets the disk
         # as it was at checkpoint time, not the computer's evolving state.
@@ -585,7 +527,7 @@ async def checkpoint_computer(
 
     # Async background upload to R2
     rt.tasks.spawn(
-        upload_checkpoint(snapshot_dir, r2_prefix, config.r2_bucket),
+        rt.host.objects.upload_dir(snapshot_dir, r2_prefix),
         name=f"upload:{checkpoint_id}",
         key=f"upload:{checkpoint_id}",
     )
@@ -603,6 +545,7 @@ async def _process_deferred(
     config: Config,
     vm_mgr: VMManager,
     account: Account,
+    host: Host,
     tasks: BackgroundTasks,
 ) -> None:
     """Boot a new computer from the latest checkpoint for a label and process deferred forks.
@@ -642,12 +585,7 @@ async def _process_deferred(
             # Escape single quotes for shell
             escaped = cmd.replace("'", "'\\''")
             write_cmds.append(f"printf '%s' '{escaped}' > /tmp/exec/{i}.txt")
-        await ssh_exec(
-            computer.vm_ip,
-            " && ".join(write_cmds),
-            config.ssh_key_path,
-            pool=None,
-        )
+        await host.guest.exec(computer.vm_ip, " && ".join(write_cmds))
 
         # Determine exec command: meta_exec from last request, or concatenate
         meta_exec = None
@@ -660,12 +598,7 @@ async def _process_deferred(
 
         # Run the exec
         if exec_cmd:
-            result = await ssh_exec(
-                computer.vm_ip,
-                exec_cmd,
-                config.ssh_key_path,
-                pool=None,
-            )
+            result = await host.guest.exec(computer.vm_ip, exec_cmd)
             logger.info(
                 "Deferred exec for label %s: exit_code=%d",
                 label,
@@ -693,7 +626,7 @@ async def _process_deferred(
                     db=db,
                     config=config,
                     vm_mgr=vm_mgr,
-                    pool=None,
+                    host=host,
                     tasks=tasks,
                 )
 
@@ -743,6 +676,7 @@ async def destroy_computer(
                         config=config,
                         vm_mgr=vm_mgr,
                         account=account,
+                        host=rt.host,
                         tasks=rt.tasks,
                     ),
                     name=f"deferred:{source_ckpt.label}",

@@ -429,7 +429,6 @@ async def _do_create(
     """Core create-computer logic, shared by API endpoint and ingress trigger."""
     from mshkn.api.computers import _self_destruct
     from mshkn.db import count_active_computers_by_account, get_account_by_id
-    from mshkn.vm.ssh import ssh_exec
 
     account = await get_account_by_id(db, account_id)
     if account is None:
@@ -447,7 +446,7 @@ async def _do_create(
     created_checkpoint_id: str | None = None
 
     if exec_cmd is not None:
-        result = await ssh_exec(computer.vm_ip, exec_cmd, config.ssh_key_path, pool=None)
+        result = await vm_manager.host.guest.exec(computer.vm_ip, exec_cmd)
         exec_exit_code = result.exit_code
         exec_stdout = result.stdout
         exec_stderr = result.stderr
@@ -465,7 +464,7 @@ async def _do_create(
                 db=db,
                 config=config,
                 vm_mgr=vm_manager,
-                pool=None,
+                host=vm_manager.host,
                 tasks=tasks,
             )
 
@@ -496,7 +495,6 @@ async def _do_fork(
     """Core fork-from-checkpoint logic, shared by API endpoint and ingress trigger."""
     from mshkn.api.computers import _self_destruct
     from mshkn.db import get_active_computer_for_label, get_checkpoint, insert_deferred
-    from mshkn.vm.ssh import ssh_exec
 
     ckpt = await get_checkpoint(db, checkpoint_id)
     if ckpt is None or ckpt.account_id != account_id:
@@ -542,7 +540,7 @@ async def _do_fork(
     created_checkpoint_id: str | None = None
 
     if exec_cmd is not None:
-        result = await ssh_exec(computer.vm_ip, exec_cmd, config.ssh_key_path, pool=None)
+        result = await vm_manager.host.guest.exec(computer.vm_ip, exec_cmd)
         exec_exit_code = result.exit_code
         exec_stdout = result.stdout
         exec_stderr = result.stderr
@@ -561,7 +559,7 @@ async def _do_fork(
                 db=db,
                 config=config,
                 vm_mgr=vm_manager,
-                pool=None,
+                host=vm_manager.host,
                 tasks=tasks,
             )
 

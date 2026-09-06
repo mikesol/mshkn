@@ -22,7 +22,6 @@ from mshkn.db import (
 from mshkn.models import Recipe, RecipeStatus
 from mshkn.observability.metrics import timed
 from mshkn.recipe.builder import build_recipe, dockerfile_content_hash
-from mshkn.vm.storage import remove_volume
 
 if TYPE_CHECKING:
     from mshkn.models import Account
@@ -111,7 +110,9 @@ async def create_recipe(
 
     async def _run_build() -> None:
         async with build_lock, timed("recipe_build"):
-            await build_recipe(db, config, recipe_id, body.dockerfile, content_hash, volume_id)
+            await build_recipe(
+                db, config, rt.host.blocks, recipe_id, body.dockerfile, content_hash, volume_id
+            )
 
     rt.tasks.spawn(_run_build(), name=f"recipe_build:{recipe_id}")
 
@@ -152,7 +153,6 @@ async def delete_recipe_endpoint(
 ) -> dict[str, str]:
     rt = get_runtime(request)
     db = rt.db
-    config = rt.config
     recipe = await get_recipe(db, recipe_id)
     if recipe is None or recipe.account_id != account.id:
         raise HTTPException(status_code=404, detail="Recipe not found")
@@ -165,9 +165,10 @@ async def delete_recipe_endpoint(
         )
 
     if recipe.base_volume_id is not None:
-        volume_name = f"mshkn-recipe-{recipe.content_hash[:16]}"
+        # The builder creates the volume as mshkn-recipe-<recipe id>; remove that one.
+        volume_name = f"mshkn-recipe-{recipe.id}"
         try:
-            await remove_volume(config.thin_pool_name, volume_name, recipe.base_volume_id)
+            await rt.host.blocks.remove(volume_id=recipe.base_volume_id, name=volume_name)
         except Exception:
             logger.exception(
                 "Failed to remove volume %s (vol %d) for recipe %s",

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from httpx import ASGITransport, AsyncClient
 
 from mshkn.db import insert_account, insert_checkpoint
+from mshkn.host import ExecResult
+from mshkn.host.fake import FakeHost
 from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
-from mshkn.vm.ssh import ExecResult
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
@@ -91,17 +92,19 @@ async def test_create_with_exec_returns_results(db: aiosqlite.Connection) -> Non
     vm_mgr = AsyncMock()
     vm_mgr.create.return_value = _make_computer()
 
-    app = make_app(make_runtime(db, vm_manager=vm_mgr))
-    mock_result = ExecResult(exit_code=0, stdout="hello world\n", stderr="")
+    host = FakeHost()
+    host.guest.script["echo hello world"] = ExecResult(
+        exit_code=0, stdout="hello world\n", stderr=""
+    )
+    app = make_app(make_runtime(db, vm_manager=vm_mgr, host=host))
 
     transport = ASGITransport(app=app)
-    with patch("mshkn.api.computers.ssh_exec", return_value=mock_result) as mock_ssh:
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/computers",
-                json={"uses": [], "exec": "echo hello world"},
-                headers=AUTH,
-            )
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/computers",
+            json={"uses": [], "exec": "echo hello world"},
+            headers=AUTH,
+        )
 
     assert resp.status_code == 200
     data = resp.json()
@@ -109,7 +112,7 @@ async def test_create_with_exec_returns_results(db: aiosqlite.Connection) -> Non
     assert data["exec_exit_code"] == 0
     assert data["exec_stdout"] == "hello world\n"
     assert data["exec_stderr"] == ""
-    mock_ssh.assert_called_once()
+    assert host.guest.commands == [("172.16.1.2", "echo hello world")]
 
 
 async def test_create_with_exec_nonzero_exit(db: aiosqlite.Connection) -> None:
@@ -118,22 +121,25 @@ async def test_create_with_exec_nonzero_exit(db: aiosqlite.Connection) -> None:
     vm_mgr = AsyncMock()
     vm_mgr.create.return_value = _make_computer()
 
-    app = make_app(make_runtime(db, vm_manager=vm_mgr))
-    mock_result = ExecResult(exit_code=1, stdout="", stderr="command not found\n")
+    host = FakeHost()
+    host.guest.script["bad-command"] = ExecResult(
+        exit_code=1, stdout="", stderr="command not found\n"
+    )
+    app = make_app(make_runtime(db, vm_manager=vm_mgr, host=host))
 
     transport = ASGITransport(app=app)
-    with patch("mshkn.api.computers.ssh_exec", return_value=mock_result):
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/computers",
-                json={"uses": [], "exec": "bad-command"},
-                headers=AUTH,
-            )
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/computers",
+            json={"uses": [], "exec": "bad-command"},
+            headers=AUTH,
+        )
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["exec_exit_code"] == 1
     assert data["exec_stderr"] == "command not found\n"
+    assert host.guest.commands == [("172.16.1.2", "bad-command")]
 
 
 async def test_fork_with_exec_returns_results(db: aiosqlite.Connection) -> None:
@@ -144,17 +150,19 @@ async def test_fork_with_exec_returns_results(db: aiosqlite.Connection) -> None:
     vm_mgr = AsyncMock()
     vm_mgr.fork_from_checkpoint.return_value = _make_computer(2)
 
-    app = make_app(make_runtime(db, vm_manager=vm_mgr))
-    mock_result = ExecResult(exit_code=0, stdout="forked output\n", stderr="")
+    host = FakeHost()
+    host.guest.script["echo forked output"] = ExecResult(
+        exit_code=0, stdout="forked output\n", stderr=""
+    )
+    app = make_app(make_runtime(db, vm_manager=vm_mgr, host=host))
 
     transport = ASGITransport(app=app)
-    with patch("mshkn.vm.ssh.ssh_exec", return_value=mock_result) as mock_ssh:
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post(
-                "/checkpoints/ckpt-test1/fork",
-                json={"exec": "echo forked output"},
-                headers=AUTH,
-            )
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/checkpoints/ckpt-test1/fork",
+            json={"exec": "echo forked output"},
+            headers=AUTH,
+        )
 
     assert resp.status_code == 200
     data = resp.json()
@@ -163,7 +171,7 @@ async def test_fork_with_exec_returns_results(db: aiosqlite.Connection) -> None:
     assert data["exec_exit_code"] == 0
     assert data["exec_stdout"] == "forked output\n"
     assert data["exec_stderr"] == ""
-    mock_ssh.assert_called_once()
+    assert host.guest.commands == [("172.16.1.3", "echo forked output")]
 
 
 async def test_fork_without_exec_works_as_before(db: aiosqlite.Connection) -> None:

@@ -9,6 +9,7 @@ import pytest
 from mshkn.app import create_app
 from mshkn.config import Config
 from mshkn.db import connect, run_migrations
+from mshkn.host.fake import FakeHost
 from mshkn.ratelimit import RateLimiter
 from mshkn.runtime import BackgroundTasks, Runtime
 
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
 
     import aiosqlite
     from fastapi import FastAPI
+
+    from mshkn.host import Host
 
 
 @pytest.fixture
@@ -34,15 +37,14 @@ def make_runtime(
     *,
     vm_manager: Any = None,
     config: Config | None = None,
-    ssh_pool: Any = None,
+    host: Host | None = None,
 ) -> Runtime:
-    """A Runtime for API tests: real DB, mocked VMManager, no Caddy, no reaper."""
+    """A Runtime for API tests: real DB, mocked VMManager, in-memory Host, no reaper."""
     return Runtime(
         config=config if config is not None else Config(domain="test.dev"),
         db=db,
+        host=host if host is not None else FakeHost(),
         vm_manager=vm_manager if vm_manager is not None else AsyncMock(),
-        caddy=None,
-        ssh_pool=ssh_pool,
         tasks=BackgroundTasks(),
         rate_limiter=RateLimiter(max_requests=80, window_seconds=10.0),
     )
