@@ -150,12 +150,18 @@ def _last(timeline: list[str], entry: str) -> int:
 
 SOCKET = "/tmp/fc-mshkn-comp-a.socket"
 
-STAGING_TABLE = (
-    f"dmsetup create {STAGING_DRIVE_NAME} --table '0 16777216 thin /dev/mapper/mshkn-pool 7'"
-)
+
+def _staging_table(volume_id: int) -> str:
+    return (
+        f"dmsetup create {STAGING_DRIVE_NAME} "
+        f"--table '0 16777216 thin /dev/mapper/mshkn-pool {volume_id}'"
+    )
 
 
-def _rename_chain(slot: int) -> str:
+STAGING_TABLE = _staging_table(7)
+
+
+def _rename_chain(slot: int, disk_name: str = "mshkn-comp-a") -> str:
     return (
         f"ip link set {STAGING_TAP} name tap{slot} && "
         f"ip addr flush dev tap{slot} && "
@@ -163,7 +169,7 @@ def _rename_chain(slot: int) -> str:
         f"ip neigh replace 172.16.{slot}.2 lladdr {STAGING_MAC} dev tap{slot} nud permanent && "
         f"iptables -I FORWARD -i tap{slot} -s 172.16.{slot}.2 ! -d 172.16.0.0/12 -j ACCEPT && "
         f"iptables -I FORWARD -i tap{slot} -s 172.16.{slot}.2 -d 172.16.0.0/12 -j DROP && "
-        f"dmsetup rename {STAGING_DRIVE_NAME} mshkn-comp-a"
+        f"dmsetup rename {STAGING_DRIVE_NAME} {disk_name}"
     )
 
 
@@ -325,10 +331,8 @@ async def test_two_boots_serialise_on_the_staging_lock(staged: Staged) -> None:
         hv.boot(slot=2, disk_volume_id=8, disk_name="mshkn-comp-b", resources=Resources()),
     )
     cmds = [c for c, _ in run.calls]
-    first_rename = next(
-        i for i, c in enumerate(cmds) if c.startswith("ip link set tap254 name tap1")
-    )
-    second_table = next(i for i, c in enumerate(cmds) if c.endswith(" 8'"))
+    first_rename = cmds.index(_rename_chain(1))
+    second_table = cmds.index(_staging_table(8))
     assert first_rename < second_table, "the second boot's staging map waits for the first's rename"
 
 

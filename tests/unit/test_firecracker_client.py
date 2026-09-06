@@ -92,3 +92,12 @@ async def test_non_2xx_raises_http_status_error() -> None:
     with pytest.raises(httpx.HTTPStatusError):
         await client.pause()
     await client.close()
+
+
+async def test_a_non_2xx_put_raises_http_status_error() -> None:
+    """`_put` has its own non-2xx branch; the test above only covers `_patch`."""
+    transport, _ = _recording_transport(status=400)
+    client = FirecrackerClient("/tmp/x.socket", transport=transport)
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.create_snapshot("/s/vmstate", "/s/memory")
+    await client.close()

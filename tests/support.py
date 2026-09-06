@@ -94,6 +94,10 @@ class ShellRecorder:
     `taps` as present; every other command is matched against `responses` by
     substring, returning the value or raising it, and otherwise returns "".
 
+    `fail_first` is what a retry needs: its key raises once and then behaves,
+    so the retry can be seen to succeed rather than merely to be attempted. It
+    is consulted before `responses`.
+
     Pass `timeline` to interleave the commands with the caller's own events:
     every call appends `run:<cmd>` to that list, so a test can assert an
     ordering that spans shell commands and API or process activity.
@@ -104,16 +108,21 @@ class ShellRecorder:
         *,
         taps: set[str] | None = None,
         responses: dict[str, str | Exception] | None = None,
+        fail_first: dict[str, Exception] | None = None,
         timeline: list[str] | None = None,
     ) -> None:
         self.calls: list[tuple[str, bool]] = []
         self.taps = set() if taps is None else taps
         self.responses = {} if responses is None else responses
+        self.fail_first = dict(fail_first or {})
         self.timeline = [] if timeline is None else timeline
 
     async def __call__(self, cmd: str, check: bool = True) -> str:
         self.calls.append((cmd, check))
         self.timeline.append(f"run:{cmd}")
+        for key in list(self.fail_first):
+            if key in cmd:
+                raise self.fail_first.pop(key)
         for key, resp in self.responses.items():
             if key in cmd:
                 if isinstance(resp, Exception):

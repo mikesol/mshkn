@@ -242,6 +242,17 @@ async def test_sync_bodies_have_the_same_shape_as_the_rest_endpoints(flow: Flow)
     ing_create = await flow.client.post(f"/ingress/{create_rule}")
     assert ing_create.status_code == 200
     assert set(ing_create.json()) == set(rest_create.json())
+    # Enumerated, the way the fork shape is above: agreeing with each other is
+    # not the same as agreeing with CreateResponse.
+    assert set(rest_create.json()) == {
+        "computer_id",
+        "url",
+        "recipe_id",
+        "exec_exit_code",
+        "exec_stdout",
+        "exec_stderr",
+        "created_checkpoint_id",
+    }
     assert ing_create.json()["url"].endswith(".test.dev")
 
     cid = rest_create.json()["computer_id"]

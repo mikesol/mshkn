@@ -107,3 +107,33 @@ def test_nested_paths_and_counts(tmp_path: Path) -> None:
     assert result.merged_dir == tmp_path / "out"
     assert (result.unchanged, result.auto_merged) == (1, 1)
     assert (result.merged_dir / "keep" / "a.txt").read_text() == "a"
+
+
+def test_b_deletes_and_a_leaves_alone_removes_the_file(tmp_path: Path) -> None:
+    """B deleting a file A did not touch is an auto-merge, and the file is gone.
+
+    This is the "changed only in B" arm with `b_file` absent: nothing is copied
+    to the output, so the delete propagates rather than being silently undone.
+    """
+    parent, a, b = _dirs(tmp_path)
+    (parent / "doomed").write_text("x")
+    (a / "doomed").write_text("x")
+    result = three_way_merge(parent, a, b)
+    assert result.conflicts == []
+    assert not (result.merged_dir / "doomed").exists()
+    assert (result.unchanged, result.auto_merged) == (0, 1)
+
+
+def test_a_missing_fork_directory_contributes_no_files(tmp_path: Path) -> None:
+    """`_all_relative_files` skips a directory that does not exist.
+
+    A fork volume that was never mounted must not make the merge raise; the
+    other two sides still merge.
+    """
+    parent, a, _b = _dirs(tmp_path)
+    (parent / "kept").write_text("x")
+    (a / "kept").write_text("x")
+    result = three_way_merge(parent, a, tmp_path / "never-mounted")
+    assert result.conflicts == []
+    assert not (result.merged_dir / "kept").exists(), "the absent side reads as a delete"
+    assert (result.unchanged, result.auto_merged) == (0, 1)

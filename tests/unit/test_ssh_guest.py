@@ -200,11 +200,23 @@ class FakeConn:
         return self._process
 
     async def run(self, command: str, check: bool = False) -> Any:
+        """Records the command and, like asyncssh, raises on a non-zero exit when check."""
         self.runs.append(command)
         if self._run_delay:
             await asyncio.sleep(self._run_delay)
         if self._run_error is not None:
             raise self._run_error
+        if check and self._run_result.exit_status != 0:
+            raise asyncssh.ProcessError(
+                env=None,
+                command=command,
+                subsystem=None,
+                exit_status=self._run_result.exit_status,
+                exit_signal=None,
+                returncode=self._run_result.exit_status,
+                stdout=self._run_result.stdout,
+                stderr=self._run_result.stderr,
+            )
         return self._run_result
 
     def start_sftp_client(self) -> FakeSftp:
@@ -551,6 +563,20 @@ async def test_upload_mkdirs_then_writes_over_sftp() -> None:
     await guest.upload("172.16.1.2", "/root/dir/file.bin", b"\x00data")
     assert conn.runs == ["mkdir -p /root/dir"]
     assert conn.files == {"/root/dir/file.bin": b"\x00data"}
+
+
+async def test_upload_maps_a_failing_mkdir_to_host_error() -> None:
+    """`upload` runs `mkdir -p` with check=True, so a non-zero exit must surface as HostError.
+
+    Without check= the guest would go on to open an SFTP file under a directory
+    that was never created.
+    """
+    conn = FakeConn(FakeProcess([], [], 0), run_result=RunResult(1, "", "Read-only file system"))
+    guest = make_guest_with([conn])
+    with pytest.raises(HostError):
+        await guest.upload("172.16.1.2", "/root/dir/file.bin", b"\x00data")
+    assert conn.runs == ["mkdir -p /root/dir"]
+    assert conn.files == {}, "no file is written when the directory could not be made"
 
 
 async def test_download_reads_over_sftp_and_maps_missing_to_file_not_found() -> None:

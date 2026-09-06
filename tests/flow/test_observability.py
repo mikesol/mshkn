@@ -40,6 +40,11 @@ async def test_health_degrades_when_the_database_fails_and_metrics_render(
     assert body["subsystems"]["storage"] == "ok" and body["subsystems"]["proxy"] == "ok"
     monkeypatch.undo()
 
+    # Create a computer first, so /metrics is asserted on samples rather than on
+    # the HELP lines every declared series prints even at zero.
+    created = await flow.client.post("/computers", json={})
+    assert created.status_code == 200
+
     text = (await flow.client.get("/metrics")).text
     for series in (
         "mshkn_operation_duration_seconds",
@@ -51,6 +56,10 @@ async def test_health_degrades_when_the_database_fails_and_metrics_render(
         "mshkn_host_ram_used_ratio",
     ):
         assert series in text
+    assert "mshkn_computers_active 1.0" in text, "the create moved the gauge, not just declared it"
+    assert 'mshkn_operation_duration_seconds_count{op="create"}' in text, (
+        "the create was observed under op=create"
+    )
     assert "mshkn_exec_duration_seconds" not in text, "exec is timed under op=exec now"
 
 
