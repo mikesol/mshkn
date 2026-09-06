@@ -16,7 +16,7 @@ from mshkn.db import (
     update_computer_status,
 )
 from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
-from tests.support import checkpoint_row, computer_row
+from tests.support import account_row, checkpoint_row, computer_row
 
 
 async def test_migrations_apply(tmp_path: Path) -> None:
@@ -33,11 +33,27 @@ async def test_migrations_apply(tmp_path: Path) -> None:
 
 
 async def test_migrations_idempotent(tmp_path: Path) -> None:
+    """A second run applies nothing: each file is recorded once and existing rows survive.
+
+    The `_migrations` ledger is what makes the re-run a no-op. Without the
+    already-applied check the second pass would re-execute every script, so the
+    ledger would carry each filename twice and the CREATE TABLE statements
+    would take the rows with them.
+    """
     db_path = tmp_path / "test.db"
     migrations_dir = Path("migrations")
+    expected = [f.name for f in sorted(migrations_dir.glob("*.sql"))]
     async with aiosqlite.connect(db_path) as db:
         await run_migrations(db, migrations_dir)
-        await run_migrations(db, migrations_dir)  # second run should be a no-op
+        await insert_account(db, account_row("acct-keep", api_key="key-keep"))
+        await run_migrations(db, migrations_dir)
+        cursor = await db.execute("SELECT filename FROM _migrations ORDER BY id")
+        recorded = [row[0] for row in await cursor.fetchall()]
+        survivor = await get_account_by_key(db, "key-keep")
+    assert recorded == expected, "the second run recorded a migration again"
+    assert survivor is not None and survivor.id == "acct-keep", (
+        "the second run re-ran a CREATE TABLE and dropped the row"
+    )
 
 
 async def test_account_roundtrip(tmp_path: Path) -> None:
