@@ -15,8 +15,9 @@ from mshkn.db import (
 )
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost
-from mshkn.models import Account, CheckpointTrigger, ComputerStatus
+from mshkn.models import CheckpointTrigger, ComputerStatus
 from mshkn.resources import DEFAULT_RESOURCES
+from tests.support import account_row
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 AUTH = {"Authorization": "Bearer test-key"}
 
-ACCOUNT = Account(id="acct-1", api_key="test-key", vm_limit=10, created_at="2026-03-08T00:00:00")
+ACCOUNT = account_row()
 
 
 def _receiver() -> tuple[FastAPI, list[dict[str, Any]]]:

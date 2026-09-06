@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
 
 from mshkn.app import create_app
+from mshkn.db import insert_account, insert_computer
 from mshkn.host.fake import FakeHost
-from mshkn.runtime import BackgroundTasks
+from mshkn.runtime import BackgroundTasks, Runtime
+from tests.support import account_row, computer_row
 from tests.unit.conftest import make_runtime
 
 if TYPE_CHECKING:
@@ -110,3 +114,62 @@ async def test_lifespan_closes_runtime_even_when_start_fails(
             pass
 
     spy.assert_awaited_once()
+
+
+async def test_from_env_builds_a_runtime_on_the_configured_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import mshkn.runtime as runtime_module
+
+    monkeypatch.setenv("MSHKN_DB_PATH", str(tmp_path / "env.db"))
+    monkeypatch.setenv("MSHKN_MIGRATIONS_DIR", str(Path("migrations").resolve()))
+    monkeypatch.setattr(runtime_module, "firecracker_host", lambda _config: FakeHost())
+    rt = await Runtime.from_env()
+    try:
+        cursor = await rt.db.execute("SELECT COUNT(*) FROM _migrations")
+        row = await cursor.fetchone()
+        assert row is not None and row[0] > 0
+        assert rt.config.db_path == tmp_path / "env.db"
+    finally:
+        await rt.close()
+
+
+async def test_start_spawns_the_reaper_and_close_tears_everything_down(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed: list[str] = []
+
+    async def record(name: str) -> None:
+        closed.append(name)
+
+    monkeypatch.setattr(runtime.host.guest, "close", lambda: record("guest"))
+    monkeypatch.setattr(runtime.host.proxy, "close", lambda: record("proxy"))
+    original_db_close = runtime.db.close
+
+    async def db_close() -> None:
+        closed.append("db")
+        await original_db_close()
+
+    monkeypatch.setattr(runtime.db, "close", db_close)
+
+    await runtime.start()
+    assert "reaper" in runtime.tasks.names()
+
+    await runtime.close()
+    assert closed == ["guest", "proxy", "db"]
+    assert len(runtime.tasks) == 0
+    assert runtime.http.is_closed
+
+
+async def test_start_reaps_a_vm_whose_process_died_while_the_server_was_down(
+    runtime: Runtime, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="mshkn.runtime")
+    await insert_account(runtime.db, account_row())
+    await insert_computer(runtime.db, computer_row(1))  # PID 1001, never booted here
+
+    await runtime.start()
+    try:
+        assert any("Startup: reaped 1 dead VM(s)" in r.getMessage() for r in caplog.records)
+    finally:
+        await runtime.close()

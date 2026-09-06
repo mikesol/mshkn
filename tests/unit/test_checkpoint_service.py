@@ -11,7 +11,7 @@ from mshkn.db import get_checkpoint, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, Conflict, NotFound
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
-from mshkn.models import Account, Checkpoint, CheckpointTrigger, Computer, ExecSpec
+from mshkn.models import CheckpointTrigger, Computer, ExecSpec
 from mshkn.observability.metrics import checkpoints_total
 from mshkn.resources import DEFAULT_RESOURCES
 from mshkn.runtime import BackgroundTasks
@@ -19,36 +19,18 @@ from mshkn.services.allocator import SlotAllocator
 from mshkn.services.checkpoints import CheckpointService, Deferred
 from mshkn.services.computers import ComputerService
 from mshkn.services.recipes import RecipeService
+from tests.support import account_row, checkpoint_row
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     import aiosqlite
 
-ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=10, created_at="t")
-OTHER = Account(id="acct-2", api_key="k2", vm_limit=10, created_at="t")
+ACCOUNT = account_row(api_key="k")
+OTHER = account_row(id="acct-2", api_key="k2")
 SPEC = ExecSpec(
     command="echo hi", self_destruct=True, callback_url=None, label=None, meta_exec=None
 )
-
-
-def _row(
-    ckpt_id: str, *, account_id: str, parent_id: str | None, volume_id: int | None
-) -> Checkpoint:
-    """A checkpoint row built by hand, for the validation branches create() cannot reach."""
-    return Checkpoint(
-        id=ckpt_id,
-        account_id=account_id,
-        parent_id=parent_id,
-        computer_id=None,
-        thin_volume_id=volume_id,
-        r2_prefix=f"{account_id}/{ckpt_id}",
-        disk_delta_size_bytes=None,
-        memory_size_bytes=None,
-        label=None,
-        pinned=False,
-        created_at="2026-09-06T00:00:00",
-    )
 
 
 async def _services(
@@ -199,7 +181,13 @@ async def test_merge_rejects_missing_foreign_and_diskless_checkpoints(
     # Each of the three operands is checked against the calling account.
     with pytest.raises(NotFound, match="Parent checkpoint not found"):
         await checkpoints.merge(OTHER, parent.id, a.id, b.id)
-    foreign = _row("ckpt-foreign", account_id=OTHER.id, parent_id=parent.id, volume_id=901)
+    foreign = checkpoint_row(
+        "ckpt-foreign",
+        account_id=OTHER.id,
+        computer_id=None,
+        parent_id=parent.id,
+        thin_volume_id=901,
+    )
     await insert_checkpoint(db, foreign)
     with pytest.raises(NotFound, match="Checkpoint A not found"):
         await checkpoints.merge(ACCOUNT, parent.id, foreign.id, b.id)
@@ -207,7 +195,13 @@ async def test_merge_rejects_missing_foreign_and_diskless_checkpoints(
         await checkpoints.merge(ACCOUNT, parent.id, a.id, foreign.id)
 
     # Owned, a child of the right parent, but never given a disk snapshot.
-    diskless = _row("ckpt-diskless", account_id=ACCOUNT.id, parent_id=parent.id, volume_id=None)
+    diskless = checkpoint_row(
+        "ckpt-diskless",
+        account_id=ACCOUNT.id,
+        computer_id=None,
+        parent_id=parent.id,
+        thin_volume_id=None,
+    )
     await insert_checkpoint(db, diskless)
     with pytest.raises(BadRequest, match="A checkpoint has no disk snapshot"):
         await checkpoints.merge(ACCOUNT, parent.id, diskless.id, b.id)
@@ -246,3 +240,49 @@ async def test_fork_or_defer_honours_exclusive_modes(
         ACCOUNT, ckpt, SPEC, recipe_id=None, exclusive="error_on_conflict"
     )
     assert isinstance(again, Computer)  # chain is free again
+
+
+async def test_merge_copies_the_result_onto_the_output_volume_in_mount_order(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    parent = await checkpoints.create(computer, label="p", trigger=CheckpointTrigger.API)
+    fork_a = await computers.fork(ACCOUNT, parent, recipe_id=None)
+    fork_b = await computers.fork(ACCOUNT, parent, recipe_id=None)
+    a = await checkpoints.create(fork_a, label="a", trigger=CheckpointTrigger.API)
+    b = await checkpoints.create(fork_b, label="b", trigger=CheckpointTrigger.API)
+    # seed the three "disks" through the fake's stable mounts
+    async with host.blocks.mounted(parent.volume_name) as mp:
+        (mp / "base.txt").write_text("v0")
+        (mp / "doomed.txt").write_text("bye")
+        (mp / "conflict.txt").write_text("v0")
+    async with host.blocks.mounted(a.volume_name) as ma:
+        (ma / "base.txt").write_text("v0")
+        (ma / "conflict.txt").write_text("A")
+        (ma / "a_only.txt").write_text("a")
+    async with host.blocks.mounted(b.volume_name) as mb:
+        (mb / "base.txt").write_text("v1")
+        (mb / "doomed.txt").write_text("bye")
+        (mb / "conflict.txt").write_text("B")
+    host.blocks.calls.clear()
+    outcome = await checkpoints.merge(ACCOUNT, parent.id, a.id, b.id)
+    assert outcome.conflicts == ["conflict.txt"]
+    assert outcome.auto_merged == 3
+    mounts = [args for name, args in host.blocks.calls if name == "mounted"]
+    assert mounts == [
+        (parent.volume_name, True),
+        (a.volume_name, True),
+        (b.volume_name, True),
+        (outcome.checkpoint.volume_name, False),
+    ]
+    out = host.blocks.mounts[outcome.checkpoint.volume_name]
+    assert (out / "base.txt").read_text() == "v1"
+    assert (out / "conflict.txt").read_text() == "A"
+    assert (out / "a_only.txt").read_text() == "a"
+    # doomed.txt is deleted in A and unchanged in B, so the algorithm drops it. The
+    # output volume began as a copy of the parent, which had it, so only the
+    # copy-back's deletion loop can take it off; this is the sole test of that loop.
+    # (That the copy happens at all is pinned by test_snap_copies_the_source_volume_content.)
+    assert not (out / "doomed.txt").exists(), "the copy-back must delete what the merge dropped"
+    host.close()

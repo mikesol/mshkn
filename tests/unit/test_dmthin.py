@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
 
 from mshkn.host.dmthin import DmThinBlockStore, parse_pool_status
 from mshkn.host.shell import ShellError
+from tests.support import ShellRecorder
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,24 +28,24 @@ def test_parse_pool_status_rejects_garbage() -> None:
         parse_pool_status("0 100 linear 8:1 0")
 
 
-class Recorder:
-    def __init__(self, responses: dict[str, str | Exception] | None = None) -> None:
-        self.calls: list[tuple[str, bool]] = []
-        self.responses = responses or {}
+class SleepSpy:
+    """Stands in for asyncio.sleep: records the backoff a retry loop asks for.
 
-    async def __call__(self, cmd: str, check: bool = True) -> str:
-        self.calls.append((cmd, check))
-        for key, resp in self.responses.items():
-            if key in cmd:
-                if isinstance(resp, Exception):
-                    raise resp
-                return resp
-        return ""
+    Recording rather than discarding is the point. A no-op patch leaves a retry
+    loop that spins with no backoff at all indistinguishable from one that waits.
+    """
+
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+
+    async def __call__(self, delay: float, result: object = None) -> object:
+        self.delays.append(delay)
+        return result
 
 
 async def test_snap_retries_after_orphaned_volume() -> None:
     first = ShellError("dmsetup message", 1, "device-mapper: message ioctl failed: File exists")
-    run = Recorder()
+    run = ShellRecorder()
     state = {"n": 0}
 
     async def flaky(cmd: str, check: bool = True) -> str:
@@ -65,7 +67,7 @@ async def test_snap_retries_after_orphaned_volume() -> None:
 
 
 async def test_activate_and_remove_issue_expected_commands() -> None:
-    run = Recorder()
+    run = ShellRecorder()
     store = DmThinBlockStore("mshkn-pool", 16777216, run=run)
     await store.activate(volume_id=7, name="mshkn-comp-x")
     await store.remove(volume_id=7, name="mshkn-comp-x")
@@ -84,8 +86,8 @@ async def test_remove_never_raises_when_dmsetup_fails(monkeypatch: pytest.Monkey
     already gone). Each is logged and the volume is left behind.
     """
     monkeypatch.setattr("mshkn.host.dmthin._REMOVE_RETRIES", 1)
-    run = Recorder(
-        {
+    run = ShellRecorder(
+        responses={
             "dmsetup remove": ShellError("dmsetup remove", 1, "device busy"),
             "delete 7": ShellError("dmsetup message", 1, "no such device"),
         }
@@ -101,7 +103,7 @@ async def test_remove_never_raises_when_dmsetup_fails(monkeypatch: pytest.Monkey
 async def test_mounted_mounts_and_unmounts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("tempfile.mkdtemp", lambda prefix: str(tmp_path / "mnt"))  # noqa: ARG005
     (tmp_path / "mnt").mkdir()
-    run = Recorder()
+    run = ShellRecorder()
     store = DmThinBlockStore("mshkn-pool", 16777216, run=run)
     async with store.mounted("mshkn-ckpt-a", readonly=True) as path:
         assert path == tmp_path / "mnt"
@@ -118,7 +120,7 @@ async def test_mounted_removes_its_directory_when_the_mount_fails(
     monkeypatch.setattr("tempfile.mkdtemp", lambda prefix: str(mount_point))  # noqa: ARG005
     mount_point.mkdir()
     failure = ShellError("mount", 32, "mount: wrong fs type")
-    run = Recorder({"mount /dev/mapper": failure})
+    run = ShellRecorder(responses={"mount /dev/mapper": failure})
     store = DmThinBlockStore("mshkn-pool", 16777216, run=run)
 
     with pytest.raises(ShellError):
@@ -132,13 +134,101 @@ async def test_mounted_removes_its_directory_when_the_mount_fails(
 
 async def test_max_volume_id_parses_dmsetup_table() -> None:
     table = "mshkn-base: 0 16777216 thin 252:0 0\nmshkn-comp-a: 0 16777216 thin 252:0 745\n"
-    run = Recorder({"dmsetup table": table})
+    run = ShellRecorder(responses={"dmsetup table": table})
     store = DmThinBlockStore("mshkn-pool", 16777216, run=run)
     assert await store.max_volume_id() == 745
 
 
 async def test_usage_uses_dmsetup_status() -> None:
-    run = Recorder({"dmsetup status": STATUS})
+    run = ShellRecorder(responses={"dmsetup status": STATUS})
     store = DmThinBlockStore("mshkn-pool", 16777216, run=run)
     usage = await store.usage()
     assert usage.data_used_ratio == pytest.approx(14044 / 409600)
+
+
+async def test_activate_replaces_a_stale_device() -> None:
+    stale = ShellError("dmsetup create", 1, "File exists")
+    run = ShellRecorder(fail_first={"dmsetup create mshkn-x": stale})
+    await DmThinBlockStore("mshkn-pool", 16, run=run).activate(volume_id=5, name="mshkn-x")
+    assert [c for c, _ in run.calls] == [
+        "dmsetup create mshkn-x --table '0 16 thin /dev/mapper/mshkn-pool 5'",
+        "dmsetup remove mshkn-x",
+        "dmsetup create mshkn-x --table '0 16 thin /dev/mapper/mshkn-pool 5'",
+    ]
+    assert run.calls[1][1] is False
+
+
+async def test_activate_raises_other_errors_untouched() -> None:
+    run = ShellRecorder(
+        responses={"dmsetup create": ShellError("dmsetup create", 1, "No such device")}
+    )
+    with pytest.raises(ShellError, match="No such device"):
+        await DmThinBlockStore("mshkn-pool", 16, run=run).activate(volume_id=5, name="mshkn-x")
+
+
+async def test_snap_raises_other_errors_untouched() -> None:
+    run = ShellRecorder(responses={"create_snap": ShellError("dmsetup message", 1, "No space")})
+    with pytest.raises(ShellError, match="No space"):
+        await DmThinBlockStore("mshkn-pool", 16, run=run).snap(source_volume_id=0, new_volume_id=9)
+
+
+async def test_remove_retries_the_unmap_five_times_then_still_deletes(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    sleeps = SleepSpy()
+    monkeypatch.setattr(asyncio, "sleep", sleeps)
+    run = ShellRecorder(
+        responses={"dmsetup remove mshkn-x": ShellError("dmsetup remove", 1, "busy")}
+    )
+    await DmThinBlockStore("mshkn-pool", 16, run=run).remove(volume_id=5, name="mshkn-x")
+    cmds = [c for c, _ in run.calls]
+    assert cmds.count("dmsetup remove mshkn-x") == 5
+    # Five attempts, so four waits: the loop backs off between them, never after the last.
+    assert sleeps.delays == [0.5, 0.5, 0.5, 0.5]
+    assert cmds[-1] == "dmsetup message mshkn-pool 0 'delete 5'"
+    assert any("failed after 5 attempts" in r.getMessage() for r in caplog.records)
+
+
+async def test_deactivate_and_mkfs_commands() -> None:
+    run = ShellRecorder()
+    store = DmThinBlockStore("mshkn-pool", 16, run=run)
+    await store.deactivate("mshkn-x")
+    await store.mkfs("mshkn-x")
+    assert [c for c, _ in run.calls] == [
+        "dmsetup remove mshkn-x",
+        "mkfs.ext4 -F /dev/mapper/mshkn-x",
+    ]
+
+
+async def test_mounted_retries_umount_then_warns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    sleeps = SleepSpy()
+    monkeypatch.setattr(asyncio, "sleep", sleeps)
+    run = ShellRecorder(responses={"umount": ShellError("umount", 32, "target is busy")})
+    store = DmThinBlockStore("mshkn-pool", 16, run=run)
+    async with store.mounted("mshkn-x", readonly=True) as path:
+        assert path.is_dir()
+        assert run.calls[0][0] == f"mount -o ro /dev/mapper/mshkn-x {path}"
+    assert [c for c, _ in run.calls].count(f"umount {path}") == 3
+    assert sleeps.delays == [0.5, 0.5]
+    assert any(
+        "umount" in r.getMessage() and "failed after 3 attempts" in r.getMessage()
+        for r in caplog.records
+    )
+    assert not path.exists()
+
+
+async def test_max_volume_id_is_none_when_dmsetup_fails_and_skips_garbage() -> None:
+    failing = ShellRecorder(responses={"dmsetup table": ShellError("dmsetup table", 1, "no pool")})
+    assert await DmThinBlockStore("mshkn-pool", 16, run=failing).max_volume_id() is None
+    table = (
+        "mshkn-a: 0 16 thin 252:0 100\n"
+        "weird line\n"
+        "mshkn-b: 0 16 thin 252:0 notanumber\n"
+        "mshkn-c: 0 16 thin 252:0 130\n"
+    )
+    store = DmThinBlockStore(
+        "mshkn-pool", 16, run=ShellRecorder(responses={"dmsetup table": table})
+    )
+    assert await store.max_volume_id() == 130

@@ -37,6 +37,9 @@ def test_from_needs_parses(needs: dict[str, object], expected: Resources) -> Non
         {"ram": "8TB"},
         {"ram": 8},
         {"ram": "lots"},
+        {"ram": "xMB"},
+        {"ram": "0MB"},
+        {"ram": "-1GB"},
         {"ram": "64MB"},
         {"ram": "33GB"},
         {"cores": 0},
@@ -59,3 +62,15 @@ def test_error_names_the_field() -> None:
         Resources.from_needs({"cores": 0})
     with pytest.raises(InvalidInput, match="gpu"):
         Resources.from_needs({"gpu": 1})
+
+
+def test_error_says_why_a_ram_value_was_rejected() -> None:
+    with pytest.raises(InvalidInput, match="is not a number"):
+        Resources.from_needs({"ram": "xMB"})
+    with pytest.raises(InvalidInput, match="must be positive"):
+        Resources.from_needs({"ram": "0MB"})
+
+
+def test_non_default_resources_are_not_the_default() -> None:
+    assert Resources(mem_mib=2048, vcpus=2).is_default is False
+    assert Resources(mem_mib=256, vcpus=4).is_default is False

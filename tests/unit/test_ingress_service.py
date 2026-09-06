@@ -11,7 +11,7 @@ from mshkn.db import claim_deferred_by_label, get_computer, insert_account
 from mshkn.errors import InvalidInput, LimitExceeded, NotFound, TransformError
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
-from mshkn.models import Account, CheckpointTrigger, ComputerStatus, IngressLogStatus
+from mshkn.models import CheckpointTrigger, ComputerStatus, IngressLogStatus
 from mshkn.resources import DEFAULT_RESOURCES, Resources
 from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
@@ -20,13 +20,14 @@ from mshkn.services.computers import ComputerService
 from mshkn.services.ingress import CreateOutcome, IngressService, validate_transform_result
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.recipes import RecipeService
+from tests.support import account_row
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     import aiosqlite
 
-ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=10, created_at="t")
+ACCOUNT = account_row(api_key="k")
 REQ: dict[str, object] = {
     "method": "POST",
     "path": "/hook",

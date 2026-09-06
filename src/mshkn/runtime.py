@@ -109,6 +109,14 @@ class BackgroundTasks:
             task.cancel()
         await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
+    def names(self) -> set[str]:
+        """The names of the tasks still outstanding.
+
+        The read-side counterpart to __len__, for callers that need to know
+        which work is in flight rather than only how much.
+        """
+        return {t.get_name() for t in self._tasks}
+
     def __len__(self) -> int:
         return len(self._tasks)
 

@@ -23,8 +23,10 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from mshkn.host.fake import FakeHostInstance
+    from mshkn.ratelimit import RateLimiter
 
 AUTH = {"Authorization": "Bearer test-key"}
+OTHER_AUTH = {"Authorization": "Bearer other-key"}
 
 
 @dataclass
@@ -33,6 +35,7 @@ class Flow:
     runtime: Runtime
     host: FakeHostInstance
     client: AsyncClient
+    other_client: AsyncClient
     received: list[dict[str, Any]]
 
 
@@ -61,6 +64,10 @@ async def _build_flow(config: Config, tmp_path: Path) -> AsyncIterator[Flow]:
         db,
         Account(id="acct-1", api_key="test-key", vm_limit=10, created_at="2026-09-05T00:00:00"),
     )
+    await insert_account(
+        db,
+        Account(id="acct-2", api_key="other-key", vm_limit=10, created_at="2026-09-05T00:00:00"),
+    )
     host = FakeHost()
     received: list[dict[str, Any]] = []
     callbacks = AsyncClient(
@@ -72,13 +79,26 @@ async def _build_flow(config: Config, tmp_path: Path) -> AsyncIterator[Flow]:
     await runtime.allocator.initialize(db, host.blocks)
     app = create_app(runtime)
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://flow", headers=AUTH) as client:
+    async with (
+        AsyncClient(transport=transport, base_url="http://flow", headers=AUTH) as client,
+        AsyncClient(
+            transport=transport, base_url="http://flow", headers=OTHER_AUTH
+        ) as other_client,
+    ):
         try:
-            yield Flow(app=app, runtime=runtime, host=host, client=client, received=received)
+            yield Flow(
+                app=app,
+                runtime=runtime,
+                host=host,
+                client=client,
+                other_client=other_client,
+                received=received,
+            )
         finally:
             await runtime.tasks.drain(timeout=2.0)
             await runtime.http.aclose()
             await db.close()
+            host.close()
 
 
 @pytest.fixture
@@ -99,6 +119,7 @@ def flow_factory(tmp_path: Path) -> Callable[..., AbstractAsyncContextManager[Fl
 
     @asynccontextmanager
     async def make(**overrides: Any) -> AsyncIterator[Flow]:
+        rate_limit: RateLimiter | None = overrides.pop("rate_limit", None)
         config = Config(
             domain="test.dev",
             checkpoint_local_dir=tmp_path / "checkpoints",
@@ -107,6 +128,8 @@ def flow_factory(tmp_path: Path) -> Callable[..., AbstractAsyncContextManager[Fl
         )
         config = replace(config, **overrides)
         async with _build_flow(config, tmp_path) as built:
+            if rate_limit is not None:
+                built.runtime.rate_limiter = rate_limit
             yield built
 
     return make

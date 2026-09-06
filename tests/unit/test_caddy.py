@@ -58,12 +58,26 @@ async def test_add_route_wraps_other_httpx_errors_as_host_error() -> None:
         await proxy.add_route("comp-1", "172.16.1.2")
 
 
-async def test_remove_route_never_raises() -> None:
+async def test_remove_route_never_raises(caplog: pytest.LogCaptureFixture) -> None:
+    """A transport error is swallowed, but the delete is still issued and logged.
+
+    Callers do not guard `remove_route`, so it must not raise. Asserting only
+    that would hold just as well for a body that never sent the request, so the
+    single DELETE aimed at this computer's route id is what is pinned.
+    """
+    seen: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
         raise httpx.RemoteProtocolError("Server disconnected")
 
     proxy = make_proxy(httpx.MockTransport(handler))
-    await proxy.remove_route("comp-1")  # logs, does not raise
+    with caplog.at_level(logging.WARNING):
+        await proxy.remove_route("comp-1")
+    assert [(r.method, r.url.path) for r in seen] == [("DELETE", "/id/route-comp-1")], (
+        "one delete, aimed at this computer's route, and no retry"
+    )
+    assert "Failed to remove Caddy route for comp-1" in caplog.text
 
 
 async def test_remove_route_treats_404_as_success(caplog: pytest.LogCaptureFixture) -> None:

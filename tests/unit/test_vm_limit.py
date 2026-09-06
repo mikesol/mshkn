@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from httpx import ASGITransport, AsyncClient
 
 from mshkn.db import insert_account
-from mshkn.models import Account
+from tests.support import account_row
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
@@ -17,9 +17,7 @@ AUTH = {"Authorization": "Bearer test-key"}
 
 
 async def _account(db: aiosqlite.Connection, vm_limit: int) -> None:
-    await insert_account(
-        db, Account(id="acct-1", api_key="test-key", vm_limit=vm_limit, created_at="t")
-    )
+    await insert_account(db, account_row(vm_limit=vm_limit))
 
 
 async def test_create_is_limited_and_destroyed_computers_do_not_count(

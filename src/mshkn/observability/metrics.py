@@ -20,9 +20,6 @@ computers_created_total = Counter(
 checkpoints_total = Counter(
     "mshkn_checkpoints_total", "Checkpoints created, by trigger", ["trigger"]
 )
-exec_duration_seconds = Histogram(
-    "mshkn_exec_duration_seconds", "Duration of exec commands in seconds"
-)
 operation_duration_seconds = Histogram(
     "mshkn_operation_duration_seconds",
     "Duration of orchestrator operations in seconds",

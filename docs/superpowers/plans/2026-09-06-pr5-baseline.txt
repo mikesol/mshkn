@@ -1,0 +1,6 @@
+Baseline before PR 5 (main @ 4d40f94, 2026-09-06)
+All checks passed!
+125 files already formatted
+Success: no issues found in 125 source files
+308 passed, 157 deselected, 1 warning in 28.36s
+TOTAL                                 3570    401    618     77    87%

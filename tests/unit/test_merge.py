@@ -48,3 +48,92 @@ def test_one_side_delete(tmp_path: Path) -> None:
     result = three_way_merge(parent, fork_a, fork_b)
     assert result.conflicts == []
     assert not (result.merged_dir / "file.txt").exists()
+
+
+def _dirs(tmp_path: Path) -> tuple[Path, Path, Path]:
+    parent, a, b = tmp_path / "parent", tmp_path / "a", tmp_path / "b"
+    for d in (parent, a, b):
+        d.mkdir()
+    return parent, a, b
+
+
+def test_delete_vs_modify_is_a_conflict_that_falls_back_to_b_when_a_deleted(
+    tmp_path: Path,
+) -> None:
+    parent, a, b = _dirs(tmp_path)
+    (parent / "f").write_text("v0")
+    (b / "f").write_text("v1")  # a deleted it, b modified it
+    result = three_way_merge(parent, a, b)
+    assert [c.path for c in result.conflicts] == ["f"]
+    # a has nothing to take, so b's copy wins the default
+    assert (result.merged_dir / "f").read_text() == "v1"
+
+
+def test_both_added_different_content_is_a_conflict(tmp_path: Path) -> None:
+    parent, a, b = _dirs(tmp_path)
+    (a / "new").write_text("from a")
+    (b / "new").write_text("from b")
+    result = three_way_merge(parent, a, b)
+    assert [c.path for c in result.conflicts] == ["new"]
+    assert (result.merged_dir / "new").read_text() == "from a"
+
+
+def test_both_added_same_content_auto_merges(tmp_path: Path) -> None:
+    parent, a, b = _dirs(tmp_path)
+    (a / "same").write_text("x")
+    (b / "same").write_text("x")
+    result = three_way_merge(parent, a, b)
+    assert result.conflicts == []
+    assert result.auto_merged == 1
+
+
+def test_both_deleted_is_absent_and_counted_as_auto_merged(tmp_path: Path) -> None:
+    """Both sides deleting a file is not "unchanged": it lands on "changed the same way"."""
+    parent, a, b = _dirs(tmp_path)
+    (parent / "gone").write_text("x")
+    result = three_way_merge(parent, a, b)
+    assert result.conflicts == []
+    assert not (result.merged_dir / "gone").exists()
+    assert (result.unchanged, result.auto_merged) == (0, 1)
+
+
+def test_nested_paths_and_counts(tmp_path: Path) -> None:
+    parent, a, b = _dirs(tmp_path)
+    for d in (parent, a, b):
+        (d / "keep").mkdir()
+        (d / "keep" / "same.txt").write_text("same")
+    (a / "keep" / "a.txt").write_text("a")
+    result = three_way_merge(parent, a, b, output=tmp_path / "out")
+    assert result.merged_dir == tmp_path / "out"
+    assert (result.unchanged, result.auto_merged) == (1, 1)
+    assert (result.merged_dir / "keep" / "a.txt").read_text() == "a"
+
+
+def test_b_deletes_and_a_leaves_alone_removes_the_file(tmp_path: Path) -> None:
+    """B deleting a file A did not touch is an auto-merge, and the file is gone.
+
+    This is the "changed only in B" arm with `b_file` absent: nothing is copied
+    to the output, so the delete propagates rather than being silently undone.
+    """
+    parent, a, b = _dirs(tmp_path)
+    (parent / "doomed").write_text("x")
+    (a / "doomed").write_text("x")
+    result = three_way_merge(parent, a, b)
+    assert result.conflicts == []
+    assert not (result.merged_dir / "doomed").exists()
+    assert (result.unchanged, result.auto_merged) == (0, 1)
+
+
+def test_a_missing_fork_directory_contributes_no_files(tmp_path: Path) -> None:
+    """`_all_relative_files` skips a directory that does not exist.
+
+    A fork volume that was never mounted must not make the merge raise; the
+    other two sides still merge.
+    """
+    parent, a, _b = _dirs(tmp_path)
+    (parent / "kept").write_text("x")
+    (a / "kept").write_text("x")
+    result = three_way_merge(parent, a, tmp_path / "never-mounted")
+    assert result.conflicts == []
+    assert not (result.merged_dir / "kept").exists(), "the absent side reads as a delete"
+    assert (result.unchanged, result.auto_merged) == (0, 1)

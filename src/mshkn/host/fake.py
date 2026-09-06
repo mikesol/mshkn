@@ -13,6 +13,7 @@ import contextlib
 import itertools
 import shutil
 import tempfile
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -49,12 +50,39 @@ class _Failable:
 
 
 class FakeBlockStore(_Failable):
+    """Volumes with content: each volume id owns a directory, and mounting a
+    device name yields that directory.
+
+    Mounts are stable, so a caller that writes through one mount and reads
+    through the next sees its own bytes, the way a real block device behaves.
+    Without that, nothing that copies data between volumes (the merge
+    copy-back, above all) can be tested off the live pool.
+    """
+
     def __init__(self) -> None:
         super().__init__()
         self.volumes: dict[int, int | None] = {0: None}  # id -> parent id
         self.active: dict[str, int] = {}  # device name -> volume id
         self.pool_usage = PoolUsage(data_used_ratio=0.1, metadata_used_ratio=0.05)
         self.calls: list[tuple[str, object]] = []
+        self._root = Path(tempfile.mkdtemp(prefix="fake-blocks-"))
+        self.mounts: dict[str, Path] = {}  # device name -> its stable directory
+        self._volume_dirs: dict[int, Path] = {}  # volume id -> content directory
+        # Nothing in production owns a FakeBlockStore, and most tests build one
+        # without a fixture, so the root also goes when the store does.
+        self._cleanup = weakref.finalize(self, shutil.rmtree, self._root, True)
+
+    def close(self) -> None:
+        """Drop every volume's content. Idempotent; fixtures call it on teardown."""
+        self._cleanup()
+
+    def _dir_for_volume(self, volume_id: int) -> Path:
+        path = self._volume_dirs.get(volume_id)
+        if path is None:
+            path = self._root / f"vol-{volume_id}"
+            path.mkdir(parents=True, exist_ok=True)
+            self._volume_dirs[volume_id] = path
+        return path
 
     # dm-thin refuses unknown ids, duplicate ids, and duplicate device names;
     # the fake does too, so ordering bugs in callers surface here instead of
@@ -70,6 +98,19 @@ class FakeBlockStore(_Failable):
             raise HostError(msg)
         self.calls.append(("snap", (source_volume_id, new_volume_id)))
         self.volumes[new_volume_id] = source_volume_id
+        # A dm-thin snapshot starts as a copy of its source, so the fake's does
+        # too; the copy is eager because the fake has no copy-on-write to lean
+        # on. symlinks=True because a block-level snapshot copies a symlink as a
+        # symlink, and the guest rootfs is full of absolute links (/sbin/init)
+        # that dangle when read from the host.
+        source_dir = self._volume_dirs.get(source_volume_id)
+        if source_dir is not None:
+            shutil.copytree(
+                source_dir,
+                self._dir_for_volume(new_volume_id),
+                symlinks=True,
+                dirs_exist_ok=True,
+            )
 
     async def activate(self, *, volume_id: int, name: str) -> None:
         self._maybe_fail("activate")
@@ -80,12 +121,15 @@ class FakeBlockStore(_Failable):
             msg = f"fake activate: device {name} already exists"
             raise HostError(msg)
         self.active[name] = volume_id
+        self.mounts[name] = self._dir_for_volume(volume_id)
 
     async def deactivate(self, name: str) -> None:
         if name not in self.active:
             msg = f"fake deactivate: device {name} is not active"
             raise HostError(msg)
         del self.active[name]
+        # The mapping goes; the content stays with the volume id until remove().
+        self.mounts.pop(name, None)
 
     async def remove(self, *, volume_id: int, name: str) -> None:
         # The real remove is best-effort and never raises: a failed dmsetup
@@ -97,20 +141,23 @@ class FakeBlockStore(_Failable):
             return
         self.active.pop(name, None)
         self.volumes.pop(volume_id, None)
+        self.mounts.pop(name, None)
+        volume_dir = self._volume_dirs.pop(volume_id, None)
+        if volume_dir is not None:
+            shutil.rmtree(volume_dir, ignore_errors=True)
 
     async def mkfs(self, name: str) -> None:
         self.calls.append(("mkfs", name))
 
     @contextlib.asynccontextmanager
-    async def mounted(self, name: str, *, readonly: bool = False) -> AsyncIterator[Path]:  # noqa: ARG002
+    async def mounted(self, name: str, *, readonly: bool = False) -> AsyncIterator[Path]:
         if name not in self.active:
             msg = f"fake mounted: device {name} is not active"
             raise HostError(msg)
-        path = Path(tempfile.mkdtemp(prefix=f"fake-mnt-{name}-"))
-        try:
-            yield path
-        finally:
-            shutil.rmtree(path, ignore_errors=True)
+        # readonly is recorded, not enforced: the point is to pin the order and
+        # the flags the caller mounts with, not to police its writes.
+        self.calls.append(("mounted", (name, readonly)))
+        yield self.mounts[name]
 
     async def max_volume_id(self) -> int | None:
         ids = [v for v in self.volumes if v != 0]
@@ -129,6 +176,7 @@ class FakeHypervisor(_Failable):
         self.restored: list[tuple[int, SnapshotFiles]] = []
         self.snapshots: list[tuple[str, Path]] = []
         self.torn_down: list[int] = []
+        self.killed: list[int] = []
 
     def _vm(self, slot: int, disk_name: str) -> RunningVM:
         pid = next(self._pids)
@@ -171,6 +219,7 @@ class FakeHypervisor(_Failable):
         return await self.snapshot(f"/tmp/fake-template-{disk_volume_id}.socket", dest_dir)
 
     async def kill(self, pid: int) -> None:
+        self.killed.append(pid)
         self.alive.pop(pid, None)
 
     def is_alive(self, pid: int) -> bool:
@@ -309,6 +358,10 @@ class FakeHostInstance(Host):
     guest: FakeGuest
     objects: FakeObjectStore
     proxy: FakeProxy
+
+    def close(self) -> None:
+        """Release the block store's scratch directories. Idempotent."""
+        self.blocks.close()
 
 
 def FakeHost() -> FakeHostInstance:  # noqa: N802 — reads as a constructor at call sites

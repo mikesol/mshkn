@@ -37,6 +37,16 @@ RESUME_SAMPLES = 10
 RESUME_P95_MS = 650  # LOAD_SNAPSHOT path: tap+FC+SSH+reconfig
 FORK_MINIMAL_SAMPLES = 10
 FORK_MINIMAL_P95_MS = 650  # LOAD_SNAPSHOT path: tap+FC+SSH+reconfig
+# The test plan states no number for large-state checkpoint (T1.2 says "Does it
+# still hold <= 1s? I doubt it") nor for merge (T1.5 says "seconds" and asks to
+# pin it down). Both ceilings below are generous, not targets: they exist so a
+# hang or an order-of-magnitude regression fails instead of printing.
+LARGE_STATE_CHECKPOINT_CEILING_MS = 10_000
+MERGE_CEILING_MS = 10_000
+# T1.4 asks for statistical indistinguishability between a small-state and a
+# large-state fork. Three samples cannot support that, so this ratio only
+# catches fork becoming O(state) — CoW broken, not CoW slightly slower.
+FORK_O1_MAX_RATIO = 3.0
 
 # ---------------------------------------------------------------------------
 # T1.1 — Create Latency (Target: <= 2s)
@@ -44,7 +54,7 @@ FORK_MINIMAL_P95_MS = 650  # LOAD_SNAPSHOT path: tap+FC+SSH+reconfig
 
 
 class TestT11CreateLatency:
-    """computer_create(uses: []) latency — target p95 <= 2000ms."""
+    """POST /computers with an empty body, latency — target p95 <= 2000ms."""
 
     async def test_bare_create_latency(self, client: httpx.AsyncClient) -> None:
         """Create bare computers repeatedly, assert a tight p95 latency target."""
@@ -200,7 +210,13 @@ class TestT12CheckpointLatency:
             )
 
     async def test_large_state_checkpoint(self, long_client: httpx.AsyncClient) -> None:
-        """Write 100MB file, then checkpoint. Measure honestly (may exceed 1s)."""
+        """Write 100MB file, then checkpoint; the checkpoint must exist and land in time.
+
+        The test plan states no bound for large state, so
+        LARGE_STATE_CHECKPOINT_CEILING_MS is a generous ceiling, not a target:
+        it catches a hang or an order-of-magnitude regression, nothing finer.
+        The printed report is the honest measurement.
+        """
         async with managed_computer(long_client) as computer_id:
             # Write 100MB of data
             await exec_command(
@@ -211,12 +227,23 @@ class TestT12CheckpointLatency:
             )
 
             start = time.perf_counter()
-            await checkpoint_computer(long_client, computer_id, label="large-100mb")
+            checkpoint_id = await checkpoint_computer(long_client, computer_id, label="large-100mb")
             elapsed_ms = (time.perf_counter() - start) * 1000
 
             print(f"T1.2 Large State (100MB) Checkpoint: {elapsed_ms:.0f}ms")
             stats = LatencyStats(values_ms=[elapsed_ms])
             print(stats.report("T1.2 Large State Checkpoint", target_ms=1000))
+
+            resp = await long_client.get("/checkpoints", params={"label": "large-100mb"})
+            resp.raise_for_status()
+            listed = {c["checkpoint_id"] for c in resp.json()}
+            assert checkpoint_id in listed, (
+                f"Checkpoint {checkpoint_id} is missing from GET /checkpoints; got {listed}"
+            )
+            assert elapsed_ms <= LARGE_STATE_CHECKPOINT_CEILING_MS, (
+                f"large-state checkpoint took {elapsed_ms:.0f}ms, over the generous "
+                f"{LARGE_STATE_CHECKPOINT_CEILING_MS}ms ceiling"
+            )
 
     async def test_many_small_files_checkpoint(self, long_client: httpx.AsyncClient) -> None:
         """Write many small files, then checkpoint repeatedly with a p95 target."""
@@ -326,10 +353,12 @@ class TestT14ForkLatency:
             )
 
     async def test_fork_o1_comparison(self, long_client: httpx.AsyncClient) -> None:
-        """Fork from 1MB state vs 50MB state — compare times to check O(1) claim.
+        """Fork from 1MB state vs 50MB state — the 50MB fork must not scale with state.
 
-        We don't assert statistical indistinguishability (too few samples),
-        but we report both so the human can eyeball it.
+        The plan (T1.4) wants the two means statistically indistinguishable;
+        three samples cannot support that, so FORK_O1_MAX_RATIO is a generous
+        ceiling that only catches CoW breaking and fork becoming O(state).
+        The printed report is what a human eyeballs for the finer picture.
         """
         small_timings: list[float] = []
         large_timings: list[float] = []
@@ -391,6 +420,11 @@ class TestT14ForkLatency:
             if small_stats.mean > 0
             else "  O(1) check: small_mean=0ms (too fast to measure)"
         )
+        assert large_stats.mean <= small_stats.mean * FORK_O1_MAX_RATIO, (
+            f"fork of 50MB state averaged {large_stats.mean:.0f}ms, more than "
+            f"{FORK_O1_MAX_RATIO}x the 1MB fork ({small_stats.mean:.0f}ms) — "
+            f"fork is scaling with state size, so the O(1) claim does not hold"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -449,10 +483,15 @@ class TestT17ForkRestoreLatency:
 
 
 class TestT15MergeLatency:
-    """Merge latency — not yet implemented."""
+    """Merge latency for POST /checkpoints/{parent}/merge — target "seconds"."""
 
     async def test_merge_latency(self, long_client: httpx.AsyncClient) -> None:
-        """Merge two forks — not yet implemented."""
+        """Merge two forks of one checkpoint; the call must succeed and land in time.
+
+        The test plan's T1.5 target is the word "seconds" and asks for a number,
+        so MERGE_CEILING_MS is a generous ceiling, not a target. The printed
+        measurement is what pins the real number down.
+        """
         async with managed_computer(long_client) as computer_id:
             ckpt = await checkpoint_computer(long_client, computer_id, label="merge-base")
             fork_a = await fork_checkpoint(long_client, ckpt)
@@ -467,10 +506,15 @@ class TestT15MergeLatency:
                     f"/checkpoints/{ckpt}/merge",
                     json={"checkpoint_a": ckpt_a, "checkpoint_b": ckpt_b},
                 )
-                resp.raise_for_status()
                 elapsed_ms = (time.perf_counter() - start) * 1000
 
                 print(f"T1.5 Merge: {elapsed_ms:.0f}ms")
+                assert resp.status_code == 200, (
+                    f"merge returned {resp.status_code}: {resp.text[:300]}"
+                )
+                assert elapsed_ms <= MERGE_CEILING_MS, (
+                    f"merge took {elapsed_ms:.0f}ms, over the generous {MERGE_CEILING_MS}ms ceiling"
+                )
             finally:
                 await destroy_computer(long_client, fork_a)
                 await destroy_computer(long_client, fork_b)

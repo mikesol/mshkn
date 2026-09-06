@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING
 from httpx import ASGITransport, AsyncClient
 
 from mshkn.db import insert_account
-from mshkn.models import Account
 from mshkn.observability.metrics import checkpoints_total, computers_created_total
 from mshkn.resources import DEFAULT_RESOURCES, Resources
+from tests.support import account_row
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ async def test_metrics_contains_expected_names(
     assert "mshkn_computers_active" in text
     assert "mshkn_computers_created_total" in text
     assert "mshkn_checkpoints_total" in text
-    assert "mshkn_exec_duration_seconds" in text
+    assert "mshkn_exec_duration_seconds" not in text
     assert "mshkn_operation_duration_seconds" in text
     assert "mshkn_operation_errors_total" in text
     assert "mshkn_thin_pool_used_ratio" in text
@@ -61,7 +61,7 @@ async def test_boot_and_restore_are_observed_as_operations(
     db: aiosqlite.Connection, runtime_config: Config
 ) -> None:
     """Spec §10 lists boot and restore among the timed ops; _bring_up produces both."""
-    account = Account(id="acct-metrics", api_key="k", vm_limit=10, created_at="t")
+    account = account_row(id="acct-metrics", api_key="k")
     await insert_account(db, account)
     rt = make_runtime(db, config=runtime_config)
     # Custom resources cold-boot; the defaults restore from the L3 template.

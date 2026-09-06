@@ -1,7 +1,11 @@
 """Phase 11: Observability — "Metrics, Logs, and Status"
 
 These tests run against a LIVE server with real Firecracker VMs.
-Most are xfail because observability infrastructure is not yet implemented.
+Nothing here is skipped. Most tests exercise an observability endpoint that
+is already implemented; two (structured JSON logs and the audit log) are not
+implemented yet and fail on purpose via pytest.fail — not implemented is a
+flavor of broken, so they are not silently skipped or given an
+expected-failure marker.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ class TestT111PrometheusEndpoint:
         - mshkn_computers_active (gauge)
         - mshkn_computers_created_total (counter)
         - mshkn_checkpoints_total (counter)
-        - mshkn_exec_duration_seconds (histogram)
+        - mshkn_operation_duration_seconds{op="exec"}
         """
         resp = await client.get("/metrics")
         assert resp.status_code == 200
@@ -66,7 +70,7 @@ class TestT112StructuredLogs:
         - computer_id (when applicable)
         - request_id (for HTTP requests)
         """
-        pass
+        pytest.fail("Not implemented: structured JSON log field verification")
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +187,7 @@ class TestT117AuditLog:
         - When (timestamp)
         - What resource (computer_id, checkpoint_id)
         """
-        pass
+        pytest.fail("Not implemented: audit log for create and destroy operations")
 
 
 # ---------------------------------------------------------------------------
