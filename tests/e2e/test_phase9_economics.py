@@ -3,8 +3,9 @@
 These tests run against a LIVE server with real Firecracker VMs.
 Two tests are skipped outright, with reasons, because they require a
 week- or month-long measurement window (NVMe wear, sleep-cost billing).
-The third is a stub: it documents a cost target but does not yet measure
-anything.
+The third (R2 storage cost per GB) is not implemented yet and fails on
+purpose via pytest.fail — not implemented is a flavor of broken, so it is
+not silently skipped or given an expected-failure marker.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ class TestT91S3Costs:
         5. Verify cost per GB-month is within target ($0.015/GB-month for R2)
         6. Verify deduplication reduces effective cost (shared base layers)
         """
-        pass
+        pytest.fail("Not implemented: R2 checkpoint storage cost-per-GB measurement")
 
 
 # ---------------------------------------------------------------------------
