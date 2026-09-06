@@ -55,6 +55,7 @@ async def test_create_exec_checkpoint_fork_destroy(flow: Flow) -> None:
     assert any(cmd == "sync" for _, cmd in host.guest.commands)
     assert host.guest.evicted == [row.vm_ip]
     assert host.blocks.volumes[ckpt.thin_volume_id or -1] == row.thin_volume_id
+    assert host.blocks.active[f"mshkn-ckpt-{ckpt_id}"] == ckpt.thin_volume_id
     assert (flow.runtime.config.checkpoint_local_dir / ckpt_id / "vmstate").exists()
     await flow.runtime.tasks.wait(f"upload:{ckpt_id}")
     assert f"acct-1/{ckpt_id}" in host.objects.prefixes
@@ -68,6 +69,7 @@ async def test_create_exec_checkpoint_fork_destroy(flow: Flow) -> None:
     assert host.blocks.volumes[fork_row.thin_volume_id] == ckpt.thin_volume_id
     assert host.hypervisor.restored[-1][0] == fork_row.thin_volume_id
     assert fork_row.vm_ip != row.vm_ip
+    assert host.guest.warmed == [row.vm_ip, fork_row.vm_ip]
 
     # destroy both: no VMs, no routes, volumes gone, rows destroyed
     for target in (cid, fork_id):
@@ -78,6 +80,7 @@ async def test_create_exec_checkpoint_fork_destroy(flow: Flow) -> None:
     assert row.thin_volume_id not in host.blocks.volumes
     assert fork_row.thin_volume_id not in host.blocks.volumes
     assert ckpt.thin_volume_id in host.blocks.volumes  # checkpoints persist
+    assert host.guest.evicted == [row.vm_ip, row.vm_ip, fork_row.vm_ip]
     for target in (cid, fork_id):
         r = await get_computer(flow.runtime.db, target)
         assert r is not None and r.status is ComputerStatus.DESTROYED
