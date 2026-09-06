@@ -29,7 +29,7 @@ systemctl enable --now docker
 curl -LsSf https://astral.sh/uv/install.sh | sh     # installs ~/.local/bin/uv
 ```
 
-Docker builds recipes and the base image; `sqlite3` is used by `scripts/e2e.sh` to ensure the test account; uv installs the project.
+Docker builds recipes and the base image; `sqlite3` is handy for inspecting `/opt/mshkn/mshkn.db` directly; uv installs the project.
 
 ## 2. Firecracker and kernel
 
@@ -140,7 +140,8 @@ The first start runs the migrations and creates `/opt/mshkn/mshkn.db`.
 ## 10. Test account
 
 ```bash
-sqlite3 /opt/mshkn/mshkn.db "INSERT OR IGNORE INTO accounts (id, api_key, vm_limit) VALUES ('acct-mike', 'mk-test-key-2026', 20);"
+cd /opt/mshkn && (.venv/bin/python -m mshkn accounts list | grep -q '^acct-mike	' \
+  || .venv/bin/python -m mshkn accounts create --id acct-mike --api-key 'mk-test-key-2026' --vm-limit 20)
 ```
 
 ## 11. Caddy (TLS reverse proxy)
