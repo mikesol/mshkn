@@ -90,3 +90,27 @@ async def test_prune_honours_retention_and_pin_and_cancels_uploads(
         assert resp.status_code == 200
         assert len(flow.runtime.tasks) == 0, "the in-flight upload was cancelled, not left to fail"
         gate.set()
+
+
+async def test_idle_reap_preserves_the_source_label(
+    flow_factory: Callable[..., AbstractAsyncContextManager[Flow]],
+) -> None:
+    async with flow_factory(idle_timeout_seconds=60) as flow:
+        host = flow.host
+        host.guest.script["sync"] = ExecResult(0, "", "")
+        base = (await flow.client.post("/computers", json={})).json()["computer_id"]
+        ckpt = (
+            await flow.client.post(f"/computers/{base}/checkpoint", json={"label": "keep"})
+        ).json()["checkpoint_id"]
+        await flow.client.delete(f"/computers/{base}")
+        fork = (await flow.client.post(f"/checkpoints/{ckpt}/fork", json={})).json()["computer_id"]
+        stale = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
+        await flow.runtime.db.execute(
+            "UPDATE computers SET created_at = ? WHERE id = ?", (stale, fork)
+        )
+        await flow.runtime.db.commit()
+        await flow.runtime.reaper.cycle()
+        chain = (await flow.client.get("/checkpoints", params={"label": "keep"})).json()
+        assert len(chain) == 2 and {c["parent_id"] for c in chain} == {None, ckpt}
+        idle = await flow.client.get("/checkpoints", params={"label": "auto-idle-timeout"})
+        assert idle.json() == [], "the fork kept its source label instead of the idle one"
