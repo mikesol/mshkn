@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -25,8 +24,6 @@ from mshkn.recipe.builder import build_recipe, dockerfile_content_hash
 
 if TYPE_CHECKING:
     from mshkn.models import Account
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
 
@@ -167,15 +164,7 @@ async def delete_recipe_endpoint(
     if recipe.base_volume_id is not None:
         # The builder creates the volume as mshkn-recipe-<recipe id>; remove that one.
         volume_name = f"mshkn-recipe-{recipe.id}"
-        try:
-            await rt.host.blocks.remove(volume_id=recipe.base_volume_id, name=volume_name)
-        except Exception:
-            logger.exception(
-                "Failed to remove volume %s (vol %d) for recipe %s",
-                volume_name,
-                recipe.base_volume_id,
-                recipe_id,
-            )
+        await rt.host.blocks.remove(volume_id=recipe.base_volume_id, name=volume_name)
 
     await delete_recipe(db, recipe_id)
     return {"status": "deleted"}

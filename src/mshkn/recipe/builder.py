@@ -8,7 +8,6 @@ import hashlib
 import logging
 import shutil
 import subprocess
-import tempfile
 import traceback
 from datetime import UTC, datetime
 from pathlib import Path
@@ -317,37 +316,3 @@ async def _post_process_rootfs(mount_point: str, config: Config) -> None:
     fcnet_link = sysinit_wants / "fcnet.service"
     if not fcnet_link.exists():
         fcnet_link.symlink_to("/etc/systemd/system/fcnet.service")
-
-
-async def ensure_base_image(config: Config) -> None:
-    """Build the mshkn-base Docker image if it doesn't exist locally."""
-    # Check if image already exists
-    try:
-        await run("docker image inspect mshkn-base", check=True)
-        logger.info("mshkn-base image already exists, skipping build")
-        return
-    except Exception:
-        pass
-
-    logger.info("mshkn-base image not found, building...")
-
-    # Find Dockerfile.mshkn-base relative to this file's package root
-    # It lives at the repo root — walk up from src/mshkn/recipe/
-    this_file = Path(__file__).resolve()
-    # Go up: recipe/ -> mshkn/ -> src/ -> repo_root
-    repo_root = this_file.parent.parent.parent.parent
-    dockerfile_src = repo_root / "Dockerfile.mshkn-base"
-
-    with tempfile.TemporaryDirectory(prefix="mshkn-base-build-") as build_ctx:
-        build_ctx_path = Path(build_ctx)
-        shutil.copy(dockerfile_src, build_ctx_path / "Dockerfile")
-
-        pub_key_path = config.ssh_key_path.with_suffix(".pub")
-        if pub_key_path.exists():
-            shutil.copy(pub_key_path, build_ctx_path / "mshkn_key.pub")
-        else:
-            (build_ctx_path / "mshkn_key.pub").write_text("")
-
-        await run(f"docker build -t mshkn-base {build_ctx}")
-
-    logger.info("mshkn-base image built successfully")

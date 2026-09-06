@@ -99,6 +99,25 @@ async def test_guest_scripts_and_records() -> None:
     assert (await guest.metrics("172.16.3.2")).ram_total_mb > 0
 
 
+async def test_stream_script_can_end_with_its_own_exit_code() -> None:
+    """A script ending in its own exit line owns the exit event.
+
+    Without this a stream_script cannot express a non-zero exit, and a script
+    that spells out its exit yields two exit events.
+    """
+    guest = FakeHost().guest
+    guest.stream_script["false"] = [("stdout", "a"), ("exit", "42")]
+    assert [i async for i in guest.stream("172.16.3.2", "false")] == [
+        ("stdout", "a"),
+        ("exit", "42"),
+    ]
+    # A script that does not end in an exit still gets the implicit clean one.
+    guest.stream_script["ls"] = [("stdout", "a")]
+    assert [i async for i in guest.stream("172.16.3.2", "ls")] == [("stdout", "a"), ("exit", "0")]
+    # So does an empty script.
+    assert [i async for i in guest.stream("172.16.3.2", "unscripted")] == [("exit", "0")]
+
+
 async def test_objects_and_proxy_record(tmp_path: Path) -> None:
     host = FakeHost()
     src = tmp_path / "up"

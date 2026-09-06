@@ -47,6 +47,17 @@ async def test_add_route_raises_host_error_on_bad_status() -> None:
         await proxy.add_route("comp-1", "172.16.1.2")
 
 
+async def test_add_route_wraps_other_httpx_errors_as_host_error() -> None:
+    """A ReadTimeout is not retried; it must still leave as a HostError, not raw httpx."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("admin API stalled")
+
+    proxy = make_proxy(httpx.MockTransport(handler))
+    with pytest.raises(HostError):
+        await proxy.add_route("comp-1", "172.16.1.2")
+
+
 async def test_remove_route_never_raises() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.RemoteProtocolError("Server disconnected")
@@ -93,7 +104,10 @@ async def test_healthy_reflects_admin_api() -> None:
     assert not await down.healthy()
 
 
-async def test_close_closes_client() -> None:
+async def test_close_makes_the_proxy_unusable() -> None:
+    """close() releases the admin client; httpx then refuses to send on it."""
     proxy = make_proxy(httpx.MockTransport(lambda _: httpx.Response(200)))
+    assert await proxy.healthy()
     await proxy.close()
-    assert proxy._client.is_closed
+    with pytest.raises(RuntimeError, match="client has been closed"):
+        await proxy.healthy()

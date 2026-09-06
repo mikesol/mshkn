@@ -73,6 +73,11 @@ class CaddyProxy:
                     await asyncio.sleep(0.1 * (attempt + 1))
                     continue
                 raise HostError(f"Caddy add_route failed after retries: {exc}") from exc
+            except httpx.HTTPError as exc:
+                # Not one of the two transient errors worth retrying (a read or
+                # write timeout, say). Callers map HostError; a raw httpx
+                # exception would reach them as an unhandled 500.
+                raise HostError(f"Caddy add_route failed: {exc!r}") from exc
         logger.info("Added Caddy route: *-%s.%s -> %s", computer_id, self.domain, vm_ip)
 
     async def remove_route(self, computer_id: str) -> None:

@@ -77,6 +77,27 @@ async def test_activate_and_remove_issue_expected_commands() -> None:
     assert cmds[2] == "dmsetup message mshkn-pool 0 'delete 7'"
 
 
+async def test_remove_never_raises_when_dmsetup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """remove() is best-effort: callers rely on it never raising and do not guard it.
+
+    Both the unmap and the pool delete can fail (device still held, volume
+    already gone). Each is logged and the volume is left behind.
+    """
+    monkeypatch.setattr("mshkn.host.dmthin._REMOVE_RETRIES", 1)
+    run = Recorder(
+        {
+            "dmsetup remove": ShellError("dmsetup remove", 1, "device busy"),
+            "delete 7": ShellError("dmsetup message", 1, "no such device"),
+        }
+    )
+    store = DmThinBlockStore("mshkn-pool", 16777216, run=run)
+    await store.remove(volume_id=7, name="mshkn-comp-x")
+    assert [c for c, _ in run.calls] == [
+        "dmsetup remove mshkn-comp-x",
+        "dmsetup message mshkn-pool 0 'delete 7'",
+    ]
+
+
 async def test_mounted_mounts_and_unmounts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("tempfile.mkdtemp", lambda prefix: str(tmp_path / "mnt"))  # noqa: ARG005
     (tmp_path / "mnt").mkdir()

@@ -15,7 +15,7 @@ from mshkn.host import ExecResult, VmMetrics
 from mshkn.host.firecracker import CONNECT_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Awaitable
 
     from mshkn.host import OutputLine, StreamName
 
@@ -41,21 +41,32 @@ class _ReaderDone:
 
 
 class ConnectFn(Protocol):
-    def __call__(self, host: str, **kwargs: Any) -> Any: ...
+    """asyncssh.connect, or a test double.
+
+    The return type is the one Any left in this module: asyncssh.connect
+    returns a context-manager wrapper and the test doubles return their own
+    objects, so only the injection point can be this loose. _fresh narrows it.
+    """
+
+    def __call__(self, host: str, **kwargs: Any) -> Awaitable[Any]: ...
 
 
 class SshGuest:
     def __init__(self, key_path: Path, *, connect: ConnectFn = asyncssh.connect) -> None:
         self._key_path = str(key_path)
         self._connect = connect
-        self._conns: dict[str, Any] = {}
+        self._conns: dict[str, asyncssh.SSHClientConnection] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._last_used: dict[str, float] = {}
+        # Bumped by evict. A connect that was in flight when its VM was evicted
+        # must not land in the pool: the slot is recycled and the next VM would
+        # inherit a connection to a dead machine.
+        self._gen: dict[str, int] = {}
 
     # -- connections ---------------------------------------------------------
 
-    async def _fresh(self, vm_ip: str, **extra: Any) -> Any:
-        return await asyncio.wait_for(
+    async def _fresh(self, vm_ip: str, **extra: Any) -> asyncssh.SSHClientConnection:
+        conn: asyncssh.SSHClientConnection = await asyncio.wait_for(
             self._connect(
                 vm_ip,
                 username="root",
@@ -65,29 +76,38 @@ class SshGuest:
             ),
             timeout=CONNECT_TIMEOUT_SECONDS,
         )
+        return conn
 
-    async def _pooled(self, vm_ip: str) -> Any:
+    async def _pooled(self, vm_ip: str) -> asyncssh.SSHClientConnection:
         """Get or create the persistent connection for a VM (health-checked when idle)."""
         lock = self._locks.setdefault(vm_ip, asyncio.Lock())
         async with lock:
-            conn = self._conns.get(vm_ip)
+            pooled = self._conns.get(vm_ip)
             loop = asyncio.get_running_loop()
-            if conn is not None:
+            if pooled is not None:
                 now = loop.time()
                 if now - self._last_used.get(vm_ip, 0.0) < _HEALTH_CHECK_INTERVAL:
                     self._last_used[vm_ip] = now
-                    return conn
+                    return pooled
                 try:
-                    result = await asyncio.wait_for(conn.run("true", check=False), timeout=3.0)
+                    result = await asyncio.wait_for(pooled.run("true", check=False), timeout=3.0)
                     if result.exit_status == 0:
                         self._last_used[vm_ip] = loop.time()
-                        return conn
+                        return pooled
                 except Exception:
                     logger.debug("pooled SSH connection to %s failed its health check", vm_ip)
                 with contextlib.suppress(Exception):
-                    conn.close()
-                del self._conns[vm_ip]
+                    pooled.close()
+                # evict takes no lock, so it can have popped this entry (or
+                # replaced it) while the probe was running. Only drop our own.
+                if self._conns.get(vm_ip) is pooled:
+                    del self._conns[vm_ip]
+            gen = self._gen.get(vm_ip, 0)
             conn = await self._fresh(vm_ip, keepalive_interval=15, login_timeout=10)
+            if self._gen.get(vm_ip, 0) != gen:
+                conn.close()
+                msg = f"SSH connection to {vm_ip} was evicted during connect"
+                raise asyncssh.ConnectionLost(msg)
             self._conns[vm_ip] = conn
             # The clock starts when the connection is usable, not when we asked
             # for it: a handshake can eat a third of the health-check interval.
@@ -98,6 +118,7 @@ class SshGuest:
         await self._pooled(vm_ip)
 
     async def evict(self, vm_ip: str) -> None:
+        self._gen[vm_ip] = self._gen.get(vm_ip, 0) + 1
         conn = self._conns.pop(vm_ip, None)
         if conn is not None:
             with contextlib.suppress(Exception):
@@ -122,6 +143,7 @@ class SshGuest:
         self._conns.clear()
         self._locks.clear()
         self._last_used.clear()
+        self._gen.clear()
 
     # -- Guest protocol ------------------------------------------------------
 
@@ -141,12 +163,18 @@ class SshGuest:
                 dedicated.close()
         except asyncssh.ConnectionLost as exc:
             logger.warning("SSH connection lost for %s, reconnecting: %s", vm_ip, exc)
-            await self.evict(vm_ip)
+            # Only evict the connection that failed. Another task may already
+            # have replaced it, and closing that one would cascade the failure
+            # through every exec in flight on this VM.
+            if self._conns.get(vm_ip) is conn:
+                await self.evict(vm_ip)
             conn = await self._pooled(vm_ip)
             return await self._run_on(conn, command, timeout)
 
     @staticmethod
-    async def _run_on(conn: Any, command: str, timeout: float) -> ExecResult:
+    async def _run_on(
+        conn: asyncssh.SSHClientConnection, command: str, timeout: float
+    ) -> ExecResult:
         result = await asyncio.wait_for(conn.run(command, check=False), timeout=timeout)
         return ExecResult(
             exit_code=result.exit_status or 0,
@@ -193,10 +221,12 @@ class SshGuest:
                 conn.close()
 
     @staticmethod
-    async def _pump(process: Any, timeout: float) -> AsyncGenerator[OutputLine, None]:
+    async def _pump(
+        process: asyncssh.SSHClientProcess[str], timeout: float
+    ) -> AsyncGenerator[OutputLine, None]:
         queue: asyncio.Queue[OutputLine | _ReaderDone] = asyncio.Queue()
 
-        async def read(reader: Any, name: StreamName) -> None:
+        async def read(reader: asyncssh.SSHReader[str], name: StreamName) -> None:
             try:
                 async for line in reader:
                     queue.put_nowait((name, line.rstrip("\n")))

@@ -181,6 +181,13 @@ class FakeHypervisor(_Failable):
 
 
 class FakeGuest(_Failable):
+    """In-memory Guest.
+
+    ``stream_script`` maps a command to the lines it yields. A script may end
+    with its own ``("exit", code)`` line to model a non-zero exit; if it does
+    not, a clean ``("exit", "0")`` is appended.
+    """
+
     def __init__(self) -> None:
         super().__init__()
         self.script: dict[str, ExecResult] = {}
@@ -220,9 +227,11 @@ class FakeGuest(_Failable):
     ) -> AsyncIterator[OutputLine]:
         self._maybe_fail("stream")
         self.commands.append((vm_ip, command))
-        for item in self.stream_script.get(command, []):
+        items = self.stream_script.get(command, [])
+        for item in items:
             yield item
-        yield ("exit", "0")
+        if not items or items[-1][0] != "exit":
+            yield ("exit", "0")
 
     async def exec_bg(self, vm_ip: str, command: str) -> int:
         self._maybe_fail("exec_bg")

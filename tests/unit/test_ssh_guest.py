@@ -142,11 +142,14 @@ class FakeConn:
         *,
         channel_error: bool = False,
         run_error: Exception | None = None,
+        run_delay: float = 0.0,
     ) -> None:
         self._process = process
         self._channel_error = channel_error
         self._run_error = run_error
+        self._run_delay = run_delay
         self.closed = False
+        self.runs: list[str] = []
 
     async def create_process(self, command: str) -> Any:
         if self._channel_error:
@@ -154,6 +157,9 @@ class FakeConn:
         return self._process
 
     async def run(self, command: str, check: bool = False) -> Any:
+        self.runs.append(command)
+        if self._run_delay:
+            await asyncio.sleep(self._run_delay)
         if self._run_error is not None:
             raise self._run_error
         return RunResult()
@@ -265,7 +271,8 @@ async def test_close_waits_for_an_in_flight_connect() -> None:
     await warm
     assert len(created) == 1
     assert created[0].closed, "close() must not let a mid-handshake connection survive"
-    assert guest._conns == {}
+    await guest.warm("172.16.1.2")
+    assert len(created) == 2, "close() must leave nothing pooled, so the next warm reconnects"
 
 
 async def test_abandoning_the_stream_kills_the_process() -> None:
@@ -336,7 +343,8 @@ async def test_exec_evicts_and_retries_when_the_connection_is_lost() -> None:
     assert not replacement.closed, "the replacement must stay in the pool"
 
 
-async def test_evict_during_connect_does_not_create_a_second_connection() -> None:
+async def test_concurrent_warms_share_one_connection() -> None:
+    """The per-IP lock is held across the handshake, so a second warm waits for it."""
     created: list[FakeConn] = []
 
     async def connect(host: str, **kwargs: Any) -> FakeConn:
@@ -346,24 +354,96 @@ async def test_evict_during_connect_does_not_create_a_second_connection() -> Non
         return conn
 
     guest = SshGuest(Path("/tmp/k"), connect=connect)
-    first = asyncio.create_task(guest.warm("172.16.1.2"))
-    await asyncio.sleep(0.01)
-    await guest.evict("172.16.1.2")
-    second = asyncio.create_task(guest.warm("172.16.1.2"))
-    await asyncio.gather(first, second)
+    await asyncio.gather(guest.warm("172.16.1.2"), guest.warm("172.16.1.2"))
     assert len(created) == 1, f"the per-IP lock must hold across connect, got {len(created)} conns"
-    assert not created[0].closed
 
 
-async def test_last_used_is_recorded_after_the_handshake() -> None:
+async def test_evict_during_connect_discards_the_new_connection() -> None:
+    """evict() takes no lock, so a connect for the same IP can still be in flight.
+
+    That connection is to a VM being destroyed. Pooling it would hand the next
+    VM on the recycled slot a connection to a dead machine.
+    """
+    created: list[FakeConn] = []
+
     async def connect(host: str, **kwargs: Any) -> FakeConn:
         await asyncio.sleep(0.1)
-        return FakeConn(FakeProcess([], [], 0))
+        conn = FakeConn(FakeProcess([], [], 0))
+        created.append(conn)
+        return conn
 
     guest = SshGuest(Path("/tmp/k"), connect=connect)
-    before = asyncio.get_running_loop().time()
+    pending = asyncio.create_task(guest.warm("172.16.1.2"))
+    await asyncio.sleep(0.01)
+    await guest.evict("172.16.1.2")
+    with pytest.raises(asyncssh.ConnectionLost):
+        await pending
+    assert created[0].closed, "the raced connection must be closed, not leaked"
+    # Nothing was stored, so the next warm has to connect again.
     await guest.warm("172.16.1.2")
-    assert guest._last_used["172.16.1.2"] >= before + 0.1
+    assert len(created) == 2
+
+
+async def test_exec_evicts_only_the_connection_that_failed() -> None:
+    """A lost exec must not close the replacement another task already pooled.
+
+    Otherwise one eviction cascades: every in-flight exec on the VM tears down
+    the connection the next one just established.
+    """
+    lost = FakeConn(
+        FakeProcess([], [], 0), run_error=asyncssh.ConnectionLost("gone"), run_delay=0.1
+    )
+    replacement = FakeConn(FakeProcess([], [], 0))
+    spare = FakeConn(FakeProcess([], [], 0))
+    guest = make_guest_with([lost, replacement, spare])
+    running = asyncio.create_task(guest.exec("172.16.1.2", "slow"))
+    await asyncio.sleep(0.01)
+    await guest.evict("172.16.1.2")  # e.g. a checkpoint pause/resume
+    await guest.warm("172.16.1.2")  # another task pools the replacement
+    assert await running == ExecResult(exit_code=0, stdout="ok\n", stderr="")
+    assert not replacement.closed, "the retry must reuse the pooled connection, not evict it"
+    assert replacement.runs == ["slow"], "the retry must run on the pooled replacement"
+    assert not spare.closed and spare.runs == [], "no third connection should have been needed"
+
+
+async def test_health_check_tolerates_an_evict_during_the_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """evict() can pop the connection a health probe is still testing."""
+    monkeypatch.setattr(ssh_module, "_HEALTH_CHECK_INTERVAL", 0.0)
+    stale = FakeConn(
+        FakeProcess([], [], 0), run_error=asyncssh.ConnectionLost("gone"), run_delay=0.1
+    )
+    replacement = FakeConn(FakeProcess([], [], 0))
+    guest = make_guest_with([stale, replacement])
+    await guest.warm("172.16.1.2")
+    probing = asyncio.create_task(guest.warm("172.16.1.2"))
+    await asyncio.sleep(0.01)
+    await guest.evict("172.16.1.2")
+    await probing
+    assert await guest.exec("172.16.1.2", "x") == ExecResult(exit_code=0, stdout="ok\n", stderr="")
+    assert replacement.runs[-1] == "x"
+
+
+async def test_a_slow_handshake_does_not_make_the_next_call_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The health-check clock starts when the connection is usable, not when asked for.
+
+    A handshake can eat a large share of the interval; timing it from the
+    request would make the very next call probe a connection that just came up.
+    """
+    monkeypatch.setattr(ssh_module, "_HEALTH_CHECK_INTERVAL", 0.15)
+    conn = FakeConn(FakeProcess([], [], 0))
+
+    async def connect(host: str, **kwargs: Any) -> FakeConn:
+        await asyncio.sleep(0.2)
+        return conn
+
+    guest = SshGuest(Path("/tmp/k"), connect=connect)
+    await guest.warm("172.16.1.2")
+    await guest.warm("172.16.1.2")
+    assert conn.runs == [], "a connection that just finished its handshake must not be probed"
 
 
 async def test_connect_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:

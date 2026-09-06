@@ -462,10 +462,7 @@ class VMManager:
 
         # Remove dm-thin volume (process is already dead, no need to wait)
         volume_name = f"mshkn-{computer.id}"
-        try:
-            await self.host.blocks.remove(volume_id=computer.thin_volume_id, name=volume_name)
-        except Exception:
-            logger.debug("Volume removal failed for %s (may already be gone)", computer.id)
+        await self.host.blocks.remove(volume_id=computer.thin_volume_id, name=volume_name)
 
         # Remove tap device and recycle slot
         slot = int(computer.tap_device.replace("tap", ""))
@@ -705,21 +702,12 @@ class VMManager:
                 try:
                     # Remove dm-thin volume
                     if ckpt.thin_volume_id is not None:
-                        vol_name = f"mshkn-ckpt-{ckpt.id}"
-                        try:
-                            await self.host.blocks.remove(
-                                volume_id=ckpt.thin_volume_id,
-                                name=vol_name,
-                            )
-                        except Exception:
-                            logger.debug(
-                                "Volume removal failed for ckpt %s (may be gone)",
-                                ckpt.id,
-                            )
+                        await self.host.blocks.remove(
+                            volume_id=ckpt.thin_volume_id,
+                            name=f"mshkn-ckpt-{ckpt.id}",
+                        )
 
                     # Remove local snapshot files
-                    import shutil
-
                     local_dir = self.config.checkpoint_local_dir / ckpt.id
                     if local_dir.exists():
                         shutil.rmtree(local_dir)

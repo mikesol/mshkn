@@ -405,6 +405,9 @@ class FirecrackerHypervisor:
         )
 
     async def _map_staging_disk(self, disk_volume_id: int) -> None:
+        # Staging shells dm-thin directly so the mapping stays under the
+        # staging lock. The table string is the same one DmThinBlockStore
+        # builds: a change to the sector count must be made in dmthin.py too.
         await self._run(
             f"dmsetup create {STAGING_DRIVE_NAME} "
             f"--table '0 {self._config.thin_volume_sectors} thin "
