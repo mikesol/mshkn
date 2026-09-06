@@ -381,6 +381,40 @@ async def test_killing_a_pid_the_hypervisor_never_started_is_still_a_kill(
     assert timeline == ["kill:4242"]
 
 
+async def test_kill_of_a_vm_that_already_died_still_unlinks_its_socket(
+    staged: Staged, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The dead-VM reaper reaches kill() after the process is gone; the socket must still go.
+
+    On the live host the one socket that survived a full E2E run belonged to a VM
+    whose process had died on its own and was cleaned up by the reaper, which
+    never called kill(). kill() on a dead pid is a no-op for the process and
+    must still release the socket recorded for it.
+    """
+    hv, _run, _timeline = staged
+    binary = _fake_binary(tmp_path, creates_socket=True)
+
+    async def start(socket_path: str, **_kwargs: Any) -> int:
+        return await real_start_firecracker_process(socket_path, binary=binary)
+
+    monkeypatch.setattr(fc, "start_firecracker_process", start)
+    monkeypatch.setattr(fc, "kill_firecracker_process", real_kill_firecracker_process)
+
+    disk_name = f"mshkn-comp-sockettest-dead-{os.getpid()}"
+    socket_path = Path(f"/tmp/fc-{disk_name}.socket")
+    try:
+        vm = await hv.boot(slot=3, disk_volume_id=7, disk_name=disk_name, resources=Resources())
+        await real_kill_firecracker_process(vm.pid)  # the VM dies on its own
+        assert not hv.is_alive(vm.pid)
+        assert socket_path.exists(), "firecracker does not remove its socket when it dies"
+        await hv.kill(vm.pid)
+        assert not socket_path.exists(), "kill of a dead pid must still unlink its socket"
+    finally:
+        socket_path.unlink(missing_ok=True)
+        socket_path.with_suffix(".socket.pid").unlink(missing_ok=True)
+    assert _survivors(binary) == [], "the test leaves no process behind"
+
+
 async def test_a_failed_boot_unlinks_the_socket_it_created(
     staged: Staged, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

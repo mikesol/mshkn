@@ -364,6 +364,9 @@ class ComputerService:
     async def cleanup_dead(self, computer: Computer) -> None:
         """Release a VM whose Firecracker process is already gone. Every step is best-effort."""
         await self.host.proxy.remove_route(computer.id)
+        if computer.firecracker_pid is not None:
+            # The process is gone; kill() is what releases the API socket recorded for it.
+            await self.host.hypervisor.kill(computer.firecracker_pid)
         await self.host.blocks.remove(volume_id=computer.thin_volume_id, name=computer.volume_name)
         try:
             await self.host.hypervisor.teardown_slot(computer.slot)
