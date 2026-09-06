@@ -20,7 +20,8 @@ from mshkn.db import (
 )
 from mshkn.models import Recipe, RecipeStatus
 from mshkn.observability.metrics import timed
-from mshkn.recipe.builder import build_recipe, dockerfile_content_hash
+from mshkn.services.allocator import SlotAllocator
+from mshkn.services.recipes import RecipeService, dockerfile_content_hash
 
 if TYPE_CHECKING:
     from mshkn.models import Account
@@ -107,9 +108,10 @@ async def create_recipe(
 
     async def _run_build() -> None:
         async with build_lock, timed("recipe_build"):
-            await build_recipe(
-                db, config, rt.host.blocks, recipe_id, body.dockerfile, content_hash, volume_id
+            service = RecipeService(
+                config, db, rt.host.blocks, rt.host.hypervisor, SlotAllocator(), rt.tasks
             )
+            await service.build(recipe_id, body.dockerfile, content_hash, volume_id)
 
     rt.tasks.spawn(_run_build(), name=f"recipe_build:{recipe_id}")
 
