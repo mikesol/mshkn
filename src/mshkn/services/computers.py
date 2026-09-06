@@ -39,12 +39,26 @@ logger = logging.getLogger(__name__)
 STATUS_METRICS_TIMEOUT_SECONDS = 15.0
 
 
-async def _best_effort(what: str, action: Awaitable[object], computer_id: str) -> None:
-    """Await a cleanup step, swallowing and logging anything it raises."""
+async def _best_effort(
+    what: str, action: Awaitable[object], computer_id: str
+) -> BaseException | None:
+    """Await one cleanup step. Never raises.
+
+    Ordinary exceptions are logged and swallowed. An interruption --
+    ``CancelledError`` above all, but also ``KeyboardInterrupt`` and
+    ``SystemExit`` -- is returned instead so the caller can finish the
+    remaining steps and re-raise it afterwards. Deferring cancellation by the
+    length of a cleanup pass is much cheaper than abandoning a half-released
+    slot.
+    """
     try:
         await action
     except Exception:
         logger.debug("%s during abandon failed for %s", what, computer_id, exc_info=True)
+    except BaseException as exc:
+        logger.debug("%s during abandon was interrupted for %s", what, computer_id)
+        return exc
+    return None
 
 
 class ComputerService:
@@ -251,30 +265,38 @@ class ComputerService:
         vm: RunningVM | None,
         routed: bool,
     ) -> None:
-        """Best-effort release of everything _bring_up acquired. Never raises.
+        """Best-effort release of everything _bring_up acquired.
 
-        Every step is guarded individually and the slot is released in a
-        ``finally``, so one failing host call can neither strand the slot nor
-        replace the error the caller is about to raise.
+        Every step is guarded individually, so one failing host call can
+        neither strand the slot nor replace the error the caller is about to
+        raise. The slot is released last, after the tap and the volume are
+        gone: a slot handed back while its VM is still alive poisons the next
+        create that lands on it.
+
+        An interruption (cancellation) during a step does not cut the pass
+        short. It is remembered, the remaining steps still run, and it is
+        re-raised at the end, so cancellation is delayed but never lost.
         """
         logger.warning("Abandoning computer %s after a failed bring-up", computer_id)
-        try:
-            if routed:
-                await _best_effort(
-                    "route removal", self.host.proxy.remove_route(computer_id), computer_id
-                )
-            if vm is not None:
-                await _best_effort("kill", self.host.hypervisor.kill(vm.pid), computer_id)
-                await _best_effort("evict", self.host.guest.evict(vm.vm_ip), computer_id)
-            await _best_effort(
-                "volume removal",
-                self.host.blocks.remove(volume_id=volume_id, name=volume_name),
-                computer_id,
-            )
-            await _best_effort("teardown", self.host.hypervisor.teardown_slot(slot), computer_id)
-        finally:
-            await _best_effort("slot release", self.allocator.release_slot(slot), computer_id)
-        await _best_effort("status update", self._mark_destroyed(computer_id), computer_id)
+        interrupted: BaseException | None = None
+
+        async def step(what: str, action: Awaitable[object]) -> None:
+            nonlocal interrupted
+            stopped = await _best_effort(what, action, computer_id)
+            if stopped is not None and interrupted is None:
+                interrupted = stopped
+
+        if routed:
+            await step("route removal", self.host.proxy.remove_route(computer_id))
+        if vm is not None:
+            await step("kill", self.host.hypervisor.kill(vm.pid))
+            await step("evict", self.host.guest.evict(vm.vm_ip))
+        await step("volume removal", self.host.blocks.remove(volume_id=volume_id, name=volume_name))
+        await step("teardown", self.host.hypervisor.teardown_slot(slot))
+        await step("status update", self._mark_destroyed(computer_id))
+        await step("slot release", self.allocator.release_slot(slot))
+        if interrupted is not None:
+            raise interrupted
 
     async def _mark_destroyed(self, computer_id: str) -> None:
         stored = await get_computer(self.db, computer_id)

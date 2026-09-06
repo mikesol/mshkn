@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
@@ -128,6 +129,51 @@ async def test_route_failure_after_boot_kills_the_vm_and_cleans_up(
     assert host.blocks.volumes == {0: None}
     assert host.proxy.routes == {}
     assert await service.active_count_total() == 0
+
+
+async def test_abandon_finishes_cleanup_when_cancelled_mid_kill(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation during a cleanup step must not hand back a half-released slot."""
+    service, host = await _service(db, tmp_path)
+    order: list[str] = []
+    killing = asyncio.Event()
+    never = asyncio.Event()
+    real_kill = host.hypervisor.kill
+    real_teardown = host.hypervisor.teardown_slot
+    real_release = service.allocator.release_slot
+
+    async def _slow_kill(pid: int) -> None:
+        await real_kill(pid)  # the signal lands...
+        killing.set()
+        await never.wait()  # ...and this models waiting for the process to reap
+
+    async def _teardown(slot: int) -> None:
+        order.append("teardown")
+        await real_teardown(slot)
+
+    async def _release(slot: int) -> None:
+        order.append("release")
+        await real_release(slot)
+
+    monkeypatch.setattr(host.hypervisor, "kill", _slow_kill)
+    monkeypatch.setattr(host.hypervisor, "teardown_slot", _teardown)
+    monkeypatch.setattr(service.allocator, "release_slot", _release)
+    host.proxy.fail_next("add_route")  # sends the bring-up into _abandon with a live VM
+
+    task = asyncio.create_task(service.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES))
+    await killing.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert host.hypervisor.alive == {}
+    assert host.blocks.volumes == {0: None}, "cleanup continued past the cancelled step"
+    assert order == ["teardown", "release"], "the slot is released only after the tap is gone"
+    assert service.allocator.free_slots == frozenset({1})
+    cursor = await db.execute("SELECT status FROM computers")
+    row = await cursor.fetchone()
+    assert row is not None and row[0] == "destroyed"
 
 
 async def test_destroy_releases_everything_and_is_idempotent(
