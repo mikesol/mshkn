@@ -20,6 +20,7 @@ set -euo pipefail
 systemctl stop mshkn litestream
 pkill -x firecracker || true
 sleep 1
+rm -f /tmp/fc-*.socket
 for tap in \$(ip -o link show type tun | awk -F': ' '{print \$2}' | grep -E '^tap[0-9]+\$' || true); do
   ip link del "\$tap" || true
 done

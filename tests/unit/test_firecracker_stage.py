@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -18,9 +19,16 @@ from mshkn.host.firecracker import (
     STAGING_VM_IP,
     FirecrackerHypervisor,
 )
+from mshkn.host.firecracker import (
+    kill_firecracker_process as real_kill_firecracker_process,
+)
+from mshkn.host.firecracker import (
+    start_firecracker_process as real_start_firecracker_process,
+)
 from mshkn.host.shell import ShellError
 from mshkn.resources import Resources
 from tests.support import ShellRecorder
+from tests.unit.test_firecracker_process import _fake_binary, _survivors
 
 CONFIG = Config(
     ssh_key_path=Path("/tmp/k"),
@@ -322,3 +330,72 @@ async def test_two_boots_serialise_on_the_staging_lock(staged: Staged) -> None:
     )
     second_table = next(i for i, c in enumerate(cmds) if c.endswith(" 8'"))
     assert first_rename < second_table, "the second boot's staging map waits for the first's rename"
+
+
+async def test_kill_unlinks_the_api_socket_a_boot_created(
+    staged: Staged, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A killed VM must leave no API socket behind.
+
+    Firecracker does not remove its own socket on exit and
+    `start_firecracker_process` only clears the one path it is about to reuse,
+    so before this the live host held 1391 stale /tmp/fc-*.socket files against
+    zero firecracker processes. The real start/kill helpers run here against
+    the fake binary from the process tests, which touches the socket path, so
+    the file under assertion is a real file. `_stage` hardcodes /tmp for the
+    socket, hence the pid-qualified disk name rather than tmp_path.
+    """
+    hv, _run, _timeline = staged
+    binary = _fake_binary(tmp_path, creates_socket=True)
+
+    async def start(socket_path: str, **_kwargs: Any) -> int:
+        return await real_start_firecracker_process(socket_path, binary=binary)
+
+    monkeypatch.setattr(fc, "start_firecracker_process", start)
+    monkeypatch.setattr(fc, "kill_firecracker_process", real_kill_firecracker_process)
+
+    disk_name = f"mshkn-comp-sockettest-{os.getpid()}"
+    socket_path = Path(f"/tmp/fc-{disk_name}.socket")
+    try:
+        vm = await hv.boot(slot=3, disk_volume_id=7, disk_name=disk_name, resources=Resources())
+        assert vm.socket_path == str(socket_path)
+        assert socket_path.exists(), "the fake firecracker bound its API socket"
+        await hv.kill(vm.pid)
+        assert not socket_path.exists(), "kill must unlink the API socket it recorded"
+    finally:
+        socket_path.unlink(missing_ok=True)
+    assert _survivors(binary) == [], "the test leaves no process behind"
+
+
+async def test_killing_a_pid_the_hypervisor_never_started_is_still_a_kill(
+    staged: Staged,
+) -> None:
+    """`kill` of an unrecorded pid still kills and does not raise on the missing socket."""
+    hv, _run, timeline = staged
+    await hv.kill(4242)
+    assert timeline == ["kill:4242"]
+
+
+async def test_a_failed_boot_unlinks_the_socket_it_created(
+    staged: Staged, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The staging cleanup path unlinks too, so a failed boot leaks nothing either."""
+    hv, _run, _timeline = staged
+    binary = _fake_binary(tmp_path, creates_socket=True)
+
+    async def start(socket_path: str, **_kwargs: Any) -> int:
+        return await real_start_firecracker_process(socket_path, binary=binary)
+
+    monkeypatch.setattr(fc, "start_firecracker_process", start)
+    monkeypatch.setattr(fc, "kill_firecracker_process", real_kill_firecracker_process)
+    FakeClient.fail_on = "configure_and_boot"
+
+    disk_name = f"mshkn-comp-sockettest-fail-{os.getpid()}"
+    socket_path = Path(f"/tmp/fc-{disk_name}.socket")
+    try:
+        with pytest.raises(HostError):
+            await hv.boot(slot=3, disk_volume_id=7, disk_name=disk_name, resources=Resources())
+        assert not socket_path.exists(), "the cleanup path must unlink the API socket"
+    finally:
+        socket_path.unlink(missing_ok=True)
+    assert _survivors(binary) == [], "the test leaves no process behind"

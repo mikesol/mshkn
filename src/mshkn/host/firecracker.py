@@ -255,6 +255,11 @@ class FirecrackerHypervisor:
         self._config = config
         self._run = run
         self._staging_lock = asyncio.Lock()
+        # pid -> API socket path, so a killed VM's socket is removed. Firecracker
+        # does not unlink its own socket on exit, and start_firecracker_process
+        # only clears a stale one for the path it is about to use, so without
+        # this every VM that ever ran leaves a file behind in /tmp.
+        self._sockets: dict[int, str] = {}
 
     # -- Hypervisor protocol -------------------------------------------------
 
@@ -328,6 +333,7 @@ class FirecrackerHypervisor:
                         create_tap(STAGING_SLOT, run=self._run),
                     )
                     pid = await start_firecracker_process(socket_path)
+                    self._sockets[pid] = socket_path
                     client = FirecrackerClient(socket_path)
                     try:
                         await client.configure_and_boot(
@@ -352,7 +358,7 @@ class FirecrackerHypervisor:
                         await client.create_snapshot(str(files.vmstate), str(files.memory))
                     finally:
                         await client.close()
-                    await kill_firecracker_process(pid)
+                    await self.kill(pid)
                     pid = None
                     await destroy_tap(STAGING_SLOT, run=self._run)
                     await self._run(f"dmsetup remove {STAGING_DRIVE_NAME}")
@@ -365,6 +371,13 @@ class FirecrackerHypervisor:
 
     async def kill(self, pid: int) -> None:
         await kill_firecracker_process(pid)
+        self._unlink_socket(pid)
+
+    def _unlink_socket(self, pid: int) -> None:
+        """Remove the API socket of a VM this hypervisor started, if we know it."""
+        path = self._sockets.pop(pid, None)
+        if path is not None:
+            Path(path).unlink(missing_ok=True)
 
     def is_alive(self, pid: int) -> bool:
         try:
@@ -408,6 +421,7 @@ class FirecrackerHypervisor:
                         await fc_task
                     raise
                 pid = await fc_task
+                self._sockets[pid] = socket_path
                 client = FirecrackerClient(socket_path)
                 try:
                     await activate(client, socket_path)
@@ -464,6 +478,7 @@ class FirecrackerHypervisor:
                 await kill_firecracker_process(pid)
             except Exception:
                 logger.warning("Failed to kill staging FC process PID=%s", pid)
+            self._unlink_socket(pid)
         await self._ensure_staging_clean()
 
     async def _ssh_add_ip(self, final_vm_ip: str, final_host_ip: str) -> None:
