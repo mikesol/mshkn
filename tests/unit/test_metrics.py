@@ -36,7 +36,7 @@ async def test_metrics_contains_expected_names(
     assert "mshkn_computers_active" in text
     assert "mshkn_computers_created_total" in text
     assert "mshkn_checkpoints_total" in text
-    assert "mshkn_exec_duration_seconds" in text
+    assert "mshkn_exec_duration_seconds" not in text
     assert "mshkn_operation_duration_seconds" in text
     assert "mshkn_operation_errors_total" in text
     assert "mshkn_thin_pool_used_ratio" in text

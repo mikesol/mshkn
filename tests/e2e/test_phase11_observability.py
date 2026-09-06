@@ -38,7 +38,7 @@ class TestT111PrometheusEndpoint:
         - mshkn_computers_active (gauge)
         - mshkn_computers_created_total (counter)
         - mshkn_checkpoints_total (counter)
-        - mshkn_exec_duration_seconds (histogram)
+        - mshkn_operation_duration_seconds{op="exec"}
         """
         resp = await client.get("/metrics")
         assert resp.status_code == 200

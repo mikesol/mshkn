@@ -266,7 +266,7 @@ class RecipeService:
             await self.blocks.mkfs(volume_name)
             async with self.blocks.mounted(volume_name) as mount_point:
                 await self._run(f"tar xf {tar_path} -C {mount_point}")
-                _post_process_rootfs(mount_point, self.config)
+                await asyncio.to_thread(_post_process_rootfs, mount_point, self.config)
             await self.blocks.deactivate(volume_name)
             device_active = False
 

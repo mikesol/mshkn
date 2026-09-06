@@ -27,3 +27,14 @@ async def test_two_status_endpoints_declare_both_response_schemas(
     recipes = schema["paths"]["/recipes"]["post"]["responses"]
     assert _model(recipes["202"]) == "RecipeResponse"
     assert _model(recipes["200"]) == "RecipeResponse"
+
+
+async def test_operation_ids_are_unique(db: aiosqlite.Connection, runtime_config: Config) -> None:
+    app = make_app(make_runtime(db, config=runtime_config))
+    ids = [
+        op["operationId"]
+        for path in app.openapi()["paths"].values()
+        for op in path.values()
+        if isinstance(op, dict) and "operationId" in op
+    ]
+    assert len(ids) == len(set(ids)), sorted(i for i in ids if ids.count(i) > 1)
