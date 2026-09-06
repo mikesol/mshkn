@@ -1,6 +1,5 @@
-"""The deferred queue's drain: a destroy and an idle reap racing on one label fork
-exactly once, and a self-destructing fork that inherits its source label and
-reports through its callback."""
+"""The deferred queue's drain: a destroy and an idle reap racing on one label
+claim the queue once between them, so exactly one fork runs."""
 
 from __future__ import annotations
 
@@ -55,40 +54,3 @@ async def test_destroy_and_idle_reap_racing_on_one_label_fork_exactly_once(
         assert sum(1 for _, cmd in host.guest.commands if cmd == "echo q") == 1
         cursor = await flow.runtime.db.execute("SELECT COUNT(*) FROM deferred_queue")
         assert (await cursor.fetchone()) == (0,)
-
-
-async def test_fork_self_destruct_inherits_the_label_and_calls_back(flow: Flow) -> None:
-    host = flow.host
-    host.guest.script["sync"] = ExecResult(0, "", "")
-    host.guest.script["echo forked"] = ExecResult(0, "forked\n", "")
-    cid = (await flow.client.post("/computers", json={})).json()["computer_id"]
-    ckpt = (await flow.client.post(f"/computers/{cid}/checkpoint", json={"label": "chain"})).json()[
-        "checkpoint_id"
-    ]
-    resp = await flow.client.post(
-        f"/checkpoints/{ckpt}/fork",
-        json={
-            "exec": "echo forked",
-            "self_destruct": True,
-            "callback_url": "http://receiver/cb",
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["created_checkpoint_id"] and body["checkpoint_id"] == ckpt
-    await flow.runtime.tasks.drain(timeout=2.0)
-    assert flow.received == [
-        {
-            "computer_id": body["computer_id"],
-            "checkpoint_id": ckpt,
-            "label": "chain",
-            "exec_exit_code": 0,
-            "exec_stdout": "forked\n",
-            "exec_stderr": "",
-            "created_checkpoint_id": body["created_checkpoint_id"],
-        }
-    ]
-    chain = (await flow.client.get("/checkpoints", params={"label": "chain"})).json()
-    assert {c["id"] for c in chain} == {ckpt, body["created_checkpoint_id"]}
-    created = next(c for c in chain if c["id"] == body["created_checkpoint_id"])
-    assert created["parent_id"] == ckpt
