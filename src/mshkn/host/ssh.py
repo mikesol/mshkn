@@ -108,6 +108,14 @@ class SshGuest:
         self._last_used.pop(vm_ip, None)
 
     async def close(self) -> None:
+        # Take each per-IP lock so a _pooled that is mid-handshake lands its
+        # connection before we close, instead of resurrecting it afterwards.
+        for vm_ip, lock in list(self._locks.items()):
+            async with lock:
+                conn = self._conns.pop(vm_ip, None)
+                if conn is not None:
+                    with contextlib.suppress(Exception):
+                        conn.close()
         for conn in self._conns.values():
             with contextlib.suppress(Exception):
                 conn.close()
@@ -170,7 +178,7 @@ class SshGuest:
         pump = self._pump(process, timeout)
         try:
             async for item in pump:
-                emitted_exit = item[0] == "exit"
+                emitted_exit = emitted_exit or item[0] == "exit"
                 yield item
         finally:
             await pump.aclose()
@@ -243,6 +251,14 @@ class SshGuest:
                     if isinstance(item, _ReaderDone):
                         finished_readers += 1
                         if item.error is not None:
+                            if exit_task.done():
+                                # The command already finished; the drop hit a
+                                # straggling fd during the grace drain.
+                                logger.warning("stream: reader failed after exit: %r", item.error)
+                                continue
+                            # Outcome unknown: stop now. Any line still queued
+                            # behind the other reader's sentinel is dropped,
+                            # since the stream ends in this error regardless.
                             reader_error = item.error
                             break
                     else:

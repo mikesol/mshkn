@@ -36,15 +36,17 @@ class FakeReader:
 class RaisingReader:
     """Yields its lines, then fails the way a dropped connection does."""
 
-    def __init__(self, lines: list[str], error: Exception) -> None:
+    def __init__(self, lines: list[str], error: Exception, *, delay: float = 0.0) -> None:
         self._lines = list(lines)
         self._error = error
+        self._delay = delay
 
     def __aiter__(self) -> RaisingReader:
         return self
 
     async def __anext__(self) -> str:
         if not self._lines:
+            await asyncio.sleep(self._delay)
             raise self._error
         return self._lines.pop(0)
 
@@ -106,6 +108,22 @@ class LostConnectionProcess:
 
     async def wait(self) -> None:
         await asyncio.sleep(3600)
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class DropAfterExitProcess:
+    """The command exits cleanly; the connection then drops during the grace drain."""
+
+    def __init__(self, error: Exception) -> None:
+        self.stdout = RaisingReader(["a\n"], error, delay=0.05)
+        self.stderr = FakeReader([])
+        self.exit_status = 0
+        self.killed = False
+
+    async def wait(self) -> None:
+        return None
 
     def kill(self) -> None:
         self.killed = True
@@ -222,6 +240,32 @@ async def test_reader_failure_propagates_instead_of_a_clean_exit() -> None:
         async for _item in guest.stream("172.16.1.2", "cmd", timeout=0.5):
             pass
     assert process.killed, "a failed reader must still release the channel"
+
+
+async def test_reader_failure_after_exit_reports_the_known_status() -> None:
+    process = DropAfterExitProcess(asyncssh.ConnectionLost("boom"))
+    guest = make_guest(process)
+    seen = [item async for item in guest.stream("172.16.1.2", "cmd", timeout=0.5)]
+    assert seen == [("stdout", "a"), ("exit", "0")]
+
+
+async def test_close_waits_for_an_in_flight_connect() -> None:
+    created: list[FakeConn] = []
+
+    async def connect(host: str, **kwargs: Any) -> FakeConn:
+        await asyncio.sleep(0.1)
+        conn = FakeConn(FakeProcess(stdout=[], stderr=[], exit_after=0))
+        created.append(conn)
+        return conn
+
+    guest = SshGuest(Path("/tmp/k"), connect=connect)
+    warm = asyncio.create_task(guest.warm("172.16.1.2"))
+    await asyncio.sleep(0.01)
+    await guest.close()
+    await warm
+    assert len(created) == 1
+    assert created[0].closed, "close() must not let a mid-handshake connection survive"
+    assert guest._conns == {}
 
 
 async def test_abandoning_the_stream_kills_the_process() -> None:
