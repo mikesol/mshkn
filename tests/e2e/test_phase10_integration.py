@@ -2,12 +2,18 @@
 
 These tests run against a LIVE server with real Firecracker VMs.
 Every test here runs against bare VMs; the capability system was
-replaced by Docker recipes.
+replaced by Docker recipes. Three tests (the Next.js scaffold, the
+pandas analysis, and the dumb-agent workflow) are not implemented yet
+and fail on purpose via pytest.fail — not implemented is a flavor of
+broken, so they are not silently skipped or given an expected-failure
+marker.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+import pytest
 
 from .conftest import (
     checkpoint_computer,
@@ -32,14 +38,14 @@ class TestT101WebAppDevelopment:
     async def test_nextjs_scaffold_and_run(self, client: httpx.AsyncClient) -> None:
         """Scaffold a Next.js app, install deps, start dev server, hit it.
 
-        Intended workflow (not yet implemented — this test is a stub):
+        Intended workflow:
         1. Create a computer from a recipe that installs Node.js 20
         2. exec 'npx create-next-app@latest myapp --yes'
         3. exec 'cd myapp && npm run dev &'
         4. exec 'curl http://localhost:3000' -> HTML response
         5. Checkpoint, fork, make a change, verify divergence
         """
-        pass
+        pytest.fail("Not implemented: Next.js scaffold-and-run workflow")
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +59,7 @@ class TestT102DataScienceWorkflow:
     async def test_pandas_analysis_checkpoint_resume(self, client: httpx.AsyncClient) -> None:
         """Install pandas, create a dataset, analyze it, checkpoint mid-work.
 
-        Intended workflow (not yet implemented — this test is a stub):
+        Intended workflow:
         1. Create a computer, then install Python 3.12 via apt/pip inside it
         2. exec 'pip install pandas numpy'
         3. exec python script that generates CSV and computes stats
@@ -61,7 +67,7 @@ class TestT102DataScienceWorkflow:
         5. Fork twice: one does linear regression, other does clustering
         6. Compare outputs from the two forks
         """
-        pass
+        pytest.fail("Not implemented: pandas analysis with checkpoint/fork comparison")
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +223,7 @@ class TestT105DumbAgentTest:
     async def test_agent_explores_and_checkpoints(self, client: httpx.AsyncClient) -> None:
         """An LLM agent should be able to use the full computer lifecycle.
 
-        Intended workflow (not yet implemented — this test is a stub):
+        Intended workflow:
         1. Agent receives task: "Find the largest file in /etc"
         2. Agent calls POST /computers with an empty body
         3. Agent calls exec('find /etc -type f -exec du -b {} + | sort -rn | head -5')
@@ -225,4 +231,4 @@ class TestT105DumbAgentTest:
         5. Agent forks to try two different approaches
         6. Agent picks best result and reports back
         """
-        pass
+        pytest.fail("Not implemented: dumb-agent explore-checkpoint-fork workflow")

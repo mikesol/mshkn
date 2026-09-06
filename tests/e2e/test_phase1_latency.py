@@ -44,7 +44,7 @@ FORK_MINIMAL_P95_MS = 650  # LOAD_SNAPSHOT path: tap+FC+SSH+reconfig
 
 
 class TestT11CreateLatency:
-    """computer_create(uses: []) latency — target p95 <= 2000ms."""
+    """POST /computers with an empty body, latency — target p95 <= 2000ms."""
 
     async def test_bare_create_latency(self, client: httpx.AsyncClient) -> None:
         """Create bare computers repeatedly, assert a tight p95 latency target."""
