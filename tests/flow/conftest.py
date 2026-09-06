@@ -98,6 +98,7 @@ async def _build_flow(config: Config, tmp_path: Path) -> AsyncIterator[Flow]:
             await runtime.tasks.drain(timeout=2.0)
             await runtime.http.aclose()
             await db.close()
+            host.close()
 
 
 @pytest.fixture

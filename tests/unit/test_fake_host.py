@@ -134,3 +134,36 @@ async def test_objects_and_proxy_record(tmp_path: Path) -> None:
     await host.proxy.remove_route("comp-a")
     assert host.proxy.routes == {}
     assert await host.proxy.healthy()
+
+
+async def test_mounted_is_stable_per_device_and_recorded() -> None:
+    blocks = FakeHost().blocks
+    await blocks.snap(source_volume_id=0, new_volume_id=100)
+    await blocks.activate(volume_id=100, name="mshkn-a")
+    async with blocks.mounted("mshkn-a") as first:
+        (first / "f.txt").write_text("hello")
+    async with blocks.mounted("mshkn-a", readonly=True) as second:
+        assert second == first
+        assert (second / "f.txt").read_text() == "hello"
+    assert [c for c in blocks.calls if c[0] == "mounted"] == [
+        ("mounted", ("mshkn-a", False)),
+        ("mounted", ("mshkn-a", True)),
+    ]
+    blocks.close()
+
+
+async def test_snap_copies_the_source_volume_content() -> None:
+    """A snapshot of a volume starts as a copy of it, as dm-thin's does."""
+    blocks = FakeHost().blocks
+    await blocks.snap(source_volume_id=0, new_volume_id=100)
+    await blocks.activate(volume_id=100, name="mshkn-a")
+    async with blocks.mounted("mshkn-a") as source:
+        (source / "seed.txt").write_text("v0")
+    await blocks.snap(source_volume_id=100, new_volume_id=101)
+    await blocks.activate(volume_id=101, name="mshkn-b")
+    async with blocks.mounted("mshkn-b") as child:
+        assert (child / "seed.txt").read_text() == "v0"
+        (child / "seed.txt").write_text("v1")
+    async with blocks.mounted("mshkn-a") as source:
+        assert (source / "seed.txt").read_text() == "v0", "the copy must not alias the source"
+    blocks.close()

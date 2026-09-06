@@ -240,3 +240,45 @@ async def test_fork_or_defer_honours_exclusive_modes(
         ACCOUNT, ckpt, SPEC, recipe_id=None, exclusive="error_on_conflict"
     )
     assert isinstance(again, Computer)  # chain is free again
+
+
+async def test_merge_copies_the_result_onto_the_output_volume_in_mount_order(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    parent = await checkpoints.create(computer, label="p", trigger=CheckpointTrigger.API)
+    fork_a = await computers.fork(ACCOUNT, parent, recipe_id=None)
+    fork_b = await computers.fork(ACCOUNT, parent, recipe_id=None)
+    a = await checkpoints.create(fork_a, label="a", trigger=CheckpointTrigger.API)
+    b = await checkpoints.create(fork_b, label="b", trigger=CheckpointTrigger.API)
+    # seed the three "disks" through the fake's stable mounts
+    async with host.blocks.mounted(parent.volume_name) as mp:
+        (mp / "base.txt").write_text("v0")
+        (mp / "doomed.txt").write_text("bye")
+        (mp / "conflict.txt").write_text("v0")
+    async with host.blocks.mounted(a.volume_name) as ma:
+        (ma / "base.txt").write_text("v0")
+        (ma / "conflict.txt").write_text("A")
+        (ma / "a_only.txt").write_text("a")
+    async with host.blocks.mounted(b.volume_name) as mb:
+        (mb / "base.txt").write_text("v1")
+        (mb / "doomed.txt").write_text("bye")
+        (mb / "conflict.txt").write_text("B")
+    host.blocks.calls.clear()
+    outcome = await checkpoints.merge(ACCOUNT, parent.id, a.id, b.id)
+    assert outcome.conflicts == ["conflict.txt"]
+    assert outcome.auto_merged == 3
+    mounts = [args for name, args in host.blocks.calls if name == "mounted"]
+    assert mounts == [
+        (parent.volume_name, True),
+        (a.volume_name, True),
+        (b.volume_name, True),
+        (outcome.checkpoint.volume_name, False),
+    ]
+    out = host.blocks.mounts[outcome.checkpoint.volume_name]
+    assert (out / "base.txt").read_text() == "v1"
+    assert (out / "conflict.txt").read_text() == "A"
+    assert (out / "a_only.txt").read_text() == "a"
+    assert not (out / "doomed.txt").exists(), "deleted in A, unchanged in B -> removed from output"
+    host.close()
