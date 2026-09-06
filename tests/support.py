@@ -85,3 +85,34 @@ def recipe_row(
         created_at="2026-03-08T00:00:00",
         built_at="2026-03-08T00:00:00" if status is RecipeStatus.READY else None,
     )
+
+
+class ShellRecorder:
+    """A stand-in for `mshkn.host.shell.run` that records and answers commands.
+
+    `calls` holds `(cmd, check)` pairs. `ip link show <tap>` reports the taps in
+    `taps` as present; every other command is matched against `responses` by
+    substring, returning the value or raising it, and otherwise returns "".
+    """
+
+    def __init__(
+        self,
+        *,
+        taps: set[str] | None = None,
+        responses: dict[str, str | Exception] | None = None,
+    ) -> None:
+        self.calls: list[tuple[str, bool]] = []
+        self.taps = set() if taps is None else taps
+        self.responses = {} if responses is None else responses
+
+    async def __call__(self, cmd: str, check: bool = True) -> str:
+        self.calls.append((cmd, check))
+        for key, resp in self.responses.items():
+            if key in cmd:
+                if isinstance(resp, Exception):
+                    raise resp
+                return resp
+        if cmd.startswith("ip link show "):
+            tap = cmd.split()[3]
+            return f"7: {tap}: <UP>" if tap in self.taps else ""
+        return ""

@@ -76,10 +76,14 @@ class FirecrackerConfig:
 class FirecrackerClient:
     """Async client for a single Firecracker instance via Unix socket API."""
 
-    def __init__(self, socket_path: str) -> None:
+    def __init__(
+        self, socket_path: str, *, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
         self.socket_path = socket_path
-        transport = httpx.AsyncHTTPTransport(uds=socket_path)
-        self._client = httpx.AsyncClient(transport=transport, base_url="http://localhost")
+        self._client = httpx.AsyncClient(
+            transport=transport or httpx.AsyncHTTPTransport(uds=socket_path),
+            base_url="http://localhost",
+        )
 
     async def configure_and_boot(self, config: FirecrackerConfig) -> None:
         await self._put(
@@ -163,28 +167,30 @@ class FirecrackerClient:
             resp.raise_for_status()
 
 
-async def start_firecracker_process(socket_path: str) -> int:
+async def start_firecracker_process(
+    socket_path: str, *, binary: str = "firecracker", socket_timeout: float = 2.0
+) -> int:
     """Start a Firecracker process and return its PID."""
     # Remove stale socket (in-process, avoids subprocess overhead)
     with contextlib.suppress(FileNotFoundError):
         Path(socket_path).unlink()
 
     proc = await asyncio.create_subprocess_exec(
-        "firecracker",
+        binary,
         "--api-sock",
         socket_path,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
-    assert proc.pid is not None
     # Poll for socket creation instead of fixed 500ms sleep
-    deadline = asyncio.get_event_loop().time() + 2.0
-    while asyncio.get_event_loop().time() < deadline:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + socket_timeout
+    while loop.time() < deadline:
         if Path(socket_path).exists():
             break
         await asyncio.sleep(0.01)
     else:
-        raise TimeoutError(f"Firecracker socket {socket_path} not created within 2s")
+        raise TimeoutError(f"Firecracker socket {socket_path} not created within {socket_timeout}s")
     logger.info("Started Firecracker process PID=%d socket=%s", proc.pid, socket_path)
     return proc.pid
 
