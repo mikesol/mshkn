@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from mshkn.db import (
     delete_ingress_rule,
@@ -80,6 +80,22 @@ class CreateAction(BaseModel):
     callback_url: str | None = None
     label: str | None = None
     meta_exec: str | None = None
+
+    @field_validator("needs")
+    @classmethod
+    def _resources(cls, value: dict[str, object] | None) -> dict[str, object] | None:
+        """Pre-flight `needs` through the same parser `execute` uses.
+
+        Without this a bad `needs` validates clean here and only fails later
+        inside `execute`, so the dry-run endpoint would report no errors for a
+        transform that is guaranteed to fail at trigger time. `execute` still
+        parses it for real: `Resources.from_needs` stays the source of truth.
+        """
+        try:
+            Resources.from_needs(value)
+        except InvalidInput as exc:
+            raise ValueError(exc.message) from None
+        return value
 
 
 def validate_transform_result(result: object) -> list[str]:
