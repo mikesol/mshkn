@@ -164,8 +164,8 @@ async def merge_checkpoints(
     import tempfile
     from pathlib import Path
 
-    from mshkn.checkpoint.merge import three_way_merge
     from mshkn.models import Checkpoint
+    from mshkn.services.merge import three_way_merge
 
     rt = get_runtime(request)
     db = rt.db
