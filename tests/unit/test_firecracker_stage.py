@@ -368,6 +368,7 @@ async def test_kill_unlinks_the_api_socket_a_boot_created(
         assert not socket_path.exists(), "kill must unlink the API socket it recorded"
     finally:
         socket_path.unlink(missing_ok=True)
+        socket_path.with_suffix(".socket.pid").unlink(missing_ok=True)
     assert _survivors(binary) == [], "the test leaves no process behind"
 
 
@@ -402,4 +403,5 @@ async def test_a_failed_boot_unlinks_the_socket_it_created(
         assert not socket_path.exists(), "the cleanup path must unlink the API socket"
     finally:
         socket_path.unlink(missing_ok=True)
+        socket_path.with_suffix(".socket.pid").unlink(missing_ok=True)
     assert _survivors(binary) == [], "the test leaves no process behind"
