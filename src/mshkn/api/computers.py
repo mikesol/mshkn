@@ -5,12 +5,12 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from mshkn.api.deps import get_runtime, require_account
-from mshkn.callback import deliver_callback
 from mshkn.db import (
     claim_deferred_by_label,
     count_active_computers_by_account,
@@ -29,6 +29,7 @@ from mshkn.observability.metrics import (
     timed,
 )
 from mshkn.resources import Resources
+from mshkn.services.callback import deliver_callback
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -174,7 +175,7 @@ async def _self_destruct(
             "created_checkpoint_id": checkpoint_id,
         }
         tasks.spawn(
-            deliver_callback(callback_url, payload),
+            deliver_callback(httpx.AsyncClient(), callback_url, payload),
             name=f"callback:{computer.id}",
         )
 

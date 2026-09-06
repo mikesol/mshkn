@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import TYPE_CHECKING, Any
+
+import httpx
+from fastapi import FastAPI, Request
+
+from mshkn.config import Config
+from mshkn.db import claim_deferred_by_label, get_computer, insert_account, insert_deferred
+from mshkn.host import ExecResult
+from mshkn.host.fake import FakeHost, FakeHostInstance
+from mshkn.models import Account, CheckpointTrigger, ComputerStatus, ExecSpec
+from mshkn.observability.metrics import checkpoints_total
+from mshkn.resources import DEFAULT_RESOURCES
+from mshkn.runtime import BackgroundTasks
+from mshkn.services.allocator import SlotAllocator
+from mshkn.services.checkpoints import CheckpointService
+from mshkn.services.computers import ComputerService
+from mshkn.services.lifecycle import Lifecycle
+from mshkn.services.recipes import RecipeService
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import aiosqlite
+
+ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=10, created_at="t")
+
+
+def _receiver() -> tuple[FastAPI, list[dict[str, Any]]]:
+    app = FastAPI()
+    received: list[dict[str, Any]] = []
+
+    @app.post("/cb")
+    async def cb(request: Request) -> dict[str, str]:
+        received.append(await request.json())
+        return {"ok": "yes"}
+
+    return app, received
+
+
+async def _lifecycle(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> tuple[Lifecycle, ComputerService, CheckpointService, FakeHostInstance, list[dict[str, Any]]]:
+    await insert_account(db, ACCOUNT)
+    host = FakeHost()
+    config = Config(domain="test.dev", checkpoint_local_dir=tmp_path / "ckpts")
+    allocator = SlotAllocator()
+    tasks = BackgroundTasks()
+    recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)
+    computers = ComputerService(config, db, host, allocator, recipes)
+    checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
+    app, received = _receiver()
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://receiver")
+    lifecycle = Lifecycle(db, computers, checkpoints, tasks, http)
+    return lifecycle, computers, checkpoints, host, received
+
+
+async def test_no_command_means_no_exec_and_no_self_destruct(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    lifecycle, computers, _, host, _ = await _lifecycle(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    spec = ExecSpec(command=None, self_destruct=True, callback_url=None, label="x", meta_exec=None)
+    result = await lifecycle.run_ephemeral(ACCOUNT, computer, spec, source_checkpoint=None)
+    assert result.exec_exit_code is None and result.created_checkpoint_id is None
+    assert host.guest.commands == []
+    stored = await get_computer(db, computer.id)
+    assert stored is not None and stored.status is ComputerStatus.RUNNING
+
+
+async def test_self_destruct_checkpoints_destroys_and_calls_back(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    lifecycle, computers, _, host, received = await _lifecycle(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    host.guest.script["echo done"] = ExecResult(0, "done\n", "err\n")
+    before = checkpoints_total.labels(trigger="self_destruct")._value.get()
+    spec = ExecSpec(
+        command="echo done",
+        self_destruct=True,
+        callback_url="http://receiver/cb",
+        label="chain",
+        meta_exec=None,
+    )
+    result = await lifecycle.run_ephemeral(ACCOUNT, computer, spec, source_checkpoint=None)
+    assert result.exec_exit_code == 0 and result.created_checkpoint_id is not None
+    assert host.guest.commands == [(computer.vm_ip, "echo done"), (computer.vm_ip, "sync")]
+    stored = await get_computer(db, computer.id)
+    assert stored is not None and stored.status is ComputerStatus.DESTROYED
+    assert checkpoints_total.labels(trigger="self_destruct")._value.get() == before + 1
+    await lifecycle.tasks.drain(timeout=2.0)
+    assert received == [
+        {
+            "computer_id": computer.id,
+            "checkpoint_id": None,
+            "label": "chain",
+            "exec_exit_code": 0,
+            "exec_stdout": "done\n",
+            "exec_stderr": "err\n",
+            "created_checkpoint_id": result.created_checkpoint_id,
+        }
+    ]
+
+
+async def test_fork_self_destruct_inherits_the_source_label(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    lifecycle, computers, checkpoints, _host, _ = await _lifecycle(db, tmp_path)
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    source = await checkpoints.create(base, label="chain", trigger=CheckpointTrigger.API)
+    fork = await computers.fork(ACCOUNT, source, recipe_id=None)
+    spec = ExecSpec(
+        command="true", self_destruct=True, callback_url=None, label=None, meta_exec=None
+    )
+    result = await lifecycle.run_ephemeral(ACCOUNT, fork, spec, source_checkpoint=source)
+    created = await checkpoints.get_owned(ACCOUNT, result.created_checkpoint_id or "")
+    assert created.label == "chain" and created.parent_id == source.id
+
+
+async def test_drain_forks_once_writes_exec_files_and_self_destructs(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    lifecycle, computers, checkpoints, host, received = await _lifecycle(db, tmp_path)
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    source = await checkpoints.create(base, label="chain", trigger=CheckpointTrigger.API)
+    await computers.destroy(base.id)
+    for i, payload in enumerate(
+        [
+            {"checkpoint_id": source.id, "exec": "echo one", "self_destruct": False},
+            {
+                "checkpoint_id": source.id,
+                "exec": "echo two",
+                "self_destruct": True,
+                "callback_url": "http://receiver/cb",
+                "meta_exec": "bash /tmp/exec/1.txt",
+            },
+        ]
+    ):
+        await insert_deferred(db, f"def-{i}", "chain", "acct-1", json.dumps(payload), f"t{i}")
+    await asyncio.gather(
+        lifecycle.drain_deferred(ACCOUNT, "chain"), lifecycle.drain_deferred(ACCOUNT, "chain")
+    )
+    forks = [c for c in host.hypervisor.restored if c[0] != base.thin_volume_id]
+    assert len(forks) == 1, "two concurrent drains must fork exactly once"
+    commands = [cmd for _, cmd in host.guest.commands if cmd not in ("sync",)]
+    assert commands[-2].startswith("mkdir -p /tmp/exec && printf '%s' 'echo one' > /tmp/exec/0.txt")
+    assert commands[-1] == "bash /tmp/exec/1.txt"  # last meta_exec wins
+    await lifecycle.tasks.drain(timeout=2.0)
+    assert len(received) == 1 and received[0]["label"] == "chain"
+    assert await claim_deferred_by_label(db, "chain") == []
+
+
+async def test_drain_with_no_labelled_checkpoint_logs_and_returns(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    lifecycle, _, _, host, _ = await _lifecycle(db, tmp_path)
+    await insert_deferred(db, "def-x", "orphan", "acct-1", "{}", "t")
+    await lifecycle.drain_deferred(ACCOUNT, "orphan")
+    assert host.hypervisor.restored == [] and host.hypervisor.booted == []

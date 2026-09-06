@@ -6,6 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from httpx import ASGITransport, AsyncClient
 
 from mshkn.config import Config
@@ -307,7 +308,9 @@ async def test_callback_url_fires_on_self_destruct(
 
     captured_payload: dict[str, Any] | None = None
 
-    async def fake_deliver(url: str, payload: dict[str, Any], max_retries: int = 3) -> None:
+    async def fake_deliver(
+        client: httpx.AsyncClient, url: str, payload: dict[str, Any], max_retries: int = 3
+    ) -> None:
         nonlocal captured_payload
         captured_payload = payload
 
