@@ -1,6 +1,6 @@
-"""Health, metrics and alerts as an operator sees them: a failing database degrades
-health, /metrics renders every series the runtime owns, and /alerts is the reaper's
-history verbatim."""
+"""The unauthenticated system endpoints as an operator sees them: /health names its
+subsystems and degrades when the database fails, /metrics renders every series the
+runtime owns, and /alerts is the reaper's history verbatim."""
 
 from __future__ import annotations
 
@@ -26,7 +26,9 @@ async def test_health_degrades_when_the_database_fails_and_metrics_render(
     # The one module seam the flow tier patches: the firecracker binary and the
     # kernel image are host facts, not runtime state the fake host can carry.
     monkeypatch.setattr(system_module, "_firecracker_present", present)
-    assert (await flow.client.get("/health")).json()["status"] == "ok"
+    healthy = (await flow.client.get("/health")).json()
+    assert healthy["status"] == "ok"
+    assert set(healthy["subsystems"]) == {"database", "firecracker", "storage", "proxy"}
 
     async def broken(*args: object, **kwargs: object) -> None:
         raise RuntimeError("disk I/O error")
@@ -53,13 +55,18 @@ async def test_health_degrades_when_the_database_fails_and_metrics_render(
 
 
 async def test_alerts_endpoint_returns_the_runtime_deque(flow: Flow) -> None:
-    flow.host.blocks.pool_usage = PoolUsage(data_used_ratio=0.99, metadata_used_ratio=0.1)
-    await flow.runtime.reaper.check_host()
+    for ratio in (0.9, 0.99):
+        flow.host.blocks.pool_usage = PoolUsage(data_used_ratio=ratio, metadata_used_ratio=0.1)
+        await flow.runtime.reaper.check_host()
     alerts = (await flow.client.get("/alerts")).json()
-    entry = next(a for a in alerts if a["source"] == "thin_pool_data")
-    assert entry["level"] == "critical"
+    data = [a for a in alerts if a["source"] == "thin_pool_data"]
+    assert [a["level"] for a in data] == ["warning", "critical"], (
+        "the deque keeps every check in the order the reaper ran them"
+    )
+    assert data[0]["value"] == 0.9 and data[1]["value"] == 0.99
+    entry = data[1]
     assert set(entry) == {"level", "source", "message", "value", "threshold", "timestamp"}
-    assert entry["value"] == 0.99 and entry["threshold"] == 0.8
+    assert entry["threshold"] == 0.8 and "99.0%" in entry["message"]
     assert not [a for a in alerts if a["source"] == "thin_pool_metadata"], (
         "metadata at 10% is below the warning threshold"
     )
