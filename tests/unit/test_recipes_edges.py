@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -36,17 +37,38 @@ async def test_docker_build_image_returns_output_and_raises_on_failure() -> None
         await docker_build_image("echo bad >&2; exit 2")
 
 
-async def test_docker_build_image_raises_when_the_build_outlives_the_timeout(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_docker_build_image_kills_a_build_that_outlives_the_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A build left running would keep its 4 GB reservation until it finished."""
     import mshkn.services.recipes as recipes
 
-    monkeypatch.setattr(recipes, "_DOCKER_BUILD_TIMEOUT_SECONDS", 0.05)
+    pidfile = tmp_path / "build.pid"
+    monkeypatch.setattr(recipes, "_DOCKER_BUILD_TIMEOUT_SECONDS", 0.3)
+
     with pytest.raises(RuntimeError, match="timed out"):
-        await docker_build_image("sleep 0.2")
-    # docker_build_image abandons the child on timeout; wait for it here so the
-    # transport is torn down on this test's loop and not on the next test's.
-    await asyncio.sleep(0.4)
+        # exec so the pid the shell records is the long-running process itself,
+        # not a wrapper whose death would leave the real one orphaned.
+        await docker_build_image(f"echo $$ > {pidfile}; exec sleep 30")
+
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pidfile.read_text()), 0)
+
+
+async def test_docker_build_image_times_out_before_the_process_even_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """There is no handle to kill when the spawn itself is what overran."""
+    import mshkn.services.recipes as recipes
+
+    async def slow_spawn(*args: object, **kwargs: object) -> None:
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(recipes, "_DOCKER_BUILD_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", slow_spawn)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        await docker_build_image("docker build .")
 
 
 async def test_delete_without_a_base_volume_removes_nothing(

@@ -232,7 +232,6 @@ class ComputerService:
             await self.allocator.release_slot(slot)
             raise
         vm: RunningVM | None = None
-        routed = False
         try:
             files = await files_for()
             # Nested inside timed("create")/timed("fork"): different labels, so a
@@ -267,9 +266,8 @@ class ComputerService:
             )
             await insert_computer(self.db, computer)
             await self.host.proxy.add_route(computer_id, vm.vm_ip)
-            routed = True
         except BaseException as exc:
-            await self._abandon(computer_id, slot, volume_id, volume_name, vm, routed)
+            await self._abandon(computer_id, slot, volume_id, volume_name, vm)
             if isinstance(exc, MshknError | asyncio.CancelledError):
                 raise
             raise HostError(
@@ -285,7 +283,6 @@ class ComputerService:
         volume_id: int,
         volume_name: str,
         vm: RunningVM | None,
-        routed: bool,
     ) -> None:
         """Best-effort release of everything _bring_up acquired.
 
@@ -298,6 +295,10 @@ class ComputerService:
         An interruption (cancellation) during a step does not cut the pass
         short. It is remembered, the remaining steps still run, and it is
         re-raised at the end, so cancellation is delayed but never lost.
+
+        The route is removed unconditionally rather than only when add_route
+        returned: a route half-applied by a call that then failed is exactly
+        what has to be cleared, and remove_route is a no-op when there is none.
         """
         logger.warning("Abandoning computer %s after a failed bring-up", computer_id)
         interrupted: BaseException | None = None
@@ -308,8 +309,7 @@ class ComputerService:
             if stopped is not None and interrupted is None:
                 interrupted = stopped
 
-        if routed:
-            await step("route removal", self.host.proxy.remove_route(computer_id))
+        await step("route removal", self.host.proxy.remove_route(computer_id))
         if vm is not None:
             await step("kill", self.host.hypervisor.kill(vm.pid))
             await step("evict", self.host.guest.evict(vm.vm_ip))

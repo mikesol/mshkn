@@ -60,7 +60,13 @@ def dockerfile_content_hash(dockerfile: str) -> str:
 
 
 async def docker_build_image(cmd: str) -> str:
-    """Run `docker build …`, returning its combined output; raise on failure or timeout."""
+    """Run `docker build …`, returning its combined output; raise on failure or timeout.
+
+    A build that overruns the timeout is killed before the error is raised. An
+    abandoned one would hold its memory reservation and its share of the CPU set
+    for as long as it took to finish, long after the caller gave up on it.
+    """
+    proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.wait_for(
             asyncio.create_subprocess_shell(
@@ -72,6 +78,11 @@ async def docker_build_image(cmd: str) -> str:
             proc.communicate(), timeout=_DOCKER_BUILD_TIMEOUT_SECONDS
         )
     except TimeoutError as exc:
+        if proc is not None:
+            logger.warning("docker build timed out; killing pid %d", proc.pid)
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
         raise RuntimeError("docker build timed out after 10 minutes") from exc
     output = stdout.decode(errors="replace")
     if proc.returncode != 0:
