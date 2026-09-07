@@ -26,6 +26,11 @@ from mshkn.services.recipes import dockerfile_base_image, image_name
         ("  FROM   ubuntu@sha256:abc  ", "ubuntu@sha256:abc"),
         ("RUN true\n# FROM mshkn-base in a comment does not count", None),
         ("", None),
+        ("FROM \\\n    mshkn-base\nRUN true", "mshkn-base"),
+        (
+            "FROM --platform=linux/amd64 \\\n  mshkn-base:latest \\\n  AS base\nRUN true",
+            "mshkn-base:latest",
+        ),
     ],
 )
 def test_last_from_wins(dockerfile: str, expected: str | None) -> None:

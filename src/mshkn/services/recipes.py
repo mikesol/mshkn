@@ -60,16 +60,32 @@ BASE_IMAGE = "mshkn-base"
 _FROM_RE = re.compile(r"^FROM\s+(?:--\S+\s+)*(\S+)", re.IGNORECASE)
 
 
+def _join_line_continuations(dockerfile: str) -> list[str]:
+    """Lines with a trailing backslash joined onto the next, stripped and backslash removed."""
+    lines: list[str] = []
+    buffer = ""
+    for raw in dockerfile.splitlines():
+        stripped = raw.strip()
+        joined = f"{buffer} {stripped}".strip() if buffer else stripped
+        if joined.endswith("\\"):
+            buffer = joined[:-1].rstrip()
+            continue
+        lines.append(joined)
+        buffer = ""
+    return lines
+
+
 def dockerfile_base_image(dockerfile: str) -> str | None:
     """The image of the last FROM (the stage that is exported), or None without a FROM.
 
     Comments, blank lines, parser directives and ARG lines before the first
     FROM are skipped; a multi-stage build is judged by its final stage,
-    because that is the filesystem `docker export` produces.
+    because that is the filesystem `docker export` produces. A line ending
+    in a backslash continues onto the next, as Dockerfile syntax allows, so
+    continuation lines are joined before this line-by-line scan runs.
     """
     image: str | None = None
-    for raw in dockerfile.splitlines():
-        line = raw.strip()
+    for line in _join_line_continuations(dockerfile):
         if not line or line.startswith("#"):
             continue
         match = _FROM_RE.match(line)
