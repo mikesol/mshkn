@@ -27,7 +27,14 @@ from mshkn.db import (
 from mshkn.errors import BadRequest, Conflict, NotFound
 from mshkn.models import Checkpoint, CheckpointTrigger, Computer, checkpoint_volume_name
 from mshkn.observability.metrics import checkpoints_total, timed
-from mshkn.services.merge import MergeResult, three_way_merge
+from mshkn.services.merge import (
+    MergeResult,
+    all_relative_entries,
+    copy_entry,
+    entry_path,
+    three_way_merge,
+    unlink_stale_ancestors,
+)
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -319,16 +326,23 @@ def _merge_into(parent: Path, fork_a: Path, fork_b: Path, output: Path) -> Merge
     with tempfile.TemporaryDirectory(prefix="mshkn-merge-") as merge_dir:
         merge_output = Path(merge_dir) / "merge_result"
         result = three_way_merge(parent=parent, fork_a=fork_a, fork_b=fork_b, output=merge_output)
-        for src in merge_output.rglob("*"):
-            if src.is_file():
-                dest = output / src.relative_to(merge_output)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dest)
-        for src in parent.rglob("*"):
-            if src.is_file():
-                rel = src.relative_to(parent)
-                if not (merge_output / rel).exists():
-                    target = output / rel
-                    if target.exists():
-                        target.unlink()
+        # Symlinks are entries, never paths to follow: an absolute link on a
+        # mounted volume resolves to the host's tree, so copying through one
+        # would read and overwrite the host's files.
+        merged = all_relative_entries(merge_output)
+        unlink_stale_ancestors(output, merged)
+        # Sorted, so a link that replaced a directory lands before anything
+        # that path used to hold; `entry_path` then reports the children of
+        # that directory as unreachable rather than writing through the link.
+        for rel in sorted(merged):
+            dest = entry_path(output, rel)
+            if dest is not None:
+                copy_entry(merge_output / rel, dest)
+        for rel in sorted(all_relative_entries(parent) - merged):
+            # A real directory here is the merge result's, put there by a fork
+            # that replaced the parent's file or link with one; only the
+            # parent's own kind of entry is deleted.
+            target = entry_path(output, rel)
+            if target is not None and (target.is_symlink() or target.is_file()):
+                target.unlink()
     return result

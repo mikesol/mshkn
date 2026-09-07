@@ -484,9 +484,15 @@ class FirecrackerHypervisor:
     async def _ssh_add_ip(self, final_vm_ip: str, final_host_ip: str) -> None:
         """Give the guest its final IP and default route, through the staging IP.
 
-        The staging IP is left on the VM — once tap254 is renamed, the old IP
-        is unreachable anyway (no matching tap/subnet on the host). `ip addr
-        add` may fail with EEXIST when a fork reuses the parent's slot.
+        The staging IP stays on the VM, and that is load-bearing: a checkpoint
+        snapshots the guest's memory as it is, so 172.16.254.2 has to be in
+        there for the restore to be reachable on the staging slot before it is
+        re-addressed. Deleting it makes every restore time out waiting for
+        172.16.254.2:22. A fork therefore also carries its parent's final
+        address, and a guest listing its own addresses sees the staging one
+        first — anything that needs a computer's address must ask the API, not
+        the guest. `ip addr add` may fail with EEXIST when a fork reuses the
+        parent's slot.
         """
         conn = await asyncio.wait_for(
             asyncssh.connect(

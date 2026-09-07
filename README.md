@@ -6,7 +6,7 @@ This is a single-host research system with no users. The API changes without not
 
 ## What exists
 
-- **Computers.** `POST /computers` boots a VM from the bare base volume or from a recipe's volume, with 256 MiB and 2 vCPUs unless `needs` says otherwise (`{"ram": "512MB", "cores": 2}`). The request can carry an `exec` command to run immediately, `self_destruct` to checkpoint and destroy afterwards, a `callback_url` to be told the result, and a `label` for the checkpoint chain.
+- **Computers.** `POST /computers` boots a VM from the base volume (the export of the `mshkn-base` image) or from a recipe's volume, with 256 MiB and 2 vCPUs unless `needs` says otherwise (`{"ram": "512MB", "cores": 2}`). The request can carry an `exec` command to run immediately, `self_destruct` to checkpoint and destroy afterwards, a `callback_url` to be told the result, and a `label` for the checkpoint chain.
 - **Exec.** `POST /computers/{computer_id}/exec` streams stdout, stderr and the exit code as server-sent events over SSH. Background commands (`exec/bg`, `exec/logs/{pid}`, `exec/kill/{pid}`), file `upload` and `download`, and `status` with live CPU, memory, disk and process counts.
 - **Checkpoints.** `POST /computers/{computer_id}/checkpoint` pauses the VM, writes a Firecracker memory and device snapshot, resumes, and takes a dm-thin snapshot of the disk. The snapshot files upload to R2 in the background. Checkpoints have labels, parents (a DAG), a pin flag, and a retention count applied per account.
 - **Fork.** `POST /checkpoints/{checkpoint_id}/fork` restores the snapshot on a fresh slot: memory state comes back, the disk is a copy-on-write child. A fork of a 50 MB working set costs the same as a fork of 1 MB.
@@ -34,7 +34,7 @@ src/mshkn/
   main.py            ASGI entry point (uvicorn mshkn.main:app)
   app.py             create_app(): routers, request-id middleware, lifespan
   runtime.py         Runtime: config, db, host, services, background tasks
-  cli.py             python -m mshkn accounts create|list, migrate
+  cli.py             python -m mshkn accounts create|list, migrate, base-volume
   config.py          Config from MSHKN_<FIELD> environment variables
   models.py          Account, Computer, Checkpoint, Recipe, IngressRule, enums
   errors.py          NotFound, Conflict, BadRequest, InvalidInput, ... HostError
@@ -49,7 +49,7 @@ src/mshkn/
   api/               FastAPI routers, request/response schemas, error mapping
   observability/     JSON logging with request ids; metrics and timed()
 migrations/          sequential, additive SQL migrations
-scripts/             deploy.sh, e2e.sh, build-rootfs.sh, mshkn-pool-up
+scripts/             deploy.sh, e2e.sh, mshkn-pool-up
 systemd/             mshkn, mshkn-pool and litestream units
 tests/               unit/, flow/ (real app over the fake host), e2e/ (live server)
 docs/                ARCHITECTURE.md, infrastructure.md, plans/ (with an index)

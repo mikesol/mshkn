@@ -14,6 +14,8 @@ mshkn's unit and flow tests run anywhere. The E2E suite (`tests/e2e/`, 157 tests
 | Network | Public IPv4, outbound internet | VMs reach the internet through host NAT; tests fetch packages inside VMs; Caddy answers on 80/443. |
 | Kernel | `dm_thin_pool` module and `thin-provisioning-tools` | dm-thin copy-on-write snapshots are how fork is O(1). |
 
+Docker on Ubuntu 24.04 (`docker.io`) ships without the buildx plugin, so `docker build` runs the deprecated legacy builder; mshkn keeps each recipe's image so that builder's layer cache serves rebuilds. If a Docker upgrade removes the legacy builder, install `docker-buildx` and re-check the recipe build log format, which BuildKit changes.
+
 The previous host was a Hetzner AX41-NVMe (Ryzen 5 3600, 64 GB, 2×512 GB NVMe). Anything in that class is comfortable.
 
 ## Accounts and secrets the host setup needs

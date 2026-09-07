@@ -1,8 +1,10 @@
-"""Row builders shared by the unit tier. Every field has a sensible default;
-override only what the test is about."""
+"""Row builders and shell fakes shared by the unit tier. Row builders give every
+field a sensible default; override only what the test is about. `ShellRecorder`
+and `FakeShell` stand in for `mshkn.host.shell.run`."""
 
 from __future__ import annotations
 
+from mshkn.host.shell import ShellError
 from mshkn.models import Account, Checkpoint, Computer, ComputerStatus, Recipe, RecipeStatus
 
 
@@ -131,4 +133,27 @@ class ShellRecorder:
         if cmd.startswith("ip link show "):
             tap = cmd.split()[3]
             return f"7: {tap}: <UP>" if tap in self.taps else ""
+        return ""
+
+
+class FakeShell:
+    """Records commands; raises ShellError for any command containing one of fail_on.
+
+    ShellError rather than a bare exception, because that is what the real
+    runner raises and what callers are written to catch. Honours `check` like
+    the real runner: a command called with `check=False` never raises, even
+    when it matches fail_on, because the caller has already said it does not
+    care about that command's outcome.
+    """
+
+    def __init__(self, fail_on: str | tuple[str, ...] | None = None) -> None:
+        self.calls: list[str] = []
+        self.fail_on: tuple[str, ...] = (
+            () if fail_on is None else (fail_on,) if isinstance(fail_on, str) else fail_on
+        )
+
+    async def __call__(self, cmd: str, check: bool = True) -> str:
+        self.calls.append(cmd)
+        if check and any(pattern in cmd for pattern in self.fail_on):
+            raise ShellError(cmd, 1, f"failed: {cmd}")
         return ""

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from mshkn.services.merge import three_way_merge
+from mshkn.services.merge import all_relative_entries, three_way_merge
 
 
 def test_non_overlapping_files(tmp_path: Path) -> None:
@@ -125,7 +125,7 @@ def test_b_deletes_and_a_leaves_alone_removes_the_file(tmp_path: Path) -> None:
 
 
 def test_a_missing_fork_directory_contributes_no_files(tmp_path: Path) -> None:
-    """`_all_relative_files` skips a directory that does not exist.
+    """`all_relative_entries` skips a directory that does not exist.
 
     A fork volume that was never mounted must not make the merge raise; the
     other two sides still merge.
@@ -137,3 +137,101 @@ def test_a_missing_fork_directory_contributes_no_files(tmp_path: Path) -> None:
     assert result.conflicts == []
     assert not (result.merged_dir / "kept").exists(), "the absent side reads as a delete"
     assert (result.unchanged, result.auto_merged) == (0, 1)
+
+
+def test_symlinks_are_merged_as_links_and_never_followed(tmp_path: Path) -> None:
+    """A symlink is an entry whose identity is its target string.
+
+    The exported `mshkn-base` filesystem has 159 absolute symlinks; following
+    one from a mounted volume lands on the host's own tree, which the merge
+    then hashed, copied and wrote back through.
+    """
+    host_file = tmp_path / "host-file"
+    host_file.write_text("host bytes")
+    before = host_file.stat().st_mtime_ns
+    parent, fork_a, fork_b = (tmp_path / n for n in ("parent", "fork_a", "fork_b"))
+    for d in (parent, fork_a, fork_b):
+        d.mkdir()
+        (d / "init").symlink_to(host_file)  # absolute link, like /usr/sbin/init
+        (d / "escape").symlink_to(tmp_path)  # absolute link to a directory
+    (fork_a / "init").unlink()
+    (fork_a / "init").symlink_to("/lib/systemd/systemd-a")  # changed only in A
+
+    result = three_way_merge(parent, fork_a, fork_b)
+    out = result.merged_dir
+    assert (out / "init").is_symlink()
+    assert str((out / "init").readlink()) == "/lib/systemd/systemd-a"
+    assert (out / "escape").is_symlink() and (out / "escape").readlink() == tmp_path
+    # the symlinked directory was not descended into, so nothing under it was copied
+    assert all_relative_entries(parent) == {"init", "escape"}
+    assert sorted(p.name for p in out.iterdir()) == ["escape", "init"]
+    assert result.conflicts == [] and result.auto_merged == 1 and result.unchanged == 1
+    assert host_file.read_text() == "host bytes" and host_file.stat().st_mtime_ns == before
+
+
+def test_a_file_replaced_by_a_symlink_in_both_forks_conflicts(tmp_path: Path) -> None:
+    """A regular file on one side and a symlink on the other is different content."""
+    parent, fork_a, fork_b = _dirs(tmp_path)
+    (parent / "f").write_text("data")
+    (fork_a / "f").symlink_to("/a")
+    (fork_b / "f").symlink_to("/b")
+    result = three_way_merge(parent, fork_a, fork_b)
+    assert [c.path for c in result.conflicts] == ["f"]
+    assert str((result.merged_dir / "f").readlink()) == "/a"
+
+
+def _hostroot(tmp_path: Path) -> tuple[Path, int]:
+    """A stand-in for the host's own tree, with one file to protect."""
+    hostroot = tmp_path / "HOSTROOT"
+    hostroot.mkdir()
+    (hostroot / "init").write_bytes(b"host init")
+    return hostroot, (hostroot / "init").stat().st_mtime_ns
+
+
+def test_a_directory_replaced_by_a_symlink_is_never_written_through(tmp_path: Path) -> None:
+    """`usr/sbin` as a link in one tree makes `usr/sbin/init` unreachable in it.
+
+    Entries are processed in sorted order, so the link lands in the output
+    before its former children are considered. Reaching a child through it
+    would read and write the host's tree.
+    """
+    hostroot, before = _hostroot(tmp_path)
+    parent, fork_a, fork_b = _dirs(tmp_path)
+    for d, content in ((parent, b"guest init"), (fork_a, b"A init")):
+        (d / "usr" / "sbin").mkdir(parents=True)
+        (d / "usr" / "sbin" / "init").write_bytes(content)
+    (fork_b / "usr").mkdir()
+    (fork_b / "usr" / "sbin").symlink_to(hostroot)
+
+    result = three_way_merge(parent, fork_a, fork_b)
+    out = result.merged_dir
+    assert (hostroot / "init").read_bytes() == b"host init"
+    assert (hostroot / "init").stat().st_mtime_ns == before
+    assert sorted(p.name for p in hostroot.iterdir()) == ["init"]
+    assert (out / "usr" / "sbin").is_symlink()
+    assert (out / "usr" / "sbin").readlink() == hostroot
+    # A modified a file whose directory B replaced with a link: a conflict the
+    # link wins, so nothing is written under it.
+    assert [c.path for c in result.conflicts] == ["usr/sbin/init"]
+
+
+def test_the_mirror_case_a_holds_the_link_and_the_host_is_still_untouched(
+    tmp_path: Path,
+) -> None:
+    """The same shape with the link in fork A: no read, no unlink, no exception."""
+    hostroot, before = _hostroot(tmp_path)
+    parent, fork_a, fork_b = _dirs(tmp_path)
+    for d, content in ((parent, b"guest init"), (fork_b, b"B init")):
+        (d / "usr" / "sbin").mkdir(parents=True)
+        (d / "usr" / "sbin" / "init").write_bytes(content)
+    (fork_a / "usr").mkdir()
+    (fork_a / "usr" / "sbin").symlink_to(hostroot)
+
+    result = three_way_merge(parent, fork_a, fork_b)
+    out = result.merged_dir
+    assert (hostroot / "init").read_bytes() == b"host init"
+    assert (hostroot / "init").stat().st_mtime_ns == before
+    assert sorted(p.name for p in hostroot.iterdir()) == ["init"]
+    assert (out / "usr" / "sbin").is_symlink()
+    assert (out / "usr" / "sbin").readlink() == hostroot
+    assert [c.path for c in result.conflicts] == ["usr/sbin/init"]

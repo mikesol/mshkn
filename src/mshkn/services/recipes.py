@@ -90,6 +90,34 @@ async def docker_build_image(cmd: str) -> str:
     return output
 
 
+async def export_image(run: RunFn, *, image_tag: str, container_name: str, tar_path: Path) -> None:
+    """docker create → export → rm: the image's root filesystem as a tar at tar_path.
+
+    The container is removed even when the export fails, so a broken build
+    does not leave a stopped container behind for the next attempt to trip on.
+    """
+    try:
+        await run(f"docker create --name {container_name} {image_tag}")
+        await run(f"docker export -o {tar_path} {container_name}")
+    finally:
+        with contextlib.suppress(Exception):
+            await run(f"docker rm {container_name}", check=False)
+
+
+async def inject_tar(
+    run: RunFn, blocks: BlockStore, config: Config, *, volume_name: str, tar_path: Path
+) -> None:
+    """Format the active device volume_name, unpack tar_path onto it, post-process for Firecracker.
+
+    Used for every recipe volume and for the bare base (volume 0), so the two
+    kinds of computer are produced by the same code.
+    """
+    await blocks.mkfs(volume_name)
+    async with blocks.mounted(volume_name) as mount_point:
+        await run(f"tar xf {tar_path} -C {mount_point}")
+        await asyncio.to_thread(_post_process_rootfs, mount_point, config)
+
+
 class RecipeService:
     def __init__(
         self,
@@ -255,18 +283,17 @@ class RecipeService:
             build_log_lines.append(await self._build_image(build_cmd))
 
             await update_recipe_status(self.db, recipe_id, RecipeStatus.EXPORTING)
-            await self._run(f"docker create --name {container_name} {image_tag}")
-            await self._run(f"docker export -o {tar_path} {container_name}")
-            await self._run(f"docker rm {container_name}")
+            await export_image(
+                self._run, image_tag=image_tag, container_name=container_name, tar_path=tar_path
+            )
 
             await update_recipe_status(self.db, recipe_id, RecipeStatus.INJECTING)
             await self.blocks.snap(source_volume_id=0, new_volume_id=volume_id)
             await self.blocks.activate(volume_id=volume_id, name=volume_name)
             device_active = True
-            await self.blocks.mkfs(volume_name)
-            async with self.blocks.mounted(volume_name) as mount_point:
-                await self._run(f"tar xf {tar_path} -C {mount_point}")
-                await asyncio.to_thread(_post_process_rootfs, mount_point, self.config)
+            await inject_tar(
+                self._run, self.blocks, self.config, volume_name=volume_name, tar_path=tar_path
+            )
             await self.blocks.deactivate(volume_name)
             device_active = False
 
@@ -290,8 +317,6 @@ class RecipeService:
                 with contextlib.suppress(Exception):
                     await self.blocks.deactivate(volume_name)
             shutil.rmtree(build_dir, ignore_errors=True)
-            with contextlib.suppress(Exception):
-                await self._run(f"docker rm {container_name}", check=False)
             with contextlib.suppress(Exception):
                 await self._run(f"docker rmi {image_tag}", check=False)
 
@@ -369,6 +394,12 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
 
     # Write /etc/resolv.conf (Docker export strips it)
     (etc / "resolv.conf").write_text("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+
+    # Write /etc/hostname and /etc/hosts for the same reason: Docker bind-mounts
+    # both into every container, so no Dockerfile can set them and the export
+    # carries the empty files the bind left behind.
+    (etc / "hostname").write_text("mshkn\n")
+    (etc / "hosts").write_text("127.0.0.1 localhost\n127.0.1.1 mshkn\n")
 
     # Remove .dockerenv so systemd doesn't detect Docker virtualization
     dockerenv = mp / ".dockerenv"

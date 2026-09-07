@@ -13,7 +13,7 @@ from mshkn.models import RecipeStatus
 from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.recipes import RecipeService, dockerfile_content_hash
-from tests.support import account_row, computer_row
+from tests.support import FakeShell, account_row, computer_row
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -21,20 +21,6 @@ if TYPE_CHECKING:
     import aiosqlite
 
 ACCOUNT = account_row(api_key="k")
-
-
-class FakeShell:
-    """Records commands; can be told to fail one of them."""
-
-    def __init__(self, fail_on: str | None = None) -> None:
-        self.calls: list[str] = []
-        self.fail_on = fail_on
-
-    async def __call__(self, cmd: str, check: bool = True) -> str:
-        self.calls.append(cmd)
-        if self.fail_on and self.fail_on in cmd:
-            raise RuntimeError(f"failed: {cmd}")
-        return ""
 
 
 def _service(

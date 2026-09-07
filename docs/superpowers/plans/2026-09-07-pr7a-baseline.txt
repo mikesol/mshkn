@@ -1,0 +1,6 @@
+Baseline before PR 7a (pr7a-one-base @ 092cab9, 2026-09-07)
+All checks passed!
+143 files already formatted
+Success: no issues found in 143 source files
+493 passed, 157 deselected in 35.89s
+TOTAL                                 3610     44    624     23    98%

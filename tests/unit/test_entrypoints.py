@@ -13,6 +13,7 @@ def test_python_dash_m_mshkn_prints_help() -> None:
     assert proc.returncode == 0
     assert "accounts" in proc.stdout
     assert "migrate" in proc.stdout
+    assert "base-volume" in proc.stdout
 
 
 def test_asgi_entry_point_builds_the_app() -> None:

@@ -184,6 +184,10 @@ def test_post_process_rewrites_an_already_configured_rootfs(tmp_path: Path) -> N
     (mp / "sbin").mkdir()
     (mp / "sbin" / "init").symlink_to("/bin/busybox")
     (mp / ".dockerenv").touch()
+    # Docker bind-mounts /etc/hostname and /etc/hosts, so the export has the
+    # empty files the bind left behind.
+    (mp / "etc" / "hostname").write_text("")
+    (mp / "etc" / "hosts").write_text("")
     wants = mp / "etc" / "systemd" / "system" / "sysinit.target.wants"
     wants.mkdir(parents=True)
     (wants / "fcnet.service").write_text("already enabled")
@@ -199,6 +203,9 @@ def test_post_process_rewrites_an_already_configured_rootfs(tmp_path: Path) -> N
     assert str((mp / "sbin" / "init").readlink()) == "/lib/systemd/systemd"
     assert not (mp / ".dockerenv").exists()
     assert (wants / "fcnet.service").read_text() == "already enabled"
+    # no Dockerfile can set these two, so post-processing writes them like resolv.conf
+    assert (mp / "etc" / "hostname").read_text() == "mshkn\n"
+    assert (mp / "etc" / "hosts").read_text() == "127.0.0.1 localhost\n127.0.1.1 mshkn\n"
 
 
 def test_post_process_leaves_a_real_init_binary_alone(tmp_path: Path) -> None:
@@ -211,3 +218,6 @@ def test_post_process_leaves_a_real_init_binary_alone(tmp_path: Path) -> None:
 
     assert (mp / "sbin" / "init").read_text() == "#!/bin/sh\n"
     assert (mp / "root" / ".ssh" / "authorized_keys").read_text() == "ssh-ed25519 AAAA test\n"
+    # written unconditionally, so a rootfs that never had the files gets them too
+    assert (mp / "etc" / "hostname").read_text() == "mshkn\n"
+    assert (mp / "etc" / "hosts").read_text() == "127.0.0.1 localhost\n127.0.1.1 mshkn\n"
