@@ -38,7 +38,7 @@ Spec: `docs/superpowers/specs/2026-09-04-quality-overhaul-design.md`. Six PRs; e
 | `docs/superpowers/plans/2026-09-05-pr3-host-boundary.md` | #62 | implemented (merged 2026-09-06) |
 | `docs/superpowers/plans/2026-09-06-pr4-services.md` | #63 | implemented (merged 2026-09-06) |
 | `docs/superpowers/plans/2026-09-06-pr5-tests.md` | #64 | implemented (merged 2026-09-07); made seven stub E2E tests fail honestly (#65) |
-| `docs/superpowers/plans/2026-09-07-pr6-docs-devtools.md` | this PR | in progress (this PR) |
+| `docs/superpowers/plans/2026-09-07-pr6-docs-devtools.md` | #72 | implemented (merged 2026-09-07) |
 
 ## Generative-agent workload proof (2026-09)
 

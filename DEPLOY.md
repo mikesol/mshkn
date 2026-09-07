@@ -82,12 +82,12 @@ dmsetup ls            # mshkn-pool and mshkn-base
 Bare computers and recipes share one filesystem: the `mshkn-base` image, built from `Dockerfile.mshkn-base` with the key from step 3. This command builds the image, exports it, and writes it into thin volume 0 (the `mshkn-base` device from step 5) through the same mkfs, untar and post-processing a recipe volume gets. It refuses to run while `systemd/mshkn.service` is active. Takes a few minutes.
 
 ```bash
-cd /opt/mshkn && .venv/bin/python -m mshkn base-volume
+( cd /opt/mshkn && set -a && [ -f ./.env ] && . ./.env; set +a; .venv/bin/python -m mshkn base-volume )
 docker images mshkn-base
 e2fsck -fn /dev/mapper/mshkn-base
 ```
 
-Rerun it after changing `Dockerfile.mshkn-base` or the key, with the service stopped. Existing checkpoint and recipe volumes are unaffected (a thin snapshot is independent of its origin), and the bare template is rebuilt on the next create.
+Rerun it after changing `Dockerfile.mshkn-base` or the key, with the service stopped. Existing checkpoint and recipe volumes are unaffected (a thin snapshot is independent of its origin), and the bare template is rebuilt on the next create. If it fails part way, rerun it; volume 0 is not usable until a run succeeds.
 
 ## 7. Environment and R2
 
@@ -120,7 +120,7 @@ systemctl daemon-reload && systemctl enable --now mshkn
 curl -s localhost:8000/health
 ```
 
-The first start runs the migrations and creates `/opt/mshkn/mshkn.db`.
+The database already exists from step 6; the service applies any migrations added since.
 
 ## 9. Test account
 
