@@ -69,6 +69,7 @@ class ExecResult:
     stdout: str
     stderr: str
     events: list[tuple[str, str]] = field(default_factory=list)
+    arrivals: list[float] = field(default_factory=list)
 
 
 async def exec_command(
@@ -78,6 +79,7 @@ async def exec_command(
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
     events: list[tuple[str, str]] = []
+    arrivals: list[float] = []
     current_event = "stdout"
 
     async with client.stream(
@@ -96,6 +98,7 @@ async def exec_command(
             elif line.startswith("data: "):
                 data = line[6:]
                 events.append((current_event, data))
+                arrivals.append(time.monotonic())
                 if current_event == "stdout":
                     stdout_lines.append(data)
                 elif current_event == "stderr":
@@ -105,6 +108,7 @@ async def exec_command(
         stdout="\n".join(stdout_lines),
         stderr="\n".join(stderr_lines),
         events=events,
+        arrivals=arrivals,
     )
 
 
@@ -133,11 +137,15 @@ async def create_recipe(client: httpx.AsyncClient, dockerfile: str, timeout: flo
 async def create_computer(
     client: httpx.AsyncClient,
     recipe_id: str | None = None,
+    *,
+    needs: dict[str, str] | None = None,
 ) -> str:
     """Create a computer, return computer_id."""
     body: dict[str, object] = {}
     if recipe_id:
         body["recipe_id"] = recipe_id
+    if needs:
+        body["needs"] = needs
     resp = await client.post("/computers", json=body)
     resp.raise_for_status()
     created: dict[str, Any] = resp.json()
@@ -184,9 +192,11 @@ async def delete_checkpoint(client: httpx.AsyncClient, checkpoint_id: str) -> No
 async def managed_computer(
     client: httpx.AsyncClient,
     recipe_id: str | None = None,
+    *,
+    needs: dict[str, str] | None = None,
 ) -> AsyncIterator[str]:
     """Context manager that creates and destroys a computer."""
-    comp_id = await create_computer(client, recipe_id=recipe_id)
+    comp_id = await create_computer(client, recipe_id=recipe_id, needs=needs)
     try:
         yield comp_id
     finally:

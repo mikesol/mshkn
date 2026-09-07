@@ -17,8 +17,8 @@ from httpx import ASGITransport, AsyncClient
 import mshkn.services.computers as computers_service
 from mshkn.db import insert_account
 from mshkn.host.fake import FakeHost
-from mshkn.models import Account
 from mshkn.resources import DEFAULT_RESOURCES
+from tests.support import account_row
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from mshkn.config import Config
     from mshkn.host import VmMetrics
 
-ACCOUNT = Account(id="acct-1", api_key="test-key", vm_limit=2, created_at="2026-03-08T00:00:00")
+ACCOUNT = account_row(vm_limit=2)
 
 
 async def test_status_endpoint_bounds_metrics_gather(

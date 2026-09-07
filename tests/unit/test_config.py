@@ -72,3 +72,32 @@ def test_parse_float_succeeds() -> None:
 def test_parse_float_raises_config_error_naming_the_variable() -> None:
     with pytest.raises(ConfigError, match="X"):
         _parse("X", "one", float)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1", True),
+        ("true", True),
+        ("YES", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("No", False),
+        ("off", False),
+    ],
+)
+def test_bool_parsing(raw: str, expected: bool) -> None:
+    assert _parse("MSHKN_X", raw, bool) is expected
+
+
+def test_bool_rejects_other_words() -> None:
+    with pytest.raises(ConfigError, match="MSHKN_X: expected a boolean"):
+        _parse("MSHKN_X", "maybe", bool)
+
+
+def test_empty_path_is_rejected_and_unknown_types_are_config_errors() -> None:
+    with pytest.raises(ConfigError, match="empty path"):
+        _parse("MSHKN_DB_PATH", "", Path)
+    with pytest.raises(ConfigError, match="unsupported field type"):
+        _parse("MSHKN_X", "1,2", list)

@@ -8,46 +8,28 @@ from mshkn.db import (
     list_checkpoints_by_account,
     run_migrations,
 )
-from mshkn.models import Account, Checkpoint
+from tests.support import account_row, checkpoint_row
 
 
 async def _setup_db(tmp_path: Path) -> aiosqlite.Connection:
     db = await aiosqlite.connect(tmp_path / "test.db")
     await run_migrations(db, Path("migrations"))
-    await insert_account(
-        db,
-        Account(
-            id="acct-1",
-            api_key="key-abc",
-            vm_limit=10,
-            created_at="2026-03-08T00:00:00",
-        ),
-    )
+    await insert_account(db, account_row(api_key="key-abc"))
     return db
-
-
-def _make_checkpoint(checkpoint_id: str, label: str | None, created_at: str) -> Checkpoint:
-    return Checkpoint(
-        id=checkpoint_id,
-        account_id="acct-1",
-        parent_id=None,
-        computer_id="comp-1",
-        thin_volume_id=1,
-        r2_prefix=f"acct-1/{checkpoint_id}",
-        disk_delta_size_bytes=1024,
-        memory_size_bytes=512000,
-        label=label,
-        pinned=False,
-        created_at=created_at,
-    )
 
 
 async def test_list_checkpoints_no_label_returns_all(tmp_path: Path) -> None:
     db = await _setup_db(tmp_path)
     try:
-        await insert_checkpoint(db, _make_checkpoint("ckpt-1", "chat-123", "2026-03-08T01:00:00"))
-        await insert_checkpoint(db, _make_checkpoint("ckpt-2", "chat-456", "2026-03-08T02:00:00"))
-        await insert_checkpoint(db, _make_checkpoint("ckpt-3", None, "2026-03-08T03:00:00"))
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-1", label="chat-123", created_at="2026-03-08T01:00:00")
+        )
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-2", label="chat-456", created_at="2026-03-08T02:00:00")
+        )
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-3", label=None, created_at="2026-03-08T03:00:00")
+        )
 
         results = await list_checkpoints_by_account(db, "acct-1")
         assert len(results) == 3
@@ -58,10 +40,18 @@ async def test_list_checkpoints_no_label_returns_all(tmp_path: Path) -> None:
 async def test_list_checkpoints_with_label_filters(tmp_path: Path) -> None:
     db = await _setup_db(tmp_path)
     try:
-        await insert_checkpoint(db, _make_checkpoint("ckpt-1", "chat-123", "2026-03-08T01:00:00"))
-        await insert_checkpoint(db, _make_checkpoint("ckpt-2", "chat-456", "2026-03-08T02:00:00"))
-        await insert_checkpoint(db, _make_checkpoint("ckpt-3", "chat-123", "2026-03-08T03:00:00"))
-        await insert_checkpoint(db, _make_checkpoint("ckpt-4", None, "2026-03-08T04:00:00"))
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-1", label="chat-123", created_at="2026-03-08T01:00:00")
+        )
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-2", label="chat-456", created_at="2026-03-08T02:00:00")
+        )
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-3", label="chat-123", created_at="2026-03-08T03:00:00")
+        )
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-4", label=None, created_at="2026-03-08T04:00:00")
+        )
 
         results = await list_checkpoints_by_account(db, "acct-1", label="chat-123")
         assert len(results) == 2
@@ -80,9 +70,15 @@ async def test_list_checkpoints_with_label_filters(tmp_path: Path) -> None:
 async def test_list_checkpoints_ordered_by_created_at_desc(tmp_path: Path) -> None:
     db = await _setup_db(tmp_path)
     try:
-        await insert_checkpoint(db, _make_checkpoint("ckpt-1", "chat-123", "2026-03-08T01:00:00"))
-        await insert_checkpoint(db, _make_checkpoint("ckpt-2", "chat-123", "2026-03-08T03:00:00"))
-        await insert_checkpoint(db, _make_checkpoint("ckpt-3", "chat-123", "2026-03-08T02:00:00"))
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-1", label="chat-123", created_at="2026-03-08T01:00:00")
+        )
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-2", label="chat-123", created_at="2026-03-08T03:00:00")
+        )
+        await insert_checkpoint(
+            db, checkpoint_row("ckpt-3", label="chat-123", created_at="2026-03-08T02:00:00")
+        )
 
         results = await list_checkpoints_by_account(db, "acct-1", label="chat-123")
         assert len(results) == 3

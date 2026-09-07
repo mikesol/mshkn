@@ -255,7 +255,10 @@ async def _parse_ingress_body(request: Request, max_bytes: int) -> dict[str, obj
 # --- Trigger endpoint (unauthenticated) ---
 
 
-@router.api_route("/ingress/{rule_id}", methods=["GET", "POST", "PUT", "PATCH"])
+@router.get("/ingress/{rule_id}", response_model=None)
+@router.post("/ingress/{rule_id}", response_model=None)
+@router.put("/ingress/{rule_id}", response_model=None)
+@router.patch("/ingress/{rule_id}", response_model=None)
 async def handle_ingress(rule_id: str, request: Request) -> Response:
     """Unauthenticated ingress trigger endpoint."""
     rt = get_runtime(request)

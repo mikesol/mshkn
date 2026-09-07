@@ -10,20 +10,21 @@ from mshkn.db import get_computer, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, HostError, LimitExceeded, NotFound
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
-from mshkn.models import Account, Checkpoint, ComputerStatus
+from mshkn.models import Checkpoint, ComputerStatus
 from mshkn.observability.metrics import computers_active, operation_errors_total
 from mshkn.resources import DEFAULT_RESOURCES, Resources
 from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.computers import ComputerService
 from mshkn.services.recipes import RecipeService
+from tests.support import account_row
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     import aiosqlite
 
-ACCOUNT = Account(id="acct-1", api_key="k", vm_limit=2, created_at="t")
+ACCOUNT = account_row(api_key="k", vm_limit=2)
 
 
 async def _clear_last_exec_at(db: aiosqlite.Connection, computer_id: str) -> None:
@@ -260,9 +261,7 @@ async def test_guest_operations_touch_last_exec_at_and_map_errors(
     with pytest.raises(NotFound):
         await service.get_owned(ACCOUNT, computer.id)
     with pytest.raises(NotFound):
-        await service.get_running(
-            Account(id="other", api_key="o", vm_limit=1, created_at="t"), computer.id
-        )
+        await service.get_running(account_row(id="other", api_key="o", vm_limit=1), computer.id)
 
 
 async def test_cleanup_dead_releases_a_vm_whose_process_is_gone(

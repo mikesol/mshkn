@@ -10,42 +10,30 @@ from mshkn.host.firecracker import (
     STAGING_TAP,
     FirecrackerHypervisor,
 )
-
-
-class Recorder:
-    def __init__(self, taps: set[str] | None = None) -> None:
-        self.calls: list[str] = []
-        self.taps = taps if taps is not None else set()
-
-    async def __call__(self, cmd: str, check: bool = True) -> str:
-        self.calls.append(cmd)
-        if cmd.startswith("ip link show "):
-            tap = cmd.split()[3]
-            return f"7: {tap}: <UP>" if tap in self.taps else ""
-        return ""
+from tests.support import ShellRecorder
 
 
 async def test_teardown_slot_skips_missing_tap() -> None:
-    run = Recorder(taps=set())
+    run = ShellRecorder()
     hv = FirecrackerHypervisor(Config(ssh_key_path=Path("/tmp/k")), run=run)
     await hv.teardown_slot(5)
-    assert not any(c.startswith("ip link del tap5") for c in run.calls)
-    assert any(c.startswith("iptables -D FORWARD -i tap5") for c in run.calls)
+    assert not any(c.startswith("ip link del tap5") for c, _ in run.calls)
+    assert any(c.startswith("iptables -D FORWARD -i tap5") for c, _ in run.calls)
 
 
 async def test_teardown_slot_deletes_present_tap() -> None:
-    run = Recorder(taps={"tap5"})
+    run = ShellRecorder(taps={"tap5"})
     hv = FirecrackerHypervisor(Config(ssh_key_path=Path("/tmp/k")), run=run)
     await hv.teardown_slot(5)
-    assert "ip link del tap5" in run.calls
+    assert "ip link del tap5" in [c for c, _ in run.calls]
 
 
 async def test_staging_clean_is_quiet_when_nothing_to_clean() -> None:
-    run = Recorder(taps=set())
+    run = ShellRecorder()
     hv = FirecrackerHypervisor(Config(ssh_key_path=Path("/tmp/k")), run=run)
     await hv._ensure_staging_clean()
-    assert not any(c == f"ip link del {STAGING_TAP}" for c in run.calls)
-    assert f"dmsetup remove {STAGING_DRIVE_NAME}" in run.calls
+    assert not any(c == f"ip link del {STAGING_TAP}" for c, _ in run.calls)
+    assert f"dmsetup remove {STAGING_DRIVE_NAME}" in [c for c, _ in run.calls]
 
 
 def test_is_alive_for_own_pid_and_reaped_child() -> None:

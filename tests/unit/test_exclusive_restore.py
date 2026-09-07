@@ -13,72 +13,24 @@ from mshkn.db import (
     insert_deferred,
     run_migrations,
 )
-from mshkn.models import Account, Checkpoint, Computer, ComputerStatus
-
-
-def _account() -> Account:
-    return Account(
-        id="acct-1",
-        api_key="key-abc",
-        vm_limit=10,
-        created_at="2026-03-08T00:00:00",
-    )
-
-
-def _checkpoint(
-    checkpoint_id: str = "ckpt-1",
-    label: str | None = "my-agent",
-    computer_id: str | None = "comp-1",
-) -> Checkpoint:
-    return Checkpoint(
-        id=checkpoint_id,
-        account_id="acct-1",
-        parent_id=None,
-        computer_id=computer_id,
-        thin_volume_id=42,
-        r2_prefix="acct-1/ckpt-1",
-        disk_delta_size_bytes=None,
-        memory_size_bytes=None,
-        label=label,
-        pinned=False,
-        created_at="2026-03-08T00:00:00",
-    )
-
-
-def _computer(
-    computer_id: str = "comp-1",
-    status: ComputerStatus = ComputerStatus.RUNNING,
-    source_checkpoint_id: str | None = "ckpt-1",
-) -> Computer:
-    return Computer(
-        id=computer_id,
-        account_id="acct-1",
-        thin_volume_id=1,
-        tap_device="tap1",
-        vm_ip="172.16.1.2",
-        socket_path="/tmp/fc.socket",
-        firecracker_pid=999,
-        status=status,
-        created_at="2026-03-08T00:00:00",
-        last_exec_at=None,
-        source_checkpoint_id=source_checkpoint_id,
-    )
+from mshkn.models import ComputerStatus
+from tests.support import account_row, checkpoint_row, computer_row
 
 
 async def _setup_db(tmp_path: Path) -> aiosqlite.Connection:
     db_path = tmp_path / "test.db"
     db = await aiosqlite.connect(db_path)
     await run_migrations(db, Path("migrations"))
-    await insert_account(db, _account())
+    await insert_account(db, account_row(api_key="key-abc"))
     return db
 
 
 async def test_get_active_computer_for_label_returns_running(tmp_path: Path) -> None:
     db = await _setup_db(tmp_path)
     try:
-        ckpt = _checkpoint()
+        ckpt = checkpoint_row(label="my-agent", thin_volume_id=42)
         await insert_checkpoint(db, ckpt)
-        comp = _computer(source_checkpoint_id="ckpt-1")
+        comp = computer_row(source_checkpoint_id="ckpt-1")
         await insert_computer(db, comp)
 
         result = await get_active_computer_for_label(db, "acct-1", "my-agent")
@@ -91,9 +43,9 @@ async def test_get_active_computer_for_label_returns_running(tmp_path: Path) -> 
 async def test_get_active_computer_for_label_ignores_destroyed(tmp_path: Path) -> None:
     db = await _setup_db(tmp_path)
     try:
-        ckpt = _checkpoint()
+        ckpt = checkpoint_row(label="my-agent", thin_volume_id=42)
         await insert_checkpoint(db, ckpt)
-        comp = _computer(status=ComputerStatus.DESTROYED, source_checkpoint_id="ckpt-1")
+        comp = computer_row(status=ComputerStatus.DESTROYED, source_checkpoint_id="ckpt-1")
         await insert_computer(db, comp)
 
         result = await get_active_computer_for_label(db, "acct-1", "my-agent")
@@ -105,9 +57,9 @@ async def test_get_active_computer_for_label_ignores_destroyed(tmp_path: Path) -
 async def test_get_active_computer_for_label_no_match(tmp_path: Path) -> None:
     db = await _setup_db(tmp_path)
     try:
-        ckpt = _checkpoint(label="other-label")
+        ckpt = checkpoint_row(label="other-label", thin_volume_id=42)
         await insert_checkpoint(db, ckpt)
-        comp = _computer(source_checkpoint_id="ckpt-1")
+        comp = computer_row(source_checkpoint_id="ckpt-1")
         await insert_computer(db, comp)
 
         result = await get_active_computer_for_label(db, "acct-1", "my-agent")
@@ -119,9 +71,9 @@ async def test_get_active_computer_for_label_no_match(tmp_path: Path) -> None:
 async def test_get_active_computer_for_label_no_label(tmp_path: Path) -> None:
     db = await _setup_db(tmp_path)
     try:
-        ckpt = _checkpoint(label=None)
+        ckpt = checkpoint_row(label=None, thin_volume_id=42)
         await insert_checkpoint(db, ckpt)
-        comp = _computer(source_checkpoint_id="ckpt-1")
+        comp = computer_row(source_checkpoint_id="ckpt-1")
         await insert_computer(db, comp)
 
         result = await get_active_computer_for_label(db, "acct-1", "my-agent")

@@ -20,13 +20,14 @@ set -euo pipefail
 systemctl stop mshkn litestream
 pkill -x firecracker || true
 sleep 1
+rm -f /tmp/fc-*.socket
 for tap in \$(ip -o link show type tun | awk -F': ' '{print \$2}' | grep -E '^tap[0-9]+\$' || true); do
   ip link del "\$tap" || true
 done
 for vol in \$(dmsetup ls --target thin | awk '{print \$1}' | grep -E '^mshkn-(comp-|restore-staging)' || true); do
   dmsetup remove "\$vol" || true
 done
-cd /opt/mshkn && set -a; . /opt/mshkn/.env; set +a; (.venv/bin/python -m mshkn accounts list | grep -q '^acct-mike	' \
+cd /opt/mshkn && set -a && . /opt/mshkn/.env && set +a && (.venv/bin/python -m mshkn accounts list | grep -q '^acct-mike	' \
   || .venv/bin/python -m mshkn accounts create --id acct-mike --api-key '${API_KEY}' --vm-limit 20)
 systemctl start mshkn litestream
 for _ in \$(seq 1 120); do

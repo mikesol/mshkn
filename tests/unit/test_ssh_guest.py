@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -130,10 +131,48 @@ class DropAfterExitProcess:
         self.killed = True
 
 
+@dataclass(frozen=True)
 class RunResult:
-    exit_status = 0
-    stdout = "ok\n"
-    stderr = ""
+    exit_status: int = 0
+    stdout: str = "ok\n"
+    stderr: str = ""
+
+
+class _FakeSftpFile:
+    """One open remote file, backed by the connection's in-memory dict."""
+
+    def __init__(self, files: dict[str, bytes], path: str, mode: str) -> None:
+        self.files, self.path, self.mode = files, path, mode
+
+    async def __aenter__(self) -> _FakeSftpFile:
+        if self.mode == "rb" and self.path not in self.files:
+            raise asyncssh.SFTPNoSuchFile("No such file")
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def read(self) -> bytes:
+        return self.files[self.path]
+
+    async def write(self, data: bytes) -> None:
+        self.files[self.path] = data
+
+
+class FakeSftp:
+    """asyncssh's SFTP client, reduced to what upload/download touch."""
+
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self.files = files
+
+    def open(self, path: str, mode: str) -> _FakeSftpFile:
+        return _FakeSftpFile(self.files, path, mode)
+
+    async def __aenter__(self) -> FakeSftp:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
 
 
 class FakeConn:
@@ -144,13 +183,16 @@ class FakeConn:
         channel_error: bool = False,
         run_error: Exception | None = None,
         run_delay: float = 0.0,
+        run_result: RunResult | None = None,
     ) -> None:
         self._process = process
         self._channel_error = channel_error
         self._run_error = run_error
         self._run_delay = run_delay
+        self._run_result = run_result if run_result is not None else RunResult()
         self.closed = False
         self.runs: list[str] = []
+        self.files: dict[str, bytes] = {}
 
     async def create_process(self, command: str) -> Any:
         if self._channel_error:
@@ -158,12 +200,27 @@ class FakeConn:
         return self._process
 
     async def run(self, command: str, check: bool = False) -> Any:
+        """Records the command and, like asyncssh, raises on a non-zero exit when check."""
         self.runs.append(command)
         if self._run_delay:
             await asyncio.sleep(self._run_delay)
         if self._run_error is not None:
             raise self._run_error
-        return RunResult()
+        if check and self._run_result.exit_status != 0:
+            raise asyncssh.ProcessError(
+                env=None,
+                command=command,
+                subsystem=None,
+                exit_status=self._run_result.exit_status,
+                exit_signal=None,
+                returncode=self._run_result.exit_status,
+                stdout=self._run_result.stdout,
+                stderr=self._run_result.stderr,
+            )
+        return self._run_result
+
+    def start_sftp_client(self) -> FakeSftp:
+        return FakeSftp(self.files)
 
     def close(self) -> None:
         self.closed = True
@@ -495,3 +552,61 @@ def test_parse_metrics_keeps_the_first_field_when_the_second_is_malformed() -> N
     assert metrics.disk_total_mb == 10240
     assert metrics.disk_usage_mb == 512
     assert metrics.processes == [{"pid": 1, "command": "init"}]
+
+
+# -- SFTP, background commands, metrics --------------------------------------
+
+
+async def test_upload_mkdirs_then_writes_over_sftp() -> None:
+    conn = FakeConn(FakeProcess([], [], 0))
+    guest = make_guest_with([conn])
+    await guest.upload("172.16.1.2", "/root/dir/file.bin", b"\x00data")
+    assert conn.runs == ["mkdir -p /root/dir"]
+    assert conn.files == {"/root/dir/file.bin": b"\x00data"}
+
+
+async def test_upload_maps_a_failing_mkdir_to_host_error() -> None:
+    """`upload` runs `mkdir -p` with check=True, so a non-zero exit must surface as HostError.
+
+    Without check= the guest would go on to open an SFTP file under a directory
+    that was never created.
+    """
+    conn = FakeConn(FakeProcess([], [], 0), run_result=RunResult(1, "", "Read-only file system"))
+    guest = make_guest_with([conn])
+    with pytest.raises(HostError):
+        await guest.upload("172.16.1.2", "/root/dir/file.bin", b"\x00data")
+    assert conn.runs == ["mkdir -p /root/dir"]
+    assert conn.files == {}, "no file is written when the directory could not be made"
+
+
+async def test_download_reads_over_sftp_and_maps_missing_to_file_not_found() -> None:
+    conn = FakeConn(FakeProcess([], [], 0))
+    conn.files["/etc/hostname"] = b"vm\n"
+    guest = make_guest_with([conn])
+    assert await guest.download("172.16.1.2", "/etc/hostname") == b"vm\n"
+    with pytest.raises(FileNotFoundError):
+        await guest.download("172.16.1.2", "/nope")
+
+
+async def test_exec_bg_returns_the_pid_and_rejects_an_empty_one() -> None:
+    conn = FakeConn(FakeProcess([], [], 0), run_result=RunResult(0, "4321\n", ""))
+    guest = make_guest_with([conn])
+    assert await guest.exec_bg("172.16.1.2", "sleep 5; echo 'q'") == 4321
+    assert conn.runs == [
+        "nohup bash -c 'sleep 5; echo '\\''q'\\''' > /tmp/bg-tmp-$$.log 2>&1 & "
+        "BG=$!; ln -sf /tmp/bg-tmp-$$.log /tmp/bg-$BG.log; echo $BG"
+    ]
+    empty = FakeConn(FakeProcess([], [], 0), run_result=RunResult(0, "", "boom"))
+    with pytest.raises(RuntimeError, match="Failed to get PID"):
+        await make_guest_with([empty]).exec_bg("172.16.1.2", "true")
+
+
+async def test_metrics_runs_the_probe_and_parses_it() -> None:
+    stdout = "87.5\n230 64\n7800 200\n1 systemd\n42 sshd\n"
+    conn = FakeConn(FakeProcess([], [], 0), run_result=RunResult(0, stdout, ""))
+    guest = make_guest_with([conn])
+    metrics = await guest.metrics("172.16.1.2")
+    assert (metrics.cpu_pct, metrics.ram_total_mb, metrics.ram_usage_mb) == (12.5, 230, 64)
+    assert (metrics.disk_total_mb, metrics.disk_usage_mb) == (7800, 200)
+    assert metrics.processes == [{"pid": 1, "command": "systemd"}, {"pid": 42, "command": "sshd"}]
+    assert conn.runs == [ssh_module._METRICS_CMD]

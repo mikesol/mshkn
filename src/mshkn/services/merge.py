@@ -87,14 +87,6 @@ def three_way_merge(
             if a_file.exists():
                 shutil.copy2(a_file, out_file)
             result.auto_merged += 1
-        elif hp is None and ha is not None and hb is None:
-            # Added only in A
-            shutil.copy2(a_file, out_file)
-            result.auto_merged += 1
-        elif hp is None and ha is None and hb is not None:
-            # Added only in B
-            shutil.copy2(b_file, out_file)
-            result.auto_merged += 1
         else:
             # Conflict
             result.conflicts.append(

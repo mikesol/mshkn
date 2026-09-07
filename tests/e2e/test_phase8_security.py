@@ -2,7 +2,10 @@
 
 These tests run against a LIVE server with real Firecracker VMs.
 They verify VM escape prevention, cross-tenant isolation, API auth,
-resource limits, and network egress controls.
+resource limits, and network egress controls. One test (R2 checkpoint blob
+access control) is not implemented yet and fails on purpose via pytest.fail —
+not implemented is a flavor of broken, so it is not silently skipped or given
+an expected-failure marker.
 
 IMPORTANT: These tests are designed to be safe. No actual exploit attempts,
 just verification that expected isolation boundaries hold.
@@ -203,17 +206,25 @@ class TestT84ResourceLimits:
             assert "alive_after_fill" in result2.stdout
 
     async def test_memory_400mb_in_512mb_vm(self, client: httpx.AsyncClient) -> None:
-        """Allocating 400MB in a 512MB VM should work."""
-        async with managed_computer(client) as computer_id:
+        """Allocating 400MB in a VM created with 512MB of RAM works.
+
+        The default VM has 256MB, where a 400MB buffer is refused, so the
+        computer is created with `needs.ram = 512MB`. `dd` with a 400MB block
+        size allocates and touches a buffer of exactly that size; the base
+        image has no python3.
+        """
+        async with managed_computer(client, needs={"ram": "512MB"}) as computer_id:
             result = await exec_command(
                 client,
                 computer_id,
-                "python3 -c \"x = bytearray(400_000_000); print('allocated_400mb')\" 2>&1",
+                "dd if=/dev/zero of=/dev/null bs=400M count=1 2>&1 && echo allocated_400mb",
                 timeout=30.0,
             )
             combined = result.stdout + result.stderr
-            # This might work or fail depending on actual VM memory config
             print(f"400MB allocation result: {combined[:500]}")
+            assert "allocated_400mb" in combined, (
+                f"400MB should fit in a 512MB VM. Output: {combined[:500]}"
+            )
 
     async def test_memory_600mb_in_512mb_vm_should_fail(self, client: httpx.AsyncClient) -> None:
         """Allocating 600MB in a 512MB VM should fail (OOM)."""
@@ -261,11 +272,11 @@ class TestT85NetworkEgress:
             )
 
     async def test_vm_host_orchestrator_port_access(self, client: httpx.AsyncClient) -> None:
-        """Test whether VM can reach the host orchestrator port (172.16.0.1:8000).
+        """A VM must not reach the host orchestrator port (172.16.0.1:8000).
 
-        NOTE: This test documents the current behavior. Since NAT is set up,
-        the VM might be able to reach the host. If it can, this is a security
-        concern that should be addressed with iptables rules.
+        A guest that can call the control plane is a security hole. If this
+        goes red the finding is real: the tap rules only filter FORWARD, so
+        traffic to the host itself needs an INPUT rule.
         """
         async with managed_computer(client) as computer_id:
             # Try to reach the host orchestrator. curl may not be installed,
@@ -279,20 +290,15 @@ class TestT85NetworkEgress:
                 timeout=15.0,
             )
             combined = result.stdout + result.stderr
-            # Document the result — this may or may not be blocked
             blocked = (
                 "CONNECTION_FAILED" in combined
                 or "refused" in combined.lower()
                 or "timed out" in combined.lower()
             )
-            if blocked:
-                print("GOOD: VM cannot reach host orchestrator port")
-            else:
-                print(
-                    f"WARNING: VM CAN reach host orchestrator at 172.16.0.1:8000. "
-                    f"Response: {combined[:300]}. "
-                    f"This should be blocked with iptables rules."
-                )
+            assert blocked, (
+                f"VM CAN reach the host orchestrator at 172.16.0.1:8000. "
+                f"Response: {combined[:300]}. This must be blocked with iptables rules."
+            )
 
     async def test_two_vms_cannot_reach_each_other(self, client: httpx.AsyncClient) -> None:
         """Two VMs on different /30 subnets should not be able to reach each other."""
@@ -339,10 +345,10 @@ class TestT86CheckpointDataIsolation:
     async def test_checkpoint_data_not_publicly_accessible(self, client: httpx.AsyncClient) -> None:
         """Checkpoint blobs in R2 should not be accessible without proper auth.
 
-        This would require:
-        1. Creating a computer and checkpointing it
-        2. Finding the R2 object key for the checkpoint
-        3. Attempting to access it via public URL (should fail)
-        4. Verifying bucket policy denies unauthenticated access
+        Intended workflow:
+        1. Create a computer and checkpoint it
+        2. Find the R2 object key for the checkpoint
+        3. Attempt to access it via public URL (should fail)
+        4. Verify the bucket policy denies unauthenticated access
         """
-        pass
+        pytest.fail("Not implemented: R2 checkpoint blob public-access check")

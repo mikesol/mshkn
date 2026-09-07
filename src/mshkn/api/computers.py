@@ -4,7 +4,6 @@ method, and shapes the result; the orchestration lives in mshkn.services."""
 from __future__ import annotations
 
 import logging
-import time
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -25,7 +24,7 @@ from mshkn.api.schemas import (
     create_response,
 )
 from mshkn.models import CheckpointTrigger, ComputerStatus, ExecSpec
-from mshkn.observability.metrics import exec_duration_seconds
+from mshkn.observability.metrics import timed
 from mshkn.resources import Resources
 
 if TYPE_CHECKING:
@@ -80,16 +79,14 @@ async def exec_command(
     computer = await rt.computers.get_running(account, computer_id)
 
     async def event_stream() -> AsyncIterator[dict[str, str]]:
-        t0 = time.monotonic()
         try:
-            async for stream, line in rt.computers.stream(computer, body.command):
-                yield {"event": stream, "data": line}
+            async with timed("exec"):
+                async for stream, line in rt.computers.stream(computer, body.command):
+                    yield {"event": stream, "data": line}
         except Exception as exc:
             logger.warning("exec stream for %s failed: %s", computer_id, type(exc).__name__)
             yield {"event": "error", "data": f"{type(exc).__name__}: {exc}"}
             yield {"event": "exit", "data": "255"}
-        finally:
-            exec_duration_seconds.observe(time.monotonic() - t0)
 
     return EventSourceResponse(event_stream())
 

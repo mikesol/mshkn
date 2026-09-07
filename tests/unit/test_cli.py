@@ -53,3 +53,11 @@ def test_migrate_is_idempotent(env: Path) -> None:
     assert main(["migrate"]) == 0
     assert main(["migrate"]) == 0
     assert env.exists()
+
+
+def test_accounts_create_rejects_a_duplicate_api_key(
+    env: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["accounts", "create", "--id", "a", "--api-key", "shared"]) == 0
+    assert main(["accounts", "create", "--id", "b", "--api-key", "shared"]) == 1
+    assert "cannot create account b" in capsys.readouterr().err
