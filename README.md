@@ -8,7 +8,7 @@ This is a single-host research system with no users. The API changes without not
 
 - **Computers.** `POST /computers` boots a VM from the bare base volume or from a recipe's volume, with 256 MiB and 2 vCPUs unless `needs` says otherwise (`{"ram": "512MB", "cores": 2}`). The request can carry an `exec` command to run immediately, `self_destruct` to checkpoint and destroy afterwards, a `callback_url` to be told the result, and a `label` for the checkpoint chain.
 - **Exec.** `POST /computers/{computer_id}/exec` streams stdout, stderr and the exit code as server-sent events over SSH. Background commands (`exec/bg`, `exec/logs/{pid}`, `exec/kill/{pid}`), file `upload` and `download`, and `status` with live CPU, memory, disk and process counts.
-- **Checkpoints.** `POST /computers/{computer_id}/checkpoint` pauses the VM, writes a Firecracker memory and device snapshot, takes a dm-thin snapshot of the disk, and resumes. The snapshot files upload to R2 in the background. Checkpoints have labels, parents (a DAG), a pin flag, and a per-account retention count.
+- **Checkpoints.** `POST /computers/{computer_id}/checkpoint` pauses the VM, writes a Firecracker memory and device snapshot, resumes, and takes a dm-thin snapshot of the disk. The snapshot files upload to R2 in the background. Checkpoints have labels, parents (a DAG), a pin flag, and a retention count applied per account.
 - **Fork.** `POST /checkpoints/{checkpoint_id}/fork` restores the snapshot on a fresh slot: memory state comes back, the disk is a copy-on-write child. A fork of a 50 MB working set costs the same as a fork of 1 MB.
 - **Exclusive chains.** A fork with `exclusive` set either fails while another computer is active on the label (`error_on_conflict`) or is queued (`defer_on_conflict`) and run when that computer self-destructs or is destroyed.
 - **Merge.** `POST /checkpoints/{parent_id}/merge` does a three-way filesystem merge of two forks against their parent into a new checkpoint and reports conflicts.
@@ -40,7 +40,7 @@ src/mshkn/
   errors.py          NotFound, Conflict, BadRequest, InvalidInput, ... HostError
   resources.py       Resources(mem_mib, vcpus) parsing and bounds
   ratelimit.py       sliding-window RateLimiter
-  db/                aiosqlite connection, migrations, one module per table
+  db/                aiosqlite connection, migrations, one module per table, ingress rules and their log sharing one
   host/              Hypervisor, BlockStore, Guest, ObjectStore, Proxy protocols;
                      Firecracker, dm-thin, SSH, rclone and Caddy implementations;
                      in-memory fakes in fake.py

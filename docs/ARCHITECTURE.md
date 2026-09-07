@@ -22,7 +22,7 @@ Domain errors are mapped in one place, `src/mshkn/api/errors.py`, which handles 
 | `NotFound` | 404 | `{"detail": <message>}` |
 | `Conflict` | 409 | message |
 | `BadRequest` | 400 | message (for example exec on a computer that is not running) |
-| `InvalidInput` | 422 | message, plus a `detail` payload for validation lists |
+| `InvalidInput` | 422 | the `detail` payload when the error carries one (validation lists), else the message |
 | `PayloadTooLarge` | 413 | message |
 | `LimitExceeded` | 429 | message (VM limit, slots, ingress rate limit) |
 | `TransformError` | 502 | the Starlark error |
@@ -87,7 +87,7 @@ Shared result types live beside the protocols: `RunningVM(pid, socket_path, slot
 
 `mshkn.host.fake.FakeHost()` returns a `FakeHostInstance` with all five fakes; it records calls, can be told to fail a named operation, and cleans its temp directories on `close()`.
 
-`src/mshkn/host/shell.py` (`run`, `ShellError`) is the only place a shell command string is executed: the dm-thin, rclone, tap and staging paths build their commands and hand them to it. The Firecracker process itself (`start_firecracker_process`) and the recipe build spawn their own subprocesses. `src/mshkn/host/network.py` owns the slot arithmetic and `create_tap` / `destroy_tap`.
+`src/mshkn/host/shell.py` (`run`, `ShellError`) is where the host layer executes shell command strings: the dm-thin, rclone, tap and staging paths build their commands and hand them to it. Outside it, `start_firecracker_process` spawns the Firecracker binary directly and the recipe build runs `docker build` through its own shell call. `src/mshkn/host/network.py` owns the slot arithmetic and `create_tap` / `destroy_tap`.
 
 ### Firecracker specifics
 
@@ -110,13 +110,13 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 ## 5. State ownership
 
-**Durable (SQLite, `src/mshkn/db/`).** One file, opened with `PRAGMA busy_timeout=5000`, `journal_mode=WAL` and `synchronous=NORMAL`. Tables: `accounts`, `computers`, `checkpoints`, `recipes`, `snapshot_templates`, `deferred_queue`, `ingress_rules`, `ingress_log`, plus `_migrations` (applied migration names). `capability_cache`, from `migrations/001_initial.sql` and rebuilt by `migrations/004_capability_cache_volume_id.sql`, still exists in the schema but no code reads or writes it; `migrations/009_recipes.sql` replaced what used it without dropping the table. Migrations in `migrations/` are sequential and applied once each, in name order. Litestream replicates the file to R2. Each `db/` module holds one table's column tuple, one row mapper and its queries; there is no ORM.
+**Durable (SQLite, `src/mshkn/db/`).** One file, opened with `PRAGMA busy_timeout=5000`, `journal_mode=WAL` and `synchronous=NORMAL`. Tables: `accounts`, `computers`, `checkpoints`, `recipes`, `snapshot_templates`, `deferred_queue`, `ingress_rules`, `ingress_log`, plus `_migrations` (applied migration names). `capability_cache`, from `migrations/001_initial.sql` and rebuilt by `migrations/004_capability_cache_volume_id.sql`, still exists in the schema but no code reads or writes it; `migrations/009_recipes.sql` replaced what used it without dropping the table. Migrations in `migrations/` are sequential and applied once each, in name order. Litestream replicates the file to R2. Each `db/` module holds one table's column tuple, one row mapper and its queries, ingress rules and their log sharing one; there is no ORM.
 
 **Durable (disk).** The thin pool `mshkn-pool` with base volume 0 (the bare rootfs), one volume per computer (`mshkn-<computer id>`), one per checkpoint (`mshkn-ckpt-<checkpoint id>`), and one per recipe base (`mshkn-recipe-<recipe id>`). Checkpoint snapshot files under `checkpoint_local_dir/<checkpoint id>/` (`vmstate`, `memory`), mirrored to R2 under `<account id>/<checkpoint id>/`, and template snapshots under `checkpoint_local_dir/templates/<key>/`.
 
 **Process-local (rebuilt at start).** The allocator's free-slot set and next volume id; the SSH connection pool; the hypervisor's staging lock and its pid-to-socket registry; ingress rate limiters (keyed by internal rule id); the exec rate limiter; the alert deque; background tasks. A restart loses in-flight uploads and callbacks (the reaper and the next checkpoint create recover the rest).
 
-**Kernel and daemons.** Tap devices, dm-thin mappings, Firecracker processes, Caddy routes. `Runtime.start` reconciles these against the database at startup; on the test host `scripts/e2e.sh` clears whatever a previous run left behind.
+**Kernel and daemons.** Tap devices, dm-thin mappings, Firecracker processes, Caddy routes. `Runtime.start` reaps computers whose Firecracker process is gone and re-derives slots and volume ids from the database and the pool; a resource with no database row is not reclaimed, so on the test host `scripts/e2e.sh` clears whatever a previous run left behind.
 
 ## 6. Lifecycle of a computer
 
@@ -141,7 +141,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 ## 7. Lifecycle of a checkpoint
 
-**Create** (`CheckpointService.create`, timed `op="checkpoint"`): `sync` inside the guest so the page cache reaches the block device; `Hypervisor.snapshot` (pause, write `vmstate` and `memory`, resume); evict the SSH connection (pause breaks the pooled session); acquire a volume id, then `BlockStore.snap` and activate the computer's volume; insert the row with `parent_id` = the computer's latest checkpoint, else the checkpoint it was forked from; count `mshkn_checkpoints_total{trigger}`; spawn the R2 upload under key `upload:<checkpoint id>`.
+**Create** (`CheckpointService.create`, timed `op="checkpoint"`): `sync` inside the guest so the page cache reaches the block device; `Hypervisor.snapshot` (pause, write `vmstate` and `memory`, resume); evict the SSH connection (pause breaks the pooled session); acquire a volume id, then snap the computer's volume into a new checkpoint volume and activate it; insert the row with `parent_id` = the computer's latest checkpoint, else the checkpoint it was forked from; count `mshkn_checkpoints_total{trigger}`; spawn the R2 upload under key `upload:<checkpoint id>`.
 
 **Delete** cancels the upload task first, then removes the thin volume, the local directory and the R2 prefix, then the row.
 

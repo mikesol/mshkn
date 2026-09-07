@@ -103,7 +103,7 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thre
 
 ## Deployment
 
-`DEPLOY.md` is the fresh-server procedure (Firecracker, dm-thin pool, Docker base image, Caddy, R2, Litestream), executed verbatim on the current host. `scripts/deploy.sh` pushes the current branch to the host and restarts the service; `scripts/e2e.sh` does that and runs the suite.
+`DEPLOY.md` is the fresh-server procedure (Firecracker, dm-thin pool, Docker base image, Caddy, R2, Litestream), executed verbatim on the current host. `scripts/deploy.sh` has the host fetch and check out the current branch from origin (push first), sync dependencies and restart the service; `scripts/e2e.sh` pushes, does that, and runs the suite.
 
 ## Server reference
 
