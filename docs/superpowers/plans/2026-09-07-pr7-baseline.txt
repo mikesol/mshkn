@@ -1,0 +1,6 @@
+Baseline before PR 7 (main @ 4f470b5, 2026-09-07)
+All checks passed!
+146 files already formatted
+Success: no issues found in 146 source files
+515 passed, 157 deselected in 39.46s
+TOTAL                                 3711     46    646     21    98%
