@@ -46,7 +46,7 @@ Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.
 
 | Plan | PR | Status |
 |---|---|---|
-| `docs/superpowers/plans/2026-09-07-pr7a-one-base.md` | not opened | planned |
+| `docs/superpowers/plans/2026-09-07-pr7a-one-base.md` | this PR | in progress (this PR) |
 | `docs/superpowers/plans/2026-09-07-pr7-workload-proof.md` | not opened | planned |
 
 ## Roadmap breakdown (`docs/plans/2026-03-08-roadmap.md`)
@@ -59,7 +59,7 @@ Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.
 | P4 merge end to end | implemented: `POST /checkpoints/{parent_id}/merge` |
 | P5 VM limits, rate limiting, idle timeout, retention, `needs`, stale cleanup | implemented: `ComputerService.create`, `src/mshkn/ratelimit.py`, `src/mshkn/services/reaper.py`, `src/mshkn/resources.py` |
 | P6 metrics, JSON logs, status enrichment, checkpoint DAG, alerts | implemented: `src/mshkn/observability/`, `GET /alerts`; Grafana dashboards are not automatable and were never built |
-| P7 Litestream | implemented: `systemd/litestream.service`, `DEPLOY.md` §12 |
+| P7 Litestream | implemented: `systemd/litestream.service`, `DEPLOY.md` §11 |
 | Economics validation (T9.x), dumb agent (T10.5), S3 isolation (T8.6) | not implemented; part of #65 |
 
 ## Open follow-ups

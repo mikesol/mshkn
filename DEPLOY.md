@@ -23,13 +23,13 @@ reboot
 ```bash
 export DEBIAN_FRONTEND=noninteractive
 apt-get update && apt-get install -y \
-  debootstrap e2fsprogs thin-provisioning-tools \
+  e2fsprogs thin-provisioning-tools \
   python3.12-venv git rclone curl jq sqlite3 docker.io iptables
 systemctl enable --now docker
 curl -LsSf https://astral.sh/uv/install.sh | sh     # installs ~/.local/bin/uv
 ```
 
-Docker builds recipes and the base image; `sqlite3` is handy for inspecting `/opt/mshkn/mshkn.db` directly; uv installs the project.
+Docker builds the base image and every recipe; `sqlite3` is handy for inspecting `/opt/mshkn/mshkn.db` directly; uv installs the project.
 
 ## 2. Firecracker and kernel
 
@@ -65,15 +65,7 @@ cd /opt && git clone https://github.com/mikesol/mshkn.git && cd mshkn
 .venv/bin/python -c "import mshkn.main; print('import ok')"
 ```
 
-## 5. Base rootfs
-
-Builds a 1 GB ext4 image with a debootstrapped Ubuntu 24.04, sshd, the MAC-encoded network setup, and the key from step 3. Takes a few minutes.
-
-```bash
-cd /opt/firecracker && bash /opt/mshkn/scripts/build-rootfs.sh rootfs.ext4
-```
-
-## 6. dm-thin pool, base volume, VM egress
+## 5. dm-thin pool and VM egress
 
 Loop devices and device-mapper tables do not survive a reboot, and Docker sets the `FORWARD` policy to `DROP`, which silently blocks all traffic back into VMs. Both are handled by `scripts/mshkn-pool-up`, run at boot by `systemd/mshkn-pool.service` before the orchestrator starts:
 
@@ -85,26 +77,19 @@ systemctl daemon-reload && systemctl enable --now mshkn-pool
 dmsetup ls            # mshkn-pool and mshkn-base
 ```
 
-Write the rootfs into the base volume (thin volume 0) and grow the filesystem to the 8 GiB volume size:
+## 6. Base image and base volume
+
+Bare computers and recipes share one filesystem: the `mshkn-base` image, built from `Dockerfile.mshkn-base` with the key from step 3. This command builds the image, exports it, and writes it into thin volume 0 (the `mshkn-base` device from step 5) through the same mkfs, untar and post-processing a recipe volume gets. It refuses to run while `systemd/mshkn.service` is active. Takes a few minutes.
 
 ```bash
-dd if=/opt/firecracker/rootfs.ext4 of=/dev/mapper/mshkn-base bs=4M status=none
-resize2fs /dev/mapper/mshkn-base
+cd /opt/mshkn && .venv/bin/python -m mshkn base-volume
+docker images mshkn-base
 e2fsck -fn /dev/mapper/mshkn-base
 ```
 
-## 7. Base Docker image for recipes
+Rerun it after changing `Dockerfile.mshkn-base` or the key, with the service stopped. Existing checkpoint and recipe volumes are unaffected (a thin snapshot is independent of its origin), and the bare template is rebuilt on the next create.
 
-Recipes are Dockerfiles that start `FROM mshkn-base`. Build it once with the VM key in the context:
-
-```bash
-mkdir -p /tmp/mshkn-base-build
-cp /opt/mshkn/Dockerfile.mshkn-base /tmp/mshkn-base-build/Dockerfile
-cp /root/.ssh/id_ed25519.pub /tmp/mshkn-base-build/mshkn_key.pub
-docker build -t mshkn-base /tmp/mshkn-base-build
-```
-
-## 8. Environment and R2
+## 7. Environment and R2
 
 Create `/opt/mshkn/.env` (mode 600):
 
@@ -127,7 +112,7 @@ echo probe > /tmp/probe.txt
 rclone copyto /tmp/probe.txt "r2:$R2_BUCKET/_probe/probe.txt" && rclone purge "r2:$R2_BUCKET/_probe/" && echo "r2 ok"
 ```
 
-## 9. Orchestrator service
+## 8. Orchestrator service
 
 ```bash
 cp /opt/mshkn/systemd/mshkn.service /etc/systemd/system/
@@ -137,14 +122,14 @@ curl -s localhost:8000/health
 
 The first start runs the migrations and creates `/opt/mshkn/mshkn.db`.
 
-## 10. Test account
+## 9. Test account
 
 ```bash
 ( cd /opt/mshkn && set -a && . ./.env && set +a && (.venv/bin/python -m mshkn accounts list | grep -q '^acct-mike	' \
   || .venv/bin/python -m mshkn accounts create --id acct-mike --api-key 'mk-test-key-2026' --vm-limit 20) )
 ```
 
-## 11. Caddy (TLS reverse proxy)
+## 10. Caddy (TLS reverse proxy)
 
 Caddy needs the Cloudflare DNS module for the wildcard certificate, and the orchestrator needs Caddy's admin API up or every create fails while registering its route.
 
@@ -201,7 +186,7 @@ curl -s localhost:2019/config/apps/http/servers/main/routes | head -c 100
 
 DNS: `*.mshkn.dev` and `api.mshkn.dev` A records point at `<ip>`.
 
-## 12. Litestream (SQLite replication to R2)
+## 11. Litestream (SQLite replication to R2)
 
 ```bash
 curl -sL -o /tmp/litestream.deb https://github.com/benbjohnson/litestream/releases/download/v0.3.13/litestream-v0.3.13-linux-amd64.deb
@@ -231,7 +216,7 @@ journalctl -u litestream -n 3 --no-pager    # "wal segment written"
 
 `litestream.service` is `PartOf=mshkn.service`, so restarting mshkn restarts it.
 
-## 13. Verify
+## 12. Verify
 
 ```bash
 systemctl status mshkn-pool mshkn caddy litestream --no-pager | grep -E "●|Active"
@@ -274,4 +259,4 @@ rm -f /opt/mshkn/thin-pool-{data,meta} /opt/mshkn/mshkn.db
 systemctl restart mshkn-pool   # recreates the empty pool and base volume
 ```
 
-Then redo step 6's `dd`/`resize2fs` and step 10.
+Then, with mshkn stopped, redo step 6 (`python -m mshkn base-volume`) and step 9.

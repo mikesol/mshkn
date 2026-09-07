@@ -32,9 +32,6 @@ class Config:
     # Paths
     db_path: Path = field(default_factory=lambda: Path("/opt/mshkn/mshkn.db"))
     migrations_dir: Path = field(default_factory=lambda: Path("migrations"))
-    base_rootfs_path: Path = field(
-        default_factory=lambda: Path("/opt/firecracker/rootfs.ext4"),
-    )
     kernel_path: Path = field(default_factory=lambda: Path("/opt/firecracker/vmlinux.bin"))
     checkpoint_local_dir: Path = field(default_factory=lambda: Path("/opt/mshkn/checkpoints"))
     ssh_key_path: Path = field(default_factory=lambda: Path("/root/.ssh/id_ed25519"))
