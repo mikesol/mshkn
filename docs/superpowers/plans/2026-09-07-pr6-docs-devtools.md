@@ -386,7 +386,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 ## 5. State ownership
 
-**Durable (SQLite, `src/mshkn/db/`).** One file, opened with `PRAGMA busy_timeout=5000`, `journal_mode=WAL` and `synchronous=NORMAL`. Tables: `accounts`, `computers`, `checkpoints`, `recipes`, `snapshot_templates`, `deferred_queue`, `ingress_rules`, `ingress_log`, plus `_migrations` (applied migration names); `capability_cache` from the first migration was dropped by `migrations/009_recipes.sql`. Migrations in `migrations/` are sequential and additive; nothing is dropped or rebuilt. Litestream replicates the file to R2. Each `db/` module holds one table's column tuple, one row mapper and its queries; there is no ORM.
+**Durable (SQLite, `src/mshkn/db/`).** One file, opened with `PRAGMA busy_timeout=5000`, `journal_mode=WAL` and `synchronous=NORMAL`. Tables: `accounts`, `computers`, `checkpoints`, `recipes`, `snapshot_templates`, `deferred_queue`, `ingress_rules`, `ingress_log`, plus `_migrations` (applied migration names) and the unused `capability_cache` from the first migration (nothing reads or writes it; vestigial schema is not rebuilt). Migrations in `migrations/` are sequential and additive; nothing is dropped or rebuilt. Litestream replicates the file to R2. Each `db/` module holds one table's column tuple, one row mapper and its queries; there is no ORM.
 
 **Durable (disk).** The thin pool `mshkn-pool` with base volume 0 (the bare rootfs), one volume per computer (`mshkn-<computer id>`), one per checkpoint (`mshkn-<checkpoint id>`), one per recipe base and template. Checkpoint snapshot files under `checkpoint_local_dir/<checkpoint id>/` (`vmstate`, `mem`), mirrored to R2 under `<account id>/<checkpoint id>/`.
 
@@ -487,7 +487,7 @@ Logs are JSON lines (`mshkn.observability.logging.JSONFormatter`) with `timestam
 | `domain` | `mshkn.dev` | `MSHKN_DOMAIN` |
 | `caddy_admin_url` | `http://localhost:2019` | `MSHKN_CADDY_ADMIN_URL` |
 
-Resources per computer come from the request, not the environment: `mshkn.resources.Resources.from_needs` parses `{"ram": "512MB", "cores": 2}` with bounds of 128 MiB to 32 GiB and 1 to 16 vCPUs, defaulting to 256 MiB and 1 vCPU.
+Resources per computer come from the request, not the environment: `mshkn.resources.Resources.from_needs` parses `{"ram": "512MB", "cores": 2}` with bounds of 128 MiB to 32 GiB and 1 to 16 vCPUs, defaulting to 256 MiB and 2 vCPUs.
 
 ## 14. Running against the fake host
 
@@ -571,7 +571,7 @@ Statuses: **implemented**, **partially implemented**, **superseded by …**, **r
 | `docs/plans/2026-03-08-roadmap.md` | Prioritised backlog from the first E2E run. | partially implemented: see the breakdown below | |
 | `docs/plans/2026-03-08-orchestrator-design.md` | One FastAPI process over Firecracker, dm-thin, R2, Nix and SQLite. | partially implemented: everything but Nix; the module layout became `host/`, `services/`, `db/` in the quality overhaul | `src/mshkn/app.py`, `src/mshkn/host/`, `src/mshkn/services/` |
 | `docs/plans/2026-03-08-orchestrator-implementation.md` | Task plan for the orchestrator. | implemented, later restructured by PRs 2 to 4 of the quality overhaul | `src/mshkn/runtime.py` |
-| `docs/plans/2026-03-09-nix-capability-system-design.md` | Two-level Nix capability cache. | superseded by `docs/plans/2026-03-13-recipe-system-design.md` | `migrations/009_recipes.sql` drops `capability_cache` |
+| `docs/plans/2026-03-09-nix-capability-system-design.md` | Two-level Nix capability cache. | superseded by `docs/plans/2026-03-13-recipe-system-design.md` | no code references the `capability_cache` table; it remains in the schema, unused (vestigial schema is not rebuilt, spec §15) |
 | `docs/plans/2026-03-09-nix-capability-implementation.md` | Task plan for the Nix cache. | superseded by `docs/plans/2026-03-13-recipe-system-implementation.md` | no `capability` package exists |
 | `docs/plans/2026-03-10-codex-agent-integration.md` | Drive computers from a Codex subscription. | retired: never built, nothing references it | |
 | `docs/plans/2026-03-11-parallel-fc-launch-design.md` | Overlap Firecracker start with disk and tap setup. | implemented | `_stage` in `src/mshkn/host/firecracker.py` gathers the disk map and tap while the process starts |
@@ -672,7 +672,7 @@ This is a single-host research system with no users. The API changes without not
 
 ## What exists
 
-- **Computers.** `POST /computers` boots a VM from the bare base volume or from a recipe's volume, with 256 MiB and 1 vCPU unless `needs` says otherwise (`{"ram": "512MB", "cores": 2}`). The request can carry an `exec` command to run immediately, `self_destruct` to checkpoint and destroy afterwards, a `callback_url` to be told the result, and a `label` for the checkpoint chain.
+- **Computers.** `POST /computers` boots a VM from the bare base volume or from a recipe's volume, with 256 MiB and 2 vCPUs unless `needs` says otherwise (`{"ram": "512MB", "cores": 2}`). The request can carry an `exec` command to run immediately, `self_destruct` to checkpoint and destroy afterwards, a `callback_url` to be told the result, and a `label` for the checkpoint chain.
 - **Exec.** `POST /computers/{computer_id}/exec` streams stdout, stderr and the exit code as server-sent events over SSH. Background commands (`exec/bg`, `exec/logs/{pid}`, `exec/kill/{pid}`), file `upload` and `download`, and `status` with live CPU, memory, disk and process counts.
 - **Checkpoints.** `POST /computers/{computer_id}/checkpoint` pauses the VM, writes a Firecracker memory and device snapshot, takes a dm-thin snapshot of the disk, and resumes. The snapshot files upload to R2 in the background. Checkpoints have labels, parents (a DAG), a pin flag, and a per-account retention count.
 - **Fork.** `POST /checkpoints/{checkpoint_id}/fork` restores the snapshot on a fresh slot: memory state comes back, the disk is a copy-on-write child. A fork of a 50 MB working set costs the same as a fork of 1 MB.
