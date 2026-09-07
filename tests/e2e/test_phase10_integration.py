@@ -147,15 +147,15 @@ def _dataset() -> list[tuple[int, int]]:
     return [(i % _GROUPS, (i * 7) % 101) for i in range(_ROWS)]
 
 
-_WRITE_CSV = """\
+_WRITE_CSV = f"""\
 import csv
 with open("/root/data.csv", "w", newline="") as f:
     w = csv.writer(f)
     w.writerow(["group", "value"])
-    for i in range(%d):
-        w.writerow([i %% %d, (i * 7) %% 101])
-print("rows", %d)
-""" % (_ROWS, _GROUPS, _ROWS)  # noqa: UP031 -- this is the VM-side script's own %% escaping, not ours
+    for i in range({_ROWS}):
+        w.writerow([i % {_GROUPS}, (i * 7) % 101])
+print("rows", {_ROWS})
+"""
 
 _MEAN = """\
 import pandas as pd
@@ -192,7 +192,8 @@ class TestT102AptAndPipOnBare:
                 await exec_command(
                     long_client,
                     cid,
-                    "apt-get update && apt-get install -y --no-install-recommends "
+                    "DEBIAN_FRONTEND=noninteractive apt-get update && "
+                    "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
                     "python3 python3-pip python3-venv",
                     timeout_seconds=300,
                 )
@@ -538,15 +539,22 @@ http.server.HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
 
 
 async def _count(url: str) -> int:
-    """GET url until it answers 200; the body is the server's request count."""
+    """GET url until it answers 200; the body is the server's request count.
+
+    Retries only on a connection that never reached the server (ConnectError,
+    ConnectTimeout) or a non-200 response; anything else (a ReadTimeout in
+    particular, where the request may have already been counted) propagates,
+    since retrying it would silently drift the count.
+    """
     async with httpx.AsyncClient(timeout=20.0) as public:
         for _ in range(30):
             try:
                 resp = await public.get(url)
-                if resp.status_code == 200:
-                    return int(resp.text.strip())
-            except httpx.HTTPError:
-                pass
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                await asyncio.sleep(1)
+                continue
+            if resp.status_code == 200:
+                return int(resp.text.strip())
             await asyncio.sleep(1)
     raise AssertionError(f"{url} never answered 200")
 
@@ -650,6 +658,34 @@ class TestT107BrokenRecipe:
 # ---------------------------------------------------------------------------
 
 
+async def _wait_with_phases(
+    client: httpx.AsyncClient, recipe_id: str, timeout: float
+) -> tuple[dict[str, Any], dict[str, float]]:
+    """Poll GET /recipes/{id} every 2s; (terminal body, {status: first-seen-seconds}).
+
+    The end-to-end build time an agent experiences is docker build plus the
+    export and inject steps that turn the image into a volume; only the
+    docker-build half is layer-cached. This records when each status
+    ("pending", "building", "exporting", "injecting", "ready"/"failed") was
+    first observed, relative to the call, so a slow rebuild can be attributed
+    to the right phase instead of only asserted about end to end.
+    """
+    started = time.monotonic()
+    deadline = started + timeout
+    phases: dict[str, float] = {}
+    while time.monotonic() < deadline:
+        r = await client.get(f"/recipes/{recipe_id}")
+        r.raise_for_status()
+        info: dict[str, Any] = r.json()
+        status = info["status"]
+        if status not in phases:
+            phases[status] = time.monotonic() - started
+        if status in ("ready", "failed"):
+            return info, phases
+        await asyncio.sleep(2)
+    raise TimeoutError(f"Recipe {recipe_id} did not complete in {timeout}s")
+
+
 def _toolchain_dockerfile(nonce: str) -> str:
     """A node toolchain in several layers; the nonce makes every run a cold build."""
     return "\n".join(
@@ -683,10 +719,15 @@ class TestT108IncrementalGrowth:
             resp.raise_for_status()
             cold_id = resp.json()["recipe_id"]
             recipe_ids.append(cold_id)
-            info, _ = await wait_for_recipe(long_client, cold_id, timeout=BUILD_CAP_SECONDS)
+            info, cold_phases = await _wait_with_phases(long_client, cold_id, BUILD_CAP_SECONDS)
             t_cold = time.monotonic() - started
             assert info["status"] == "ready", (info.get("build_log") or "")[-800:]
             assert t_cold <= BUILD_CAP_SECONDS
+            if "exporting" in cold_phases:
+                print(
+                    f"T10.8 cold: build ≈ {cold_phases['exporting']:.0f}s, "
+                    f"export+inject ≈ {t_cold - cold_phases['exporting']:.0f}s"
+                )
 
             started = time.monotonic()
             resp = await long_client.post("/recipes", json={"dockerfile": grown_text})
@@ -694,13 +735,19 @@ class TestT108IncrementalGrowth:
             grown_id = resp.json()["recipe_id"]
             assert grown_id != cold_id
             recipe_ids.append(grown_id)
-            info, _ = await wait_for_recipe(long_client, grown_id, timeout=BUILD_CAP_SECONDS)
+            info, grown_phases = await _wait_with_phases(long_client, grown_id, BUILD_CAP_SECONDS)
             t_incr = time.monotonic() - started
             assert info["status"] == "ready", (info.get("build_log") or "")[-800:]
             print(f"T10.8 cold build {t_cold:.0f}s, appended-layer rebuild {t_incr:.0f}s")
+            if "exporting" in grown_phases:
+                print(
+                    f"T10.8 appended: build ≈ {grown_phases['exporting']:.0f}s, "
+                    f"export+inject ≈ {t_incr - grown_phases['exporting']:.0f}s"
+                )
             assert t_incr < 0.5 * t_cold, (
                 f"a rebuild that only appends a layer took {t_incr:.0f}s against a cold "
-                f"{t_cold:.0f}s: the layer cache is not being used"
+                f"{t_cold:.0f}s: either the layer cache is not being used, or export and "
+                f"inject dominate the build (see the phase split above)"
             )
 
             cid = await create_computer(long_client, recipe_id=grown_id)
@@ -713,13 +760,19 @@ class TestT108IncrementalGrowth:
                     timeout_seconds=60,
                 )
             )
-            assert len(versions.splitlines()) == 5, versions
+            # The exit-0 chain already proves all five commands ran; count non-empty
+            # lines rather than exactly 5, since a tool's update-notifier banner can
+            # add extra lines to its own version output.
+            non_empty = [line for line in versions.splitlines() if line.strip()]
+            assert len(non_empty) >= 5, versions
             print("T10.8 root filesystem: " + _ok(await exec_command(long_client, cid, "df -m /")))
         finally:
             if cid:
                 await destroy_computer(long_client, cid)
             # Newest first: the grown recipe shares layers with the cold one.
+            delete_results: list[tuple[str, int]] = []
             for recipe_id in reversed(recipe_ids):
                 resp = await long_client.delete(f"/recipes/{recipe_id}")
-                assert resp.status_code == 200, (recipe_id, resp.text)
+                delete_results.append((recipe_id, resp.status_code))
+            assert all(code == 200 for _, code in delete_results), delete_results
             # The template directory of the grown recipe stays behind until #75.
