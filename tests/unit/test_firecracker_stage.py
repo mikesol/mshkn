@@ -130,6 +130,11 @@ def staged(monkeypatch: pytest.MonkeyPatch) -> Staged:
         timeline.append(f"ssh:{final_vm_ip}:{final_host_ip}")
 
     monkeypatch.setattr(hv, "_ssh_add_ip", ssh_add_ip)
+
+    async def ssh_settle() -> None:
+        timeline.append(f"settle:{STAGING_VM_IP}")
+
+    monkeypatch.setattr(hv, "_ssh_settle", ssh_settle, raising=False)
     return hv, run, timeline
 
 
@@ -301,6 +306,7 @@ async def test_build_template_boots_snapshots_and_tears_down_staging(
         f"boot:{template}",
         f"close:{template}",
         f"wait:{STAGING_VM_IP}:22:30.0",
+        f"settle:{STAGING_VM_IP}",
         f"pause:{template}",
         f"snapshot:{template}",
         f"close:{template}",
@@ -488,3 +494,27 @@ async def test_ssh_add_ip_sets_the_clock_before_the_address(
         "ip route replace default via 172.16.7.1 && "
         "ip neigh flush dev eth0"
     ]
+
+
+async def test_ssh_settle_completes_a_session_over_the_staging_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The template is snapshotted only after sshd has served a whole session.
+
+    Port 22 accepting a TCP connection is not the guest being ready: a snapshot
+    taken at that moment restored into a guest whose SSH handshake hung (#82).
+    """
+    conn = _FakeSshConn()
+    hosts: list[str] = []
+
+    async def connect(host: str, **kwargs: Any) -> _FakeSshConn:
+        hosts.append(host)
+        return conn
+
+    monkeypatch.setattr(asyncssh, "connect", connect)
+    hv = FirecrackerHypervisor(CONFIG, run=ShellRecorder())
+
+    await hv._ssh_settle()
+
+    assert hosts == [STAGING_VM_IP]
+    assert conn.runs == ["true"]
