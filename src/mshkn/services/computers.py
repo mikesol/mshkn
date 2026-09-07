@@ -392,9 +392,11 @@ class ComputerService:
         async with timed("exec"):
             return await self.host.guest.exec(computer.vm_ip, command, timeout=timeout)
 
-    async def stream(self, computer: Computer, command: str) -> AsyncIterator[OutputLine]:
+    async def stream(
+        self, computer: Computer, command: str, *, timeout: float = 60.0
+    ) -> AsyncIterator[OutputLine]:
         await self._touch(computer)
-        async for item in self.host.guest.stream(computer.vm_ip, command):
+        async for item in self.host.guest.stream(computer.vm_ip, command, timeout=timeout):
             yield item
 
     async def exec_bg(self, computer: Computer, command: str) -> int:

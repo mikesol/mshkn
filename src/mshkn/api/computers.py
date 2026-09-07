@@ -81,7 +81,9 @@ async def exec_command(
     async def event_stream() -> AsyncIterator[dict[str, str]]:
         try:
             async with timed("exec"):
-                async for stream, line in rt.computers.stream(computer, body.command):
+                async for stream, line in rt.computers.stream(
+                    computer, body.command, timeout=float(body.timeout_seconds)
+                ):
                     yield {"event": stream, "data": line}
         except Exception as exc:
             logger.warning("exec stream for %s failed: %s", computer_id, type(exc).__name__)

@@ -47,3 +47,28 @@ async def test_a_recipe_from_another_base_is_422_before_any_build(
     assert ok.status_code == 202, ok.text
     await flow.runtime.tasks.wait(f"recipe_build:{ok.json()['recipe_id']}")
     assert (await flow.client.get(f"/recipes/{ok.json()['recipe_id']}")).json()["status"] == "ready"
+
+
+async def test_exec_timeout_is_the_callers_and_bounded(flow: Flow) -> None:
+    cid = (await flow.client.post("/computers", json={})).json()["computer_id"]
+
+    async with flow.client.stream(
+        "POST", f"/computers/{cid}/exec", json={"command": "true"}
+    ) as resp:
+        assert resp.status_code == 200
+        await resp.aread()
+    async with flow.client.stream(
+        "POST",
+        f"/computers/{cid}/exec",
+        json={"command": "pip install pandas", "timeout_seconds": 300},
+    ) as resp:
+        assert resp.status_code == 200
+        await resp.aread()
+    assert flow.host.guest.stream_timeouts == [60.0, 300.0]
+
+    for bad in (0, 601, -5):
+        resp = await flow.client.post(
+            f"/computers/{cid}/exec", json={"command": "true", "timeout_seconds": bad}
+        )
+        assert resp.status_code == 422, (bad, resp.text)
+    assert flow.host.guest.stream_timeouts == [60.0, 300.0]  # rejected before reaching the guest
