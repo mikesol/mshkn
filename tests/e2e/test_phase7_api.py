@@ -591,3 +591,34 @@ class TestT78MergeSelf:
         # Clean up
         await delete_checkpoint(long_client, ckpt_a)
         await delete_checkpoint(long_client, parent_ckpt)
+
+
+# ---------------------------------------------------------------------------
+# T7.9 — The Exec Time Limit Belongs to the Caller
+# ---------------------------------------------------------------------------
+
+
+class TestT79ExecTimeLimit:
+    """timeout_seconds bounds a command; a killed command never reports success."""
+
+    async def test_a_long_command_survives_a_longer_limit(
+        self, long_client: httpx.AsyncClient
+    ) -> None:
+        async with managed_computer(long_client) as cid:
+            result = await exec_command(
+                long_client, cid, "sleep 65 && echo slept", timeout_seconds=90
+            )
+            assert result.events[-1] == ("exit", "0"), result.events
+            assert "slept" in result.stdout
+
+    async def test_a_command_past_its_limit_is_killed_and_says_so(
+        self, long_client: httpx.AsyncClient
+    ) -> None:
+        async with managed_computer(long_client) as cid:
+            started = time.monotonic()
+            result = await exec_command(long_client, cid, "sleep 30", timeout_seconds=2)
+            elapsed = time.monotonic() - started
+            assert elapsed < 10, (
+                f"the stream should end soon after the 2 s limit, took {elapsed:.1f}s"
+            )
+            assert result.events[-1] == ("exit", "137"), result.events
