@@ -256,6 +256,8 @@ Host mshkn
 MSHKN_SERVER=mshkn MSHKN_API_URL=http://<ip>:8000 scripts/e2e.sh
 ```
 
+Expect **144 passed, 6 skipped, 7 failed**; the seven failures are the `Not implemented` tests tracked in #65, and any other failure means the host or the deployment is wrong. The suite runs for about 14 minutes.
+
 ## Teardown
 
 Kill all VMs and wipe state (the pool is recreated by `mshkn-pool.service` on the next start):
@@ -263,6 +265,7 @@ Kill all VMs and wipe state (the pool is recreated by `mshkn-pool.service` on th
 ```bash
 systemctl stop mshkn litestream
 pkill -x firecracker || true
+rm -f /tmp/fc-*.socket
 for tap in $(ip -o link show type tun | awk -F': ' '{print $2}'); do ip link del "$tap"; done
 for vol in $(dmsetup ls --target thin | awk '{print $1}'); do dmsetup remove "$vol" || true; done
 dmsetup remove mshkn-pool || true
