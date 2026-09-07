@@ -58,6 +58,20 @@ class _ReaderDone:
     error: Exception | None
 
 
+def _exit_code(process: asyncssh.SSHClientProcess[str]) -> str:
+    """The exit event's payload: the status, else 128 + the signal, else 255.
+
+    A process the timeout killed has no exit status, only an exit signal;
+    reporting it as 0 would tell the caller a killed command succeeded.
+    """
+    if process.exit_status is not None:
+        return str(process.exit_status)
+    returncode = process.returncode  # asyncssh: negative signal number when signalled
+    if returncode is not None and returncode < 0:
+        return str(128 - returncode)
+    return "255"
+
+
 class ConnectFn(Protocol):
     """asyncssh.connect, or a test double.
 
@@ -229,7 +243,7 @@ class SshGuest:
                     conn.close()
                     raise
             emitted_exit = False
-            pump = self._pump(process, timeout)
+            pump = self._pump(process, timeout, command)
             try:
                 async for item in pump:
                     emitted_exit = emitted_exit or item[0] == "exit"
@@ -248,7 +262,7 @@ class SshGuest:
 
     @staticmethod
     async def _pump(
-        process: asyncssh.SSHClientProcess[str], timeout: float
+        process: asyncssh.SSHClientProcess[str], timeout: float, command: str
     ) -> AsyncGenerator[OutputLine, None]:
         queue: asyncio.Queue[OutputLine | _ReaderDone] = asyncio.Queue()
 
@@ -289,7 +303,7 @@ class SshGuest:
                 if budget <= 0:
                     if grace_deadline is None:
                         logger.warning(
-                            "stream: process did not exit within %.1fs, killing", timeout
+                            "stream: %r did not exit within %.1fs, killing", command, timeout
                         )
                         process.kill()
                         grace_deadline = now + STREAM_GRACE_SECONDS
@@ -333,7 +347,7 @@ class SshGuest:
             # A reader died mid-command. Reporting a clean exit here would make
             # a dropped connection indistinguishable from a successful run.
             raise reader_error
-        yield ("exit", str(process.exit_status or 0))
+        yield ("exit", _exit_code(process))
 
     async def exec_bg(self, vm_ip: str, command: str) -> int:
         async with _host_errors("exec_bg"):

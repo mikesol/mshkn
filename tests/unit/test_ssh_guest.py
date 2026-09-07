@@ -67,6 +67,7 @@ class FakeProcess:
         self.stderr = FakeReader(stderr, hang_after=hang)
         self._exit_after = exit_after
         self.exit_status = code
+        self.returncode: int | None = None
         self.killed = False
 
     async def wait(self) -> None:
@@ -89,6 +90,7 @@ class LateStatusProcess:
         self._exit_after = exit_after
         self._code = code
         self.exit_status: int | None = None
+        self.returncode: int | None = None
         self.killed = False
 
     async def wait(self) -> None:
@@ -106,6 +108,7 @@ class LostConnectionProcess:
         self.stdout = RaisingReader(["a\n"], error)
         self.stderr = FakeReader([], hang_after=True)
         self.exit_status: int | None = None
+        self.returncode: int | None = None
         self.killed = False
 
     async def wait(self) -> None:
@@ -122,6 +125,47 @@ class DropAfterExitProcess:
         self.stdout = RaisingReader(["a\n"], error, delay=0.05)
         self.stderr = FakeReader([])
         self.exit_status = 0
+        self.returncode: int | None = None
+        self.killed = False
+
+    async def wait(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class KilledProcess:
+    """A command that ignores the deadline: no exit status, a signal once killed.
+
+    asyncssh reports a signalled process with exit_status None and
+    returncode = -signal; SIGKILL is 9.
+    """
+
+    def __init__(self) -> None:
+        self.stdout = FakeReader([(0.0, "working\n")], hang_after=True)
+        self.stderr = FakeReader([], hang_after=True)
+        self.exit_status: int | None = None
+        self.returncode: int | None = None
+        self.killed = False
+
+    async def wait(self) -> None:
+        while not self.killed:
+            await asyncio.sleep(0.01)
+        self.returncode = -9
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class StatuslessProcess:
+    """The channel closed with neither an exit status nor a signal."""
+
+    def __init__(self) -> None:
+        self.stdout = FakeReader([(0.0, "a\n")])
+        self.stderr = FakeReader([])
+        self.exit_status: int | None = None
+        self.returncode: int | None = None
         self.killed = False
 
     async def wait(self) -> None:
@@ -276,6 +320,25 @@ async def test_stream_kills_on_timeout_and_still_reports_exit(
     items = [item async for item in guest.stream("172.16.1.2", "cmd", timeout=0.1)]
     assert process.killed
     assert items == [("stdout", "x"), ("exit", "0")]
+
+
+async def test_a_killed_command_reports_128_plus_the_signal(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(ssh_module, "STREAM_GRACE_SECONDS", 0.1)
+    process = KilledProcess()
+    guest = make_guest(process)
+    with caplog.at_level("WARNING", logger="mshkn.host.ssh"):
+        items = [item async for item in guest.stream("172.16.1.2", "sleep 30", timeout=0.1)]
+    assert process.killed
+    assert items == [("stdout", "working"), ("exit", "137")]
+    assert any("sleep 30" in rec.getMessage() for rec in caplog.records)
+
+
+async def test_a_process_with_neither_status_nor_signal_reports_255() -> None:
+    guest = make_guest(StatuslessProcess())
+    items = [item async for item in guest.stream("172.16.1.2", "cmd")]
+    assert items == [("stdout", "a"), ("exit", "255")]
 
 
 async def test_stream_grace_drains_lines_after_exit(monkeypatch: pytest.MonkeyPatch) -> None:
