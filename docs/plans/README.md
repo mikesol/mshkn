@@ -2,14 +2,14 @@
 
 Every design and implementation document in this repository, with its status as of 2026-09-07 (main after PR #64). Status is judged from the code, not from what the document says about itself. The documents are historical records and are not edited; this index is what changes.
 
-Statuses: **implemented**, **partially implemented**, **superseded by …**, **retired** (never built, not replaced), **reference** (not a plan).
+Statuses: **implemented**, **partially implemented**, **not implemented** (in the test plan, no code, tracked in an issue), **in progress** (the plan being executed), **superseded by …**, **retired** (never built, not replaced), **reference** (not a plan).
 
 ## Product
 
 | Document | What it proposed | Status | Evidence |
 |---|---|---|---|
 | `docs/plans/2026-03-07-disposable-cloud-computers-design.md` | The product: disposable Firecracker VMs identified by checkpoints, fork and merge, Nix capability layers, sleep-for-free economics. | partially implemented: the computer, checkpoint, fork and merge model is live; the Nix capability layer was replaced by Docker recipes | `src/mshkn/services/computers.py`, `src/mshkn/services/checkpoints.py`, `src/mshkn/services/recipes.py` |
-| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 157 end-to-end tests, T0 to T13. | reference; the suite is `tests/e2e/`. Seven tests (T8.6, T9.1, T10.1, T10.2, T10.5, T11.3 and the audit-log check) fail as `Not implemented` until built (#65). | `tests/e2e/` collects 157 |
+| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 157 end-to-end tests, T0 to T13. | reference; the suite is `tests/e2e/`. Seven tests (T8.6, T9.1, T10.1, T10.2, T10.5, T11.2 and the audit-log check) fail as `Not implemented` until built (#65). | `tests/e2e/` collects 157 |
 | `docs/plans/2026-03-08-roadmap.md` | Prioritised backlog from the first E2E run. | partially implemented: see the breakdown below | |
 | `docs/plans/2026-03-08-orchestrator-design.md` | One FastAPI process over Firecracker, dm-thin, R2, Nix and SQLite. | partially implemented: everything but Nix; the module layout became `host/`, `services/`, `db/` in the quality overhaul | `src/mshkn/app.py`, `src/mshkn/host/`, `src/mshkn/services/` |
 | `docs/plans/2026-03-08-orchestrator-implementation.md` | Task plan for the orchestrator. | implemented, later restructured by PRs 2 to 4 of the quality overhaul | `src/mshkn/runtime.py` |
@@ -38,19 +38,19 @@ Spec: `docs/superpowers/specs/2026-09-04-quality-overhaul-design.md`. Six PRs; e
 | `docs/superpowers/plans/2026-09-05-pr3-host-boundary.md` | #62 | implemented (merged 2026-09-06) |
 | `docs/superpowers/plans/2026-09-06-pr4-services.md` | #63 | implemented (merged 2026-09-06) |
 | `docs/superpowers/plans/2026-09-06-pr5-tests.md` | #64 | implemented (merged 2026-09-07); made seven stub E2E tests fail honestly (#65) |
-| `docs/superpowers/plans/2026-09-07-pr6-docs-devtools.md` | this PR | docs, the docs test, the devtools move |
+| `docs/superpowers/plans/2026-09-07-pr6-docs-devtools.md` | this PR | in progress (this PR) |
 
 ## Roadmap breakdown (`docs/plans/2026-03-08-roadmap.md`)
 
 | Item | Status |
 |---|---|
-| P1 destroy ownership check, startup recovery, allocation locking | done: `ComputerService.get_owned`, `Runtime.start`, `SlotAllocator` |
-| P2 Caddy dynamic routing | done: `src/mshkn/host/caddy.py` |
-| P3 Nix capability system | superseded by recipes |
-| P4 merge end to end | done: `POST /checkpoints/{parent_id}/merge` |
-| P5 VM limits, rate limiting, idle timeout, retention, `needs`, stale cleanup | done: `ComputerService.create`, `src/mshkn/ratelimit.py`, `src/mshkn/services/reaper.py`, `src/mshkn/resources.py` |
-| P6 metrics, JSON logs, status enrichment, checkpoint DAG, alerts | done: `src/mshkn/observability/`, `GET /alerts`; Grafana dashboards are not automatable and were never built |
-| P7 Litestream | done: `systemd/litestream.service`, `DEPLOY.md` §12 |
+| P1 destroy ownership check, startup recovery, allocation locking | implemented: `ComputerService.get_owned`, `Runtime.start`, `SlotAllocator` |
+| P2 Caddy dynamic routing | implemented: `src/mshkn/host/caddy.py` |
+| P3 Nix capability system | superseded by `docs/plans/2026-03-13-recipe-system-design.md` |
+| P4 merge end to end | implemented: `POST /checkpoints/{parent_id}/merge` |
+| P5 VM limits, rate limiting, idle timeout, retention, `needs`, stale cleanup | implemented: `ComputerService.create`, `src/mshkn/ratelimit.py`, `src/mshkn/services/reaper.py`, `src/mshkn/resources.py` |
+| P6 metrics, JSON logs, status enrichment, checkpoint DAG, alerts | implemented: `src/mshkn/observability/`, `GET /alerts`; Grafana dashboards are not automatable and were never built |
+| P7 Litestream | implemented: `systemd/litestream.service`, `DEPLOY.md` §12 |
 | Economics validation (T9.x), dumb agent (T10.5), S3 isolation (T8.6) | not implemented; part of #65 |
 
 ## Open follow-ups
