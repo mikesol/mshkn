@@ -128,7 +128,11 @@ def staged(monkeypatch: pytest.MonkeyPatch) -> Staged:
     async def ssh_add_ip(final_vm_ip: str, final_host_ip: str) -> None:
         timeline.append(f"ssh:{final_vm_ip}:{final_host_ip}")
 
+    async def ssh_keep_only(final_vm_ip: str) -> None:
+        timeline.append(f"keep:{final_vm_ip}")
+
     monkeypatch.setattr(hv, "_ssh_add_ip", ssh_add_ip)
+    monkeypatch.setattr(hv, "_ssh_keep_only", ssh_keep_only)
     return hv, run, timeline
 
 
@@ -195,17 +199,21 @@ async def test_boot_runs_the_staging_chain_in_order(staged: Staged) -> None:
     assert f"ip tuntap add dev {STAGING_TAP} mode tap" in cmds
     assert cmds.index("ip link del tap3") < cmds.index(_rename_chain(3))
     assert _rename_chain(3) in cmds
-    # The API client is closed before the port wait, and the rename chain only
-    # runs once the guest has taken its final IP over SSH.
+    # The API client is closed before the port wait, the rename chain only runs
+    # once the guest has taken its final IP over SSH, and the guest drops its
+    # other addresses afterwards, over the final one.
     assert _lifecycle(timeline) == [
         f"start:{SOCKET}",
         f"boot:{SOCKET}",
         f"close:{SOCKET}",
         f"wait:{STAGING_VM_IP}:22:30.0",
         "ssh:172.16.3.2:172.16.3.1",
+        "keep:172.16.3.2",
     ]
-    assert _first(timeline, "ssh:172.16.3.2:172.16.3.1") < _first(
-        timeline, f"run:{_rename_chain(3)}"
+    assert (
+        _first(timeline, "ssh:172.16.3.2:172.16.3.1")
+        < _first(timeline, f"run:{_rename_chain(3)}")
+        < _first(timeline, "keep:172.16.3.2")
     )
     (client,) = FakeClient.instances
     assert client.closed
@@ -237,8 +245,10 @@ async def test_restore_loads_the_snapshot_with_the_short_ssh_timeout(staged: Sta
         f"close:{SOCKET}",
         f"wait:{STAGING_VM_IP}:22:5.0",
         "ssh:172.16.9.2:172.16.9.1",
+        "keep:172.16.9.2",
     ]
     assert _rename_chain(9) in [c for c, _ in run.calls]
+    assert _first(timeline, f"run:{_rename_chain(9)}") < _first(timeline, "keep:172.16.9.2")
 
 
 async def test_activate_failure_cleans_staging_and_raises_host_error(staged: Staged) -> None:
