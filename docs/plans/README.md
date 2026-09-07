@@ -46,7 +46,7 @@ Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.
 
 | Plan | PR | Status |
 |---|---|---|
-| `docs/superpowers/plans/2026-09-07-pr7a-one-base.md` | this PR | in progress (this PR) |
+| `docs/superpowers/plans/2026-09-07-pr7a-one-base.md` | #79 | implemented (merged 2026-09-07) |
 | `docs/superpowers/plans/2026-09-07-pr7-workload-proof.md` | this PR | in progress (this PR) |
 
 ## Roadmap breakdown (`docs/plans/2026-03-08-roadmap.md`)
