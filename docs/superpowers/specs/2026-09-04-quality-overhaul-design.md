@@ -38,6 +38,8 @@ src/mshkn/
   models.py            Account, Computer, Checkpoint, Recipe, DeferredRequest, StrEnums
   errors.py            NotFound, Conflict, InvalidInput, LimitExceeded, HostError
   resources.py         Resources(mem_mib, vcpus): defaults, parsing, bounds
+  main.py              ASGI entry point: uvicorn mshkn.main:app (systemd unit)
+  ratelimit.py         RateLimiter (sliding window; exec per API key, ingress per rule)
 
   db/
     __init__.py        connect() with pragmas; run_migrations()
@@ -54,14 +56,17 @@ src/mshkn/
     r2.py              RcloneObjectStore
     caddy.py           CaddyProxy
     fake.py            FakeHypervisor, FakeBlockStore, FakeGuest, FakeObjectStore, FakeProxy
+    firecracker_host.py production Host wiring; the one FirecrackerHypervisor per process
 
   services/
     allocator.py       SlotAllocator (slots + volume ids, derived from DB and pool at startup)
     computers.py       ComputerService: create, fork, destroy, exec, exec_bg, upload, download, status
     checkpoints.py     CheckpointService: create (single impl), delete, prune, merge
     lifecycle.py       run_ephemeral(): exec → optional self-destruct → callback → deferred drain
+    callback.py        deliver_callback: POST with retries, never raises
     recipes.py         RecipeService: build pipeline, L3 template build (one impl for bare and recipe)
     ingress.py         IngressService: rule CRUD, trigger handling, starlark
+    starlark.py        transform validation and execution (starlark_go)
     reaper.py          Reaper: dead VMs, idle VMs, prune, host checks
     merge.py           three_way_merge (pure, unchanged algorithm)
 
@@ -75,6 +80,8 @@ src/mshkn/
     logging.py         JSONFormatter, request-id contextvar, RequestIdFilter
     metrics.py         histograms/counters/gauges, timed(op) context manager
 ```
+
+Amended 2026-09-07 (PR 6): the five entries above marked with their purpose were added because the implementation has them; the spec is the record of the layout as built.
 
 Dependency direction is strict: `api → services → host, db`. `models`, `errors`, `config`, `resources`, `observability` are leaves. Nothing in `services` or `host` imports `api`. There are no function-local imports except where an import is genuinely optional (none are expected).
 
