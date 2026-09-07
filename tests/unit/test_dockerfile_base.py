@@ -31,6 +31,8 @@ from mshkn.services.recipes import dockerfile_base_image, image_name
             "FROM --platform=linux/amd64 \\\n  mshkn-base:latest \\\n  AS base\nRUN true",
             "mshkn-base:latest",
         ),
+        ("FROM python:3.12\nFROM mshkn-base \\", "mshkn-base"),
+        ("FROM mshkn-base\nRUN true \\", "mshkn-base"),
     ],
 )
 def test_last_from_wins(dockerfile: str, expected: str | None) -> None:

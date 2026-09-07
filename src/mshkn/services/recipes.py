@@ -61,7 +61,12 @@ _FROM_RE = re.compile(r"^FROM\s+(?:--\S+\s+)*(\S+)", re.IGNORECASE)
 
 
 def _join_line_continuations(dockerfile: str) -> list[str]:
-    """Lines with a trailing backslash joined onto the next, stripped and backslash removed."""
+    """Lines with a trailing backslash joined onto the next, stripped and backslash removed.
+
+    A trailing backslash on the last line has nothing to join onto; `docker
+    build` still processes that line as if the backslash were not there, so
+    it is flushed rather than dropped.
+    """
     lines: list[str] = []
     buffer = ""
     for raw in dockerfile.splitlines():
@@ -72,6 +77,8 @@ def _join_line_continuations(dockerfile: str) -> list[str]:
             continue
         lines.append(joined)
         buffer = ""
+    if buffer:
+        lines.append(buffer)
     return lines
 
 
