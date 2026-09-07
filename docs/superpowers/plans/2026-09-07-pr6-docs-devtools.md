@@ -232,7 +232,7 @@ The one `skipif` is a build-order device inside this PR: Task 2 turns it into a 
 - [ ] **Step 3: Run it against the current docs; expect the stale README to fail.**
 
 Run: `uv run pytest tests/unit/test_docs.py -q -p no:cacheprovider`
-Expected: exactly `3 failed, 20 passed, 1 skipped` (verified while writing this plan): `test_retired_terms_are_absent[README.md]` (`Nix`, `VMManager`), `test_retired_terms_are_absent[CLAUDE.md]` (`Priority 1 (Bug Fixes)`), and the path/module/route/metric/env checks pass for all four documents (if one fails, the doc has a genuine stale reference: fix it in the task that owns that doc and note it in the report; do not loosen the regex). The architecture test is skipped.
+Expected: exactly `2 failed, 21 passed, 1 skipped` (the plan first said 3; that count predated excluding `mshkn.dev` from the module regex): `test_retired_terms_are_absent[README.md]` (`Nix`, `VMManager`), `test_retired_terms_are_absent[CLAUDE.md]` (`Priority 1 (Bug Fixes)`), and the path/module/route/metric/env checks pass for all four documents (if one fails, the doc has a genuine stale reference: fix it in the task that owns that doc and note it in the report; do not loosen the regex). The architecture test is skipped.
 
 - [ ] **Step 4: Commit the test alone.** The failing cases are honest: they are what Tasks 4 and 5 fix. CI is not run on the intermediate commit, and the final gate (Task 6) is green.
 
