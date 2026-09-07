@@ -136,10 +136,11 @@ class DropAfterExitProcess:
 
 
 class KilledProcess:
-    """A command that ignores the deadline: no exit status, a signal once killed.
+    """A command that ignores the deadline: no status until a signal kills it.
 
-    asyncssh reports a signalled process with exit_status None and
-    returncode = -signal; SIGKILL is 9.
+    asyncssh's SSHClientChannel.get_exit_status() returns -1 (not None)
+    once an exit-signal has been received, and get_returncode() returns
+    the negative signal number; SIGKILL is 9.
     """
 
     def __init__(self) -> None:
@@ -152,6 +153,7 @@ class KilledProcess:
     async def wait(self) -> None:
         while not self.killed:
             await asyncio.sleep(0.01)
+        self.exit_status = -1
         self.returncode = -9
 
     def kill(self) -> None:
@@ -339,6 +341,17 @@ async def test_a_process_with_neither_status_nor_signal_reports_255() -> None:
     guest = make_guest(StatuslessProcess())
     items = [item async for item in guest.stream("172.16.1.2", "cmd")]
     assert items == [("stdout", "a"), ("exit", "255")]
+
+
+async def test_a_normal_exit_reports_its_status_not_the_signal_branch() -> None:
+    """asyncssh sets returncode == exit_status (both non-negative) on a normal
+    exit; pins that _exit_code's signal check (returncode < 0) does not
+    misfire on a non-negative returncode and skip the real status."""
+    process = FakeProcess([], [], 0.0, code=3)
+    process.returncode = 3
+    guest = make_guest(process)
+    items = [item async for item in guest.stream("172.16.1.2", "cmd")]
+    assert items == [("exit", "3")]
 
 
 async def test_stream_grace_drains_lines_after_exit(monkeypatch: pytest.MonkeyPatch) -> None:

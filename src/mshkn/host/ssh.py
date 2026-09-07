@@ -59,16 +59,21 @@ class _ReaderDone:
 
 
 def _exit_code(process: asyncssh.SSHClientProcess[str]) -> str:
-    """The exit event's payload: the status, else 128 + the signal, else 255.
+    """The exit event's payload: 128 + the signal, else the status, else 255.
 
-    A process the timeout killed has no exit status, only an exit signal;
-    reporting it as 0 would tell the caller a killed command succeeded.
+    asyncssh's SSHClientChannel.get_exit_status() returns -1, not None,
+    once an exit-signal has arrived (get_exit_signal() carries the signal
+    itself); get_returncode() is the one property that tells the two
+    apart, returning the negative signal number when signalled and the
+    non-negative exit status otherwise. A process the timeout killed is
+    signalled, not exited; checking exit_status first would misread its
+    -1 as a real (and wrong) status instead of running the signal branch.
     """
-    if process.exit_status is not None:
-        return str(process.exit_status)
-    returncode = process.returncode  # asyncssh: negative signal number when signalled
+    returncode = process.returncode
     if returncode is not None and returncode < 0:
         return str(128 - returncode)
+    if process.exit_status is not None and process.exit_status >= 0:
+        return str(process.exit_status)
     return "255"
 
 
