@@ -17,6 +17,7 @@ from .conftest import (
     destroy_computer,
     exec_command,
     managed_computer,
+    wait_for_recipe,
 )
 
 if TYPE_CHECKING:
@@ -111,28 +112,17 @@ class TestContentHashDedup:
 
 
 class TestBuildFailure:
-    """Bad Dockerfile produces status=failed with build_log."""
+    """A Dockerfile whose build fails produces status=failed with a build_log."""
 
     async def test_bad_dockerfile_fails(self, long_client: httpx.AsyncClient) -> None:
         resp = await long_client.post(
             "/recipes",
-            json={"dockerfile": "FROM nonexistent-image-that-does-not-exist-12345"},
+            json={"dockerfile": "FROM mshkn-base\nRUN false"},
         )
         resp.raise_for_status()
         recipe_id = resp.json()["recipe_id"]
 
-        # Poll until terminal
-        import asyncio
-        import time
-
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            r = await long_client.get(f"/recipes/{recipe_id}")
-            r.raise_for_status()
-            data = r.json()
-            if data["status"] in ("ready", "failed"):
-                break
-            await asyncio.sleep(3)
+        data, _ = await wait_for_recipe(long_client, recipe_id, timeout=600)
 
         assert data["status"] == "failed"
         assert data.get("build_log") is not None

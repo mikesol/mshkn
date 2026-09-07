@@ -11,6 +11,7 @@ import contextlib
 import logging
 import os
 import signal
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -251,9 +252,17 @@ class FirecrackerHypervisor:
     _RESTORE_SSH_TIMEOUT = 5.0
     _BOOT_SSH_TIMEOUT = 30.0
 
-    def __init__(self, config: Config, *, run: RunFn = shell_run) -> None:
+    def __init__(
+        self,
+        config: Config,
+        *,
+        run: RunFn = shell_run,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
         self._config = config
         self._run = run
+        # Wall clock, injectable: the staging pass stamps it into the guest.
+        self._clock = clock
         self._staging_lock = asyncio.Lock()
         # pid -> API socket path, so a killed VM's socket is removed. Firecracker
         # does not unlink its own socket on exit, and start_firecracker_process
@@ -492,7 +501,14 @@ class FirecrackerHypervisor:
         address, and a guest listing its own addresses sees the staging one
         first — anything that needs a computer's address must ask the API, not
         the guest. `ip addr add` may fail with EEXIST when a fork reuses the
-        parent's slot.
+        parent's slot. The clock is set first because a restored snapshot keeps
+        the time it was taken at, which ages every guest by the age of its
+        template or checkpoint; it is separated from the rest by `;`, not
+        `&&`, because setting the clock is best-effort and must never cost the
+        guest its address — an `&&` there would skip `ip addr add` when `date`
+        failed, leave the rest to succeed, and hand back an unreachable
+        computer with no error. The epoch is read immediately before the
+        command runs, so the guest does not land a connect's worth behind.
         """
         conn = await asyncio.wait_for(
             asyncssh.connect(
@@ -504,7 +520,9 @@ class FirecrackerHypervisor:
             timeout=CONNECT_TIMEOUT_SECONDS,
         )
         async with conn:
+            now = int(self._clock())
             await conn.run(
+                f"date -u -s @{now} >/dev/null 2>&1; "
                 f"ip addr add {final_vm_ip}/30 dev eth0 2>/dev/null; "
                 f"ip route replace default via {final_host_ip} && "
                 f"ip neigh flush dev eth0",

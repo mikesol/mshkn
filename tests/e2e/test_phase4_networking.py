@@ -6,7 +6,6 @@ These tests run against a LIVE server with real Firecracker VMs and Caddy revers
 from __future__ import annotations
 
 import asyncio
-from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -19,6 +18,7 @@ from .conftest import (
     exec_command,
     fork_checkpoint,
     managed_computer,
+    port_url,
 )
 
 # Shared Python recipe Dockerfile for networking tests
@@ -28,16 +28,6 @@ _PYTHON_WS_DOCKERFILE = (
     "RUN apt-get update && apt-get install -y python3 python3-pip\n"
     "RUN pip3 install websockets --break-system-packages\n"
 )
-
-
-def port_url(base_url: str, port: int) -> str:
-    """Construct a port-specific URL from a base computer URL.
-
-    base_url: https://comp-abc123.mshkn.dev
-    returns:  https://{port}-comp-abc123.mshkn.dev
-    """
-    parsed = urlparse(base_url)
-    return f"{parsed.scheme}://{port}-{parsed.hostname}"
 
 
 # ---------------------------------------------------------------------------

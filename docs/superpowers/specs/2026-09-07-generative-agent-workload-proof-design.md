@@ -182,13 +182,13 @@ Dockerfile with a per-run nonce as its first layer (`RUN echo run-<uuid>`), then
 
 ### Timing
 
-Estimated additions: T10.1 about 3 min (build dominated), T10.2 about 4 min, T10.5 about 1 min, T10.6 about 1 min, T10.7 about 2 min, T10.8 about 4 min, T7.9 about 1.5 min. Suite from about 14 to about 26 minutes. The suite is 161 tests.
+Estimated additions: T10.1 about 3 min (build dominated), T10.2 about 4 min, T10.5 about 1 min, T10.6 about 1 min, T10.7 about 2 min, T10.8 about 4 min, T7.9 about 1.5 min. Suite from about 14 to about 26 minutes. The suite is 163 tests.
 
 ## 7. Documents and issues
 
 Changed in PR 7a: `DEPLOY.md`, `README.md` (layout, running it), `docs/ARCHITECTURE.md` (§5 volume 0, §8 first paragraph, §13 table), `docs/infrastructure.md` (Docker paragraph, buildx note), `docs/plans/README.md` (a PR 7a row).
 
-Changed in PR 7: `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` (Phase 10 replaced, T7.9 added; text in the appendix), `README.md` (Exec bullet, Recipes bullet, "what does not exist" list, test counts), `CLAUDE.md` (expected gate 153 / 6 / 4 and the four), `docs/ARCHITECTURE.md` (§6 exec, §8 base rule and image lifetime, §11 timeouts and exit codes), `docs/infrastructure.md` (161 tests), `docs/plans/README.md` (the test plan row, the sentence that historical documents are never edited, the #65 list, a PR 7 row).
+Changed in PR 7: `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` (Phase 10 replaced, T7.9 added; text in the appendix), `README.md` (Exec bullet, Recipes bullet, "what does not exist" list, test counts), `CLAUDE.md` (expected gate 153 / 6 / 4 and the four), `docs/ARCHITECTURE.md` (§6 exec, §8 base rule and image lifetime, §11 timeouts and exit codes), `docs/infrastructure.md` (163 tests), `docs/plans/README.md` (the test plan row, the sentence that historical documents are never edited, the #65 list, a PR 7 row).
 
 Issues:
 

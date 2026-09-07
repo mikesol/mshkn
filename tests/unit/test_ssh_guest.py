@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,7 @@ import pytest
 import mshkn.host.ssh as ssh_module
 from mshkn.errors import HostError
 from mshkn.host import ExecResult
-from mshkn.host.ssh import SshGuest, parse_metrics
+from mshkn.host.ssh import SshGuest, guest_timeout_command, parse_metrics
 
 
 class FakeReader:
@@ -67,6 +68,7 @@ class FakeProcess:
         self.stderr = FakeReader(stderr, hang_after=hang)
         self._exit_after = exit_after
         self.exit_status = code
+        self.returncode: int | None = None
         self.killed = False
 
     async def wait(self) -> None:
@@ -89,6 +91,7 @@ class LateStatusProcess:
         self._exit_after = exit_after
         self._code = code
         self.exit_status: int | None = None
+        self.returncode: int | None = None
         self.killed = False
 
     async def wait(self) -> None:
@@ -106,6 +109,7 @@ class LostConnectionProcess:
         self.stdout = RaisingReader(["a\n"], error)
         self.stderr = FakeReader([], hang_after=True)
         self.exit_status: int | None = None
+        self.returncode: int | None = None
         self.killed = False
 
     async def wait(self) -> None:
@@ -122,6 +126,49 @@ class DropAfterExitProcess:
         self.stdout = RaisingReader(["a\n"], error, delay=0.05)
         self.stderr = FakeReader([])
         self.exit_status = 0
+        self.returncode: int | None = None
+        self.killed = False
+
+    async def wait(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class KilledProcess:
+    """A command that ignores the deadline: no status until a signal kills it.
+
+    asyncssh's SSHClientChannel.get_exit_status() returns -1 (not None)
+    once an exit-signal has been received, and get_returncode() returns
+    the negative signal number; SIGKILL is 9.
+    """
+
+    def __init__(self) -> None:
+        self.stdout = FakeReader([(0.0, "working\n")], hang_after=True)
+        self.stderr = FakeReader([], hang_after=True)
+        self.exit_status: int | None = None
+        self.returncode: int | None = None
+        self.killed = False
+
+    async def wait(self) -> None:
+        while not self.killed:
+            await asyncio.sleep(0.01)
+        self.exit_status = -1
+        self.returncode = -9
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class StatuslessProcess:
+    """The channel closed with neither an exit status nor a signal."""
+
+    def __init__(self) -> None:
+        self.stdout = FakeReader([(0.0, "a\n")])
+        self.stderr = FakeReader([])
+        self.exit_status: int | None = None
+        self.returncode: int | None = None
         self.killed = False
 
     async def wait(self) -> None:
@@ -192,9 +239,11 @@ class FakeConn:
         self._run_result = run_result if run_result is not None else RunResult()
         self.closed = False
         self.runs: list[str] = []
+        self.processes: list[str] = []
         self.files: dict[str, bytes] = {}
 
     async def create_process(self, command: str) -> Any:
+        self.processes.append(command)
         if self._channel_error:
             raise asyncssh.ChannelOpenError(4, "open failed")
         return self._process
@@ -270,12 +319,66 @@ async def test_stream_kills_on_timeout_and_still_reports_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(ssh_module, "STREAM_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(ssh_module, "STREAM_HOST_GRACE_SECONDS", 0.05)
     # readers stay open (a background child holds the fds) and the process never exits
     process = FakeProcess(stdout=[(0.0, "x\n")], stderr=[], exit_after=10, code=0, hang=True)
     guest = make_guest(process)
     items = [item async for item in guest.stream("172.16.1.2", "cmd", timeout=0.1)]
     assert process.killed
     assert items == [("stdout", "x"), ("exit", "0")]
+
+
+async def test_the_host_backstop_trails_the_guests_own_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The host waits timeout + STREAM_HOST_GRACE_SECONDS, so the guest's timeout goes first."""
+    monkeypatch.setattr(ssh_module, "STREAM_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(ssh_module, "STREAM_HOST_GRACE_SECONDS", 0.5)
+    process = FakeProcess(stdout=[(0.0, "x\n")], stderr=[], exit_after=10, code=0, hang=True)
+    guest = make_guest(process)
+    items: list[tuple[str, str]] = []
+
+    async def drain() -> None:
+        async for item in guest.stream("172.16.1.2", "cmd", timeout=0.1):
+            items.append(item)
+
+    task = asyncio.create_task(drain())
+    await asyncio.sleep(0.3)
+    assert not process.killed, "the host must not kill at timeout_seconds; the guest's timeout does"
+    await task
+    assert process.killed, "the backstop still fires once the host's grace has run out as well"
+    assert items == [("stdout", "x"), ("exit", "0")]
+
+
+async def test_a_killed_command_reports_128_plus_the_signal(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(ssh_module, "STREAM_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(ssh_module, "STREAM_HOST_GRACE_SECONDS", 0.05)
+    process = KilledProcess()
+    guest = make_guest(process)
+    with caplog.at_level("WARNING", logger="mshkn.host.ssh"):
+        items = [item async for item in guest.stream("172.16.1.2", "sleep 30", timeout=0.1)]
+    assert process.killed
+    assert items == [("stdout", "working"), ("exit", "137")]
+    assert any("sleep 30" in rec.getMessage() for rec in caplog.records)
+
+
+async def test_a_process_with_neither_status_nor_signal_reports_255() -> None:
+    guest = make_guest(StatuslessProcess())
+    items = [item async for item in guest.stream("172.16.1.2", "cmd")]
+    assert items == [("stdout", "a"), ("exit", "255")]
+
+
+async def test_a_normal_exit_reports_its_status_not_the_signal_branch() -> None:
+    """asyncssh sets returncode == exit_status (both non-negative) on a normal
+    exit; pins that _exit_code's signal check (returncode < 0) does not
+    misfire on a non-negative returncode and skip the real status."""
+    process = FakeProcess([], [], 0.0, code=3)
+    process.returncode = 3
+    guest = make_guest(process)
+    items = [item async for item in guest.stream("172.16.1.2", "cmd")]
+    assert items == [("exit", "3")]
 
 
 async def test_stream_grace_drains_lines_after_exit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -371,6 +474,38 @@ async def test_stream_closes_the_fallback_connection_when_the_retry_also_fails()
     assert isinstance(info.value.__cause__, asyncssh.ChannelOpenError)
     assert dedicated.closed, "the dedicated fallback must not leak when its channel also fails"
     assert not pooled.closed
+
+
+async def test_guest_timeout_command_rounds_up_and_kills_at_the_deadline() -> None:
+    """sshd ignores the SSH signal request, so the kill is the guest's coreutils timeout."""
+    assert (
+        guest_timeout_command("echo hi; sleep 2", 2.4)
+        == "timeout --preserve-status -s KILL 3 bash -c 'echo hi; sleep 2'"
+    )
+
+
+async def test_guest_timeout_command_quotes_so_the_guest_shell_round_trips_it() -> None:
+    command = """echo 'it'"'"'s here'"""
+    wrapped = guest_timeout_command(command, 1.0)
+    assert shlex.split(wrapped) == [
+        "timeout",
+        "--preserve-status",
+        "-s",
+        "KILL",
+        "1",
+        "bash",
+        "-c",
+        command,
+    ]
+
+
+async def test_stream_runs_the_command_under_the_guests_timeout() -> None:
+    process = FakeProcess(stdout=[(0.0, "a\n")], stderr=[], exit_after=0.0)
+    conn = FakeConn(process)
+    guest = make_guest_with([conn])
+    items = [item async for item in guest.stream("172.16.1.2", "cmd", timeout=7)]
+    assert items == [("stdout", "a"), ("exit", "0")]
+    assert conn.processes == ["timeout --preserve-status -s KILL 7 bash -c cmd"]
 
 
 # -- exec and the pool -------------------------------------------------------

@@ -29,7 +29,7 @@ from mshkn.db import (
     update_recipe_status,
     update_recipe_template,
 )
-from mshkn.errors import Conflict, NotFound
+from mshkn.errors import Conflict, InvalidInput, NotFound
 from mshkn.host import SnapshotFiles
 from mshkn.host.shell import run as shell_run
 from mshkn.models import Recipe, RecipeStatus, recipe_volume_name
@@ -53,10 +53,72 @@ logger = logging.getLogger(__name__)
 
 _DOCKER_BUILD_TIMEOUT_SECONDS = 600
 
+BASE_IMAGE = "mshkn-base"
+
+# `FROM [--flag=value ...] <image> [AS <name>]`, any case; the image is the first
+# token that is not a flag.
+_FROM_RE = re.compile(r"^FROM\s+(?:--\S+\s+)*(\S+)", re.IGNORECASE)
+
+
+def _join_line_continuations(dockerfile: str) -> list[str]:
+    """Lines with a trailing backslash joined onto the next, stripped and backslash removed.
+
+    A trailing backslash on the last line has nothing to join onto; `docker
+    build` still processes that line as if the backslash were not there, so
+    it is flushed rather than dropped.
+    """
+    lines: list[str] = []
+    buffer = ""
+    for raw in dockerfile.splitlines():
+        stripped = raw.strip()
+        joined = f"{buffer} {stripped}".strip() if buffer else stripped
+        if joined.endswith("\\"):
+            buffer = joined[:-1].rstrip()
+            continue
+        lines.append(joined)
+        buffer = ""
+    if buffer:
+        lines.append(buffer)
+    return lines
+
+
+def dockerfile_base_image(dockerfile: str) -> str | None:
+    """The image of the last FROM (the stage that is exported), or None without a FROM.
+
+    Comments, blank lines, parser directives and ARG lines before the first
+    FROM are skipped; a multi-stage build is judged by its final stage,
+    because that is the filesystem `docker export` produces. A line ending
+    in a backslash continues onto the next, as Dockerfile syntax allows, so
+    continuation lines are joined before this line-by-line scan runs.
+    """
+    image: str | None = None
+    for line in _join_line_continuations(dockerfile):
+        if not line or line.startswith("#"):
+            continue
+        match = _FROM_RE.match(line)
+        if match:
+            image = match.group(1)
+    return image
+
+
+def image_name(reference: str) -> str:
+    """'mshkn-base' for 'mshkn-base', 'mshkn-base:latest' and 'mshkn-base@sha256:…'."""
+    name = reference.split("@", 1)[0]
+    # The tag follows the last colon, unless that colon belongs to a registry port.
+    head, sep, tail = name.rpartition(":")
+    if sep and "/" not in tail:
+        return head
+    return name
+
 
 def dockerfile_content_hash(dockerfile: str) -> str:
     """SHA-256 hex digest of the Dockerfile text."""
     return hashlib.sha256(dockerfile.encode()).hexdigest()
+
+
+def recipe_image_tag(recipe_id: str) -> str:
+    """The Docker image a recipe's build leaves behind; its layers are the rebuild cache."""
+    return f"mshkn-recipe-img-{recipe_id}"
 
 
 async def docker_build_image(cmd: str) -> str:
@@ -149,6 +211,13 @@ class RecipeService:
     # -- CRUD ----------------------------------------------------------------
 
     async def create(self, account: Account, dockerfile: str) -> tuple[Recipe, bool]:
+        base = dockerfile_base_image(dockerfile)
+        if base is None:
+            raise InvalidInput("Dockerfile has no FROM instruction")
+        if image_name(base) != BASE_IMAGE:
+            raise InvalidInput(
+                f"recipes must be built FROM {BASE_IMAGE} (the final stage is FROM {base})"
+            )
         content_hash = dockerfile_content_hash(dockerfile)
         existing = await get_recipe_by_content_hash(self.db, account.id, content_hash)
         if existing is not None:
@@ -196,6 +265,8 @@ class RecipeService:
         if recipe.base_volume_id is not None:
             await self.blocks.remove(volume_id=recipe.base_volume_id, name=recipe.volume_name)
         await delete_recipe(self.db, recipe_id)
+        with contextlib.suppress(Exception):
+            await self._run(f"docker rmi -f {recipe_image_tag(recipe_id)}", check=False)
 
     async def resolve(self, recipe_id: str) -> Recipe:
         """The recipe a computer can be created from, or the reason it cannot."""
@@ -262,12 +333,14 @@ class RecipeService:
     async def build(
         self, recipe_id: str, dockerfile: str, content_hash: str, volume_id: int
     ) -> None:
-        """Docker build → export → inject into dm-thin → ready; failed with a log otherwise."""
+        """Docker build → export → inject into dm-thin → ready (the image stays as the layer
+        cache); failed with a log otherwise.
+        """
         build_dir = Path(f"/tmp/mshkn-build-{content_hash}")
         tar_path = build_dir / "rootfs.tar"
         container_name = f"tmp-{recipe_id}"
         volume_name = recipe_volume_name(recipe_id)
-        image_tag = f"mshkn-recipe-img-{recipe_id}"
+        image_tag = recipe_image_tag(recipe_id)
         device_active = False
         build_log_lines: list[str] = []
         try:
@@ -312,13 +385,13 @@ class RecipeService:
             await update_recipe_build_result(
                 self.db, recipe_id, status=RecipeStatus.FAILED, build_log="\n".join(build_log_lines)
             )
+            with contextlib.suppress(Exception):
+                await self._run(f"docker rmi -f {image_tag}", check=False)
         finally:
             if device_active:
                 with contextlib.suppress(Exception):
                     await self.blocks.deactivate(volume_name)
             shutil.rmtree(build_dir, ignore_errors=True)
-            with contextlib.suppress(Exception):
-                await self._run(f"docker rmi {image_tag}", check=False)
 
 
 def _post_process_rootfs(mount_point: Path, config: Config) -> None:

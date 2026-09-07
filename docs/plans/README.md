@@ -9,7 +9,7 @@ Statuses: **implemented**, **partially implemented**, **not implemented** (in th
 | Document | What it proposed | Status | Evidence |
 |---|---|---|---|
 | `docs/plans/2026-03-07-disposable-cloud-computers-design.md` | The product: disposable Firecracker VMs identified by checkpoints, fork and merge, Nix capability layers, sleep-for-free economics. | partially implemented: the computer, checkpoint, fork and merge model is live; the Nix capability layer was replaced by Docker recipes | `src/mshkn/services/computers.py`, `src/mshkn/services/checkpoints.py`, `src/mshkn/services/recipes.py` |
-| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 157 end-to-end tests, T0 to T13. | reference; the suite is `tests/e2e/`. Seven tests (T8.6, T9.1, T10.1, T10.2, T10.5, T11.2 and the audit-log check) fail as `Not implemented` until built (#65). Phase 10 and T7.9 were revised by #76 (`docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md`); the revised tests land with PR 7. | `tests/e2e/` collects 157 |
+| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 163 end-to-end tests, T0 to T13. | reference; the suite is `tests/e2e/`. Four tests (T8.6, T9.1, T11.2 and the audit-log check) fail as `Not implemented` until built (#65). Phase 10 and T7.9 were revised by #76 (`docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md`) and landed with PR 7. | `tests/e2e/` collects 163 |
 | `docs/plans/2026-03-08-roadmap.md` | Prioritised backlog from the first E2E run. | partially implemented: see the breakdown below | |
 | `docs/plans/2026-03-08-orchestrator-design.md` | One FastAPI process over Firecracker, dm-thin, R2, Nix and SQLite. | partially implemented: everything but Nix; the module layout became `host/`, `services/`, `db/` in the quality overhaul | `src/mshkn/app.py`, `src/mshkn/host/`, `src/mshkn/services/` |
 | `docs/plans/2026-03-08-orchestrator-implementation.md` | Task plan for the orchestrator. | implemented, later restructured by PRs 2 to 4 of the quality overhaul | `src/mshkn/runtime.py` |
@@ -46,8 +46,8 @@ Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.
 
 | Plan | PR | Status |
 |---|---|---|
-| `docs/superpowers/plans/2026-09-07-pr7a-one-base.md` | this PR | in progress (this PR) |
-| `docs/superpowers/plans/2026-09-07-pr7-workload-proof.md` | not opened | planned |
+| `docs/superpowers/plans/2026-09-07-pr7a-one-base.md` | #79 | implemented (merged 2026-09-07) |
+| `docs/superpowers/plans/2026-09-07-pr7-workload-proof.md` | this PR | in progress (this PR) |
 
 ## Roadmap breakdown (`docs/plans/2026-03-08-roadmap.md`)
 
@@ -60,8 +60,8 @@ Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.
 | P5 VM limits, rate limiting, idle timeout, retention, `needs`, stale cleanup | implemented: `ComputerService.create`, `src/mshkn/ratelimit.py`, `src/mshkn/services/reaper.py`, `src/mshkn/resources.py` |
 | P6 metrics, JSON logs, status enrichment, checkpoint DAG, alerts | implemented: `src/mshkn/observability/`, `GET /alerts`; Grafana dashboards are not automatable and were never built |
 | P7 Litestream | implemented: `systemd/litestream.service`, `DEPLOY.md` §11 |
-| Economics validation (T9.x), dumb agent (T10.5), S3 isolation (T8.6) | not implemented; part of #65 |
+| Economics validation (T9.x), S3 isolation (T8.6) | not implemented; part of #65 |
 
 ## Open follow-ups
 
-Filed from PR 5's final review and live runs: #65 (seven unimplemented E2E tests), #66 (an abandoned bring-up can orphan a spawned Firecracker), #67 (socket registry is process-local), #68 (`_post_process_rootfs` and a pre-existing `fcnet.service` symlink), #69 (test-harness hygiene), #70 (REST destroy and the dead-VM reaper can tear down the same computer). Earlier: #55 to #57 (restore-path experiments), #58 (exec log retention), #59 (`/forward`).
+Filed from PR 5's final review and live runs: #65 (four unimplemented E2E checks), #66 (an abandoned bring-up can orphan a spawned Firecracker), #67 (socket registry is process-local), #68 (`_post_process_rootfs` and a pre-existing `fcnet.service` symlink), #69 (test-harness hygiene), #70 (REST destroy and the dead-VM reaper can tear down the same computer). Earlier: #55 to #57 (restore-path experiments), #58 (exec log retention), #59 (`/forward`).

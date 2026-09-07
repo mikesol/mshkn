@@ -19,6 +19,7 @@ from mshkn.db import clear_bare_template
 from mshkn.errors import ConfigError, Conflict
 from mshkn.host.shell import ShellError
 from mshkn.host.shell import run as shell_run
+from mshkn.services.recipes import BASE_IMAGE as BASE_IMAGE  # re-exported: the CLI imports it here
 from mshkn.services.recipes import docker_build_image, export_image, inject_tar
 
 if TYPE_CHECKING:
@@ -30,7 +31,6 @@ if TYPE_CHECKING:
     from mshkn.services.recipes import BuildImageFn
 
 DEFAULT_DOCKERFILE = Path(mshkn.__file__).resolve().parents[2] / "Dockerfile.mshkn-base"
-BASE_IMAGE = "mshkn-base"
 BASE_DEVICE = "mshkn-base"
 
 

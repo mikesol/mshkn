@@ -245,6 +245,7 @@ class FakeGuest(_Failable):
         self.files: dict[tuple[str, str], bytes] = {}
         self.warmed: list[str] = []
         self.evicted: list[str] = []
+        self.stream_timeouts: list[float] = []
         self.default = ExecResult(exit_code=0, stdout="", stderr="")
         self.default_metrics = VmMetrics(
             cpu_pct=1.5,
@@ -272,9 +273,10 @@ class FakeGuest(_Failable):
         vm_ip: str,
         command: str,
         *,
-        timeout: float = 60.0,  # noqa: ARG002
+        timeout: float = 60.0,
     ) -> AsyncIterator[OutputLine]:
         self._maybe_fail("stream")
+        self.stream_timeouts.append(timeout)
         self.commands.append((vm_ip, command))
         items = self.stream_script.get(command, [])
         for item in items:

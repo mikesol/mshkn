@@ -38,6 +38,7 @@ class CreateResponse(BaseModel):
 
 class ExecRequest(BaseModel):
     command: str
+    timeout_seconds: int = Field(default=60, ge=1, le=600)
 
 
 class ExecBgResponse(BaseModel):

@@ -14,6 +14,7 @@ import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -73,19 +74,33 @@ class ExecResult:
 
 
 async def exec_command(
-    client: httpx.AsyncClient, computer_id: str, command: str, timeout: float = 30.0
+    client: httpx.AsyncClient,
+    computer_id: str,
+    command: str,
+    timeout: float = 30.0,
+    *,
+    timeout_seconds: int | None = None,
 ) -> ExecResult:
-    """Execute a command via SSE and return parsed output."""
+    """Execute a command via SSE and return parsed output.
+
+    timeout is the HTTP read timeout; timeout_seconds is the server-side limit
+    (60 by default) and, when given, stretches the HTTP timeout to cover it.
+    """
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
     events: list[tuple[str, str]] = []
     arrivals: list[float] = []
     current_event = "stdout"
 
+    body: dict[str, object] = {"command": command}
+    if timeout_seconds is not None:
+        body["timeout_seconds"] = timeout_seconds
+        timeout = max(timeout, timeout_seconds + 30)
+
     async with client.stream(
         "POST",
         f"/computers/{computer_id}/exec",
-        json={"command": command},
+        json=body,
         timeout=timeout,
     ) as resp:
         resp.raise_for_status()
@@ -112,7 +127,23 @@ async def exec_command(
     )
 
 
-async def create_recipe(client: httpx.AsyncClient, dockerfile: str, timeout: float = 300.0) -> str:
+async def wait_for_recipe(
+    client: httpx.AsyncClient, recipe_id: str, timeout: float = 600.0
+) -> tuple[dict[str, Any], float]:
+    """Poll GET /recipes/{id} to a terminal status; (body, seconds waited)."""
+    started = time.monotonic()
+    deadline = started + timeout
+    while time.monotonic() < deadline:
+        r = await client.get(f"/recipes/{recipe_id}")
+        r.raise_for_status()
+        info: dict[str, Any] = r.json()
+        if info["status"] in ("ready", "failed"):
+            return info, time.monotonic() - started
+        await asyncio.sleep(3)
+    raise TimeoutError(f"Recipe {recipe_id} did not complete in {timeout}s")
+
+
+async def create_recipe(client: httpx.AsyncClient, dockerfile: str, timeout: float = 600.0) -> str:
     """Create a recipe, wait for it to be ready, return recipe_id."""
     resp = await client.post("/recipes", json={"dockerfile": dockerfile})
     resp.raise_for_status()
@@ -120,18 +151,27 @@ async def create_recipe(client: httpx.AsyncClient, dockerfile: str, timeout: flo
     recipe_id: str = data["recipe_id"]
     if data["status"] == "ready":
         return recipe_id
+    info, _ = await wait_for_recipe(client, recipe_id, timeout)
+    if info["status"] != "ready":
+        raise RuntimeError(f"Recipe build failed: {info.get('build_log', '')[:500]}")
+    return recipe_id
 
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        await asyncio.sleep(3)
-        r = await client.get(f"/recipes/{recipe_id}")
-        r.raise_for_status()
-        info: dict[str, Any] = r.json()
-        if info["status"] == "ready":
-            return recipe_id
-        if info["status"] == "failed":
-            raise RuntimeError(f"Recipe build failed: {info.get('build_log', '')[:500]}")
-    raise TimeoutError(f"Recipe {recipe_id} did not complete in {timeout}s")
+
+async def upload_file(client: httpx.AsyncClient, computer_id: str, path: str, data: bytes) -> None:
+    """PUT a file into the VM through POST /computers/{id}/upload?path=."""
+    resp = await client.post(
+        f"/computers/{computer_id}/upload",
+        params={"path": path},
+        content=data,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    resp.raise_for_status()
+
+
+def port_url(base_url: str, port: int) -> str:
+    """https://comp-abc.mshkn.dev → https://{port}-comp-abc.mshkn.dev."""
+    parsed = urlparse(base_url)
+    return f"{parsed.scheme}://{port}-{parsed.hostname}"
 
 
 async def create_computer(

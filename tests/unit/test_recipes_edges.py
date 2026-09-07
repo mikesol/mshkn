@@ -76,7 +76,7 @@ async def test_delete_without_a_base_volume_removes_nothing(
 ) -> None:
     await insert_account(db, ACCOUNT)
     service, host, _ = _service(db, tmp_path, build_ok=False)
-    recipe, _ = await service.create(ACCOUNT, "FROM x")
+    recipe, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN true")
     await service.tasks.wait(service.build_task_name(recipe.id))  # failed → base_volume_id None
 
     await service.delete(ACCOUNT, recipe.id)
@@ -107,7 +107,7 @@ async def test_get_and_list_are_scoped_to_the_account(
     await insert_account(db, ACCOUNT)
     await insert_account(db, OTHER)
     service, _, _ = _service(db, tmp_path)
-    mine, _ = await service.create(ACCOUNT, "FROM mine")
+    mine, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN mine")
     await service.tasks.wait(service.build_task_name(mine.id))
 
     with pytest.raises(NotFound):
@@ -159,7 +159,7 @@ async def test_build_writes_an_empty_key_when_the_host_has_no_public_key(
     service, _, _ = _service(db, tmp_path)
     (tmp_path / "id_ed25519.pub").unlink()
 
-    recipe, _ = await service.create(ACCOUNT, "FROM keyless")
+    recipe, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN keyless")
     await service.tasks.wait(service.build_task_name(recipe.id))
 
     stored = await get_recipe(db, recipe.id)

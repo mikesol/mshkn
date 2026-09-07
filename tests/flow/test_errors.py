@@ -43,7 +43,7 @@ async def test_every_domain_error_maps_to_its_code(flow: Flow) -> None:
     assert (await c.post("/computers", json={"recipe_id": "rcp-nope"})).status_code == 404
 
     # 409 Conflict: a recipe that is not READY, and a second exclusive fork
-    pending = await c.post("/recipes", json={"dockerfile": "FROM x"})
+    pending = await c.post("/recipes", json={"dockerfile": "FROM mshkn-base\nRUN true"})
     rid = pending.json()["recipe_id"]
     assert (await c.post("/computers", json={"recipe_id": rid})).status_code == 409
     await flow.runtime.tasks.drain(timeout=5.0)  # the build fails without docker

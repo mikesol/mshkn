@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -42,6 +44,9 @@ async def _host_errors(what: str) -> AsyncIterator[None]:
 # After the main process exits, keep draining output for this long: background
 # children that inherited the shell's fds can keep the streams open.
 STREAM_GRACE_SECONDS = 2.0
+# The host's own deadline trails the guest's kill by this much, so the guest
+# gets to report 137 before the backstop takes over.
+STREAM_HOST_GRACE_SECONDS = 5.0
 _HEALTH_CHECK_INTERVAL = 30.0
 _METRICS_CMD = (
     "top -bn1 -d0.5 | grep '%Cpu' | awk '{print $8}'; "
@@ -51,11 +56,44 @@ _METRICS_CMD = (
 )
 
 
+def guest_timeout_command(command: str, timeout: float) -> str:
+    """Run command under the guest's coreutils timeout, KILL at the deadline.
+
+    sshd ignores the SSH signal request, so a kill has to come from inside
+    the guest. --preserve-status makes a killed command exit 128 + 9 = 137
+    and an ordinary command exit with its own status.
+    """
+    seconds = max(1, math.ceil(timeout))
+    return f"timeout --preserve-status -s KILL {seconds} bash -c {shlex.quote(command)}"
+
+
 @dataclass(frozen=True)
 class _ReaderDone:
     """Sentinel a reader task queues when it stops, carrying why it stopped."""
 
     error: Exception | None
+
+
+def _exit_code(process: asyncssh.SSHClientProcess[str]) -> str:
+    """The exit event's payload: 128 + the signal, else the status, else 255.
+
+    asyncssh's SSHClientChannel.get_exit_status() returns -1, not None,
+    once an exit-signal has arrived (get_exit_signal() carries the signal
+    itself); get_returncode() is the one property that tells the two
+    apart, returning the negative signal number when signalled and the
+    non-negative exit status otherwise. A command the guest's `timeout`
+    killed comes back through the status branch — `--preserve-status` makes
+    137 an ordinary exit status. The signal branch is for the host's
+    backstop: `process.kill()`, on an sshd that honours the signal request,
+    signals the process, and checking exit_status first would misread the
+    -1 that leaves behind as a real (and wrong) status.
+    """
+    returncode = process.returncode
+    if returncode is not None and returncode < 0:
+        return str(128 - returncode)
+    if process.exit_status is not None and process.exit_status >= 0:
+        return str(process.exit_status)
+    return "255"
 
 
 class ConnectFn(Protocol):
@@ -214,22 +252,29 @@ class SshGuest:
 
         Uses the pooled connection; if the pooled connection cannot open
         another channel (sshd MaxSessions), falls back to a dedicated one.
+
+        The command runs under the guest's own `timeout`, which is what
+        actually kills it at the deadline: sshd ignores the SSH signal
+        request, so `process.kill()` alone leaves the command running. The
+        host's deadline, STREAM_HOST_GRACE_SECONDS later, stays as the
+        backstop for a guest without `timeout` or an sshd that has hung.
         """
         async with _host_errors("stream"):
             conn = await self._pooled(vm_ip)
             owned = False
+            wrapped = guest_timeout_command(command, timeout)
             try:
-                process = await conn.create_process(command)
+                process = await conn.create_process(wrapped)
             except asyncssh.ChannelOpenError:
                 conn = await self._fresh(vm_ip)
                 owned = True
                 try:
-                    process = await conn.create_process(command)
+                    process = await conn.create_process(wrapped)
                 except BaseException:
                     conn.close()
                     raise
             emitted_exit = False
-            pump = self._pump(process, timeout)
+            pump = self._pump(process, timeout + STREAM_HOST_GRACE_SECONDS, command, timeout)
             try:
                 async for item in pump:
                     emitted_exit = emitted_exit or item[0] == "exit"
@@ -248,8 +293,18 @@ class SshGuest:
 
     @staticmethod
     async def _pump(
-        process: asyncssh.SSHClientProcess[str], timeout: float
+        process: asyncssh.SSHClientProcess[str],
+        host_timeout: float,
+        command: str,
+        timeout_seconds: float,
     ) -> AsyncGenerator[OutputLine, None]:
+        """Drain the process until it exits or `host_timeout` runs out.
+
+        `host_timeout` is the backstop deadline (`timeout_seconds` plus the
+        host's grace); the guest's own `timeout` should have killed the
+        command a grace earlier. `timeout_seconds` is carried only so the
+        warning can name the caller's number as well as the deadline.
+        """
         queue: asyncio.Queue[OutputLine | _ReaderDone] = asyncio.Queue()
 
         async def read(reader: asyncssh.SSHReader[str], name: StreamName) -> None:
@@ -269,7 +324,7 @@ class SshGuest:
         ]
         exit_task = asyncio.create_task(process.wait())
         loop = asyncio.get_running_loop()
-        hard_deadline = loop.time() + timeout
+        hard_deadline = loop.time() + host_timeout
         grace_deadline: float | None = None
         finished_readers = 0
         reader_error: Exception | None = None
@@ -289,7 +344,11 @@ class SshGuest:
                 if budget <= 0:
                     if grace_deadline is None:
                         logger.warning(
-                            "stream: process did not exit within %.1fs, killing", timeout
+                            "stream: %r did not exit within %.1fs "
+                            "(timeout_seconds %.0f plus the host's grace), killing",
+                            command,
+                            host_timeout,
+                            timeout_seconds,
                         )
                         process.kill()
                         grace_deadline = now + STREAM_GRACE_SECONDS
@@ -333,7 +392,7 @@ class SshGuest:
             # A reader died mid-command. Reporting a clean exit here would make
             # a dropped connection indistinguishable from a successful run.
             raise reader_error
-        yield ("exit", str(process.exit_status or 0))
+        yield ("exit", _exit_code(process))
 
     async def exec_bg(self, vm_ip: str, command: str) -> int:
         async with _host_errors("exec_bg"):

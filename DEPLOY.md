@@ -241,7 +241,7 @@ Host mshkn
 MSHKN_SERVER=mshkn MSHKN_API_URL=http://<ip>:8000 scripts/e2e.sh
 ```
 
-Expect **144 passed, 6 skipped, 7 failed**; the seven failures are the `Not implemented` tests tracked in #65, and any other failure means the host or the deployment is wrong. The suite runs for about 14 minutes.
+Expect **153 passed, 6 skipped, 4 failed**; the four failures are the `Not implemented` tests tracked in #65, and any other failure means the host or the deployment is wrong. The suite runs for about 26 minutes.
 
 ## Teardown
 
