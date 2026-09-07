@@ -445,6 +445,13 @@ Walk through every single API endpoint:
 
 - `checkpoint_merge(ckpt_a, ckpt_a)` — should either no-op or return the same checkpoint. Not crash.
 
+### T7.9 — The Exec Time Limit Belongs to the Caller
+
+- `POST /computers/{id}/exec` takes `timeout_seconds` (default 60, at most 600).
+- `sleep 65 && echo slept` with `timeout_seconds: 90` → exit 0, `slept` on stdout.
+- `sleep 30` with `timeout_seconds: 2` → the stream ends within 10 s, the exit event is 137 (killed), and nothing reports success.
+- **A killed command that reports exit 0 is a lie, and this is where it gets caught.**
+
 ---
 
 ## Phase 8: "Security, Because I Don't Trust You" (Isolation & Auth)
@@ -501,49 +508,85 @@ Walk through every single API endpoint:
 
 ---
 
-## Phase 10: "The Agent Doesn't Care About Your Feelings" (Integration)
+## Phase 10: "The Agent Doesn't Care About Your Feelings" (The Generative Loop)
 
-### T10.1 — Real Agent Workflow: Web App Development
+mshkn exists for a generative agent that writes its own recipes and the programs
+those computers run. Phases 0 to 9 prove the primitives; this phase proves the
+loop: write a recipe, build it, read the failure, fix it, run real tools,
+checkpoint, fork, diverge, pick. Every test here is deterministic and runs
+against the live host; none needs an LLM.
 
-Simulate an actual agent building a Next.js app:
+### T10.1 — The ffmpeg Loop
 
-1. `computer_create(uses: [node-22(next@14, react, tailwindcss)])`
-2. Upload a project scaffold.
-3. `computer_exec(id, "cd /app && npm run dev")` in background.
-4. Hit the HTTPS URL — does the dev server respond?
-5. Make changes, verify hot reload works via the public URL.
-6. Checkpoint. Destroy. Resume. Dev server starts again from checkpoint?
+1. Submit a recipe: `FROM mshkn-base`, one `RUN` that installs ffmpeg.
+2. Poll `GET /recipes/{id}` to `ready`. **Within the 600 s build cap.**
+3. Create a computer from it; synthesize a two-second tone with ffmpeg.
+4. Checkpoint. Fork twice. One fork transcodes to mp3, the other trims to one second.
+5. **Each fork has its own output and not the other's; ffprobe durations differ.**
 
-### T10.2 — Real Agent Workflow: Data Science
+### T10.2 — apt and pip Inside a Bare Computer
 
-1. `computer_create(uses: [python-3.12(numpy, pandas, scikit-learn)])`
-2. Upload a CSV dataset (50MB).
-3. Run a training script. Get results.
-4. Agent realizes it needs `matplotlib`. Gets structured error.
-5. Agent forks with new manifest including `matplotlib`.
-6. Continues from checkpoint with `matplotlib` available. Previous work intact.
+1. Create a bare computer (no recipe).
+2. `apt-get install python3 python3-pip python3-venv` in the foreground with `timeout_seconds: 300`. **Exit 0.** (VM egress through host NAT, not `docker build`.)
+3. `pip install pandas` in a venv, `timeout_seconds: 300`. **Exit 0.**
+4. Write a deterministic dataset. Checkpoint.
+5. Fork twice: one fork computes the mean, the other per-group sums.
+6. **Both match values the test computed itself; neither fork has the other's file.**
 
-### T10.3 — Real Agent Workflow: Parallel Exploration
+### T10.3 — Parallel Exploration
 
 1. Create computer, set up base state, checkpoint.
 2. Fork 3 times — try 3 different approaches.
 3. Each fork does different work.
 4. Agent picks the best fork's checkpoint.
-5. Discards the other two. Checkpoints cleaned up.
+5. Discards the other two.
 
-### T10.4 — Real Agent Workflow: Failure Recovery
+### T10.4 — Failure Recovery
 
 1. Create computer, do work, checkpoint.
-2. Agent runs a command that corrupts state (`rm -rf /app/node_modules` or similar).
-3. Agent resumes from last good checkpoint. Clean state, no corruption.
+2. Run a command that corrupts state.
+3. Fork from the last good checkpoint. Clean state, no corruption.
 4. Repeat — this is the core "retry" value prop.
 
-### T10.5 — Dumb Agent Test
+### T10.5 — The Scripted Agent Loop
 
-- Give the 15 tools to the cheapest, dumbest LLM available (Haiku or equivalent).
-- Can it successfully: create a computer, run a command, checkpoint, fork, destroy?
-- The structured `suggested_action` on `pip install` — can a dumb model parse and execute it?
-- **If this only works with Opus, the "any model can do it" claim is false.**
+A deterministic agent with a tool table over the API, no LLM. Task: name the
+largest regular file under /etc.
+
+1. Create. Explore. Checkpoint `explored`.
+2. Fork two attempts with different commands. Each writes `/root/answer.txt`.
+3. Compare: **the answers must agree.** Checkpoint the winner under label `answer`.
+4. Destroy the loser; delete its checkpoints.
+5. **`GET /checkpoints?label=answer` returns one; forking it yields the answer; the loser is 404 and its checkpoints are gone.**
+
+The old T10.5 gave the tools to the cheapest model and asked whether it could
+cope. That claim is no longer part of the definition of done: the first real
+agent is built after this phase passes, and it will be measured on its own.
+
+### T10.6 — A Listener Survives Checkpoint and Fork
+
+1. Start an HTTP server with an in-memory request counter, bound to all interfaces.
+2. Three requests over the public URL → 1, 2, 3.
+3. Checkpoint. Fork.
+4. **The fork's public URL answers 4. The original's answers 4 too, independently.**
+5. Memory state and the bound socket survived a new slot and a new address.
+
+### T10.7 — Broken Recipe, Build Log, Fix
+
+1. `FROM python:3.12` → **422 naming the rule and the image** (#73). No build.
+2. `FROM mshkn-base` installing a package that does not exist → `failed`, **`build_log` names the package and the apt error.**
+3. The corrected text → `ready`; a computer from it has the tool.
+4. The broken text again → **a new recipe id** (the failed row is replaced), `failed` again.
+
+### T10.8 — Incremental Toolchain Growth
+
+Recipes are content-hashed and do not layer on each other. The agent grows an
+image by appending to its own Dockerfile text.
+
+1. A node toolchain recipe with a per-run nonce layer and several global npm installs. Record the cold build time. **Within 600 s.**
+2. The same text plus one appended `RUN`. **Rebuild within 600 s and under half the cold time.**
+3. A computer from the second recipe has every tool.
+4. Delete the computer and both recipes.
 
 ---
 
@@ -741,7 +784,7 @@ The ingress mapping layer lets external webhooks trigger disposable computers vi
 | API (Phase 7) | All 15 endpoints work, edge cases return errors not crashes | Any crash or hang on bad input |
 | Security (Phase 8) | Full VM isolation, tenant separation | Any escape, cross-tenant access, or host access |
 | Economics (Phase 9) | Actual costs within 2x of projections | Costs >3x projections |
-| Integration (Phase 10) | Real agent workflows complete end-to-end | Any workflow that can't complete |
+| The loop (Phase 10) | Recipes build within the cap, broken ones say why, forks diverge, listeners survive, the scripted agent finishes | Any step of the loop that can't complete, or a rebuild no faster than a cold build |
 | Observability (Phase 11) | Metrics accurate within 10% of reality, alerts fire within 1 min, status tool matches shell output, DAG fully reconstructible | Metrics lie, alerts don't fire, status is decorative, or DAG has broken parent pointers |
 | Ingress (Phase 13) | Rule CRUD works, Starlark transforms execute correctly, ingress triggers fork/create, rate limiting enforced, logs recorded | Any CRUD failure, Starlark escape, or silent ingress failure |
 

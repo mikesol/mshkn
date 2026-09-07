@@ -1,6 +1,6 @@
 # Plans index
 
-Every design and implementation document in this repository, with its status as of 2026-09-07 (main after PR #64). Status is judged from the code, not from what the document says about itself. The documents are historical records and are not edited; this index is what changes.
+Every design and implementation document in this repository, with its status as of 2026-09-07 (main after PR #64). Status is judged from the code, not from what the document says about itself. The documents are historical records and are not edited, with one exception: the test plan is the definition of done, and a `spec-change` issue may revise it (#76 replaced Phase 10 and added T7.9 on 2026-09-07). Otherwise this index is what changes.
 
 Statuses: **implemented**, **partially implemented**, **not implemented** (in the test plan, no code, tracked in an issue), **in progress** (the plan being executed), **superseded by …**, **retired** (never built, not replaced), **reference** (not a plan).
 
@@ -9,7 +9,7 @@ Statuses: **implemented**, **partially implemented**, **not implemented** (in th
 | Document | What it proposed | Status | Evidence |
 |---|---|---|---|
 | `docs/plans/2026-03-07-disposable-cloud-computers-design.md` | The product: disposable Firecracker VMs identified by checkpoints, fork and merge, Nix capability layers, sleep-for-free economics. | partially implemented: the computer, checkpoint, fork and merge model is live; the Nix capability layer was replaced by Docker recipes | `src/mshkn/services/computers.py`, `src/mshkn/services/checkpoints.py`, `src/mshkn/services/recipes.py` |
-| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 157 end-to-end tests, T0 to T13. | reference; the suite is `tests/e2e/`. Seven tests (T8.6, T9.1, T10.1, T10.2, T10.5, T11.2 and the audit-log check) fail as `Not implemented` until built (#65). | `tests/e2e/` collects 157 |
+| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 157 end-to-end tests, T0 to T13. | reference; the suite is `tests/e2e/`. Seven tests (T8.6, T9.1, T10.1, T10.2, T10.5, T11.2 and the audit-log check) fail as `Not implemented` until built (#65). Phase 10 and T7.9 were revised by #76 (`docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md`); the revised tests land with PR 7. | `tests/e2e/` collects 157 |
 | `docs/plans/2026-03-08-roadmap.md` | Prioritised backlog from the first E2E run. | partially implemented: see the breakdown below | |
 | `docs/plans/2026-03-08-orchestrator-design.md` | One FastAPI process over Firecracker, dm-thin, R2, Nix and SQLite. | partially implemented: everything but Nix; the module layout became `host/`, `services/`, `db/` in the quality overhaul | `src/mshkn/app.py`, `src/mshkn/host/`, `src/mshkn/services/` |
 | `docs/plans/2026-03-08-orchestrator-implementation.md` | Task plan for the orchestrator. | implemented, later restructured by PRs 2 to 4 of the quality overhaul | `src/mshkn/runtime.py` |
@@ -39,6 +39,15 @@ Spec: `docs/superpowers/specs/2026-09-04-quality-overhaul-design.md`. Six PRs; e
 | `docs/superpowers/plans/2026-09-06-pr4-services.md` | #63 | implemented (merged 2026-09-06) |
 | `docs/superpowers/plans/2026-09-06-pr5-tests.md` | #64 | implemented (merged 2026-09-07); made seven stub E2E tests fail honestly (#65) |
 | `docs/superpowers/plans/2026-09-07-pr6-docs-devtools.md` | this PR | in progress (this PR) |
+
+## Generative-agent workload proof (2026-09)
+
+Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md` (from the #76 brainstorm). Two PRs: PR 7a makes the bare base the export of `mshkn-base`; PR 7 adds the eight Phase 10 tests and T7.9, enforces the base-image rule (#73), adds a caller-chosen exec timeout, reports killed commands honestly, and retains recipe images so rebuilds are incremental. Plans are written per PR when each starts.
+
+| Plan | PR | Status |
+|---|---|---|
+| PR 7a, one base | not opened | planned |
+| PR 7, the proof | not opened | planned |
 
 ## Roadmap breakdown (`docs/plans/2026-03-08-roadmap.md`)
 
