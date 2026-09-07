@@ -361,6 +361,7 @@ class FirecrackerHypervisor:
                     await wait_for_port(
                         STAGING_VM_IP, 22, timeout=self._BOOT_SSH_TIMEOUT, interval=0.025
                     )
+                    await self._ssh_settle()
                     client = FirecrackerClient(socket_path)
                     try:
                         await client.pause()
@@ -489,6 +490,26 @@ class FirecrackerHypervisor:
                 logger.warning("Failed to kill staging FC process PID=%s", pid)
             self._unlink_socket(pid)
         await self._ensure_staging_clean()
+
+    async def _ssh_settle(self) -> None:
+        """Complete one SSH session on the staging address before a template is snapshotted.
+
+        Port 22 accepting a TCP connection is not the guest being ready: sshd may
+        still be mid-startup, and a snapshot taken then can restore into a guest
+        whose SSH handshake never completes (#82). A whole session, handshake and
+        command, is what every later restore needs to find in the memory image.
+        """
+        conn = await asyncio.wait_for(
+            asyncssh.connect(
+                STAGING_VM_IP,
+                username="root",
+                known_hosts=None,
+                client_keys=[str(self._config.ssh_key_path)],
+            ),
+            timeout=CONNECT_TIMEOUT_SECONDS,
+        )
+        async with conn:
+            await conn.run("true", check=True)
 
     async def _ssh_add_ip(self, final_vm_ip: str, final_host_ip: str) -> None:
         """Give the guest its final IP and default route, through the staging IP.
