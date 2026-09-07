@@ -29,7 +29,7 @@ from mshkn.db import (
     update_recipe_status,
     update_recipe_template,
 )
-from mshkn.errors import Conflict, NotFound
+from mshkn.errors import Conflict, InvalidInput, NotFound
 from mshkn.host import SnapshotFiles
 from mshkn.host.shell import run as shell_run
 from mshkn.models import Recipe, RecipeStatus, recipe_volume_name
@@ -52,6 +52,40 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DOCKER_BUILD_TIMEOUT_SECONDS = 600
+
+BASE_IMAGE = "mshkn-base"
+
+# `FROM [--flag=value ...] <image> [AS <name>]`, any case; the image is the first
+# token that is not a flag.
+_FROM_RE = re.compile(r"^FROM\s+(?:--\S+\s+)*(\S+)", re.IGNORECASE)
+
+
+def dockerfile_base_image(dockerfile: str) -> str | None:
+    """The image of the last FROM (the stage that is exported), or None without a FROM.
+
+    Comments, blank lines, parser directives and ARG lines before the first
+    FROM are skipped; a multi-stage build is judged by its final stage,
+    because that is the filesystem `docker export` produces.
+    """
+    image: str | None = None
+    for raw in dockerfile.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _FROM_RE.match(line)
+        if match:
+            image = match.group(1)
+    return image
+
+
+def image_name(reference: str) -> str:
+    """'mshkn-base' for 'mshkn-base', 'mshkn-base:latest' and 'mshkn-base@sha256:…'."""
+    name = reference.split("@", 1)[0]
+    # The tag follows the last colon, unless that colon belongs to a registry port.
+    head, sep, tail = name.rpartition(":")
+    if sep and "/" not in tail:
+        return head
+    return name
 
 
 def dockerfile_content_hash(dockerfile: str) -> str:
@@ -149,6 +183,13 @@ class RecipeService:
     # -- CRUD ----------------------------------------------------------------
 
     async def create(self, account: Account, dockerfile: str) -> tuple[Recipe, bool]:
+        base = dockerfile_base_image(dockerfile)
+        if base is None:
+            raise InvalidInput("Dockerfile has no FROM instruction")
+        if image_name(base) != BASE_IMAGE:
+            raise InvalidInput(
+                f"recipes must be built FROM {BASE_IMAGE} (the final stage is FROM {base})"
+            )
         content_hash = dockerfile_content_hash(dockerfile)
         existing = await get_recipe_by_content_hash(self.db, account.id, content_hash)
         if existing is not None:

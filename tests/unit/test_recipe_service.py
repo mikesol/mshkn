@@ -83,7 +83,7 @@ async def test_failed_build_records_the_log_and_leaves_no_device(
 ) -> None:
     await insert_account(db, ACCOUNT)
     service, host, _ = _service(db, tmp_path, build_ok=False)
-    recipe, _ = await service.create(ACCOUNT, "FROM nope")
+    recipe, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN false")
     await service.tasks.wait(service.build_task_name(recipe.id))
     stored = await get_recipe(db, recipe.id)
     assert stored is not None and stored.status is RecipeStatus.FAILED
@@ -97,7 +97,7 @@ async def test_inject_failure_after_activate_deactivates_the_device(
 ) -> None:
     await insert_account(db, ACCOUNT)
     service, host, _ = _service(db, tmp_path, shell=FakeShell(fail_on="tar xf"))
-    recipe, _ = await service.create(ACCOUNT, "FROM x")
+    recipe, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN true")
     await service.tasks.wait(service.build_task_name(recipe.id))
     stored = await get_recipe(db, recipe.id)
     assert stored is not None and stored.status is RecipeStatus.FAILED
@@ -107,18 +107,18 @@ async def test_inject_failure_after_activate_deactivates_the_device(
 async def test_create_dedupes_by_content_hash(db: aiosqlite.Connection, tmp_path: Path) -> None:
     await insert_account(db, ACCOUNT)
     service, _, _ = _service(db, tmp_path)
-    first, created1 = await service.create(ACCOUNT, "FROM same")
-    again, created2 = await service.create(ACCOUNT, "FROM same")
+    first, created1 = await service.create(ACCOUNT, "FROM mshkn-base\nRUN same")
+    again, created2 = await service.create(ACCOUNT, "FROM mshkn-base\nRUN same")
     assert created1 and not created2 and again.id == first.id
 
 
 async def test_failed_recipe_is_replaced_on_retry(db: aiosqlite.Connection, tmp_path: Path) -> None:
     await insert_account(db, ACCOUNT)
     failing, _, _ = _service(db, tmp_path, build_ok=False)
-    first, _ = await failing.create(ACCOUNT, "FROM retry")
+    first, _ = await failing.create(ACCOUNT, "FROM mshkn-base\nRUN retry")
     await failing.tasks.wait(failing.build_task_name(first.id))
     ok, _, _ = _service(db, tmp_path)
-    second, created = await ok.create(ACCOUNT, "FROM retry")
+    second, created = await ok.create(ACCOUNT, "FROM mshkn-base\nRUN retry")
     assert created and second.id != first.id
     assert await get_recipe(db, first.id) is None
 
@@ -130,7 +130,7 @@ async def test_resolve_rejects_unknown_and_not_ready(
     service, _, _ = _service(db, tmp_path, build_ok=False)
     with pytest.raises(NotFound):
         await service.resolve("rcp-nope")
-    recipe, _ = await service.create(ACCOUNT, "FROM x")
+    recipe, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN true")
     with pytest.raises(Conflict):
         await service.resolve(recipe.id)  # still pending
 
@@ -140,7 +140,7 @@ async def test_delete_refuses_referenced_recipes_and_removes_the_volume(
 ) -> None:
     await insert_account(db, ACCOUNT)
     service, host, _ = _service(db, tmp_path)
-    recipe, _ = await service.create(ACCOUNT, "FROM x")
+    recipe, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN true")
     await service.tasks.wait(service.build_task_name(recipe.id))
     await insert_computer(db, computer_row(recipe_id=recipe.id))
     with pytest.raises(Conflict):
