@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Python `>=3.12`; uv only; every command runs as `uv run <tool>` inside the worktree.
-- Local validation, the same checks CI runs: `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov`. Green at the end of every task, with zero warnings and the coverage floor (`fail_under = 98`) intact. Plain `uv run pytest` measures no coverage; the docs must say `--cov` wherever they describe the gate.
+- Local validation, the same checks CI runs: `uv lock --check && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov`. Green at the end of every task, with zero warnings and the coverage floor (`fail_under = 98`) intact. Plain `uv run pytest` measures no coverage; the docs must say `--cov` wherever they describe the gate.
 - **Nothing under `src/` changes.** This PR is docs, one test file, one script file, and the removal of untracked artifacts. If a doc task discovers a product defect, it files an issue and describes the current behaviour honestly.
 - No xfail, no new skips, no `# type: ignore` in tests (the two `[misc]` in `tests/unit/test_models.py` stay), no assertion-free tests.
 - Plain, honest prose: no marketing, no claims the code does not back. Every path, module, route, metric, and env var a doc mentions is real (`tests/unit/test_docs.py` enforces it). Historical plan documents under `docs/plans/` are not edited; their status lives in the index.
@@ -790,7 +790,7 @@ Disposable cloud computers for AI agents: Firecracker microVMs you create, exec 
 Run this before every commit you would show anyone. It is the same set of checks CI runs (`.github/workflows/ci.yml`):
 
 ```bash
-uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov
+uv lock --check && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov
 ```
 
 uv is the only package manager; every tool runs through the project venv as `uv run <tool>`. `pytest --cov` runs the unit and flow tiers and enforces the coverage floor (98 %, `fail_under` in `pyproject.toml`); plain `pytest` skips the coverage measurement, which is fine while iterating on one file. The E2E tier is deselected by default; zero warnings is part of green. `tests/unit/test_docs.py` fails when a document names a path, module, route, metric or variable that does not exist: fix the document, not the test.

@@ -68,10 +68,10 @@ MSHKN_SERVER=root@<ip> scripts/e2e.sh   # pushes, deploys, runs tests/e2e on the
 
 The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 144 passed, 6 skipped and 7 failed; the seven are the unimplemented workflows in #65, and anything else failing is a regression.
 
-The full local gate, the same checks CI runs (`.github/workflows/ci.yml`):
+The full local gate, which is what CI runs (`.github/workflows/ci.yml`) after `uv sync --frozen`:
 
 ```bash
-uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov
+uv lock --check && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov
 ```
 
 To drive the whole stack without a host, build a `mshkn.host.fake.FakeHost` and hand it to `mshkn.runtime.Runtime.build`; `tests/flow/conftest.py` shows the wiring.

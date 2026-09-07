@@ -4,10 +4,10 @@ Disposable cloud computers for AI agents: Firecracker microVMs you create, exec 
 
 ## The gate
 
-Run this before every commit you would show anyone. It is the same set of checks CI runs (`.github/workflows/ci.yml`):
+Run this before every commit you would show anyone. It is what CI runs (`.github/workflows/ci.yml`), after `uv sync --frozen`:
 
 ```bash
-uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov
+uv lock --check && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov
 ```
 
 uv is the only package manager; every tool runs through the project venv as `uv run <tool>`. `pytest --cov` runs the unit and flow tiers and enforces the coverage floor (98 %, `fail_under` in `pyproject.toml`); plain `pytest` skips the coverage measurement, which is fine while iterating on one file. The E2E tier is deselected by default; zero warnings is part of green. `tests/unit/test_docs.py` fails when a document names a path, module, route, metric or variable that does not exist: fix the document, not the test.
