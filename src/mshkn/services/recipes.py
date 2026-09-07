@@ -395,6 +395,12 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
     # Write /etc/resolv.conf (Docker export strips it)
     (etc / "resolv.conf").write_text("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
 
+    # Write /etc/hostname and /etc/hosts for the same reason: Docker bind-mounts
+    # both into every container, so no Dockerfile can set them and the export
+    # carries the empty files the bind left behind.
+    (etc / "hostname").write_text("mshkn\n")
+    (etc / "hosts").write_text("127.0.0.1 localhost\n127.0.1.1 mshkn\n")
+
     # Remove .dockerenv so systemd doesn't detect Docker virtualization
     dockerenv = mp / ".dockerenv"
     if dockerenv.exists():
