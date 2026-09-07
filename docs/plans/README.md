@@ -42,12 +42,12 @@ Spec: `docs/superpowers/specs/2026-09-04-quality-overhaul-design.md`. Six PRs; e
 
 ## Generative-agent workload proof (2026-09)
 
-Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md` (from the #76 brainstorm). Two PRs: PR 7a makes the bare base the export of `mshkn-base`; PR 7 adds the eight Phase 10 tests and T7.9, enforces the base-image rule (#73), adds a caller-chosen exec timeout, reports killed commands honestly, and retains recipe images so rebuilds are incremental. Plans are written per PR when each starts.
+Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md` (from the #76 brainstorm). Two PRs: PR 7a makes the bare base the export of `mshkn-base`; PR 7 adds the eight Phase 10 tests and T7.9, enforces the base-image rule (#73), adds a caller-chosen exec timeout, reports killed commands honestly, and retains recipe images so rebuilds are incremental. Both plans are written; each PR records its baseline beside its plan when it starts.
 
 | Plan | PR | Status |
 |---|---|---|
-| PR 7a, one base | not opened | planned |
-| PR 7, the proof | not opened | planned |
+| `docs/superpowers/plans/2026-09-07-pr7a-one-base.md` | not opened | planned |
+| `docs/superpowers/plans/2026-09-07-pr7-workload-proof.md` | not opened | planned |
 
 ## Roadmap breakdown (`docs/plans/2026-03-08-roadmap.md`)
 
