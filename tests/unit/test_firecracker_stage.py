@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any, ClassVar
 
+import asyncssh
 import httpx
 import pytest
 
@@ -439,3 +440,42 @@ async def test_a_failed_boot_unlinks_the_socket_it_created(
         socket_path.unlink(missing_ok=True)
         socket_path.with_suffix(".socket.pid").unlink(missing_ok=True)
     assert _survivors(binary) == [], "the test leaves no process behind"
+
+
+class _FakeSshConn:
+    """asyncssh's connection, reduced to what _ssh_add_ip touches."""
+
+    def __init__(self) -> None:
+        self.runs: list[str] = []
+
+    async def run(self, command: str, check: bool = False) -> None:
+        self.runs.append(command)
+
+    async def __aenter__(self) -> _FakeSshConn:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+async def test_ssh_add_ip_sets_the_clock_before_the_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restored snapshot keeps the time it was taken at, so the clock is set first."""
+    conn = _FakeSshConn()
+
+    async def connect(host: str, **kwargs: Any) -> _FakeSshConn:
+        assert host == STAGING_VM_IP
+        return conn
+
+    monkeypatch.setattr(asyncssh, "connect", connect)  # the module seam firecracker.py uses
+    hv = FirecrackerHypervisor(CONFIG, run=ShellRecorder(), clock=lambda: 1_800_000_000.5)
+
+    await hv._ssh_add_ip("172.16.7.2", "172.16.7.1")
+
+    assert len(conn.runs) == 1
+    command = conn.runs[0]
+    assert command.startswith("date -u -s @1800000000 >/dev/null && ")
+    assert "ip addr add 172.16.7.2/30 dev eth0" in command
+    assert "ip route replace default via 172.16.7.1" in command
+    assert "ip neigh flush dev eth0" in command
