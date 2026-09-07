@@ -143,7 +143,7 @@ async def test_builds_exports_writes_volume_zero_and_drops_the_bare_template(
         "docker rm tmp-mshkn-base",
         f"tar xf {build_dir / 'rootfs.tar'} -C {root}",
     ]
-    assert ("mkfs", "mshkn-base") in host.blocks.calls
+    assert host.blocks.calls == [("mkfs", "mshkn-base"), ("mounted", ("mshkn-base", False))]
     assert host.blocks.volumes == {0: None}  # no snapshot: volume 0 itself was written
     assert (root / "sbin" / "init").is_symlink()
     assert await get_bare_template(db) is None
@@ -151,7 +151,7 @@ async def test_builds_exports_writes_volume_zero_and_drops_the_bare_template(
     host.close()
 
 
-async def test_a_failed_export_removes_the_context_and_keeps_the_template(
+async def test_a_failed_export_removes_the_context_and_the_template(
     db: aiosqlite.Connection, tmp_path: Path
 ) -> None:
     host = FakeHost()
@@ -174,7 +174,39 @@ async def test_a_failed_export_removes_the_context_and_keeps_the_template(
         )
     assert not seen["build_dir"].exists()
     assert ("mkfs", "mshkn-base") not in host.blocks.calls
-    assert await get_bare_template(db) == ("/t/vmstate", "/t/memory")
+    assert await get_bare_template(db) is None
+    host.close()
+
+
+async def test_a_failed_inject_after_mkfs_drops_the_template_and_the_volume_is_unusable(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    host = FakeHost()
+    await host.blocks.activate(volume_id=0, name="mshkn-base")
+    config = _config(tmp_path)
+    bare_dir = config.checkpoint_local_dir / "templates" / "bare"
+    bare_dir.mkdir(parents=True)
+    (bare_dir / "vmstate").write_bytes(b"old")
+    await cache_bare_template(db, str(bare_dir / "vmstate"), str(bare_dir / "memory"))
+    seen: dict[str, Path] = {}
+
+    async def build_image(cmd: str) -> str:
+        seen["build_dir"] = Path(cmd.split()[-1])
+        return "ok"
+
+    with pytest.raises(ShellError):
+        await write_base_volume(
+            config=config,
+            db=db,
+            blocks=host.blocks,
+            dockerfile=_dockerfile(tmp_path),
+            run=FakeShell(fail_on=(INACTIVE, "tar xf")),
+            build_image=build_image,
+        )
+    assert ("mkfs", "mshkn-base") in host.blocks.calls
+    assert await get_bare_template(db) is None
+    assert not bare_dir.exists()
+    assert not seen["build_dir"].exists()
     host.close()
 
 

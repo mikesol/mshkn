@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mshkn.config import Config
+from mshkn.errors import HostError
 from mshkn.host.fake import FakeHost
 from mshkn.host.shell import ShellError
 from mshkn.services.recipes import export_image, inject_tar
@@ -36,6 +37,14 @@ async def test_export_image_removes_the_container_when_export_fails(tmp_path: Pa
     assert shell.calls[-1] == "docker rm tmp-x"
 
 
+async def test_export_image_succeeds_when_the_container_removal_fails(tmp_path: Path) -> None:
+    shell = FakeShell(fail_on="docker rm")
+    await export_image(
+        shell, image_tag="img:1", container_name="tmp-x", tar_path=tmp_path / "r.tar"
+    )
+    assert shell.calls[-1] == "docker rm tmp-x"
+
+
 async def test_inject_tar_formats_unpacks_and_post_processes(tmp_path: Path) -> None:
     host = FakeHost()
     await host.blocks.activate(volume_id=0, name="mshkn-base")
@@ -45,7 +54,7 @@ async def test_inject_tar_formats_unpacks_and_post_processes(tmp_path: Path) -> 
     tar = tmp_path / "rootfs.tar"
     await inject_tar(shell, host.blocks, config, volume_name="mshkn-base", tar_path=tar)
     root = host.blocks.mounts["mshkn-base"]
-    assert ("mkfs", "mshkn-base") in host.blocks.calls
+    assert host.blocks.calls == [("mkfs", "mshkn-base"), ("mounted", ("mshkn-base", False))]
     assert shell.calls == [f"tar xf {tar} -C {root}"]
     # _post_process_rootfs ran on the mounted tree
     assert (root / "sbin" / "init").is_symlink()
@@ -56,7 +65,7 @@ async def test_inject_tar_formats_unpacks_and_post_processes(tmp_path: Path) -> 
 
 async def test_inject_tar_fails_on_an_unmapped_device(tmp_path: Path) -> None:
     host = FakeHost()
-    with pytest.raises(Exception, match="not"):
+    with pytest.raises(HostError, match="not active"):
         await inject_tar(
             FakeShell(),
             host.blocks,

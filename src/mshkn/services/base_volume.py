@@ -51,6 +51,15 @@ async def write_base_volume(
     because a create that ran meanwhile would snapshot a half-written origin.
     Existing checkpoint and recipe volumes are unaffected: a thin snapshot is
     independent of its origin once taken.
+
+    The bare template is dropped as soon as validation passes, before build,
+    export, or inject_tar's mkfs (the step that destroys volume 0's existing
+    filesystem) run: the template is a memory snapshot of the old base, and it
+    must never survive to describe a filesystem that mkfs has since erased.
+    Losing the template on a failure that never touched the volume (build,
+    export) costs one template rebuild on the next create; a failure inside
+    inject_tar itself (mount, untar, post-process) leaves volume 0 not usable
+    until a rerun succeeds.
     """
     try:
         await run("systemctl is-active --quiet mshkn")
@@ -63,6 +72,8 @@ async def write_base_volume(
         raise ConfigError(f"public key {pub_key} not found; VMs built without it are unreachable")
     if not dockerfile.exists():
         raise ConfigError(f"Dockerfile {dockerfile} not found")
+    await clear_bare_template(db)
+    await asyncio.to_thread(shutil.rmtree, config.checkpoint_local_dir / "templates" / "bare", True)
     build_dir = Path(tempfile.mkdtemp(prefix="mshkn-base-build-"))
     try:
         shutil.copy(dockerfile, build_dir / "Dockerfile")
@@ -75,10 +86,6 @@ async def write_base_volume(
             run, image_tag=image_tag, container_name=f"tmp-{device}", tar_path=tar_path
         )
         await inject_tar(run, blocks, config, volume_name=device, tar_path=tar_path)
-        await clear_bare_template(db)
-        await asyncio.to_thread(
-            shutil.rmtree, config.checkpoint_local_dir / "templates" / "bare", True
-        )
         return log
     finally:
         shutil.rmtree(build_dir, ignore_errors=True)
