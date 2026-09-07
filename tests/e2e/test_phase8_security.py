@@ -301,22 +301,20 @@ class TestT85NetworkEgress:
             )
 
     async def test_two_vms_cannot_reach_each_other(self, client: httpx.AsyncClient) -> None:
-        """Two VMs on different /30 subnets should not be able to reach each other."""
+        """Two VMs on different /30 subnets should not be able to reach each other.
+
+        VM B's address comes from the API, not from the guest. Every guest keeps
+        the staging address 172.16.254.2 — a checkpoint's memory snapshot has to
+        carry it for the restore to be reachable on the staging slot — and lists
+        it first, so asking the guest returns an address VM A owns too and VM A
+        answers its own ping locally.
+        """
         comp_a = await create_computer(client)
         comp_b = await create_computer(client)
         try:
-            # Get IP of VM B by checking its network config
-            result_b = await exec_command(
-                client,
-                comp_b,
-                "ip -4 addr show eth0 2>/dev/null | grep inet | awk '{print $2}' | cut -d/ -f1 "
-                "|| hostname -I | awk '{print $1}'",
-                timeout=10.0,
-            )
-            ip_b = result_b.stdout.strip().split("\n")[0].strip()
-
-            if not ip_b:
-                pytest.skip("Could not determine VM B's IP address")
+            status_b = await client.get(f"/computers/{comp_b}/status")
+            assert status_b.status_code == 200, status_b.text
+            ip_b = status_b.json()["vm_ip"]
 
             # VM A tries to ping VM B
             result = await exec_command(

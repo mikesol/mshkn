@@ -444,7 +444,6 @@ class FirecrackerHypervisor:
                     f"-d 172.16.0.0/12 -j DROP && "
                     f"dmsetup rename {STAGING_DRIVE_NAME} {disk_name}"
                 )
-                await self._ssh_keep_only(final_vm_ip)
             except Exception:
                 await self._cleanup_staging(pid)
                 raise
@@ -485,10 +484,15 @@ class FirecrackerHypervisor:
     async def _ssh_add_ip(self, final_vm_ip: str, final_host_ip: str) -> None:
         """Give the guest its final IP and default route, through the staging IP.
 
-        The staging IP is still on the VM afterwards — deleting it here would
-        cut this connection before the exit status arrived — so `_ssh_keep_only`
-        removes it once the final IP is reachable. `ip addr add` may fail with
-        EEXIST when a fork reuses the parent's slot.
+        The staging IP stays on the VM, and that is load-bearing: a checkpoint
+        snapshots the guest's memory as it is, so 172.16.254.2 has to be in
+        there for the restore to be reachable on the staging slot before it is
+        re-addressed. Deleting it makes every restore time out waiting for
+        172.16.254.2:22. A fork therefore also carries its parent's final
+        address, and a guest listing its own addresses sees the staging one
+        first — anything that needs a computer's address must ask the API, not
+        the guest. `ip addr add` may fail with EEXIST when a fork reuses the
+        parent's slot.
         """
         conn = await asyncio.wait_for(
             asyncssh.connect(
@@ -504,29 +508,5 @@ class FirecrackerHypervisor:
                 f"ip addr add {final_vm_ip}/30 dev eth0 2>/dev/null; "
                 f"ip route replace default via {final_host_ip} && "
                 f"ip neigh flush dev eth0",
-                check=True,
-            )
-
-    async def _ssh_keep_only(self, final_vm_ip: str) -> None:
-        """Drop every IPv4 address on eth0 but the final one, over the final one.
-
-        The staging address (and, on a fork restored from a checkpoint, the
-        parent's) survives `_ssh_add_ip`, so addresses accumulate along a fork
-        chain. A guest that owns another computer's address answers for it
-        locally and reports the wrong address to anything that asks.
-        """
-        conn = await asyncio.wait_for(
-            asyncssh.connect(
-                final_vm_ip,
-                username="root",
-                known_hosts=None,
-                client_keys=[str(self._config.ssh_key_path)],
-            ),
-            timeout=CONNECT_TIMEOUT_SECONDS,
-        )
-        async with conn:
-            await conn.run(
-                "for a in $(ip -4 -o addr show eth0 | awk '{print $4}'); do "
-                f'[ "$a" = "{final_vm_ip}/30" ] || ip addr del "$a" dev eth0; done',
                 check=True,
             )

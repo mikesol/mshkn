@@ -80,6 +80,22 @@ def entry_path(root: Path, rel: str) -> Path | None:
     return root / rel
 
 
+def unlink_stale_ancestors(output: Path, entries: set[str]) -> None:
+    """Remove symlinks in `output` that stand above an entry of the result.
+
+    An output volume snapped from the parent carries the parent's symlinks. A
+    fork that replaced one of them with a real directory makes that link stale:
+    left in place it shadows the children about to be copied, and the delete
+    pass then removes the link too, so neither survives.
+    """
+    for rel in sorted(entries):
+        walked = output
+        for part in Path(rel).parts[:-1]:
+            walked = walked / part
+            if walked.is_symlink() and str(walked.relative_to(output)) not in entries:
+                walked.unlink()
+
+
 def copy_entry(src: Path, dest: Path) -> None:
     """Reproduce src at dest: a symlink as a symlink, a file as a file.
 

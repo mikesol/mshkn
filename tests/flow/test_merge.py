@@ -166,3 +166,48 @@ async def test_merge_replaces_a_directory_with_a_forks_symlink(flow: Flow, tmp_p
     out = host.blocks.mounts[f"mshkn-ckpt-{body['checkpoint_id']}"]
     sbin = out / "usr" / "sbin"
     assert sbin.is_symlink() and sbin.readlink() == host_root
+
+
+async def test_merge_replaces_a_stale_symlink_on_the_volume_with_a_forks_directory(
+    flow: Flow, tmp_path: Path
+) -> None:
+    """The mirror of the previous case: a fork replaced the link with a directory.
+
+    The output volume is snapped from the parent, so it still carries the
+    parent's `usr/sbin` link. That link is stale — the merge result has a real
+    directory there — and until it goes it shadows the children about to be
+    copied, while the delete pass removes the link itself: neither survives.
+    """
+    host = flow.host
+    host.guest.script["sync"] = ExecResult(0, "", "")
+    c = flow.client
+    host_root = tmp_path / "hostroot"
+    host_root.mkdir()
+    (host_root / "init").write_bytes(b"HOST-INIT")
+    mtime = (host_root / "init").stat().st_mtime_ns
+
+    cid = (await c.post("/computers", json={})).json()["computer_id"]
+    parent = (await c.post(f"/computers/{cid}/checkpoint", json={})).json()["checkpoint_id"]
+    fa = (await c.post(f"/checkpoints/{parent}/fork", json={})).json()["computer_id"]
+    fb = (await c.post(f"/checkpoints/{parent}/fork", json={})).json()["computer_id"]
+    a = (await c.post(f"/computers/{fa}/checkpoint", json={})).json()["checkpoint_id"]
+    b = (await c.post(f"/computers/{fb}/checkpoint", json={})).json()["checkpoint_id"]
+    for name in (f"mshkn-ckpt-{parent}", f"mshkn-ckpt-{b}"):
+        async with host.blocks.mounted(name) as mount:
+            (mount / "usr").mkdir(parents=True, exist_ok=True)
+            (mount / "usr" / "sbin").symlink_to(host_root)
+    async with host.blocks.mounted(f"mshkn-ckpt-{a}") as mount:
+        (mount / "usr" / "sbin").mkdir(parents=True, exist_ok=True)
+        (mount / "usr" / "sbin" / "init").write_bytes(b"A-INIT")
+
+    resp = await c.post(f"/checkpoints/{parent}/merge", json={"checkpoint_a": a, "checkpoint_b": b})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["conflicts"] == []
+    out = host.blocks.mounts[f"mshkn-ckpt-{body['checkpoint_id']}"]
+    sbin = out / "usr" / "sbin"
+    assert not sbin.is_symlink(), "the parent's link is stale once a fork puts a directory there"
+    assert (sbin / "init").read_bytes() == b"A-INIT"
+    assert (host_root / "init").read_bytes() == b"HOST-INIT"
+    assert (host_root / "init").stat().st_mtime_ns == mtime
+    assert sorted(p.name for p in host_root.iterdir()) == ["init"]

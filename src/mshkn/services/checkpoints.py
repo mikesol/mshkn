@@ -33,6 +33,7 @@ from mshkn.services.merge import (
     copy_entry,
     entry_path,
     three_way_merge,
+    unlink_stale_ancestors,
 )
 
 if TYPE_CHECKING:
@@ -329,6 +330,7 @@ def _merge_into(parent: Path, fork_a: Path, fork_b: Path, output: Path) -> Merge
         # mounted volume resolves to the host's tree, so copying through one
         # would read and overwrite the host's files.
         merged = all_relative_entries(merge_output)
+        unlink_stale_ancestors(output, merged)
         # Sorted, so a link that replaced a directory lands before anything
         # that path used to hold; `entry_path` then reports the children of
         # that directory as unreachable rather than writing through the link.
@@ -337,7 +339,10 @@ def _merge_into(parent: Path, fork_a: Path, fork_b: Path, output: Path) -> Merge
             if dest is not None:
                 copy_entry(merge_output / rel, dest)
         for rel in sorted(all_relative_entries(parent) - merged):
+            # A real directory here is the merge result's, put there by a fork
+            # that replaced the parent's file or link with one; only the
+            # parent's own kind of entry is deleted.
             target = entry_path(output, rel)
-            if target is not None and (target.is_symlink() or target.exists()):
+            if target is not None and (target.is_symlink() or target.is_file()):
                 target.unlink()
     return result
