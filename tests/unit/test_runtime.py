@@ -173,3 +173,27 @@ async def test_start_reaps_a_vm_whose_process_died_while_the_server_was_down(
         assert any("Startup: reaped 1 dead VM(s)" in r.getMessage() for r in caplog.records)
     finally:
         await runtime.close()
+
+
+async def test_start_finishes_a_teardown_the_previous_process_left_half_done(
+    runtime: Runtime, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A row still `destroying` at startup is an interrupted teardown: nobody else owns it."""
+    from mshkn.db import get_computer
+    from mshkn.models import ComputerStatus
+
+    caplog.set_level(logging.INFO, logger="mshkn.runtime")
+    await insert_account(runtime.db, account_row())
+    await insert_computer(runtime.db, computer_row(1, status=ComputerStatus.DESTROYING))
+    host = runtime.host
+
+    await runtime.start()
+    try:
+        stored = await get_computer(runtime.db, "comp-1")
+        assert stored is not None and stored.status is ComputerStatus.DESTROYED
+        assert host.hypervisor.torn_down == [1]  # type: ignore[attr-defined]
+        assert runtime.allocator.free_slots == frozenset({1})
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Startup: finished 1 interrupted teardown(s)" in m for m in messages)
+    finally:
+        await runtime.close()

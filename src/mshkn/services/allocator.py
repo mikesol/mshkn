@@ -18,7 +18,6 @@ from mshkn.db import (
 )
 from mshkn.errors import LimitExceeded
 from mshkn.host.firecracker import STAGING_SLOT
-from mshkn.models import ComputerStatus
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -55,9 +54,10 @@ class SlotAllocator:
         max_vol = _FIRST_VOLUME_ID - 1
         if computers:
             max_vol = max(max_vol, max(c.thin_volume_id for c in computers))
-        running = [c for c in computers if c.status == ComputerStatus.RUNNING]
-        if running:
-            active = {c.slot for c in running}
+        # list_all_computers already excludes destroyed rows; a computer still
+        # `destroying` holds its slot until the interrupted teardown is resumed.
+        if computers:
+            active = {c.slot for c in computers}
             self._next_slot = min(max(active) + 1, _LAST_SLOT + 1)
             self._free_slots = {s for s in range(1, self._next_slot) if s not in active}
         else:
@@ -88,9 +88,18 @@ class SlotAllocator:
             return self._take_volume_id()
 
     async def release_slot(self, slot: int) -> None:
+        """Hand a slot back. A slot that is not held stays as it is.
+
+        Refusing the release is what keeps a second teardown of the same
+        computer from putting a slot in circulation while another VM holds it.
+        """
         async with self._lock:
-            if slot != STAGING_SLOT:
-                self._free_slots.add(slot)
+            if slot == STAGING_SLOT:
+                return
+            if slot in self._free_slots or not 1 <= slot < self._next_slot:
+                logger.warning("Refusing to release slot %d: not held", slot)
+                return
+            self._free_slots.add(slot)
 
     def _take_slot(self) -> int:
         self._free_slots.discard(STAGING_SLOT)

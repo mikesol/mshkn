@@ -10,7 +10,7 @@ from mshkn.config import Config
 from mshkn.db import claim_deferred_by_label, get_computer, insert_account, insert_deferred
 from mshkn.host import PoolUsage
 from mshkn.host.fake import FakeHost, FakeHostInstance
-from mshkn.models import Alert, CheckpointTrigger, ComputerStatus
+from mshkn.models import Alert, CheckpointTrigger, Computer, ComputerStatus
 from mshkn.observability.metrics import checkpoints_total, thin_pool_used_ratio
 from mshkn.resources import DEFAULT_RESOURCES
 from mshkn.runtime import BackgroundTasks
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import aiosqlite
+    import pytest
 
 ACCOUNT = account_row(api_key="k")
 
@@ -141,3 +142,37 @@ async def test_host_checks_raise_pool_alerts_and_set_gauges(
     assert thin_pool_used_ratio.labels(kind="data")._value.get() == 0.96
     assert list(reaper.alerts) == alerts
     assert all(isinstance(a, Alert) for a in alerts)
+
+
+async def test_reap_dead_leaves_a_computer_another_teardown_has_claimed_alone(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    reaper, computers, _, host = await _reaper(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    host.hypervisor.alive.pop(computer.firecracker_pid or -1)
+    await db.execute("UPDATE computers SET status = 'destroying' WHERE id = ?", (computer.id,))
+    await db.commit()
+
+    assert await reaper.reap_dead() == 0
+
+    assert host.hypervisor.torn_down == [] and host.hypervisor.killed == []
+    assert computers.allocator.free_slots == frozenset()
+
+
+async def test_reap_dead_counts_only_the_computers_it_actually_reaped(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cleanup that lost its claim to a concurrent destroy is not a reap."""
+    reaper, computers, _, host = await _reaper(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    host.hypervisor.alive.pop(computer.firecracker_pid or -1)
+    original = computers.cleanup_dead
+
+    async def cleanup(snapshot: Computer) -> bool:
+        await computers.destroy(snapshot.id)  # destroy wins in between
+        return await original(snapshot)
+
+    monkeypatch.setattr(computers, "cleanup_dead", cleanup)
+
+    assert await reaper.reap_dead() == 0
+    assert host.hypervisor.torn_down == [computer.slot]
