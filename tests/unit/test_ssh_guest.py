@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,7 @@ import pytest
 import mshkn.host.ssh as ssh_module
 from mshkn.errors import HostError
 from mshkn.host import ExecResult
-from mshkn.host.ssh import SshGuest, parse_metrics
+from mshkn.host.ssh import SshGuest, guest_timeout_command, parse_metrics
 
 
 class FakeReader:
@@ -238,9 +239,11 @@ class FakeConn:
         self._run_result = run_result if run_result is not None else RunResult()
         self.closed = False
         self.runs: list[str] = []
+        self.processes: list[str] = []
         self.files: dict[str, bytes] = {}
 
     async def create_process(self, command: str) -> Any:
+        self.processes.append(command)
         if self._channel_error:
             raise asyncssh.ChannelOpenError(4, "open failed")
         return self._process
@@ -316,6 +319,7 @@ async def test_stream_kills_on_timeout_and_still_reports_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(ssh_module, "STREAM_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(ssh_module, "STREAM_HOST_GRACE_SECONDS", 0.05)
     # readers stay open (a background child holds the fds) and the process never exits
     process = FakeProcess(stdout=[(0.0, "x\n")], stderr=[], exit_after=10, code=0, hang=True)
     guest = make_guest(process)
@@ -328,6 +332,7 @@ async def test_a_killed_command_reports_128_plus_the_signal(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(ssh_module, "STREAM_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(ssh_module, "STREAM_HOST_GRACE_SECONDS", 0.05)
     process = KilledProcess()
     guest = make_guest(process)
     with caplog.at_level("WARNING", logger="mshkn.host.ssh"):
@@ -447,6 +452,38 @@ async def test_stream_closes_the_fallback_connection_when_the_retry_also_fails()
     assert isinstance(info.value.__cause__, asyncssh.ChannelOpenError)
     assert dedicated.closed, "the dedicated fallback must not leak when its channel also fails"
     assert not pooled.closed
+
+
+async def test_guest_timeout_command_rounds_up_and_kills_at_the_deadline() -> None:
+    """sshd ignores the SSH signal request, so the kill is the guest's coreutils timeout."""
+    assert (
+        guest_timeout_command("echo hi; sleep 2", 2.4)
+        == "timeout --preserve-status -s KILL 3 bash -c 'echo hi; sleep 2'"
+    )
+
+
+async def test_guest_timeout_command_quotes_so_the_guest_shell_round_trips_it() -> None:
+    command = """echo 'it'"'"'s here'"""
+    wrapped = guest_timeout_command(command, 1.0)
+    assert shlex.split(wrapped) == [
+        "timeout",
+        "--preserve-status",
+        "-s",
+        "KILL",
+        "1",
+        "bash",
+        "-c",
+        command,
+    ]
+
+
+async def test_stream_runs_the_command_under_the_guests_timeout() -> None:
+    process = FakeProcess(stdout=[(0.0, "a\n")], stderr=[], exit_after=0.0)
+    conn = FakeConn(process)
+    guest = make_guest_with([conn])
+    items = [item async for item in guest.stream("172.16.1.2", "cmd", timeout=7)]
+    assert items == [("stdout", "a"), ("exit", "0")]
+    assert conn.processes == ["timeout --preserve-status -s KILL 7 bash -c cmd"]
 
 
 # -- exec and the pool -------------------------------------------------------
