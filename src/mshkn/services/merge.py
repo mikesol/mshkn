@@ -23,7 +23,7 @@ class MergeResult:
     unchanged: int = 0
 
 
-def _entry_hash(path: Path) -> str | None:
+def _entry_hash(path: Path | None) -> str | None:
     """Identity of a path without following symlinks.
 
     The link target for a symlink, an md5 of the bytes for a regular file,
@@ -31,6 +31,8 @@ def _entry_hash(path: Path) -> str | None:
     one from a mounted volume lands on the host's own tree, so the merge reads
     the link, never the file it names.
     """
+    if path is None:
+        return None
     if path.is_symlink():
         return "link:" + str(path.readlink())
     if path.is_file():
@@ -61,19 +63,55 @@ def all_relative_entries(*dirs: Path) -> set[str]:
     return entries
 
 
+def entry_path(root: Path, rel: str) -> Path | None:
+    """`root / rel`, or None when a symlink stands anywhere above it.
+
+    A symlink is an entry, never a door. If `usr/sbin` is a link in one tree
+    then `usr/sbin/init` is not reachable in that tree at all: reaching it
+    would leave the volume and land on the host's own filesystem. The caller
+    reads that None as "absent here", so a fork that replaced a directory with
+    a link deletes the directory's children and adds the link.
+    """
+    walked = root
+    for part in Path(rel).parts[:-1]:
+        walked = walked / part
+        if walked.is_symlink():
+            return None
+    return root / rel
+
+
 def copy_entry(src: Path, dest: Path) -> None:
     """Reproduce src at dest: a symlink as a symlink, a file as a file.
 
     Never writes through an existing symlink at dest, which for an absolute
-    link on a mounted volume would be a write onto the host.
+    link on a mounted volume would be a write onto the host. A real directory
+    at dest is removed: the output volume is snapped from the parent, so it
+    carries the parent's directories, and a fork may have replaced one of them
+    with a link.
     """
-    if dest.is_symlink() or dest.exists():
+    if dest.is_symlink():
+        dest.unlink()
+    elif dest.is_dir():
+        shutil.rmtree(dest)
+    elif dest.exists():
         dest.unlink()
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.is_symlink():
         dest.symlink_to(src.readlink())
     else:
         shutil.copy2(src, dest, follow_symlinks=False)
+
+
+def _apply(src: Path | None, src_hash: str | None, dest: Path | None) -> None:
+    """Copy src to dest when both are entries no symlink stands above.
+
+    A None src is a delete, a None hash is a path that is not a file or a link
+    (a directory another tree replaced with one), and a None dest means a link
+    already won that path in the output.
+    """
+    if src is None or src_hash is None or dest is None:
+        return
+    copy_entry(src, dest)
 
 
 def three_way_merge(
@@ -89,38 +127,33 @@ def three_way_merge(
     result = MergeResult(merged_dir=output)
     all_files = all_relative_entries(parent, fork_a, fork_b)
 
+    # Sorted, so a link lands in the output before the children of the
+    # directory it replaced are considered, and `entry_path` sees it there.
     for rel in sorted(all_files):
-        p_file = parent / rel
-        a_file = fork_a / rel
-        b_file = fork_b / rel
-        out_file = output / rel
+        p_file = entry_path(parent, rel)
+        a_file = entry_path(fork_a, rel)
+        b_file = entry_path(fork_b, rel)
+        out_file = entry_path(output, rel)
 
         hp = _entry_hash(p_file)
         ha = _entry_hash(a_file)
         hb = _entry_hash(b_file)
 
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-
         if ha == hp and hb == hp:
             # Unchanged in both
-            if p_file.is_symlink() or p_file.exists():
-                copy_entry(p_file, out_file)
+            _apply(p_file, hp, out_file)
             result.unchanged += 1
         elif ha != hp and hb == hp:
-            # Changed only in A
-            if a_file.is_symlink() or a_file.exists():
-                copy_entry(a_file, out_file)
-            # else: A deleted it
+            # Changed only in A; a None hash there is A deleting it
+            _apply(a_file, ha, out_file)
             result.auto_merged += 1
         elif ha == hp and hb != hp:
             # Changed only in B
-            if b_file.is_symlink() or b_file.exists():
-                copy_entry(b_file, out_file)
+            _apply(b_file, hb, out_file)
             result.auto_merged += 1
         elif ha == hb:
             # Both changed the same way
-            if a_file.is_symlink() or a_file.exists():
-                copy_entry(a_file, out_file)
+            _apply(a_file, ha, out_file)
             result.auto_merged += 1
         else:
             # Conflict
@@ -133,9 +166,9 @@ def three_way_merge(
                 )
             )
             # Default: take fork_a
-            if a_file.is_symlink() or a_file.exists():
-                copy_entry(a_file, out_file)
-            elif b_file.is_symlink() or b_file.exists():
-                copy_entry(b_file, out_file)
+            if ha is not None:
+                _apply(a_file, ha, out_file)
+            else:
+                _apply(b_file, hb, out_file)
 
     return result
