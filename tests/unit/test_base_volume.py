@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mshkn.cli import _parser, base_volume
 from mshkn.config import Config
 from mshkn.db import cache_bare_template, clear_bare_template, get_bare_template
 from mshkn.errors import ConfigError, Conflict
@@ -174,4 +175,50 @@ async def test_a_failed_export_removes_the_context_and_keeps_the_template(
     assert not seen["build_dir"].exists()
     assert ("mkfs", "mshkn-base") not in host.blocks.calls
     assert await get_bare_template(db) == ("/t/vmstate", "/t/memory")
+    host.close()
+
+
+def test_base_volume_parser_defaults() -> None:
+    args = _parser().parse_args(["base-volume"])
+    assert args.command == "base-volume"
+    assert args.dockerfile == DEFAULT_DOCKERFILE
+    assert args.image == BASE_IMAGE and args.device == BASE_DEVICE
+    custom = _parser().parse_args(
+        ["base-volume", "--dockerfile", "/x/Dockerfile", "--image", "i", "--device", "d"]
+    )
+    assert custom.dockerfile == Path("/x/Dockerfile")
+    assert custom.image == "i" and custom.device == "d"
+
+
+async def test_base_volume_command_reports_a_refusal(
+    db: aiosqlite.Connection, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    host = FakeHost()
+    args = _parser().parse_args(["base-volume", "--dockerfile", str(_dockerfile(tmp_path))])
+    assert await base_volume(args, _config(tmp_path), db, blocks=host.blocks, run=FakeShell()) == 1
+    assert "stop it" in capsys.readouterr().err
+    host.close()
+
+
+async def test_base_volume_command_succeeds(
+    db: aiosqlite.Connection, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    host = FakeHost()
+    await host.blocks.activate(volume_id=0, name="mshkn-base")
+
+    async def build_image(cmd: str) -> str:
+        return "built"
+
+    args = _parser().parse_args(["base-volume", "--dockerfile", str(_dockerfile(tmp_path))])
+    code = await base_volume(
+        args,
+        _config(tmp_path),
+        db,
+        blocks=host.blocks,
+        run=FakeShell(fail_on=INACTIVE),
+        build_image=build_image,
+    )
+    assert code == 0
+    assert "base volume mshkn-base written from mshkn-base" in capsys.readouterr().out
+    assert ("mkfs", "mshkn-base") in host.blocks.calls
     host.close()
