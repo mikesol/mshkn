@@ -55,7 +55,7 @@ from mshkn.db.recipes import (
     update_recipe_status,
     update_recipe_template,
 )
-from mshkn.db.templates import cache_bare_template, get_bare_template
+from mshkn.db.templates import cache_bare_template, clear_bare_template, get_bare_template
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -63,6 +63,7 @@ if TYPE_CHECKING:
 __all__ = [
     "cache_bare_template",
     "claim_deferred_by_label",
+    "clear_bare_template",
     "connect",
     "count_active_computers",
     "count_active_computers_by_account",
