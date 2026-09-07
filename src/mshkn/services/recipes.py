@@ -116,6 +116,11 @@ def dockerfile_content_hash(dockerfile: str) -> str:
     return hashlib.sha256(dockerfile.encode()).hexdigest()
 
 
+def recipe_image_tag(recipe_id: str) -> str:
+    """The Docker image a recipe's build leaves behind; its layers are the rebuild cache."""
+    return f"mshkn-recipe-img-{recipe_id}"
+
+
 async def docker_build_image(cmd: str) -> str:
     """Run `docker build …`, returning its combined output; raise on failure or timeout.
 
@@ -260,6 +265,8 @@ class RecipeService:
         if recipe.base_volume_id is not None:
             await self.blocks.remove(volume_id=recipe.base_volume_id, name=recipe.volume_name)
         await delete_recipe(self.db, recipe_id)
+        with contextlib.suppress(Exception):
+            await self._run(f"docker rmi -f {recipe_image_tag(recipe_id)}", check=False)
 
     async def resolve(self, recipe_id: str) -> Recipe:
         """The recipe a computer can be created from, or the reason it cannot."""
@@ -326,12 +333,14 @@ class RecipeService:
     async def build(
         self, recipe_id: str, dockerfile: str, content_hash: str, volume_id: int
     ) -> None:
-        """Docker build → export → inject into dm-thin → ready; failed with a log otherwise."""
+        """Docker build → export → inject into dm-thin → ready (the image stays as the layer
+        cache); failed with a log otherwise.
+        """
         build_dir = Path(f"/tmp/mshkn-build-{content_hash}")
         tar_path = build_dir / "rootfs.tar"
         container_name = f"tmp-{recipe_id}"
         volume_name = recipe_volume_name(recipe_id)
-        image_tag = f"mshkn-recipe-img-{recipe_id}"
+        image_tag = recipe_image_tag(recipe_id)
         device_active = False
         build_log_lines: list[str] = []
         try:
@@ -376,13 +385,13 @@ class RecipeService:
             await update_recipe_build_result(
                 self.db, recipe_id, status=RecipeStatus.FAILED, build_log="\n".join(build_log_lines)
             )
+            with contextlib.suppress(Exception):
+                await self._run(f"docker rmi -f {image_tag}", check=False)
         finally:
             if device_active:
                 with contextlib.suppress(Exception):
                     await self.blocks.deactivate(volume_name)
             shutil.rmtree(build_dir, ignore_errors=True)
-            with contextlib.suppress(Exception):
-                await self._run(f"docker rmi {image_tag}", check=False)
 
 
 def _post_process_rootfs(mount_point: Path, config: Config) -> None:

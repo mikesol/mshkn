@@ -12,7 +12,7 @@ from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import RecipeStatus
 from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
-from mshkn.services.recipes import RecipeService, dockerfile_content_hash
+from mshkn.services.recipes import RecipeService, dockerfile_content_hash, recipe_image_tag
 from tests.support import FakeShell, account_row, computer_row
 
 if TYPE_CHECKING:
@@ -169,3 +169,33 @@ async def test_ensure_template_returns_none_when_the_build_fails(
     service, host, _ = _service(db, tmp_path)
     host.hypervisor.fail_next("build_template")
     assert await service.ensure_template(None) is None
+
+
+async def test_a_successful_build_keeps_its_image_for_the_layer_cache(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    await insert_account(db, ACCOUNT)
+    service, _, shell = _service(db, tmp_path)
+    recipe, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN true")
+    await service.tasks.wait(service.build_task_name(recipe.id))
+    assert not any("docker rmi" in c for c in shell.calls)
+
+
+async def test_a_failed_build_removes_its_image(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    await insert_account(db, ACCOUNT)
+    service, _, shell = _service(db, tmp_path, shell=FakeShell(fail_on="tar xf"))
+    recipe, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN true")
+    await service.tasks.wait(service.build_task_name(recipe.id))
+    assert f"docker rmi -f {recipe_image_tag(recipe.id)}" in shell.calls
+
+
+async def test_delete_removes_the_image_with_the_volume(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    await insert_account(db, ACCOUNT)
+    service, host, shell = _service(db, tmp_path)
+    recipe, _ = await service.create(ACCOUNT, "FROM mshkn-base\nRUN true")
+    await service.tasks.wait(service.build_task_name(recipe.id))
+    await service.delete(ACCOUNT, recipe.id)
+    assert ("remove", (100, f"mshkn-recipe-{recipe.id}")) in host.blocks.calls
+    assert shell.calls[-1] == f"docker rmi -f {recipe_image_tag(recipe.id)}"
