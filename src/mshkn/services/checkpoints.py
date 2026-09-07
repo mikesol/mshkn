@@ -27,7 +27,12 @@ from mshkn.db import (
 from mshkn.errors import BadRequest, Conflict, NotFound
 from mshkn.models import Checkpoint, CheckpointTrigger, Computer, checkpoint_volume_name
 from mshkn.observability.metrics import checkpoints_total, timed
-from mshkn.services.merge import MergeResult, three_way_merge
+from mshkn.services.merge import (
+    MergeResult,
+    all_relative_entries,
+    copy_entry,
+    three_way_merge,
+)
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -319,16 +324,14 @@ def _merge_into(parent: Path, fork_a: Path, fork_b: Path, output: Path) -> Merge
     with tempfile.TemporaryDirectory(prefix="mshkn-merge-") as merge_dir:
         merge_output = Path(merge_dir) / "merge_result"
         result = three_way_merge(parent=parent, fork_a=fork_a, fork_b=fork_b, output=merge_output)
-        for src in merge_output.rglob("*"):
-            if src.is_file():
-                dest = output / src.relative_to(merge_output)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dest)
-        for src in parent.rglob("*"):
-            if src.is_file():
-                rel = src.relative_to(parent)
-                if not (merge_output / rel).exists():
-                    target = output / rel
-                    if target.exists():
-                        target.unlink()
+        # Symlinks are entries, never paths to follow: an absolute link on a
+        # mounted volume resolves to the host's tree, so copying through one
+        # would read and overwrite the host's files.
+        merged = all_relative_entries(merge_output)
+        for rel in merged:
+            copy_entry(merge_output / rel, output / rel)
+        for rel in all_relative_entries(parent) - merged:
+            target = output / rel
+            if target.is_symlink() or target.exists():
+                target.unlink()
     return result

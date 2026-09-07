@@ -125,7 +125,7 @@ def test_b_deletes_and_a_leaves_alone_removes_the_file(tmp_path: Path) -> None:
 
 
 def test_a_missing_fork_directory_contributes_no_files(tmp_path: Path) -> None:
-    """`_all_relative_files` skips a directory that does not exist.
+    """`all_relative_entries` skips a directory that does not exist.
 
     A fork volume that was never mounted must not make the merge raise; the
     other two sides still merge.
@@ -137,3 +137,43 @@ def test_a_missing_fork_directory_contributes_no_files(tmp_path: Path) -> None:
     assert result.conflicts == []
     assert not (result.merged_dir / "kept").exists(), "the absent side reads as a delete"
     assert (result.unchanged, result.auto_merged) == (0, 1)
+
+
+def test_symlinks_are_merged_as_links_and_never_followed(tmp_path: Path) -> None:
+    """A symlink is an entry whose identity is its target string.
+
+    The exported `mshkn-base` filesystem has 159 absolute symlinks; following
+    one from a mounted volume lands on the host's own tree, which the merge
+    then hashed, copied and wrote back through.
+    """
+    host_file = tmp_path / "host-file"
+    host_file.write_text("host bytes")
+    before = host_file.stat().st_mtime_ns
+    parent, fork_a, fork_b = (tmp_path / n for n in ("parent", "fork_a", "fork_b"))
+    for d in (parent, fork_a, fork_b):
+        d.mkdir()
+        (d / "init").symlink_to(host_file)  # absolute link, like /usr/sbin/init
+        (d / "escape").symlink_to(tmp_path)  # absolute link to a directory
+    (fork_a / "init").unlink()
+    (fork_a / "init").symlink_to("/lib/systemd/systemd-a")  # changed only in A
+
+    result = three_way_merge(parent, fork_a, fork_b)
+    out = result.merged_dir
+    assert (out / "init").is_symlink()
+    assert str((out / "init").readlink()) == "/lib/systemd/systemd-a"
+    assert (out / "escape").is_symlink() and (out / "escape").readlink() == tmp_path
+    # the symlinked directory was not descended into, so nothing under it was copied
+    assert sorted(p.name for p in out.iterdir()) == ["escape", "init"]
+    assert result.conflicts == [] and result.auto_merged == 1 and result.unchanged == 1
+    assert host_file.read_text() == "host bytes" and host_file.stat().st_mtime_ns == before
+
+
+def test_a_file_replaced_by_a_symlink_in_both_forks_conflicts(tmp_path: Path) -> None:
+    """A regular file on one side and a symlink on the other is different content."""
+    parent, fork_a, fork_b = _dirs(tmp_path)
+    (parent / "f").write_text("data")
+    (fork_a / "f").symlink_to("/a")
+    (fork_b / "f").symlink_to("/b")
+    result = three_way_merge(parent, fork_a, fork_b)
+    assert [c.path for c in result.conflicts] == ["f"]
+    assert str((result.merged_dir / "f").readlink()) == "/a"

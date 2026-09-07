@@ -151,7 +151,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 **Drain** (`Lifecycle.drain_deferred`): after a self-destruct or destroy on a labelled chain, one background task claims every queued request for the label atomically (`DELETE … RETURNING`), forks one computer from the newest checkpoint carrying the label, writes each queued `exec` to `/tmp/exec/N.txt`, and runs the last `meta_exec` if any, else the queued commands joined by newlines. A claim that finds nothing ends the drain; a drain that produces another self-destruct spawns the next.
 
-**Merge** (`CheckpointService.merge`): both forks must be children of the named parent, or the request is a 400. The parent and both forks are mounted read-only alongside a fresh volume snapped from the parent; `three_way_merge` runs in a worker thread and its output is copied onto that volume; the result is a new checkpoint labelled `merge` whose response lists conflicts.
+**Merge** (`CheckpointService.merge`): both forks must be children of the named parent, or the request is a 400. The parent and both forks are mounted read-only alongside a fresh volume snapped from the parent; `three_way_merge` runs in a worker thread and its output is copied onto that volume; the result is a new checkpoint labelled `merge` whose response lists conflicts. Symlinks are compared and reproduced as links and never followed, so an absolute link on a volume — a guest rootfs is full of them — can neither be read through nor written through onto the host's own tree.
 
 ## 8. Recipes and templates
 
