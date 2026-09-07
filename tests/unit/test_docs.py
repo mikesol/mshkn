@@ -2,7 +2,7 @@
 
 Every backticked path, dotted module name, `METHOD /route`, `mshkn_*` metric and
 `MSHKN_*`/`R2_*` variable in the documents listed in DOCS must exist in the
-code, and the architecture doc's route and metric tables must be complete.
+code, and the architecture doc must name every route and metric.
 A doc that drifts from the code fails here instead of misleading a reader.
 """
 
@@ -141,13 +141,16 @@ def test_retired_terms_are_absent(doc: str) -> None:
     assert present == [], f"{doc} still mentions retired things: {present}"
 
 
-@pytest.mark.skipif("docs/ARCHITECTURE.md" not in DOCS, reason="landed by a later task")
 def test_architecture_lists_every_route_and_metric() -> None:
     text = _text("docs/ARCHITECTURE.md")
     documented = set(ROUTE_RE.findall(text))
     undocumented = sorted(_app_routes() - documented)
-    assert undocumented == [], f"routes missing from ARCHITECTURE.md: {undocumented}"
+    assert undocumented == [], (
+        f"the architecture doc must name every route and metric: missing routes {undocumented}"
+    )
     _, families = _registry_names()
     named = set(METRIC_RE.findall(text))
     missing = sorted(f for f in families if f not in named and f"{f}_total" not in named)
-    assert missing == [], f"metrics missing from ARCHITECTURE.md: {missing}"
+    assert missing == [], (
+        f"the architecture doc must name every route and metric: missing metrics {missing}"
+    )
