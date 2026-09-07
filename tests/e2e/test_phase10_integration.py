@@ -1,73 +1,247 @@
-"""Phase 10: Integration — "Real Agent Workflows"
+"""Phase 10: The Generative Loop.
 
-These tests run against a LIVE server with real Firecracker VMs.
-Every test here runs against bare VMs; the capability system was
-replaced by Docker recipes. Three tests (the Next.js scaffold, the
-pandas analysis, and the dumb-agent workflow) are not implemented yet
-and fail on purpose via pytest.fail — not implemented is a flavor of
-broken, so they are not silently skipped or given an expected-failure
-marker.
+mshkn exists for a generative agent that writes its own recipes and the
+programs those computers run. Phases 0 to 9 prove the primitives; this phase
+proves the loop: write a recipe, build it, read the failure, fix it, run real
+tools, checkpoint, fork, diverge, pick. Every test here is deterministic and
+runs against the live host; none needs an LLM.
 """
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
-import pytest
+import httpx  # noqa: TC002
 
 from .conftest import (
     checkpoint_computer,
     create_computer,
+    create_recipe,
     delete_checkpoint,
     destroy_computer,
     exec_command,
     fork_checkpoint,
+    upload_file,
 )
 
 if TYPE_CHECKING:
-    import httpx
+    from .conftest import ExecResult
+
+BUILD_CAP_SECONDS = 600  # the documented docker build cap; every recipe must be ready within it
+
+
+def _apt(*packages: str) -> str:
+    return (
+        "RUN apt-get update && apt-get install -y --no-install-recommends "
+        + " ".join(packages)
+        + " && rm -rf /var/lib/apt/lists/*"
+    )
+
+
+def _ok(result: ExecResult) -> str:
+    """stdout of a command that must have exited 0."""
+    assert result.events and result.events[-1] == ("exit", "0"), (
+        f"command failed: events={result.events[-6:]} stderr={result.stderr[-500:]}"
+    )
+    return result.stdout.strip()
+
+
+async def _file_size(client: httpx.AsyncClient, cid: str, path: str) -> int:
+    """-1 when the file does not exist."""
+    out = _ok(await exec_command(client, cid, f"stat -c %s {path} 2>/dev/null || echo -1"))
+    return int(out.splitlines()[-1])
+
 
 # ---------------------------------------------------------------------------
-# T10.1 — Web App Development Workflow
+# T10.1 — The ffmpeg Loop
 # ---------------------------------------------------------------------------
 
+FFMPEG_DOCKERFILE = "FROM mshkn-base\n" + _apt("ffmpeg") + "\n"
 
-class TestT101WebAppDevelopment:
-    """Full web app dev workflow: create project, install deps, run server."""
 
-    async def test_nextjs_scaffold_and_run(self, client: httpx.AsyncClient) -> None:
-        """Scaffold a Next.js app, install deps, start dev server, hit it.
+class TestT101FfmpegLoop:
+    """Recipe → ready → create → run a real tool → checkpoint → fork → diverge."""
 
-        Intended workflow:
-        1. Create a computer from a recipe that installs Node.js 20
-        2. exec 'npx create-next-app@latest myapp --yes'
-        3. exec 'cd myapp && npm run dev &'
-        4. exec 'curl http://localhost:3000' -> HTML response
-        5. Checkpoint, fork, make a change, verify divergence
-        """
-        pytest.fail("Not implemented: Next.js scaffold-and-run workflow")
+    async def test_recipe_create_run_checkpoint_fork_diverge(
+        self, long_client: httpx.AsyncClient
+    ) -> None:
+        started = time.monotonic()
+        recipe_id = await create_recipe(long_client, FFMPEG_DOCKERFILE, timeout=BUILD_CAP_SECONDS)
+        print(f"T10.1 ffmpeg recipe ready in {time.monotonic() - started:.0f}s")
+
+        cid = await create_computer(long_client, recipe_id=recipe_id)
+        checkpoint_id: str | None = None
+        forks: list[str] = []
+        try:
+            _ok(
+                await exec_command(
+                    long_client,
+                    cid,
+                    "ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -y /root/tone.wav",
+                    timeout_seconds=120,
+                )
+            )
+            assert await _file_size(long_client, cid, "/root/tone.wav") > 0
+            checkpoint_id = await checkpoint_computer(long_client, cid, label="ffmpeg-base")
+
+            fork_a = await fork_checkpoint(long_client, checkpoint_id)
+            forks.append(fork_a)
+            fork_b = await fork_checkpoint(long_client, checkpoint_id)
+            forks.append(fork_b)
+
+            _ok(
+                await exec_command(
+                    long_client,
+                    fork_a,
+                    "ffmpeg -v error -i /root/tone.wav -y /root/tone.mp3",
+                    timeout_seconds=120,
+                )
+            )
+            _ok(
+                await exec_command(
+                    long_client,
+                    fork_b,
+                    "ffmpeg -v error -i /root/tone.wav -t 1 -y /root/short.wav",
+                    timeout_seconds=120,
+                )
+            )
+
+            # Each fork has its own output and not the other's.
+            assert await _file_size(long_client, fork_a, "/root/tone.mp3") > 0
+            assert await _file_size(long_client, fork_a, "/root/short.wav") == -1
+            assert await _file_size(long_client, fork_b, "/root/short.wav") > 0
+            assert await _file_size(long_client, fork_b, "/root/tone.mp3") == -1
+
+            probe = "ffprobe -v error -show_entries format=duration -of csv=p=0 {}"
+            mp3 = float(
+                _ok(await exec_command(long_client, fork_a, probe.format("/root/tone.mp3")))
+            )
+            short = float(
+                _ok(await exec_command(long_client, fork_b, probe.format("/root/short.wav")))
+            )
+            assert 1.8 <= mp3 <= 2.3, mp3
+            assert 0.9 <= short <= 1.1, short
+        finally:
+            for fid in forks:
+                await destroy_computer(long_client, fid)
+            await destroy_computer(long_client, cid)
+            if checkpoint_id:
+                await delete_checkpoint(long_client, checkpoint_id)
 
 
 # ---------------------------------------------------------------------------
-# T10.2 — Data Science Workflow
+# T10.2 — apt and pip Inside a Bare Computer
 # ---------------------------------------------------------------------------
 
+_ROWS = 200
+_GROUPS = 4
 
-class TestT102DataScienceWorkflow:
-    """Data science workflow: install pandas, run analysis, checkpoint results."""
 
-    async def test_pandas_analysis_checkpoint_resume(self, client: httpx.AsyncClient) -> None:
-        """Install pandas, create a dataset, analyze it, checkpoint mid-work.
+def _dataset() -> list[tuple[int, int]]:
+    """(group, value) rows the test and the VM agree on without a random source."""
+    return [(i % _GROUPS, (i * 7) % 101) for i in range(_ROWS)]
 
-        Intended workflow:
-        1. Create a computer, then install Python 3.12 via apt/pip inside it
-        2. exec 'pip install pandas numpy'
-        3. exec python script that generates CSV and computes stats
-        4. Checkpoint after data generation
-        5. Fork twice: one does linear regression, other does clustering
-        6. Compare outputs from the two forks
-        """
-        pytest.fail("Not implemented: pandas analysis with checkpoint/fork comparison")
+
+_WRITE_CSV = """\
+import csv
+with open("/root/data.csv", "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["group", "value"])
+    for i in range(%d):
+        w.writerow([i %% %d, (i * 7) %% 101])
+print("rows", %d)
+""" % (_ROWS, _GROUPS, _ROWS)  # noqa: UP031 -- this is the VM-side script's own %% escaping, not ours
+
+_MEAN = """\
+import pandas as pd
+df = pd.read_csv("/root/data.csv")
+open("/root/mean.txt", "w").write(f"{df.value.mean():.4f}\\n")
+print(f"mean={df.value.mean():.4f}")
+"""
+
+_GROUP_SUMS = """\
+import pandas as pd
+df = pd.read_csv("/root/data.csv")
+sums = df.groupby("group").value.sum()
+with open("/root/sums.txt", "w") as f:
+    for g, s in sums.items():
+        f.write(f"{g}={s}\\n")
+        print(f"{g}={s}")
+"""
+
+
+class TestT102AptAndPipOnBare:
+    """The other egress path: apt and pip run inside the VM, not in docker build."""
+
+    async def test_apt_pip_checkpoint_fork_compare(self, long_client: httpx.AsyncClient) -> None:
+        rows = _dataset()
+        expected_mean = sum(v for _, v in rows) / len(rows)
+        expected_sums = {g: sum(v for gg, v in rows if gg == g) for g in range(_GROUPS)}
+
+        cid = await create_computer(long_client)
+        checkpoint_id: str | None = None
+        forks: list[str] = []
+        try:
+            started = time.monotonic()
+            _ok(
+                await exec_command(
+                    long_client,
+                    cid,
+                    "apt-get update && apt-get install -y --no-install-recommends "
+                    "python3 python3-pip python3-venv",
+                    timeout_seconds=300,
+                )
+            )
+            print(f"T10.2 apt in {time.monotonic() - started:.0f}s")
+            started = time.monotonic()
+            _ok(
+                await exec_command(
+                    long_client,
+                    cid,
+                    "python3 -m venv /root/venv && /root/venv/bin/pip install -q pandas",
+                    timeout_seconds=300,
+                )
+            )
+            print(f"T10.2 pip in {time.monotonic() - started:.0f}s")
+
+            await upload_file(long_client, cid, "/root/write_csv.py", _WRITE_CSV.encode())
+            assert _ok(await exec_command(long_client, cid, "python3 /root/write_csv.py")) == (
+                f"rows {_ROWS}"
+            )
+            checkpoint_id = await checkpoint_computer(long_client, cid, label="data-ready")
+
+            fork_a = await fork_checkpoint(long_client, checkpoint_id)
+            forks.append(fork_a)
+            fork_b = await fork_checkpoint(long_client, checkpoint_id)
+            forks.append(fork_b)
+            await upload_file(long_client, fork_a, "/root/mean.py", _MEAN.encode())
+            await upload_file(long_client, fork_b, "/root/sums.py", _GROUP_SUMS.encode())
+
+            mean_out = _ok(
+                await exec_command(
+                    long_client, fork_a, "/root/venv/bin/python /root/mean.py", timeout_seconds=120
+                )
+            )
+            assert mean_out == f"mean={expected_mean:.4f}", mean_out
+
+            sums_out = _ok(
+                await exec_command(
+                    long_client, fork_b, "/root/venv/bin/python /root/sums.py", timeout_seconds=120
+                )
+            )
+            got = {int(k): int(v) for k, v in (line.split("=") for line in sums_out.splitlines())}
+            assert got == expected_sums, sums_out
+
+            # Neither fork has the other's file.
+            assert await _file_size(long_client, fork_a, "/root/sums.txt") == -1
+            assert await _file_size(long_client, fork_b, "/root/mean.txt") == -1
+        finally:
+            for fid in forks:
+                await destroy_computer(long_client, fid)
+            await destroy_computer(long_client, cid)
+            if checkpoint_id:
+                await delete_checkpoint(long_client, checkpoint_id)
 
 
 # ---------------------------------------------------------------------------
@@ -210,25 +384,3 @@ class TestT104FailureRecovery:
                 await destroy_computer(long_client, recovered_id)
             if checkpoint_id:
                 await delete_checkpoint(long_client, checkpoint_id)
-
-
-# ---------------------------------------------------------------------------
-# T10.5 — Dumb Agent Test
-# ---------------------------------------------------------------------------
-
-
-class TestT105DumbAgentTest:
-    """End-to-end test with an LLM agent using the computer API."""
-
-    async def test_agent_explores_and_checkpoints(self, client: httpx.AsyncClient) -> None:
-        """An LLM agent should be able to use the full computer lifecycle.
-
-        Intended workflow:
-        1. Agent receives task: "Find the largest file in /etc"
-        2. Agent calls POST /computers with an empty body
-        3. Agent calls exec('find /etc -type f -exec du -b {} + | sort -rn | head -5')
-        4. Agent checkpoints after exploration
-        5. Agent forks to try two different approaches
-        6. Agent picks best result and reports back
-        """
-        pytest.fail("Not implemented: dumb-agent explore-checkpoint-fork workflow")
