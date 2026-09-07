@@ -23,7 +23,7 @@
 - Product changes in this PR are exactly: `dockerfile_base_image` and the rule in `RecipeService.create`; `ExecRequest.timeout_seconds` and its threading; `_exit_code` in `mshkn.host.ssh` and the command in the timeout log line; image retention in `RecipeService.build` and removal in `RecipeService.delete`; `FakeGuest.stream_timeouts`. Nothing else under `src/` changes behaviour.
 - Every E2E test destroys its computers, deletes its checkpoints and (T10.8) its recipes in `finally`. Recipes shared by content hash resolve immediately after the first build on a host.
 - Every recipe must reach `ready` within 600 s; `create_recipe`'s timeout becomes 600.
-- Live E2E gate for this PR: **153 passed, 6 skipped, 4 failed**, the four being T8.6 (`test_checkpoint_data_not_publicly_accessible`), T9.1 (`test_checkpoint_storage_cost_per_gb`), T11.2 (`test_logs_are_json`) and T11.7 (`test_create_destroy_logged`). Any other failure is a regression: fix it or stop and discuss. The suite collects 161.
+- Live E2E gate for this PR: **153 passed, 6 skipped, 4 failed**, the four being T8.6 (`test_checkpoint_data_not_publicly_accessible`), T9.1 (`test_checkpoint_storage_cost_per_gb`), T11.2 (`test_logs_are_json`) and T11.7 (`test_create_destroy_logged`). Any other failure is a regression: fix it or stop and discuss. The suite collects 163.
 - PR 7a (one base) must be on `main` first: T10.2 runs apt on a bare computer, which only the new base has.
 - Commit messages end with the trailer block (Co-Authored-By and Claude-Session lines). Never merge; open the PR and request authorization.
 
@@ -1383,7 +1383,7 @@ class TestT108IncrementalGrowth:
 
 - [ ] **Step 3: Static checks and collection**
 
-Run: `uv run ruff check tests/e2e && uv run ruff format --check tests/e2e && uv run mypy && uv run pytest tests/e2e --collect-only -q -m e2e | tail -1` → clean; **161 tests** collected (phase 10 collects 9: T10.1, T10.2, T10.3, T10.4, T10.5, T10.6, T10.7 ×2, T10.8). Run `uv run pytest -q` → unit and flow unchanged.
+Run: `uv run ruff check tests/e2e && uv run ruff format --check tests/e2e && uv run mypy && uv run pytest tests/e2e --collect-only -q -m e2e | tail -1` → clean; **163 tests** collected (phase 10 collects 9: T10.1, T10.2, T10.3, T10.4, T10.5, T10.6, T10.7 ×2, T10.8). Run `uv run pytest -q` → unit and flow unchanged.
 
 - [ ] **Step 4: Commit**
 
@@ -1403,12 +1403,12 @@ git commit -m "test(e2e): T10.7 broken recipe, build log, fix; T10.8 incremental
 
 - Line 10 (Exec): append after `over SSH`: `, bounded by a caller-chosen \`timeout_seconds\` (60 by default, 600 at most; a command past it is killed and reports exit 137)`.
 - Line 15 (Recipes): `takes a Dockerfile that starts \`FROM mshkn-base\`` → `takes a Dockerfile whose final stage is \`FROM mshkn-base\` (anything else is a 422 before any build)`; append `; the built image is kept so a recipe that appends a layer rebuilds only that layer, and goes when the recipe is deleted`.
-- Line 28: `Four of the 161 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.`
+- Line 28: `Four of the 163 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.`
 - Line 69: `It currently reports 153 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.`
 
 - [ ] **Step 2: CLAUDE.md**
 
-- Line 3: `(161 E2E tests)`.
+- Line 3: `(163 E2E tests)`.
 - Line 24: `a full run takes about 26 minutes. The expected result is **153 passed, 6 skipped, 4 failed**, and the four must be exactly the \`Not implemented\` tests in #65.`
 
 - [ ] **Step 3: DEPLOY.md**
@@ -1423,11 +1423,11 @@ The Verify section's line: `Expect **153 passed, 6 skipped, 4 failed**; the four
 
 - [ ] **Step 5: docs/infrastructure.md**
 
-Line 3: `(\`tests/e2e/\`, 161 tests)`.
+Line 3: `(\`tests/e2e/\`, 163 tests)`.
 
 - [ ] **Step 6: docs/plans/README.md**
 
-- The test plan row: `The definition of done: 161 end-to-end tests, T0 to T13.` and the status: `reference; the suite is \`tests/e2e/\`. Four tests (T8.6, T9.1, T11.2 and the audit-log check) fail as \`Not implemented\` until built (#65). Phase 10 and T7.9 were revised by #76 (\`docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md\`) and landed with PR 7.` Evidence: `\`tests/e2e/\` collects 161`.
+- The test plan row: `The definition of done: 163 end-to-end tests, T0 to T13.` and the status: `reference; the suite is \`tests/e2e/\`. Four tests (T8.6, T9.1, T11.2 and the audit-log check) fail as \`Not implemented\` until built (#65). Phase 10 and T7.9 were revised by #76 (\`docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md\`) and landed with PR 7.` Evidence: `\`tests/e2e/\` collects 163`.
 - The PR 7 row: `| \`docs/superpowers/plans/2026-09-07-pr7-workload-proof.md\` | this PR | in progress (this PR) |`.
 - In the roadmap breakdown, the last row: `| Economics validation (T9.x), S3 isolation (T8.6) | not implemented; part of #65 |` (the dumb agent entry goes: T10.5 is now the scripted loop).
 - Open follow-ups: `#65 (four unimplemented E2E checks)`.
@@ -1438,7 +1438,7 @@ Run: `uv run pytest tests/unit/test_docs.py -v` → pass (`mshkn.services.recipe
 
 ```bash
 git add -A
-git commit -m "docs: the exec limit, the base-image rule, image retention; the gate is 153/6/4 over 161 tests"
+git commit -m "docs: the exec limit, the base-image rule, image retention; the gate is 153/6/4 over 163 tests"
 ```
 
 ---

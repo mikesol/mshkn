@@ -1,6 +1,6 @@
 # Infrastructure requirements
 
-mshkn's unit and flow tests run anywhere. The E2E suite (`tests/e2e/`, 157 tests) is the source of truth for the product and needs a real host that can run Firecracker microVMs, dm-thin block devices, Docker recipe builds, and a public HTTPS proxy. This page states the minimum that host must provide so it can be rented before work that depends on it starts.
+mshkn's unit and flow tests run anywhere. The E2E suite (`tests/e2e/`, 163 tests) is the source of truth for the product and needs a real host that can run Firecracker microVMs, dm-thin block devices, Docker recipe builds, and a public HTTPS proxy. This page states the minimum that host must provide so it can be rented before work that depends on it starts.
 
 ## Minimum host
 

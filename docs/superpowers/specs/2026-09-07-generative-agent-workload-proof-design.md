@@ -182,7 +182,7 @@ Dockerfile with a per-run nonce as its first layer (`RUN echo run-<uuid>`), then
 
 ### Timing
 
-Estimated additions: T10.1 about 3 min (build dominated), T10.2 about 4 min, T10.5 about 1 min, T10.6 about 1 min, T10.7 about 2 min, T10.8 about 4 min, T7.9 about 1.5 min. Suite from about 14 to about 26 minutes. The suite is 161 tests.
+Estimated additions: T10.1 about 3 min (build dominated), T10.2 about 4 min, T10.5 about 1 min, T10.6 about 1 min, T10.7 about 2 min, T10.8 about 4 min, T7.9 about 1.5 min. Suite from about 14 to about 26 minutes. The suite is 163 tests.
 
 ## 7. Documents and issues
 

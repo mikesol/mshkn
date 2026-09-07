@@ -7,12 +7,12 @@ This is a single-host research system with no users. The API changes without not
 ## What exists
 
 - **Computers.** `POST /computers` boots a VM from the base volume (the export of the `mshkn-base` image) or from a recipe's volume, with 256 MiB and 2 vCPUs unless `needs` says otherwise (`{"ram": "512MB", "cores": 2}`). The request can carry an `exec` command to run immediately, `self_destruct` to checkpoint and destroy afterwards, a `callback_url` to be told the result, and a `label` for the checkpoint chain.
-- **Exec.** `POST /computers/{computer_id}/exec` streams stdout, stderr and the exit code as server-sent events over SSH. Background commands (`exec/bg`, `exec/logs/{pid}`, `exec/kill/{pid}`), file `upload` and `download`, and `status` with live CPU, memory, disk and process counts.
+- **Exec.** `POST /computers/{computer_id}/exec` streams stdout, stderr and the exit code as server-sent events over SSH, bounded by a caller-chosen `timeout_seconds` (60 by default, 600 at most; a command past it is killed and reports exit 137). Background commands (`exec/bg`, `exec/logs/{pid}`, `exec/kill/{pid}`), file `upload` and `download`, and `status` with live CPU, memory, disk and process counts.
 - **Checkpoints.** `POST /computers/{computer_id}/checkpoint` pauses the VM, writes a Firecracker memory and device snapshot, resumes, and takes a dm-thin snapshot of the disk. The snapshot files upload to R2 in the background. Checkpoints have labels, parents (a DAG), a pin flag, and a retention count applied per account.
 - **Fork.** `POST /checkpoints/{checkpoint_id}/fork` restores the snapshot on a fresh slot: memory state comes back, the disk is a copy-on-write child. A fork of a 50 MB working set costs the same as a fork of 1 MB.
 - **Exclusive chains.** A fork with `exclusive` set either fails while another computer is active on the label (`error_on_conflict`) or is queued (`defer_on_conflict`) and run when that computer self-destructs or is destroyed.
 - **Merge.** `POST /checkpoints/{parent_id}/merge` does a three-way filesystem merge of two forks against their parent into a new checkpoint and reports conflicts.
-- **Recipes.** `POST /recipes` takes a Dockerfile that starts `FROM mshkn-base`; the image is built, exported and written into a thin volume, and a booted template snapshot is cached so computers from the recipe restore instead of cold-booting.
+- **Recipes.** `POST /recipes` takes a Dockerfile whose final stage is `FROM mshkn-base` (anything else is a 422 before any build); the image is built, exported and written into a thin volume, and a booted template snapshot is cached so computers from the recipe restore instead of cold-booting; the built image is kept so a recipe that appends a layer rebuilds only that layer, and goes when the recipe is deleted.
 - **Ingress.** Unauthenticated webhook URLs (`/ingress/{rule_id}`) whose Starlark transform decides whether to create or fork a computer, synchronously or not, with per-rule body-size and rate limits.
 - **Reaper.** Dead VMs are cleaned up, idle VMs are checkpointed and destroyed after `MSHKN_IDLE_TIMEOUT` seconds, old checkpoints are pruned, and thin-pool and host RAM pressure raise alerts at `GET /alerts`.
 - **Observability.** JSON logs with request ids, Prometheus metrics at `GET /metrics`, subsystem health at `GET /health`.
@@ -25,7 +25,7 @@ This is a single-host research system with no users. The API changes without not
 - More than one host. Slots, taps, thin volumes and the checkpoint directory are local to the machine; a checkpoint cannot be restored on another host.
 - Billing, quotas beyond the VM limit, or any notion of a user beyond an API key.
 - Retention of exec output after the computer is gone (#58) and an HTTP forwarding endpoint (#59).
-- Seven of the 157 end-to-end tests describe workflows that are not implemented and fail on purpose until they are (#65): three phase-10 agent workflows, structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
+- Four of the 163 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
 
 ## Layout
 
@@ -66,7 +66,7 @@ uv run pytest tests/flow      # the real app and services over the fake host
 MSHKN_SERVER=root@<ip> scripts/e2e.sh   # pushes, deploys, runs tests/e2e on the live server
 ```
 
-The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 144 passed, 6 skipped and 7 failed; the seven are the unimplemented workflows in #65, and anything else failing is a regression.
+The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 153 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.
 
 The full local gate, which is what CI runs (`.github/workflows/ci.yml`) after `uv sync --frozen`:
 
