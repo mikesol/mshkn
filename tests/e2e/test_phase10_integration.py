@@ -26,6 +26,7 @@ from .conftest import (
     fork_checkpoint,
     port_url,
     upload_file,
+    wait_for_recipe,
 )
 
 if TYPE_CHECKING:
@@ -592,3 +593,133 @@ class TestT106ListenerSurvives:
             await destroy_computer(long_client, cid)
             if checkpoint_id:
                 await delete_checkpoint(long_client, checkpoint_id)
+
+
+# ---------------------------------------------------------------------------
+# T10.7 — Broken Recipe, Build Log, Fix
+# ---------------------------------------------------------------------------
+
+_MISSING_PACKAGE = "no-such-package-mshkn-e2e"
+
+
+class TestT107BrokenRecipe:
+    """The agent's first recipes will be wrong; every failure must say why, early."""
+
+    async def test_wrong_base_is_rejected_before_any_build(
+        self, long_client: httpx.AsyncClient
+    ) -> None:
+        resp = await long_client.post("/recipes", json={"dockerfile": "FROM python:3.12\nRUN true"})
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert "mshkn-base" in detail and "python:3.12" in detail, detail
+
+    async def test_failed_build_names_the_cause_and_the_fix_builds(
+        self, long_client: httpx.AsyncClient
+    ) -> None:
+        broken = "FROM mshkn-base\n" + _apt(_MISSING_PACKAGE) + "\n"
+        resp = await long_client.post("/recipes", json={"dockerfile": broken})
+        resp.raise_for_status()
+        failed_id = resp.json()["recipe_id"]
+        info, elapsed = await wait_for_recipe(long_client, failed_id, timeout=BUILD_CAP_SECONDS)
+        assert info["status"] == "failed", info
+        log = info["build_log"] or ""
+        assert _MISSING_PACKAGE in log and "Unable to locate package" in log, log[-800:]
+        print(f"T10.7 failed build reported in {elapsed:.0f}s")
+
+        # The corrected text builds and boots with the tool.
+        fixed_id = await create_recipe(
+            long_client, "FROM mshkn-base\n" + _apt("jq") + "\n", timeout=BUILD_CAP_SECONDS
+        )
+        cid = await create_computer(long_client, recipe_id=fixed_id)
+        try:
+            assert "jq" in _ok(await exec_command(long_client, cid, "jq --version")).lower()
+        finally:
+            await destroy_computer(long_client, cid)
+
+        # Resubmitting the broken text after a failure retries as a new recipe.
+        again = await long_client.post("/recipes", json={"dockerfile": broken})
+        again.raise_for_status()
+        retry_id = again.json()["recipe_id"]
+        assert retry_id != failed_id
+        info, _ = await wait_for_recipe(long_client, retry_id, timeout=BUILD_CAP_SECONDS)
+        assert info["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# T10.8 — Incremental Toolchain Growth
+# ---------------------------------------------------------------------------
+
+
+def _toolchain_dockerfile(nonce: str) -> str:
+    """A node toolchain in several layers; the nonce makes every run a cold build."""
+    return "\n".join(
+        [
+            "FROM mshkn-base",
+            f"RUN echo run-{nonce}",
+            _apt("nodejs", "npm", "ca-certificates"),
+            "RUN npm install -g typescript",
+            "RUN npm install -g esbuild",
+            "RUN npm install -g prettier",
+            "RUN mkdir -p /app && cd /app && npm init -y",
+            "",
+        ]
+    )
+
+
+class TestT108IncrementalGrowth:
+    """The agent grows an image by appending to its Dockerfile; only the new layer is paid for."""
+
+    async def test_appended_layer_rebuilds_in_under_half_the_cold_time(
+        self, long_client: httpx.AsyncClient
+    ) -> None:
+        nonce = uuid.uuid4().hex[:8]
+        cold_text = _toolchain_dockerfile(nonce)
+        grown_text = cold_text + "RUN npm install -g nodemon\n"
+        recipe_ids: list[str] = []
+        cid: str | None = None
+        try:
+            started = time.monotonic()
+            resp = await long_client.post("/recipes", json={"dockerfile": cold_text})
+            resp.raise_for_status()
+            cold_id = resp.json()["recipe_id"]
+            recipe_ids.append(cold_id)
+            info, _ = await wait_for_recipe(long_client, cold_id, timeout=BUILD_CAP_SECONDS)
+            t_cold = time.monotonic() - started
+            assert info["status"] == "ready", (info.get("build_log") or "")[-800:]
+            assert t_cold <= BUILD_CAP_SECONDS
+
+            started = time.monotonic()
+            resp = await long_client.post("/recipes", json={"dockerfile": grown_text})
+            resp.raise_for_status()
+            grown_id = resp.json()["recipe_id"]
+            assert grown_id != cold_id
+            recipe_ids.append(grown_id)
+            info, _ = await wait_for_recipe(long_client, grown_id, timeout=BUILD_CAP_SECONDS)
+            t_incr = time.monotonic() - started
+            assert info["status"] == "ready", (info.get("build_log") or "")[-800:]
+            print(f"T10.8 cold build {t_cold:.0f}s, appended-layer rebuild {t_incr:.0f}s")
+            assert t_incr < 0.5 * t_cold, (
+                f"a rebuild that only appends a layer took {t_incr:.0f}s against a cold "
+                f"{t_cold:.0f}s: the layer cache is not being used"
+            )
+
+            cid = await create_computer(long_client, recipe_id=grown_id)
+            versions = _ok(
+                await exec_command(
+                    long_client,
+                    cid,
+                    "node --version && tsc --version && esbuild --version "
+                    "&& prettier --version && nodemon --version",
+                    timeout_seconds=60,
+                )
+            )
+            assert len(versions.splitlines()) == 5, versions
+            print("T10.8 root filesystem: " + _ok(await exec_command(long_client, cid, "df -m /")))
+        finally:
+            if cid:
+                await destroy_computer(long_client, cid)
+            # Newest first: the grown recipe shares layers with the cold one.
+            for recipe_id in reversed(recipe_ids):
+                resp = await long_client.delete(f"/recipes/{recipe_id}")
+                assert resp.status_code == 200, (recipe_id, resp.text)
+            # The template directory of the grown recipe stays behind until #75.
