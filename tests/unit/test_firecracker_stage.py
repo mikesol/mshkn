@@ -461,21 +461,30 @@ class _FakeSshConn:
 async def test_ssh_add_ip_sets_the_clock_before_the_address(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A restored snapshot keeps the time it was taken at, so the clock is set first."""
+    """A restored snapshot keeps the time it was taken at, so the clock is set first.
+
+    Whole-string equality, because the separators are the point: `date` is
+    joined with `;`, so a guest whose clock cannot be set still gets its
+    address, and the `&&` before `ip neigh flush` still guards the route.
+    The fake clock advances during the connect, so an epoch read before the
+    connect would show up here as the older second.
+    """
     conn = _FakeSshConn()
+    ticks = [1_799_999_900.0]
 
     async def connect(host: str, **kwargs: Any) -> _FakeSshConn:
         assert host == STAGING_VM_IP
+        ticks[0] = 1_800_000_000.5  # a connect takes time; the guest gets the later stamp
         return conn
 
     monkeypatch.setattr(asyncssh, "connect", connect)  # the module seam firecracker.py uses
-    hv = FirecrackerHypervisor(CONFIG, run=ShellRecorder(), clock=lambda: 1_800_000_000.5)
+    hv = FirecrackerHypervisor(CONFIG, run=ShellRecorder(), clock=lambda: ticks[0])
 
     await hv._ssh_add_ip("172.16.7.2", "172.16.7.1")
 
-    assert len(conn.runs) == 1
-    command = conn.runs[0]
-    assert command.startswith("date -u -s @1800000000 >/dev/null && ")
-    assert "ip addr add 172.16.7.2/30 dev eth0" in command
-    assert "ip route replace default via 172.16.7.1" in command
-    assert "ip neigh flush dev eth0" in command
+    assert conn.runs == [
+        "date -u -s @1800000000 >/dev/null 2>&1; "
+        "ip addr add 172.16.7.2/30 dev eth0 2>/dev/null; "
+        "ip route replace default via 172.16.7.1 && "
+        "ip neigh flush dev eth0"
+    ]

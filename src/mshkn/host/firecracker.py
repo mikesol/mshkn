@@ -503,9 +503,13 @@ class FirecrackerHypervisor:
         the guest. `ip addr add` may fail with EEXIST when a fork reuses the
         parent's slot. The clock is set first because a restored snapshot keeps
         the time it was taken at, which ages every guest by the age of its
-        template or checkpoint.
+        template or checkpoint; it is separated from the rest by `;`, not
+        `&&`, because setting the clock is best-effort and must never cost the
+        guest its address — an `&&` there would skip `ip addr add` when `date`
+        failed, leave the rest to succeed, and hand back an unreachable
+        computer with no error. The epoch is read immediately before the
+        command runs, so the guest does not land a connect's worth behind.
         """
-        now = int(self._clock())
         conn = await asyncio.wait_for(
             asyncssh.connect(
                 STAGING_VM_IP,
@@ -516,8 +520,9 @@ class FirecrackerHypervisor:
             timeout=CONNECT_TIMEOUT_SECONDS,
         )
         async with conn:
+            now = int(self._clock())
             await conn.run(
-                f"date -u -s @{now} >/dev/null && "
+                f"date -u -s @{now} >/dev/null 2>&1; "
                 f"ip addr add {final_vm_ip}/30 dev eth0 2>/dev/null; "
                 f"ip route replace default via {final_host_ip} && "
                 f"ip neigh flush dev eth0",

@@ -328,6 +328,28 @@ async def test_stream_kills_on_timeout_and_still_reports_exit(
     assert items == [("stdout", "x"), ("exit", "0")]
 
 
+async def test_the_host_backstop_trails_the_guests_own_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The host waits timeout + STREAM_HOST_GRACE_SECONDS, so the guest's timeout goes first."""
+    monkeypatch.setattr(ssh_module, "STREAM_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(ssh_module, "STREAM_HOST_GRACE_SECONDS", 0.5)
+    process = FakeProcess(stdout=[(0.0, "x\n")], stderr=[], exit_after=10, code=0, hang=True)
+    guest = make_guest(process)
+    items: list[tuple[str, str]] = []
+
+    async def drain() -> None:
+        async for item in guest.stream("172.16.1.2", "cmd", timeout=0.1):
+            items.append(item)
+
+    task = asyncio.create_task(drain())
+    await asyncio.sleep(0.3)
+    assert not process.killed, "the host must not kill at timeout_seconds; the guest's timeout does"
+    await task
+    assert process.killed, "the backstop still fires once the host's grace has run out as well"
+    assert items == [("stdout", "x"), ("exit", "0")]
+
+
 async def test_a_killed_command_reports_128_plus_the_signal(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

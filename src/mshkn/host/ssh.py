@@ -81,9 +81,12 @@ def _exit_code(process: asyncssh.SSHClientProcess[str]) -> str:
     once an exit-signal has arrived (get_exit_signal() carries the signal
     itself); get_returncode() is the one property that tells the two
     apart, returning the negative signal number when signalled and the
-    non-negative exit status otherwise. A process the timeout killed is
-    signalled, not exited; checking exit_status first would misread its
-    -1 as a real (and wrong) status instead of running the signal branch.
+    non-negative exit status otherwise. A command the guest's `timeout`
+    killed comes back through the status branch — `--preserve-status` makes
+    137 an ordinary exit status. The signal branch is for the host's
+    backstop: `process.kill()`, on an sshd that honours the signal request,
+    signals the process, and checking exit_status first would misread the
+    -1 that leaves behind as a real (and wrong) status.
     """
     returncode = process.returncode
     if returncode is not None and returncode < 0:
@@ -271,7 +274,7 @@ class SshGuest:
                     conn.close()
                     raise
             emitted_exit = False
-            pump = self._pump(process, timeout + STREAM_HOST_GRACE_SECONDS, command)
+            pump = self._pump(process, timeout + STREAM_HOST_GRACE_SECONDS, command, timeout)
             try:
                 async for item in pump:
                     emitted_exit = emitted_exit or item[0] == "exit"
@@ -290,8 +293,18 @@ class SshGuest:
 
     @staticmethod
     async def _pump(
-        process: asyncssh.SSHClientProcess[str], timeout: float, command: str
+        process: asyncssh.SSHClientProcess[str],
+        host_timeout: float,
+        command: str,
+        timeout_seconds: float,
     ) -> AsyncGenerator[OutputLine, None]:
+        """Drain the process until it exits or `host_timeout` runs out.
+
+        `host_timeout` is the backstop deadline (`timeout_seconds` plus the
+        host's grace); the guest's own `timeout` should have killed the
+        command a grace earlier. `timeout_seconds` is carried only so the
+        warning can name the caller's number as well as the deadline.
+        """
         queue: asyncio.Queue[OutputLine | _ReaderDone] = asyncio.Queue()
 
         async def read(reader: asyncssh.SSHReader[str], name: StreamName) -> None:
@@ -311,7 +324,7 @@ class SshGuest:
         ]
         exit_task = asyncio.create_task(process.wait())
         loop = asyncio.get_running_loop()
-        hard_deadline = loop.time() + timeout
+        hard_deadline = loop.time() + host_timeout
         grace_deadline: float | None = None
         finished_readers = 0
         reader_error: Exception | None = None
@@ -331,7 +344,11 @@ class SshGuest:
                 if budget <= 0:
                     if grace_deadline is None:
                         logger.warning(
-                            "stream: %r did not exit within %.1fs, killing", command, timeout
+                            "stream: %r did not exit within %.1fs "
+                            "(timeout_seconds %.0f plus the host's grace), killing",
+                            command,
+                            host_timeout,
+                            timeout_seconds,
                         )
                         process.kill()
                         grace_deadline = now + STREAM_GRACE_SECONDS
