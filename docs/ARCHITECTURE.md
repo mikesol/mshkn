@@ -87,7 +87,7 @@ Shared result types live beside the protocols: `RunningVM(pid, socket_path, slot
 
 `mshkn.host.fake.FakeHost()` returns a `FakeHostInstance` with all five fakes; it records calls, can be told to fail a named operation, and cleans its temp directories on `close()`.
 
-`src/mshkn/host/shell.py` (`run`, `ShellError`) is the only place a subprocess is spawned for the host: the dm-thin, rclone, tap and staging paths build their command strings and hand them to it. `src/mshkn/host/network.py` owns the slot arithmetic and `create_tap` / `destroy_tap`.
+`src/mshkn/host/shell.py` (`run`, `ShellError`) is the only place a shell command string is executed: the dm-thin, rclone, tap and staging paths build their commands and hand them to it. The Firecracker process itself (`start_firecracker_process`) and the recipe build spawn their own subprocesses. `src/mshkn/host/network.py` owns the slot arithmetic and `create_tap` / `destroy_tap`.
 
 ### Firecracker specifics
 
@@ -104,7 +104,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 | `mshkn.services.recipes.RecipeService` | Recipe rows and the build pipeline (`docker build` → export → thin volume → template snapshot), serialised per account and de-duplicated per template key. |
 | `mshkn.services.ingress.IngressService` | Rule CRUD, `enabled_rule`, `trigger` (Starlark transform → `ForkAction`/`CreateAction` → outcome), per-rule rate limiters, trigger logs. |
 | `mshkn.services.reaper.Reaper` | `reap_dead`, `reap_idle`, prune, `check_host` (pool, root filesystem and RAM thresholds), the 60-second cycle. |
-| `mshkn.services.merge` | `three_way_merge`, a pure function over three directory trees. |
+| `mshkn.services.merge` | `three_way_merge`, a function over three directory trees that writes a fourth. |
 | `mshkn.services.callback.deliver_callback` | POST with retries and backoff; never raises. |
 | `mshkn.services.starlark` | Validation and execution of transform source in the `starlark_go` sandbox. |
 
@@ -112,7 +112,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 **Durable (SQLite, `src/mshkn/db/`).** One file, opened with `PRAGMA busy_timeout=5000`, `journal_mode=WAL` and `synchronous=NORMAL`. Tables: `accounts`, `computers`, `checkpoints`, `recipes`, `snapshot_templates`, `deferred_queue`, `ingress_rules`, `ingress_log`, plus `_migrations` (applied migration names). `capability_cache`, from `migrations/001_initial.sql` and rebuilt by `migrations/004_capability_cache_volume_id.sql`, still exists in the schema but no code reads or writes it; `migrations/009_recipes.sql` replaced what used it without dropping the table. Migrations in `migrations/` are sequential and applied once each, in name order. Litestream replicates the file to R2. Each `db/` module holds one table's column tuple, one row mapper and its queries; there is no ORM.
 
-**Durable (disk).** The thin pool `mshkn-pool` with base volume 0 (the bare rootfs), one volume per computer (`mshkn-<computer id>`), one per checkpoint (`mshkn-ckpt-<checkpoint id>`), one per recipe base (`mshkn-recipe-<recipe id>`) and the template snapshots. Checkpoint snapshot files under `checkpoint_local_dir/<checkpoint id>/` (`vmstate`, `memory`), mirrored to R2 under `<account id>/<checkpoint id>/`.
+**Durable (disk).** The thin pool `mshkn-pool` with base volume 0 (the bare rootfs), one volume per computer (`mshkn-<computer id>`), one per checkpoint (`mshkn-ckpt-<checkpoint id>`), and one per recipe base (`mshkn-recipe-<recipe id>`). Checkpoint snapshot files under `checkpoint_local_dir/<checkpoint id>/` (`vmstate`, `memory`), mirrored to R2 under `<account id>/<checkpoint id>/`, and template snapshots under `checkpoint_local_dir/templates/<key>/`.
 
 **Process-local (rebuilt at start).** The allocator's free-slot set and next volume id; the SSH connection pool; the hypervisor's staging lock and its pid-to-socket registry; ingress rate limiters (keyed by internal rule id); the exec rate limiter; the alert deque; background tasks. A restart loses in-flight uploads and callbacks (the reaper and the next checkpoint create recover the rest).
 
@@ -135,7 +135,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 **Destroy** (`ComputerService.destroy`, timed `op="destroy"`): remove the Caddy route, kill the VM (which unlinks its API socket), remove the thin volume, tear down the tap, release the slot, evict the SSH connection, mark the row `destroyed`, refresh the gauge. Destroying an already destroyed computer is a no-op.
 
-**Dead VM** (`Reaper.reap_dead` → `ComputerService.cleanup_dead`): when a running computer's Firecracker pid is gone, the same teardown runs with every step best-effort.
+**Dead VM** (`Reaper.reap_dead` → `ComputerService.cleanup_dead`): when a running computer's Firecracker pid is gone, the same teardown runs, tolerant of resources that are already gone; the reaper catches a failure per computer, so one broken computer does not block the others.
 
 **Idle** (`Reaper.reap_idle`): a running computer whose `last_exec_at` (or `created_at`) is older than `idle_timeout_seconds` is checkpointed with trigger `idle` and label `auto-idle-timeout` (or its chain's label), then destroyed and its label drained.
 
@@ -155,13 +155,13 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 ## 8. Recipes and templates
 
-A recipe is a Dockerfile, by convention starting `FROM mshkn-base` (the image built in `DEPLOY.md` §7 from `Dockerfile.mshkn-base`); the service does not check that line, it only requires the build to produce a bootable rootfs. Two identical Dockerfiles for one account resolve to the same recipe by content hash, and one account's builds run one at a time. `RecipeService.build` runs `docker build` with a 4 GB memory reservation on two CPUs and a ten-minute timeout (the build is killed on timeout), exports the container filesystem, unpacks it into a thin volume snapped from volume 0, and post-processes it for Firecracker (init symlink, network unit, SSH keys) in a worker thread; that volume becomes the recipe's base.
+A recipe is a Dockerfile, by convention starting `FROM mshkn-base` (the image built in `DEPLOY.md` §7 from `Dockerfile.mshkn-base`); the service does not check that line, and nothing verifies the result boots until the first computer is created from it. Two identical Dockerfiles for one account resolve to the same recipe by content hash, and one account's builds run one at a time. `RecipeService.build` runs `docker build` with a 4 GB memory limit on two CPUs and a ten-minute timeout (the build is killed on timeout), exports the container filesystem, unpacks it into a thin volume snapped from volume 0, and post-processes it for Firecracker (init symlink, network unit, SSH keys) in a worker thread; that volume becomes the recipe's base.
 
 The first create at the default resources for a recipe (or for the bare base) triggers `Hypervisor.build_template`: a VM is cold-booted on the staging slot and snapshotted, so later creates restore in the fork path's time instead of cold-booting. A recipe's template paths are stored on its own row; the bare template is the single row in `snapshot_templates`. Template builds are de-duplicated per key, so concurrent first callers share one, and a failed template build logs a warning and cold-boots.
 
 ## 9. Ingress
 
-An ingress rule has a Starlark `transform(request)` returning either `{"action": "fork", "checkpoint_id": ..., "exec": ..., ...}` (`checkpoint_id` or `label` is required) or `{"action": "create", "recipe_id": ..., "needs": ..., "exec": ..., ...}`, or nothing. `POST /ingress_rules` validates the source by executing it and requiring a `transform` global. A trigger request is parsed into the dict the transform sees (method, path, headers, query, JSON or form body, raw body) with the rule's `max_body_bytes` enforced on both the declared and the streamed length (413), then rate-limited per rule over a one-minute window (429), transformed (`TransformError` → 502), validated against `ForkAction`/`CreateAction` (`extra=forbid`), and executed. A transform that returns nothing gives 204. `response_mode` `sync` returns the same body as the REST fork or create; `async` runs the action in the background and returns 202 with an `accepted` marker; a deferred fork returns the deferred id with `queued`. Every trigger writes an `ingress_log` row.
+An ingress rule has a Starlark `transform(request)` returning either `{"action": "fork", "checkpoint_id": ..., "exec": ..., ...}` (`checkpoint_id` or `label` is required) or `{"action": "create", "recipe_id": ..., "needs": ..., "exec": ..., ...}`, or nothing. `POST /ingress_rules` validates the source by executing it and requiring a `transform` global. A trigger request is parsed into the dict the transform sees (method, path, headers, query, JSON or form body, raw body) with the rule's `max_body_bytes` enforced on both the declared and the streamed length (413), then rate-limited per rule over a one-minute window (429), transformed (`TransformError` → 502), validated against `ForkAction`/`CreateAction` (`extra=forbid`), and executed. A transform that returns nothing gives 204. `response_mode` `sync` returns the same body as the REST fork or create; `async` runs the action in the background and returns 202 with an `accepted` marker; a deferred fork returns the deferred id with `queued`. Every transform that runs writes an `ingress_log` row, and an async action that fails writes a second; a request rejected before the transform — unknown rule, oversized body, rate limit — writes none.
 
 ## 10. Networking
 
@@ -174,7 +174,7 @@ Slot N gives host address `172.16.N.1`, VM address `172.16.N.2`, tap `tapN` and 
 - **Timeouts kill what they abandon.** A Firecracker process whose socket never appears is killed; a `docker build` past its deadline is killed; a stream whose process ignores exit is killed after 60 seconds.
 - **Checkpoint upload and delete do not race.** Delete cancels the upload task by key before removing files.
 - **Deferred requests are claimed once.** The drain's `DELETE … RETURNING` makes two drains on one label safe.
-- **Dead VMs are reaped**, at startup and every reaper cycle, with every step best-effort so one broken resource does not block the rest.
+- **Dead VMs are reaped**, at startup and every reaper cycle, tolerant of resources that are already gone, and the reaper catches a failure per computer so one broken computer does not block the others.
 - **Known gaps** are tracked as issues: #70 (a REST destroy and the dead-VM reaper can tear down the same computer concurrently), #66 (an abandoned bring-up can leave a Firecracker that had already spawned), #67 (the socket registry is process-local).
 
 ## 12. Observability
@@ -191,7 +191,7 @@ Logs are JSON lines (`mshkn.observability.logging.JSONFormatter`) with `timestam
 | `mshkn_thin_pool_used_ratio` | gauge | `kind` = `data`, `metadata` | `Reaper.check_host` |
 | `mshkn_host_ram_used_ratio` | gauge | | `Reaper.check_host` |
 
-`GET /health` reports `database`, `firecracker`, `storage` and `proxy` as `ok` or an error string, with overall `ok` or `degraded` (always HTTP 200; the deploy script's readiness check reads the body). `GET /alerts` returns the reaper's recent alerts: thin pool data or metadata over 80 % (warning) or 95 % (critical), root filesystem usage over 80 % (critical over 95 %), and host RAM over 90 %.
+`GET /health` reports `database`, `firecracker`, `storage` and `proxy` as `ok` or an error string, with overall `ok` or `degraded` (always HTTP 200, so a caller has to read `status` in the body; `scripts/e2e.sh` only waits for the endpoint to answer before running the suite). `GET /alerts` returns the reaper's recent alerts: thin pool data or metadata over 80 % (warning) or 95 % (critical), root filesystem usage over 80 % (critical over 95 %), and host RAM over 90 %.
 
 ## 13. Configuration
 
