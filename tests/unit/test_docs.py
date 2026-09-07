@@ -24,7 +24,13 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
 
 # Extended by later tasks as each document lands.
-DOCS: tuple[str, ...] = ("README.md", "CLAUDE.md", "DEPLOY.md", "docs/infrastructure.md")
+DOCS: tuple[str, ...] = (
+    "README.md",
+    "CLAUDE.md",
+    "DEPLOY.md",
+    "docs/infrastructure.md",
+    "docs/ARCHITECTURE.md",
+)
 
 # Words a document must not contain because the thing they name is gone.
 BANNED: dict[str, tuple[str, ...]] = {
