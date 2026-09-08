@@ -41,7 +41,7 @@ run() { # computer_id command  (exec over SSE; fails unless the exit event is 0)
   out="$(curl -fsS -N -X POST "$MSHKN_API_URL/computers/$1/exec" -H "Authorization: Bearer $MSHKN_API_KEY" \
     -H 'Content-Type: application/json' --data "$(jq -cn --arg c "$2" '{command: $c, timeout_seconds: 300}')")"
   local code
-  code="$(printf '%s\n' "$out" | awk '/^event: exit/{getline; sub(/^data: /, ""); print}' | tail -1)"
+  code="$(printf '%s\n' "$out" | tr -d '\r' | awk '/^event: exit/{getline; sub(/^data: /, ""); print}' | tail -1)"
   if [ "$code" != "0" ]; then
     echo "exec failed ($code): $2" >&2
     printf '%s\n' "$out" >&2

@@ -6,10 +6,13 @@ from __future__ import annotations
 import base64
 import json
 import re
+import shlex
+import subprocess
 from pathlib import Path
 
 from membrane.declarations import parse_policy
 from membrane.invariants import door_is_open
+from sse_starlette.event import ensure_bytes
 
 from mshkn.services.recipes import BASE_IMAGE, dockerfile_base_image, image_name
 from mshkn.services.starlark import execute_transform, validate_starlark
@@ -91,3 +94,29 @@ def test_hatch_script_makes_the_calls_the_spec_lists() -> None:
     }
     assert "set -euo pipefail" in script
     assert (EMBRYO / "liturgy.md").read_text().count("| ") > 20
+
+
+def test_run_parses_the_exit_code_from_a_real_crlf_sse_stream() -> None:
+    """mshkn's exec endpoint answers over server-sent events separated by CRLF
+    (sse_starlette's default), not bare LF; the exit-code parse in hatch.sh's
+    `run()` must survive that or every hatch aborts right after it uploads
+    `/brain/.env` (spec §8)."""
+    script = (EMBRYO / "hatch.sh").read_text()
+    match = re.search(r'code="\$\((.*)\)"', script)
+    assert match is not None, "hatch.sh's run() must assign code from a command substitution"
+    pipeline = match.group(1)
+
+    stream = (
+        ensure_bytes({"event": "stdout", "data": "hi"}, sep="\r\n")
+        + ensure_bytes({"event": "exit", "data": "0"}, sep="\r\n")
+    ).decode()
+
+    # Bytes, not text=True: Python's text-mode pipes do universal-newline
+    # translation and would silently turn \r\n back into \n, hiding the very
+    # bug this test pins.
+    result = subprocess.run(
+        ["bash", "-c", f"out={shlex.quote(stream)}\n{pipeline}"],
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.rstrip(b"\n") == b"0"
