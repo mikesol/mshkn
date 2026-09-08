@@ -63,7 +63,7 @@ The manifest half of the declaration (everything but `dockerfile` and `entrypoin
 ### State kinds
 
 - **`ephemeral`.** Every invocation is `POST /computers {recipe_id, exec, self_destruct: true}`. Nothing survives.
-- **`chain`.** The first invocation is `POST /computers` from the recipe with `label` set to the chain and `self_destruct`, which leaves the chain's first checkpoint. Every later invocation forks the chain by label (#89) with `exclusive: defer_on_conflict` and `self_destruct`. State is the disk; invocations are serialised by mshkn; a deferred invocation runs when the current one self-destructs, with `meta_exec` batching as mshkn already does. The membrane pins each chain's head and unpins the previous one, so retention prunes history but never the state.
+- **`chain`.** The first invocation is `POST /computers` from the recipe with `label` set to the chain and `self_destruct`, which leaves the chain's first checkpoint. Every later invocation forks the chain by label (#89) with `exclusive: defer_on_conflict` and `self_destruct`. State is the disk; invocations are serialised by mshkn; a deferred invocation runs when the current one self-destructs, with `meta_exec` batching as mshkn already does. Retention keeps the newest checkpoint of every label (#93), so a chain's history is pruned but its head, which is its state, never is. (Pinning cannot do this: `pinned` is set only on `POST /computers/{id}/checkpoint`, never on a self-destruct checkpoint, and nothing unpins.)
 - **`event`.** A `chain` verb that is also reachable from outside. On approval the membrane creates an ingress rule whose transform forks the chain with the verb's entrypoint over the event body, so webhooks land on the verb, not on the brain. In the embryo there is no verb-to-brain push: the verb collects, and the brain reads what arrived by invoking the verb when asked. Push needs a token the verb could present to the brain's door, which is the vault (#91).
 
 ### Known limit
@@ -170,7 +170,7 @@ Two external, stateless services, reached with keys in `/brain/.env` until #92: 
 
 `Dockerfile.brain`: `FROM mshkn-base`; Python and a venv with `anthropic`, `mem0ai`, `openai`; the package copied to `/brain/membrane` with a `membrane` entrypoint on the path.
 
-`hatch.sh` is the only thing a human runs that is not a root command. Eight calls with the account key: `POST /keys` for the brain's scoped key (`computers:*` on its own computers, `recipes:*`, `checkpoints:*` under `verb/`, nothing else); `POST /recipes` and poll to `ready`; `POST /computers {recipe_id, needs: {ram: "512MB", cores: 2}}`; upload `/brain/.env` (the scoped key, the two model keys, the API URL); `POST /computers/{id}/checkpoint {label: "brain"}`; `DELETE /computers/{id}`; `POST /ingress_rules` with the transform above. It prints the ingress URL.
+`hatch.sh` is the only thing a human runs that is not a root command. Eight calls with the account key: `POST /keys` for the brain's scoped key (#88: `{"recipes": {"create": true, "read": true}, "computers": {"create_from": "*"}, "labels": ["verb/"]}`, which also confines every `/computers/{id}/…` call to computers that key created); `POST /recipes` and poll to `ready`; `POST /computers {recipe_id, needs: {ram: "512MB", cores: 2}}`; upload `/brain/.env` (the scoped key, the two model keys, the API URL); `POST /computers/{id}/checkpoint {label: "brain"}`; `DELETE /computers/{id}`; `POST /ingress_rules` with the transform above. It prints the ingress URL.
 
 The priors, the state before turn 1:
 
@@ -239,7 +239,7 @@ The liturgy is spoken N times (across models where useful), and the result is ho
 
 ## 12. Documents and issues
 
-- Prerequisites, as their own PRs before the embryo: #88 (scoped keys), #89 (fork by label).
+- Prerequisites, as their own PRs before the embryo: #88 (scoped keys), #89 (fork by label, with a per-label lock covering head resolution and admission), #93 (retention keeps every label's head).
 - `docs/plans/README.md`: a section for this spec and its plan.
 - `docs/infrastructure.md`: the two model keys join the accounts table, provided by the operator.
 - `README.md`: a paragraph under "What exists" for `embryo/`, and the test count.
@@ -278,7 +278,9 @@ Checked on 2026-09-08 against the code, the live host and a scratch venv (`mem0a
 - **A fork's exec runs with `ComputerService.exec`'s 300 s default** and ingress cannot set it. The membrane's deadline is 240 s.
 - **Sandboxed Starlark has `repr` and no `base64` or `json`**; the payload is base64 by the sender.
 - **Sync ingress and the fork endpoint return `exec_stdout` in full.** `EphemeralResult` carries the raw stdout; only the `exec_log` copy is truncated, to 8 KiB head and tail (`EXEC_LOG_OUTPUT_BYTES` in `src/mshkn/services/lifecycle.py`). So a proposal in a reply always reaches curl whole; the audit copy may lose the middle. Audit lines print first, and the plan decides whether to raise the constant or record proposals by hash in the audit lines.
-- **`exclusive` on a fork takes `error_on_conflict` or `defer_on_conflict`**; the brain uses the first, verb chains the second.
+- **`exclusive` on a fork takes `error_on_conflict` or `defer_on_conflict`**; the brain uses the first, verb chains the second. Today the check (`get_active_computer_for_label`) and the fork are separate awaits with no lock, and the ingress fork-by-label resolves the head in a separate step too; #89 puts both under one per-label lock.
+- **Retention is per account, not per label**: `list_prunable_checkpoints` keeps the `checkpoint_retention_count` newest unpinned checkpoints (20 by default) and pinned ones; a quiet chain's head would be pruned. #93 keeps every label's head.
+- **The account has one credential**, `accounts.api_key`, resolved by `require_account` in `src/mshkn/api/deps.py`; there is no key table and no record of which credential created a computer. #88 adds both.
 - **A VM reaches `api.mshkn.dev` on its own host.** From a bare computer on the live host: `getent` resolves the name to the host's public address, a TCP connect to 443 succeeds, and `curl https://api.mshkn.dev/health` returns 200 over the VM's NAT egress. The bare base has `curl`. Nothing to build.
 - **mem0 supports everything §7 needs.** `Memory.from_config` with `vector_store: qdrant` and `path` plus `on_disk: true` creates a local store (files under the path, no server); `llm: anthropic` is a built-in provider; `embedder: openai` is built in. `add()` takes `metadata` and `search()` and `get_all()` take `filters`, which is how provenance is attached and filtered. `add(infer=False)` stores text without an LLM call.
 - **Two routes to a scripted embedder with no third-party key.** `embedder: fastembed` runs a local ONNX model (default `thenlper/gte-large`; pulls `onnxruntime`, `tokenizers`, `huggingface-hub`, and downloads the model on first use, so the recipe must fetch it at build time). Or `EmbedderFactory.provider_to_class` is a plain dict, so the membrane can register a deterministic hash embedder for scripted mode (`EmbeddingBase` is two methods, `embed` and `embed_batch`). The plan takes the second: lighter, deterministic, and scripted mode then makes no external call at all when combined with `infer=False`.
