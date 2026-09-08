@@ -12,6 +12,7 @@ from mshkn.db import (
     insert_checkpoint,
     insert_computer,
     list_accounts,
+    list_prunable_checkpoints,
     run_migrations,
     update_computer_status,
 )
@@ -251,3 +252,42 @@ async def test_count_active_computers_spans_accounts(db: aiosqlite.Connection) -
     )
     assert await count_active_computers(db) == 2
     assert [a.id for a in await list_accounts(db)] == ["acct-1", "acct-2"]
+
+
+async def test_prunable_excludes_pinned_and_every_labels_newest(tmp_path: Path) -> None:
+    """keep_count 2, three labels with history, unlabelled ones, and a pinned one.
+
+    Never returned: pinned rows, the newest row of each label, and the keep_count
+    newest of what is left. Returned oldest first: labelled history beyond the
+    count and unlabelled rows beyond the count.
+    """
+    rows = [
+        ("p", "a", "2026-09-08T00:00:00", True),
+        ("a1", "a", "2026-09-08T00:00:01", False),
+        ("b1", "b", "2026-09-08T00:00:02", False),
+        ("u1", None, "2026-09-08T00:00:03", False),
+        ("a2", "a", "2026-09-08T00:00:04", False),
+        ("c1", "c", "2026-09-08T00:00:05", False),
+        ("b2", "b", "2026-09-08T00:00:06", False),
+        ("u2", None, "2026-09-08T00:00:07", False),
+        ("a3", "a", "2026-09-08T00:00:08", False),
+        ("c2", "c", "2026-09-08T00:00:09", False),
+        ("u3", None, "2026-09-08T00:00:10", False),
+    ]
+    async with aiosqlite.connect(tmp_path / "test.db") as db:
+        await run_migrations(db, Path("migrations"))
+        await insert_account(db, account_row())
+        for n, (ckpt_id, label, created_at, pinned) in enumerate(rows):
+            await insert_checkpoint(
+                db,
+                checkpoint_row(
+                    ckpt_id,
+                    computer_id=None,
+                    thin_volume_id=50 + n,
+                    label=label,
+                    pinned=pinned,
+                    created_at=created_at,
+                ),
+            )
+        prunable = [c.id for c in await list_prunable_checkpoints(db, "acct-1", keep_count=2)]
+    assert prunable == ["a1", "b1", "u1", "a2", "c1"]

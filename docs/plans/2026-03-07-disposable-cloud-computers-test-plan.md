@@ -370,6 +370,7 @@ computer_create(uses: [tarball("https://example.com/tool.tar.gz")])
 - Are the oldest 15 eventually cleaned up?
 - Pin checkpoint #3. Is it retained even though it's old?
 - Unpinned checkpoints expire after X days? Verify.
+- Advance a labelled chain by self-destruct forks past the retention count, then push it out of the newest N with unlabelled checkpoints. Is the chain's head retained? (Retention keeps the newest checkpoint of every label; the pruning tests above use unlabelled checkpoints for that reason.)
 
 ### T6.5 — Litestream Replication
 
