@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING
 
@@ -8,7 +9,7 @@ import pytest
 
 from mshkn.config import Config
 from mshkn.db import claim_deferred_by_label, get_computer, insert_account
-from mshkn.errors import InvalidInput, LimitExceeded, NotFound, TransformError
+from mshkn.errors import Conflict, InvalidInput, LimitExceeded, NotFound, TransformError
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import CheckpointTrigger, ComputerStatus, IngressLogStatus
@@ -421,3 +422,37 @@ async def test_test_rule_reports_results_and_starlark_failures(
     result, errors, elapsed = ingress.test_rule(boom, REQ)
     assert result is None and len(errors) == 1 and elapsed >= 0
     assert (await ingress.logs(ACCOUNT, boom.id)) == []  # a dry run logs nothing
+
+
+async def test_concurrent_exclusive_forks_by_label_through_a_rule_admit_exactly_one(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """The ingress label branch goes through the same per-label lock as the API."""
+    ingress, computers, checkpoints, host = await _ingress(db, tmp_path)
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    await checkpoints.create(base, label="chain", trigger=CheckpointTrigger.API)
+    await computers.destroy(base.id)
+    restores_before = len(host.hypervisor.restored)
+    rule = await ingress.create_rule(
+        ACCOUNT,
+        name="excl",
+        starlark_source=(
+            'def transform(req):\n  return {"action": "fork", "label": "chain",'
+            ' "exec": "true", "exclusive": "error_on_conflict"}'
+        ),
+        response_mode="sync",
+        max_body_bytes=1024,
+        rate_limit_rpm=60,
+    )
+
+    results = await asyncio.gather(
+        ingress.trigger(rule, REQ), ingress.trigger(rule, REQ), return_exceptions=True
+    )
+
+    assert sum(isinstance(r, Conflict) for r in results) == 1, results
+    assert len(host.hypervisor.restored) - restores_before == 1
+    logs = await ingress.logs(ACCOUNT, rule.id)
+    assert sorted(log.status for log in logs) == [
+        IngressLogStatus.COMPLETED,
+        IngressLogStatus.FAILED,
+    ]

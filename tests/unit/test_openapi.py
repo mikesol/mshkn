@@ -24,6 +24,9 @@ async def test_two_status_endpoints_declare_both_response_schemas(
     fork = schema["paths"]["/checkpoints/{checkpoint_id}/fork"]["post"]["responses"]
     assert _model(fork["200"]) == "ForkResponse"
     assert _model(fork["202"]) == "DeferredResponse"
+    by_label = schema["paths"]["/checkpoints/fork"]["post"]["responses"]
+    assert _model(by_label["200"]) == "ForkResponse"
+    assert _model(by_label["202"]) == "DeferredResponse"
     recipes = schema["paths"]["/recipes"]["post"]["responses"]
     assert _model(recipes["202"]) == "RecipeResponse"
     assert _model(recipes["200"]) == "RecipeResponse"

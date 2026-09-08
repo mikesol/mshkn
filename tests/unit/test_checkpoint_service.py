@@ -11,7 +11,7 @@ from mshkn.db import get_checkpoint, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, Conflict, NotFound
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
-from mshkn.models import CheckpointTrigger, Computer, ExecSpec
+from mshkn.models import Checkpoint, CheckpointTrigger, Computer, ExecSpec
 from mshkn.observability.metrics import checkpoints_total
 from mshkn.resources import DEFAULT_RESOURCES
 from mshkn.runtime import BackgroundTasks
@@ -286,3 +286,165 @@ async def test_merge_copies_the_result_onto_the_output_volume_in_mount_order(
     # (That the copy happens at all is pinned by test_snap_copies_the_source_volume_content.)
     assert not (out / "doomed.txt").exists(), "the copy-back must delete what the merge dropped"
     host.close()
+
+
+async def _chain(
+    checkpoints: CheckpointService, computers: ComputerService, *labels: str
+) -> list[Checkpoint]:
+    """One base computer checkpointed once per label, in order, then destroyed."""
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    made = [
+        await checkpoints.create(base, label=label, trigger=CheckpointTrigger.API)
+        for label in labels
+    ]
+    await computers.destroy(base.id)
+    return made
+
+
+async def test_fork_by_label_forks_the_newest_checkpoint_carrying_the_label(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    checkpoints, computers, _host = await _services(db, tmp_path)
+    _old, new, _other = await _chain(checkpoints, computers, "chain", "chain", "other")
+
+    head, forked = await checkpoints.fork_by_label(
+        ACCOUNT, "chain", SPEC, exclusive=None, recipe_id=None
+    )
+
+    assert head.id == new.id
+    assert isinstance(forked, Computer) and forked.source_checkpoint_id == new.id
+
+
+async def test_fork_by_label_is_404_for_an_unknown_label(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    checkpoints, computers, _ = await _services(db, tmp_path)
+    await _chain(checkpoints, computers, "chain")
+    with pytest.raises(NotFound, match="No checkpoint with label 'missing'"):
+        await checkpoints.fork_by_label(ACCOUNT, "missing", SPEC, exclusive=None, recipe_id=None)
+
+
+async def test_fork_by_label_does_not_see_another_accounts_label(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    checkpoints, computers, _ = await _services(db, tmp_path)
+    await _chain(checkpoints, computers, "chain")
+    await insert_account(db, OTHER)
+    with pytest.raises(NotFound):
+        await checkpoints.fork_by_label(OTHER, "chain", SPEC, exclusive=None, recipe_id=None)
+
+
+async def test_two_concurrent_exclusive_forks_by_label_admit_exactly_one(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """Both callers pass the active-computer check before either has inserted a
+    computer row unless admission is serialised; the lock makes the second see
+    the first's computer and get the conflict."""
+    checkpoints, computers, host = await _services(db, tmp_path)
+    await _chain(checkpoints, computers, "chain")
+    restores_before = len(host.hypervisor.restored)
+
+    results = await asyncio.gather(
+        checkpoints.fork_by_label(
+            ACCOUNT, "chain", SPEC, exclusive="error_on_conflict", recipe_id=None
+        ),
+        checkpoints.fork_by_label(
+            ACCOUNT, "chain", SPEC, exclusive="error_on_conflict", recipe_id=None
+        ),
+        return_exceptions=True,
+    )
+
+    forked = [r for r in results if isinstance(r, tuple)]
+    conflicts = [r for r in results if isinstance(r, Conflict)]
+    assert len(forked) == 1 and len(conflicts) == 1, results
+    assert len(host.hypervisor.restored) - restores_before == 1
+
+
+async def test_two_concurrent_deferring_forks_by_label_fork_one_and_queue_one(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    checkpoints, computers, host = await _services(db, tmp_path)
+    (ckpt,) = await _chain(checkpoints, computers, "chain")
+    restores_before = len(host.hypervisor.restored)
+
+    results = await asyncio.gather(
+        checkpoints.fork_by_label(
+            ACCOUNT, "chain", SPEC, exclusive="defer_on_conflict", recipe_id=None
+        ),
+        checkpoints.fork_by_label(
+            ACCOUNT, "chain", SPEC, exclusive="defer_on_conflict", recipe_id=None
+        ),
+    )
+
+    outcomes = [outcome for _, outcome in results]
+    assert sum(isinstance(o, Computer) for o in outcomes) == 1
+    assert sum(isinstance(o, Deferred) for o in outcomes) == 1
+    assert len(host.hypervisor.restored) - restores_before == 1
+    cur = await db.execute("SELECT request_payload FROM deferred_queue WHERE label = 'chain'")
+    rows = list(await cur.fetchall())
+    assert len(rows) == 1 and json.loads(rows[0][0])["checkpoint_id"] == ckpt.id
+
+
+async def test_fork_by_id_with_exclusive_contends_on_the_label_lock(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    checkpoints, computers, host = await _services(db, tmp_path)
+    (ckpt,) = await _chain(checkpoints, computers, "chain")
+    restores_before = len(host.hypervisor.restored)
+
+    results = await asyncio.gather(
+        checkpoints.fork_or_defer(
+            ACCOUNT, ckpt, SPEC, recipe_id=None, exclusive="error_on_conflict"
+        ),
+        checkpoints.fork_by_label(
+            ACCOUNT, "chain", SPEC, exclusive="error_on_conflict", recipe_id=None
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(r, Conflict) for r in results) == 1, results
+    assert len(host.hypervisor.restored) - restores_before == 1
+
+
+async def test_labels_lock_independently(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    """Two labels, and the same label on two accounts, do not wait on each other."""
+    checkpoints, computers, host = await _services(db, tmp_path)
+    await _chain(checkpoints, computers, "a", "b")
+    await insert_account(db, OTHER)
+    base = await computers.create(OTHER, recipe_id=None, resources=DEFAULT_RESOURCES)
+    await checkpoints.create(base, label="a", trigger=CheckpointTrigger.API)
+    await computers.destroy(base.id)
+    restores_before = len(host.hypervisor.restored)
+
+    results = await asyncio.gather(
+        checkpoints.fork_by_label(
+            ACCOUNT, "a", SPEC, exclusive="error_on_conflict", recipe_id=None
+        ),
+        checkpoints.fork_by_label(
+            ACCOUNT, "b", SPEC, exclusive="error_on_conflict", recipe_id=None
+        ),
+        checkpoints.fork_by_label(OTHER, "a", SPEC, exclusive="error_on_conflict", recipe_id=None),
+    )
+
+    assert all(isinstance(outcome, Computer) for _, outcome in results)
+    assert len(host.hypervisor.restored) - restores_before == 3
+
+
+async def test_label_locks_exist_only_while_held(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    """A lock entry lives from the first waiter to the last release; a label
+    that 404s or a chain that is idle leaves nothing behind."""
+    checkpoints, computers, _host = await _services(db, tmp_path)
+    await _chain(checkpoints, computers, "chain")
+    with pytest.raises(NotFound):
+        await checkpoints.fork_by_label(ACCOUNT, "missing", SPEC, exclusive=None, recipe_id=None)
+    assert checkpoints._label_locks == {}
+
+    await asyncio.gather(
+        checkpoints.fork_by_label(
+            ACCOUNT, "chain", SPEC, exclusive="defer_on_conflict", recipe_id=None
+        ),
+        checkpoints.fork_by_label(
+            ACCOUNT, "chain", SPEC, exclusive="defer_on_conflict", recipe_id=None
+        ),
+    )
+    assert checkpoints._label_locks == {}
