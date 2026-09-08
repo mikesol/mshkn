@@ -271,3 +271,68 @@ def test_disable_tolerates_a_catalog_entry_with_no_matching_proposal() -> None:
     assert disable(state, "counter") == "counter disabled"
     assert state.catalog["counter"].status == "disabled"
     assert state.proposals == {}
+
+
+def test_propose_forces_pending_status_and_clears_recipe_and_log() -> None:
+    """Finding 1: a document is data, not authority — a model naming its own
+    status, recipe_id or log is ignored; every proposal is born pending."""
+    state = State()
+    doc = {**_verb_proposal(VERB), "status": "applied", "recipe_id": "rcp-x", "log": "boom"}
+    p = propose(state, doc)
+    assert p.status == "pending" and p.recipe_id is None and p.log is None
+
+
+async def test_a_rejected_supersede_leaves_a_ready_verb_untouched(tmp_path: Path) -> None:
+    """Finding 2 / ruling T8-R1: a 422 at approval fails the proposal, not the
+    working verb a rejected supersede was meant to replace."""
+    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    first = propose(state, _verb_proposal(VERB))
+    await approve(api, state, brain, first.id)
+    state.catalog["page_title"].status = "ready"
+    bad_dockerfile = "FROM mshkn-base\nRUN true # fix"
+    api.reject_dockerfiles[bad_dockerfile] = "recipes must be built FROM mshkn-base"
+    fix = propose(
+        state, _verb_proposal({**VERB, "dockerfile": bad_dockerfile}, supersedes=first.id)
+    )
+    line = await approve(api, state, brain, fix.id)
+    assert line.startswith("p-2 failed") and fix.status == "failed"
+    assert state.catalog["page_title"].status == "ready"
+    assert state.catalog["page_title"].proposal_id == "p-1"
+
+
+def test_supersedes_across_kinds_is_refused_at_propose() -> None:
+    """Finding 3 / ruling T8-R2: a verb proposal cannot supersede a policy
+    proposal (and vice versa)."""
+    state = State()
+    pol = propose(state, {"kind": "policy", "title": "p", "rationale": "r", "policy": CLOSED})
+    with pytest.raises(DeclarationError, match="supersedes"):
+        propose(state, _verb_proposal(VERB, supersedes=pol.id))
+
+
+def test_supersedes_a_different_verb_is_refused_at_propose() -> None:
+    """Finding 3 / ruling T8-R2: a verb proposal can only supersede a
+    proposal for the same verb name."""
+    state = State()
+    first = propose(state, _verb_proposal(VERB))
+    with pytest.raises(DeclarationError, match="supersedes"):
+        propose(state, _verb_proposal(CHAIN_VERB, supersedes=first.id))
+
+
+async def test_reject_refuses_anything_not_pending_or_blocked(tmp_path: Path) -> None:
+    """Finding 4: reject cannot undo an approval; it mirrors approve's guard."""
+    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    pol = propose(state, {"kind": "policy", "title": "p", "rationale": "r", "policy": CLOSED})
+    await approve(api, state, brain, pol.id)
+    line = reject(state, pol.id, "too late")
+    assert line == "p-1 is applied, not pending or blocked"
+    assert pol.status == "applied" and state.inbox == []
+
+
+async def test_reject_accepts_a_blocked_proposal(tmp_path: Path) -> None:
+    """Finding 4: a blocked proposal (unmet requires) can still be rejected."""
+    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    p = propose(state, _verb_proposal({**VERB, "requires": [{"kind": "secret", "name": "gh"}]}))
+    await approve(api, state, brain, p.id)
+    assert p.status == "blocked"
+    assert reject(state, p.id, "not needed") == "p-1 rejected: not needed"
+    assert p.status == "rejected"

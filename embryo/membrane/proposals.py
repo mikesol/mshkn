@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from membrane.declarations import parse_policy, parse_proposal
+from membrane.declarations import DeclarationError, parse_policy, parse_proposal
 from membrane.invariants import refuse_approval
 from membrane.mshkn import MshknError
 from membrane.state import CatalogEntry, CatalogStatus, InboxItem
@@ -17,8 +17,39 @@ if TYPE_CHECKING:
     from membrane.state import Brain, State
 
 
+def _supersede_target(state: State, proposal: Proposal) -> Proposal | None:
+    """The proposal `proposal.supersedes` names, only when it is a genuine
+    match: same kind, and for a verb, the same verb name (finding 3 / T8-R2).
+    `None` for no supersedes, an unknown id, a kind mismatch or a verb-name
+    mismatch alike — propose() refuses the last three; approve() uses this to
+    decide whether to mark the target superseded."""
+    if proposal.supersedes is None:
+        return None
+    target = state.proposals.get(proposal.supersedes)
+    if target is None or target.kind != proposal.kind:
+        return None
+    if proposal.kind == "verb" and (
+        proposal.verb is None or target.verb is None or target.verb.name != proposal.verb.name
+    ):
+        return None
+    return target
+
+
 def propose(state: State, doc: object) -> Proposal:
     proposal = parse_proposal(doc, id=f"p-{state.next_proposal}")
+    # A document is data, not authority: whatever status/recipe_id/log a model
+    # names is discarded. Every proposal is born pending (finding 1).
+    proposal.status = "pending"
+    proposal.recipe_id = None
+    proposal.log = None
+    if proposal.supersedes is not None and _supersede_target(state, proposal) is None:
+        for_verb = (
+            f" for verb {proposal.verb.name!r}" if proposal.kind == "verb" and proposal.verb else ""
+        )
+        raise DeclarationError(
+            f"proposal.supersedes {proposal.supersedes!r} does not name an existing "
+            f"{proposal.kind} proposal{for_verb}"
+        )
     state.new_proposal_id()
     state.proposals[proposal.id] = proposal
     return proposal
@@ -51,15 +82,22 @@ async def approve(api: MshknApi, state: State, brain: Brain, proposal_id: str) -
         except MshknError as exc:
             proposal.status = "failed"
             proposal.log = exc.detail
-            state.catalog[verb.name] = CatalogEntry(
-                verb=verb, status="failed", recipe_id=None, proposal_id=proposal.id
-            )
+            # §5 step 3: a rejected Dockerfile fails the proposal, not the
+            # verb it was meant to (re)build. A working, non-disabled entry
+            # for this name — e.g. the one a rejected supersede targeted —
+            # is left exactly as it was (finding 2 / T8-R1).
+            existing = state.catalog.get(verb.name)
+            if existing is None or existing.status == "disabled":
+                state.catalog[verb.name] = CatalogEntry(
+                    verb=verb, status="failed", recipe_id=None, proposal_id=proposal.id
+                )
             return f"{proposal.id} failed: {exc.detail}"
         proposal.recipe_id = info.id
         status: CatalogStatus = "ready" if info.status == "ready" else "building"
         proposal.status = status
-        if proposal.supersedes in state.proposals:
-            state.proposals[proposal.supersedes].status = "superseded"
+        target = _supersede_target(state, proposal)
+        if target is not None:
+            target.status = "superseded"
         state.catalog[verb.name] = CatalogEntry(
             verb=verb, status=status, recipe_id=info.id, proposal_id=proposal.id
         )
@@ -75,13 +113,16 @@ async def approve(api: MshknApi, state: State, brain: Brain, proposal_id: str) -
         brain.write_self(proposal.prompt)
         state.applied_prompt = proposal.id
     proposal.status = "applied"
-    if proposal.supersedes in state.proposals:
-        state.proposals[proposal.supersedes].status = "superseded"
+    target = _supersede_target(state, proposal)
+    if target is not None:
+        target.status = "superseded"
     return f"{proposal.id} applied: {proposal.kind} replaced; effective from the next turn"
 
 
 def reject(state: State, proposal_id: str, reason: str) -> str:
     proposal = _get(state, proposal_id)
+    if proposal.status not in ("pending", "blocked"):
+        return f"{proposal.id} is {proposal.status}, not pending or blocked"
     proposal.status = "rejected"
     state.inbox.append(
         InboxItem(
