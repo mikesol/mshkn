@@ -99,6 +99,7 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thre
 - **Be mega-rigorous.** Don't code to the benchmark. Don't sweep stuff under the carpet. Evidence before assertions.
 - **No backwards compatibility or versioning.** This is a pre-alpha research project with zero users. Don't version APIs, don't keep fallback paths, don't create a "v2" beside the old thing; replace it. The one exception is database migrations, which are sequential and additive.
 - **Product behaviour changes need a test that found or pins them**, in the unit or flow tier; the E2E tier proves them on the live host.
+- **An issue that specifies a change opens with what exists.** Before filing or rewriting an issue that says how mshkn should change, read the code it touches (`src/mshkn/api/deps.py` and the routers for auth and routes, `src/mshkn/api/schemas.py` for request fields, `src/mshkn/db/` and `migrations/` for tables, the service for behaviour). The issue's first section is "What exists today", and every claim in it cites a file. Prose in `README.md` and `docs/ARCHITECTURE.md` is accurate but not exhaustive; a mechanism the docs do not name must be read from the code, not inferred. #88, #89 and #93 are the template.
 - **Infrastructure comes before workarounds.** If a task needs a host or a service the project does not have, write the minimum into `docs/infrastructure.md` and ask for it; do not make the product optional or add indirection to work around missing infrastructure.
 
 ## Deployment
