@@ -1,0 +1,7 @@
+{
+ "principals": {
+  "anonymous": {"invoke": [], "propose": false}
+ },
+ "hooks": [],
+ "door": "closed"
+}

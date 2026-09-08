@@ -1,0 +1,7 @@
+FROM mshkn-base
+ENV MEM0_TELEMETRY=False
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /brain/venv \
+    && /brain/venv/bin/pip install --no-cache-dir anthropic==1.4.0 mem0ai==2.0.20 openai==3.8.0 httpx
+RUN mkdir -p /brain/memory
