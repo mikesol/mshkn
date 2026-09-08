@@ -52,6 +52,7 @@ class Config:
     # Idle timeout and retention
     idle_timeout_seconds: int = 1800  # 30 minutes
     checkpoint_retention_count: int = 20  # per account, keep last N
+    exec_log_retention_seconds: int = 86400  # ephemeral exec output; 0 keeps it forever
 
     # Networking
     domain: str = "mshkn.dev"

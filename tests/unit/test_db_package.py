@@ -44,6 +44,7 @@ async def test_migrations_create_indexes(tmp_path: Path) -> None:
         "idx_checkpoints_computer_created",
         "idx_checkpoints_label",
         "idx_deferred_queue_label_created",
+        "idx_exec_log_created",
     } <= names
 
 

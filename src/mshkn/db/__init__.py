@@ -33,6 +33,12 @@ from mshkn.db.computers import (
     update_last_exec_at,
 )
 from mshkn.db.deferred import claim_deferred_by_label, insert_deferred
+from mshkn.db.exec_log import (
+    delete_exec_logs_before,
+    get_exec_log,
+    insert_exec_log,
+    set_exec_log_checkpoint,
+)
 from mshkn.db.ingress import (
     delete_ingress_rule,
     get_ingress_rule_by_id,
@@ -41,6 +47,7 @@ from mshkn.db.ingress import (
     list_ingress_logs,
     list_ingress_rules_by_account,
     rotate_ingress_rule_id,
+    update_ingress_log,
     update_ingress_rule,
 )
 from mshkn.db.recipes import (
@@ -71,6 +78,7 @@ __all__ = [
     "count_active_computers_by_account",
     "count_recipe_references",
     "delete_checkpoint",
+    "delete_exec_logs_before",
     "delete_failed_recipes_by_hash",
     "delete_ingress_rule",
     "delete_recipe",
@@ -80,6 +88,7 @@ __all__ = [
     "get_bare_template",
     "get_checkpoint",
     "get_computer",
+    "get_exec_log",
     "get_ingress_rule_by_id",
     "get_latest_checkpoint_for_computer",
     "get_max_checkpoint_volume_id",
@@ -90,6 +99,7 @@ __all__ = [
     "insert_checkpoint",
     "insert_computer",
     "insert_deferred",
+    "insert_exec_log",
     "insert_ingress_log",
     "insert_ingress_rule",
     "insert_recipe",
@@ -103,7 +113,9 @@ __all__ = [
     "list_recipes_by_account",
     "rotate_ingress_rule_id",
     "run_migrations",
+    "set_exec_log_checkpoint",
     "update_computer_status",
+    "update_ingress_log",
     "update_ingress_rule",
     "update_last_exec_at",
     "update_recipe_build_result",

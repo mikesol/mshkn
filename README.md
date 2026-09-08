@@ -8,6 +8,7 @@ This is a single-host research system with no users. The API changes without not
 
 - **Computers.** `POST /computers` boots a VM from the base volume (the export of the `mshkn-base` image) or from a recipe's volume, with 256 MiB and 2 vCPUs unless `needs` says otherwise (`{"ram": "512MB", "cores": 2}`). The request can carry an `exec` command to run immediately, `self_destruct` to checkpoint and destroy afterwards, a `callback_url` to be told the result, and a `label` for the checkpoint chain.
 - **Exec.** `POST /computers/{computer_id}/exec` streams stdout, stderr and the exit code as server-sent events over SSH, bounded by a caller-chosen `timeout_seconds` (60 by default, 600 at most; a command past it is killed and reports exit 137). Background commands (`exec/bg`, `exec/logs/{pid}`, `exec/kill/{pid}`), file `upload` and `download`, and `status` with live CPU, memory, disk and process counts.
+- **Exec log.** The `exec` that runs on a create or fork is recorded: `GET /computers/{computer_id}/exec_log` returns its command, exit code, stdout and stderr (each kept to 8 KiB, head and tail) and the checkpoint it produced, after the computer has self-destructed, for `MSHKN_EXEC_LOG_RETENTION_SECONDS` (a day by default). A checkpoint's `computer_id` and an ingress log entry's `computer_id` name the record.
 - **Checkpoints.** `POST /computers/{computer_id}/checkpoint` pauses the VM, writes a Firecracker memory and device snapshot, resumes, and takes a dm-thin snapshot of the disk. The snapshot files upload to R2 in the background. Checkpoints have labels, parents (a DAG), a pin flag, and a retention count applied per account.
 - **Fork.** `POST /checkpoints/{checkpoint_id}/fork` restores the snapshot on a fresh slot: memory state comes back, the disk is a copy-on-write child. A fork of a 50 MB working set costs the same as a fork of 1 MB.
 - **Exclusive chains.** A fork with `exclusive` set either fails while another computer is active on the label (`error_on_conflict`) or is queued (`defer_on_conflict`) and run when that computer self-destructs or is destroyed.
@@ -24,8 +25,8 @@ This is a single-host research system with no users. The API changes without not
 
 - More than one host. Slots, taps, thin volumes and the checkpoint directory are local to the machine; a checkpoint cannot be restored on another host.
 - Billing, quotas beyond the VM limit, or any notion of a user beyond an API key.
-- Retention of exec output after the computer is gone (#58) and an HTTP forwarding endpoint (#59).
-- Four of the 163 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
+- An HTTP forwarding endpoint (#59).
+- Four of the 165 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
 
 ## Layout
 
@@ -66,7 +67,7 @@ uv run pytest tests/flow      # the real app and services over the fake host
 MSHKN_SERVER=root@<ip> scripts/e2e.sh   # pushes, deploys, runs tests/e2e on the live server
 ```
 
-The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 153 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.
+The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 155 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.
 
 The full local gate, which is what CI runs (`.github/workflows/ci.yml`) after `uv sync --frozen`:
 

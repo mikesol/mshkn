@@ -1,6 +1,6 @@
 # Plans index
 
-Every design and implementation document in this repository, with its status as of 2026-09-07 (main after PR #64). Status is judged from the code, not from what the document says about itself. The documents are historical records and are not edited, with one exception: the test plan is the definition of done, and a `spec-change` issue may revise it (#76 replaced Phase 10 and added T7.9 on 2026-09-07). Otherwise this index is what changes.
+Every design and implementation document in this repository, with its status as of 2026-09-07 (main after PR #64). Status is judged from the code, not from what the document says about itself. The documents are historical records and are not edited, with one exception: the test plan is the definition of done, and a `spec-change` issue may revise it (#76 replaced Phase 10 and added T7.9 on 2026-09-07; #58 added T7.10 and T13.14 on 2026-09-08). Otherwise this index is what changes.
 
 Statuses: **implemented**, **partially implemented**, **not implemented** (in the test plan, no code, tracked in an issue), **in progress** (the plan being executed), **superseded by …**, **retired** (never built, not replaced), **reference** (not a plan).
 
@@ -9,7 +9,7 @@ Statuses: **implemented**, **partially implemented**, **not implemented** (in th
 | Document | What it proposed | Status | Evidence |
 |---|---|---|---|
 | `docs/plans/2026-03-07-disposable-cloud-computers-design.md` | The product: disposable Firecracker VMs identified by checkpoints, fork and merge, Nix capability layers, sleep-for-free economics. | partially implemented: the computer, checkpoint, fork and merge model is live; the Nix capability layer was replaced by Docker recipes | `src/mshkn/services/computers.py`, `src/mshkn/services/checkpoints.py`, `src/mshkn/services/recipes.py` |
-| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 163 end-to-end tests, T0 to T13. | reference; the suite is `tests/e2e/`. Four tests (T8.6, T9.1, T11.2 and the audit-log check) fail as `Not implemented` until built (#65). Phase 10 and T7.9 were revised by #76 (`docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md`) and landed with PR 7. | `tests/e2e/` collects 163 |
+| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 165 end-to-end tests, T0 to T13. | reference; the suite is `tests/e2e/`. Four tests (T8.6, T9.1, T11.2 and the audit-log check) fail as `Not implemented` until built (#65). Phase 10 and T7.9 were revised by #76 (`docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md`) and landed with PR 7; T7.10 and T13.14 (exec log retention) landed with #58. | `tests/e2e/` collects 165 |
 | `docs/plans/2026-03-08-roadmap.md` | Prioritised backlog from the first E2E run. | partially implemented: see the breakdown below | |
 | `docs/plans/2026-03-08-orchestrator-design.md` | One FastAPI process over Firecracker, dm-thin, R2, Nix and SQLite. | partially implemented: everything but Nix; the module layout became `host/`, `services/`, `db/` in the quality overhaul | `src/mshkn/app.py`, `src/mshkn/host/`, `src/mshkn/services/` |
 | `docs/plans/2026-03-08-orchestrator-implementation.md` | Task plan for the orchestrator. | implemented, later restructured by PRs 2 to 4 of the quality overhaul | `src/mshkn/runtime.py` |
@@ -47,7 +47,7 @@ Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.
 | Plan | PR | Status |
 |---|---|---|
 | `docs/superpowers/plans/2026-09-07-pr7a-one-base.md` | #79 | implemented (merged 2026-09-07) |
-| `docs/superpowers/plans/2026-09-07-pr7-workload-proof.md` | this PR | in progress (this PR) |
+| `docs/superpowers/plans/2026-09-07-pr7-workload-proof.md` | #81 | implemented (merged 2026-09-07) |
 
 ## Roadmap breakdown (`docs/plans/2026-03-08-roadmap.md`)
 
@@ -64,4 +64,4 @@ Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.
 
 ## Open follow-ups
 
-Filed from PR 5's final review and live runs: #65 (four unimplemented E2E checks), #66 (an abandoned bring-up can orphan a spawned Firecracker), #67 (socket registry is process-local), #68 (`_post_process_rootfs` and a pre-existing `fcnet.service` symlink), #69 (test-harness hygiene), #70 (REST destroy and the dead-VM reaper can tear down the same computer). Earlier: #55 to #57 (restore-path experiments), #58 (exec log retention), #59 (`/forward`).
+Filed from PR 5's final review and live runs: #65 (four unimplemented E2E checks), #66 (an abandoned bring-up can orphan a spawned Firecracker), #67 (socket registry is process-local), #68 (`_post_process_rootfs` and a pre-existing `fcnet.service` symlink), #69 (test-harness hygiene), #70 (REST destroy and the dead-VM reaper can tear down the same computer). Earlier: #55 to #57 (restore-path experiments), #59 (`/forward`). Closed since: #70 (PR #84), #58 (exec log retention: the `exec_log` table, `GET /computers/{computer_id}/exec_log`, T7.10 and T13.14).

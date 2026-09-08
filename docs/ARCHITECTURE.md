@@ -41,6 +41,7 @@ Domain errors are mapped in one place, `src/mshkn/api/errors.py`, which handles 
 | `POST /computers/{computer_id}/exec` | `ComputerService.stream` as server-sent events, timed under `op="exec"` |
 | `POST /computers/{computer_id}/exec/bg` | `ComputerService.exec_bg` |
 | `GET /computers/{computer_id}/exec/logs/{pid}` | `ComputerService.exec_logs` |
+| `GET /computers/{computer_id}/exec_log` | `Lifecycle.exec_log`: the record of the exec that ran on create or fork, kept after the computer is gone |
 | `POST /computers/{computer_id}/exec/kill/{pid}` | `ComputerService.exec_kill` |
 | `POST /computers/{computer_id}/upload` | `ComputerService.upload` (`?path=`, raw body) |
 | `GET /computers/{computer_id}/download` | `ComputerService.download` (`?path=`) |
@@ -100,17 +101,17 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 | `mshkn.services.allocator.SlotAllocator` | Free slot set and next thin-volume id, both derived at start from the database (every non-destroyed row holds its slot) and `BlockStore.max_volume_id`; `acquire`, `acquire_volume_id`, `release_slot` under one lock. `release_slot` refuses, with a warning, a slot that is not held. |
 | `mshkn.services.computers.ComputerService` | `create`, `fork`, `destroy`, `cleanup_dead`, `resume_teardowns`, guest operations (`exec`, `stream`, `exec_bg`, `exec_logs`, `exec_kill`, `upload`, `download`, `metrics`), ownership checks (`get_owned`, `get_running`), the active gauge. |
 | `mshkn.services.checkpoints.CheckpointService` | `create` (the single implementation for API, self-destruct and idle triggers), `delete`, `prune`, `merge`, `fork_or_defer`, `latest_for_label`, `source_label`. |
-| `mshkn.services.lifecycle.Lifecycle` | `run_ephemeral` (exec → optional self-destruct checkpoint → destroy → callback → drain), `drain_after_destroy`, `drain_deferred`. |
+| `mshkn.services.lifecycle.Lifecycle` | `run_ephemeral` (exec → exec-log row → optional self-destruct checkpoint → destroy → callback → drain), `exec_log`, `expire_exec_logs`, `drain_after_destroy`, `drain_deferred`. |
 | `mshkn.services.recipes.RecipeService` | Recipe rows and the build pipeline (`docker build` → export → thin volume → template snapshot), serialised per account and de-duplicated per template key. |
-| `mshkn.services.ingress.IngressService` | Rule CRUD, `enabled_rule`, `trigger` (Starlark transform → `ForkAction`/`CreateAction` → outcome), per-rule rate limiters, trigger logs. |
-| `mshkn.services.reaper.Reaper` | `reap_dead`, `reap_idle`, prune, `check_host` (pool, root filesystem and RAM thresholds), the 60-second cycle. |
+| `mshkn.services.ingress.IngressService` | Rule CRUD, `enabled_rule`, `trigger` (Starlark transform → `ForkAction`/`CreateAction` → outcome), per-rule rate limiters, trigger logs (one row per trigger, brought to its final status and the computer it ran on). |
+| `mshkn.services.reaper.Reaper` | `reap_dead`, `reap_idle`, prune, exec-log expiry, `check_host` (pool, root filesystem and RAM thresholds), the 60-second cycle. |
 | `mshkn.services.merge` | `three_way_merge`, a function over three directory trees that writes a fourth. |
 | `mshkn.services.callback.deliver_callback` | POST with retries and backoff; never raises. |
 | `mshkn.services.starlark` | Validation and execution of transform source in the `starlark_go` sandbox. |
 
 ## 5. State ownership
 
-**Durable (SQLite, `src/mshkn/db/`).** One file, opened with `PRAGMA busy_timeout=5000`, `journal_mode=WAL` and `synchronous=NORMAL`. Tables: `accounts`, `computers`, `checkpoints`, `recipes`, `snapshot_templates`, `deferred_queue`, `ingress_rules`, `ingress_log`, plus `_migrations` (applied migration names). `capability_cache`, from `migrations/001_initial.sql` and rebuilt by `migrations/004_capability_cache_volume_id.sql`, still exists in the schema but no code reads or writes it; `migrations/009_recipes.sql` replaced what used it without dropping the table. Migrations in `migrations/` are sequential and applied once each, in name order. Litestream replicates the file to R2. Each `db/` module holds one table's column tuple, one row mapper and its queries, ingress rules and their log sharing one; there is no ORM.
+**Durable (SQLite, `src/mshkn/db/`).** One file, opened with `PRAGMA busy_timeout=5000`, `journal_mode=WAL` and `synchronous=NORMAL`. Tables: `accounts`, `computers`, `checkpoints`, `recipes`, `snapshot_templates`, `deferred_queue`, `ingress_rules`, `ingress_log`, `exec_log`, plus `_migrations` (applied migration names). `capability_cache`, from `migrations/001_initial.sql` and rebuilt by `migrations/004_capability_cache_volume_id.sql`, still exists in the schema but no code reads or writes it; `migrations/009_recipes.sql` replaced what used it without dropping the table. Migrations in `migrations/` are sequential and applied once each, in name order. Litestream replicates the file to R2. Each `db/` module holds one table's column tuple, one row mapper and its queries, ingress rules and their log sharing one; there is no ORM.
 
 **Durable (disk).** The thin pool `mshkn-pool` with base volume 0 (the export of the `mshkn-base` image, written by `python -m mshkn base-volume`), one volume per computer (`mshkn-<computer id>`), one per checkpoint (`mshkn-ckpt-<checkpoint id>`), and one per recipe base (`mshkn-recipe-<recipe id>`). Checkpoint snapshot files under `checkpoint_local_dir/<checkpoint id>/` (`vmstate`, `memory`), mirrored to R2 under `<account id>/<checkpoint id>/`, and template snapshots under `checkpoint_local_dir/templates/<key>/`.
 
@@ -141,13 +142,15 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 **Idle** (`Reaper.reap_idle`): a running computer whose `last_exec_at` (or `created_at`) is older than `idle_timeout_seconds` is checkpointed with trigger `idle` and label `auto-idle-timeout` (or its chain's label), then destroyed and its label drained.
 
+**Ephemeral runs and their record** (`Lifecycle.run_ephemeral`): a create or fork that carries `exec` runs it through `ComputerService.exec` and writes one `exec_log` row keyed by the computer id (`src/mshkn/db/exec_log.py`): the command, exit code, stdout and stderr, the checkpoint it was forked from and the chain's label. The row is written before the self-destruct checkpoint is taken, so a checkpoint that fails does not also lose the output that led to it, and it is updated with `created_checkpoint_id` once the checkpoint exists. Stored stdout and stderr are each bounded to 8 KiB (`mshkn.services.lifecycle.EXEC_LOG_OUTPUT_BYTES`): past that the head and the tail are kept around a marker naming the bytes dropped, and the row's `stdout_truncated` / `stderr_truncated` flags say so; the response and the callback still carry the whole output. `GET /computers/{computer_id}/exec_log` returns the row to its owner whether the computer is alive or gone, which is how an agent reads what an ephemeral turn did: a checkpoint's `computer_id` in `GET /checkpoints` names the row, as does an ingress log entry's `computer_id`. The reaper deletes rows older than `exec_log_retention_seconds` (24 hours by default; 0 keeps them).
+
 ## 7. Lifecycle of a checkpoint
 
 **Create** (`CheckpointService.create`, timed `op="checkpoint"`): `sync` inside the guest so the page cache reaches the block device; `Hypervisor.snapshot` (pause, write `vmstate` and `memory`, resume); evict the SSH connection (pause breaks the pooled session); acquire a volume id, then snap the computer's volume into a new checkpoint volume and activate it; insert the row with `parent_id` = the computer's latest checkpoint, else the checkpoint it was forked from; count `mshkn_checkpoints_total{trigger}`; spawn the R2 upload under key `upload:<checkpoint id>`.
 
 **Delete** cancels the upload task first, then removes the thin volume, the local directory and the R2 prefix, then the row.
 
-**Prune** (`Reaper` cycle) keeps the newest `checkpoint_retention_count` unpinned checkpoints per account and deletes the rest. Pinned checkpoints are never pruned.
+**Prune** (`Reaper` cycle) keeps the newest `checkpoint_retention_count` unpinned checkpoints per account and deletes the rest. Pinned checkpoints are never pruned. Deleting a checkpoint leaves its computer's `exec_log` row alone; that row goes on its own clock (`exec_log_retention_seconds`).
 
 **Fork or defer** (`CheckpointService.fork_or_defer`): with `exclusive` set and a labelled checkpoint, an active computer on that label means either `Conflict` (`error_on_conflict`) or a row in `deferred_queue` and a `Deferred` result (`defer_on_conflict`). Otherwise it is a plain fork.
 
@@ -163,7 +166,7 @@ The first create at the default resources for a recipe (or for the bare base) tr
 
 ## 9. Ingress
 
-An ingress rule has a Starlark `transform(request)` returning either `{"action": "fork", "checkpoint_id": ..., "exec": ..., ...}` (`checkpoint_id` or `label` is required) or `{"action": "create", "recipe_id": ..., "needs": ..., "exec": ..., ...}`, or nothing. `POST /ingress_rules` validates the source by executing it and requiring a `transform` global. A trigger request is parsed into the dict the transform sees (method, path, headers, query, JSON or form body, raw body) with the rule's `max_body_bytes` enforced on both the declared and the streamed length (413), then rate-limited per rule over a one-minute window (429), transformed (`TransformError` → 502), validated against `ForkAction`/`CreateAction` (`extra=forbid`), and executed. A transform that returns nothing gives 204. `response_mode` `sync` returns the same body as the REST fork or create; `async` runs the action in the background and returns 202 with an `accepted` marker; a deferred fork returns the deferred id with `queued`. Every transform that runs writes an `ingress_log` row, and an async action that fails writes a second; a request rejected before the transform — unknown rule, oversized body, rate limit — writes none.
+An ingress rule has a Starlark `transform(request)` returning either `{"action": "fork", "checkpoint_id": ..., "exec": ..., ...}` (`checkpoint_id` or `label` is required) or `{"action": "create", "recipe_id": ..., "needs": ..., "exec": ..., ...}`, or nothing. `POST /ingress_rules` validates the source by executing it and requiring a `transform` global. A trigger request is parsed into the dict the transform sees (method, path, headers, query, JSON or form body, raw body) with the rule's `max_body_bytes` enforced on both the declared and the streamed length (413), then rate-limited per rule over a one-minute window (429), transformed (`TransformError` → 502), validated against `ForkAction`/`CreateAction` (`extra=forbid`), and executed. A transform that returns nothing gives 204. `response_mode` `sync` returns the same body as the REST fork or create; `async` runs the action in the background and returns 202 with an `accepted` marker; a deferred fork returns the deferred id with `queued`. Every transform that runs writes one `ingress_log` row: for a sync action it records the final status and the `computer_id` the action ran on; for an async action the row is written as `accepted` before the task starts and the task brings that same row to `completed` (with its `computer_id`) or `failed` (with the error), so a trigger is one row whose status is its outcome. A deferred fork has no computer yet. A request rejected before the transform — unknown rule, oversized body, rate limit — writes none.
 
 ## 10. Networking
 
@@ -213,6 +216,7 @@ Logs are JSON lines (`mshkn.observability.logging.JSONFormatter`) with `timestam
 | `r2_bucket`, `r2_endpoint`, `r2_access_key_id`, `r2_secret_access_key` | `mshkn-checkpoints`, empty | `R2_BUCKET`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `idle_timeout_seconds` | `1800` | `MSHKN_IDLE_TIMEOUT` |
 | `checkpoint_retention_count` | `20` | `MSHKN_CHECKPOINT_RETENTION` |
+| `exec_log_retention_seconds` | `86400` | `MSHKN_EXEC_LOG_RETENTION_SECONDS` |
 | `domain` | `mshkn.dev` | `MSHKN_DOMAIN` |
 | `caddy_admin_url` | `http://localhost:2019` | `MSHKN_CADDY_ADMIN_URL` |
 
