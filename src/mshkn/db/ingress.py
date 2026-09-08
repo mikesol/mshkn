@@ -33,6 +33,7 @@ LOG_COLUMNS: tuple[str, ...] = (
     "starlark_result",
     "error_message",
     "created_at",
+    "computer_id",
 )
 _LOG_SELECT = "SELECT " + ", ".join(LOG_COLUMNS) + " FROM ingress_log"
 
@@ -63,6 +64,7 @@ def _row_to_log(row: Sequence[object]) -> IngressLog:
         starlark_result=None if d["starlark_result"] is None else str(d["starlark_result"]),
         error_message=None if d["error_message"] is None else str(d["error_message"]),
         created_at=str(d["created_at"]),
+        computer_id=None if d["computer_id"] is None else str(d["computer_id"]),
     )
 
 
@@ -151,7 +153,24 @@ async def insert_ingress_log(db: aiosqlite.Connection, log: IngressLog) -> None:
             log.starlark_result,
             log.error_message,
             log.created_at,
+            log.computer_id,
         ),
+    )
+    await db.commit()
+
+
+async def update_ingress_log(
+    db: aiosqlite.Connection,
+    log_id: str,
+    *,
+    status: IngressLogStatus,
+    error_message: str | None,
+    computer_id: str | None,
+) -> None:
+    """Record how an accepted trigger ended: the same row, its final status."""
+    await db.execute(
+        "UPDATE ingress_log SET status=?, error_message=?, computer_id=? WHERE id=?",
+        (status, error_message, computer_id, log_id),
     )
     await db.commit()
 

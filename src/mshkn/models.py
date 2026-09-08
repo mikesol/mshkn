@@ -151,6 +151,24 @@ class EphemeralResult:
     created_checkpoint_id: str | None
 
 
+@dataclass(frozen=True)
+class ExecLog:
+    """What an ephemeral run did, kept after its computer is gone (#58)."""
+
+    computer_id: str
+    account_id: str
+    source_checkpoint_id: str | None
+    created_checkpoint_id: str | None
+    label: str | None
+    command: str
+    exit_code: int
+    stdout: str
+    stderr: str
+    stdout_truncated: bool
+    stderr_truncated: bool
+    created_at: str
+
+
 @dataclass
 class Alert:
     level: str  # "warning" or "critical"
@@ -184,3 +202,4 @@ class IngressLog:
     starlark_result: str | None
     error_message: str | None
     created_at: str
+    computer_id: str | None = None

@@ -252,12 +252,12 @@ async def test_async_fork_by_label_runs_in_the_background(
     assert outcome.status_code == 202 and outcome.result is None
     await ingress.tasks.drain(timeout=2.0)
     assert len(host.hypervisor.restored) == 2  # base's template restore + the fork
-    assert [log.status for log in await ingress.logs(ACCOUNT, rule.id)] == [
-        IngressLogStatus.ACCEPTED
-    ]
+    logs = await ingress.logs(ACCOUNT, rule.id)
+    assert [log.status for log in logs] == [IngressLogStatus.COMPLETED]
+    assert logs[0].computer_id is not None, "the accepted row was brought to completed in place"
 
 
-async def test_async_action_failure_logs_a_failed_row(
+async def test_async_action_failure_marks_the_accepted_row_failed(
     db: aiosqlite.Connection, tmp_path: Path
 ) -> None:
     ingress, _, _, _ = await _ingress(db, tmp_path)
@@ -274,9 +274,9 @@ async def test_async_action_failure_logs_a_failed_row(
     assert (await ingress.trigger(rule, REQ)).status_code == 202
     await ingress.tasks.drain(timeout=2.0)
     logs = await ingress.logs(ACCOUNT, rule.id)
-    assert sorted(log.status.value for log in logs) == ["accepted", "failed"]
-    failed = next(log for log in logs if log.status is IngressLogStatus.FAILED)
-    assert failed.error_message is not None and "missing" in failed.error_message
+    assert [log.status for log in logs] == [IngressLogStatus.FAILED]
+    assert logs[0].error_message is not None and "missing" in logs[0].error_message
+    assert logs[0].computer_id is None
 
 
 async def test_fork_defers_when_the_label_already_has_a_running_computer(

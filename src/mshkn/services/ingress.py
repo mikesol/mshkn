@@ -27,6 +27,7 @@ from mshkn.db import (
     list_ingress_logs,
     list_ingress_rules_by_account,
     rotate_ingress_rule_id,
+    update_ingress_log,
     update_ingress_rule,
 )
 from mshkn.errors import InvalidInput, LimitExceeded, NotFound, TransformError
@@ -329,17 +330,23 @@ class IngressService:
         if account is None:
             raise NotFound("Ingress rule's account not found")
         if rule.response_mode == "async":
-            self.tasks.spawn(
-                self._execute_and_log(account, rule, result), name=f"ingress:{rule.id}"
-            )
-            await self._log(rule, IngressLogStatus.ACCEPTED, json.dumps(result), None)
+            # The row exists before the task can finish, so the task always has
+            # a row to bring to completed or failed.
+            log = await self._log(rule, IngressLogStatus.ACCEPTED, json.dumps(result), None)
+            self.tasks.spawn(self._execute_and_log(account, log, result), name=f"ingress:{rule.id}")
             return TriggerOutcome(202, None)
         try:
             executed = await self.execute(account, result)
         except Exception as exc:
             await self._log(rule, IngressLogStatus.FAILED, json.dumps(result), _error_text(exc))
             raise
-        await self._log(rule, IngressLogStatus.COMPLETED, json.dumps(result), None)
+        await self._log(
+            rule,
+            IngressLogStatus.COMPLETED,
+            json.dumps(result),
+            None,
+            computer_id=_computer_id(executed),
+        )
         return TriggerOutcome(200, executed)
 
     async def execute(self, account: Account, action: dict[str, Any]) -> IngressResult:
@@ -387,17 +394,26 @@ class IngressService:
         return CreateOutcome(computer=computer, result=outcome)
 
     async def _execute_and_log(
-        self, account: Account, rule: IngressRule, action: dict[str, Any]
+        self, account: Account, log: IngressLog, action: dict[str, Any]
     ) -> None:
+        """Run an accepted action and bring its log row to its final status."""
         try:
-            await self.execute(account, action)
+            executed = await self.execute(account, action)
         except Exception as exc:
-            logger.warning("Async ingress action failed for rule %s: %s", rule.id, exc)
-            await self._log(rule, IngressLogStatus.FAILED, json.dumps(action), _error_text(exc))
+            logger.warning("Async ingress action failed for log %s: %s", log.id, exc)
+            await self._finish(log, IngressLogStatus.FAILED, _error_text(exc), None)
+            return
+        await self._finish(log, IngressLogStatus.COMPLETED, None, _computer_id(executed))
 
     async def _log(
-        self, rule: IngressRule, status: IngressLogStatus, result: str | None, error: str | None
-    ) -> None:
+        self,
+        rule: IngressRule,
+        status: IngressLogStatus,
+        result: str | None,
+        error: str | None,
+        *,
+        computer_id: str | None = None,
+    ) -> IngressLog:
         log = IngressLog(
             id=f"ilog-{uuid.uuid4().hex[:12]}",
             rule_internal_id=rule.internal_id,
@@ -405,11 +421,28 @@ class IngressService:
             starlark_result=result,
             error_message=error,
             created_at=datetime.now(UTC).isoformat(),
+            computer_id=computer_id,
         )
         try:
             await insert_ingress_log(self.db, log)
         except Exception:
             logger.warning("Failed to write ingress log for %s", rule.internal_id)
+        return log
+
+    async def _finish(
+        self, log: IngressLog, status: IngressLogStatus, error: str | None, computer_id: str | None
+    ) -> None:
+        try:
+            await update_ingress_log(
+                self.db, log.id, status=status, error_message=error, computer_id=computer_id
+            )
+        except Exception:
+            logger.warning("Failed to update ingress log %s", log.id)
+
+
+def _computer_id(result: IngressResult) -> str | None:
+    """The computer an executed action ran on; a deferred fork has none yet."""
+    return None if isinstance(result, Deferred) else result.computer.id
 
 
 def _error_text(exc: Exception) -> str:

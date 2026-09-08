@@ -1,4 +1,5 @@
-"""Background maintenance: dead VMs, idle VMs, checkpoint retention, host checks (spec §6.7)."""
+"""Background maintenance: dead VMs, idle VMs, checkpoint and exec-log retention,
+host checks (spec §6.7)."""
 
 from __future__ import annotations
 
@@ -83,14 +84,17 @@ class Reaper:
         dead = await self.reap_dead()
         idle = await self.reap_idle()
         pruned = await self.checkpoints.prune()
+        expired = await self.lifecycle.expire_exec_logs()
         alerts = await self.check_host()
         await self.computers.refresh_active_gauge()
-        if dead or idle or pruned or alerts:
+        if dead or idle or pruned or expired or alerts:
             logger.info(
-                "Reaper cycle: %d dead, %d idle VM(s), %d checkpoint(s) pruned, %d alert(s)",
+                "Reaper cycle: %d dead, %d idle VM(s), %d checkpoint(s) pruned, "
+                "%d exec log(s) expired, %d alert(s)",
                 dead,
                 idle,
                 pruned,
+                expired,
                 len(alerts),
             )
 

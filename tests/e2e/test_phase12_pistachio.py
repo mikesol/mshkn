@@ -513,3 +513,58 @@ async def test_deferred_batch_with_callback(long_client: httpx.AsyncClient) -> N
     await destroy_computer(long_client, fork_data["computer_id"])
     for c in ckpts:
         await delete_checkpoint(long_client, c["id"])
+
+
+# ---------------------------------------------------------------------------
+# T7.10 (test plan) — The output of an ephemeral turn outlives the computer (#58)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exec_log_outlives_the_self_destructed_computer(
+    long_client: httpx.AsyncClient,
+) -> None:
+    """A self-destructed fork's exec output is readable from its exec log."""
+    comp_id = await create_computer(long_client)
+    ckpt_id = await checkpoint_computer(long_client, comp_id, label="test-exec-log")
+    await destroy_computer(long_client, comp_id)
+    command = "echo turn-out; echo turn-err >&2; exit 3"
+    try:
+        resp = await long_client.post(
+            f"/checkpoints/{ckpt_id}/fork",
+            json={"exec": command, "self_destruct": True},
+        )
+        resp.raise_for_status()
+        turn = resp.json()
+        assert turn["exec_exit_code"] == 3 and turn["created_checkpoint_id"]
+        gone = await long_client.get(f"/computers/{turn['computer_id']}/status")
+        assert gone.status_code == 404, "the computer self-destructed"
+
+        resp = await long_client.get(f"/computers/{turn['computer_id']}/exec_log")
+        assert resp.status_code == 200, resp.text
+        log = resp.json()
+        assert log["command"] == command
+        assert log["exit_code"] == 3
+        assert log["stdout"] == turn["exec_stdout"] and "turn-out" in log["stdout"]
+        assert log["stderr"] == turn["exec_stderr"] and "turn-err" in log["stderr"]
+        assert log["stdout_truncated"] is False and log["stderr_truncated"] is False
+        assert log["source_checkpoint_id"] == ckpt_id
+        assert log["created_checkpoint_id"] == turn["created_checkpoint_id"]
+        assert log["label"] == "test-exec-log"
+
+        # Reachable from the chain alone: the created checkpoint names the computer.
+        chain = (await long_client.get("/checkpoints", params={"label": "test-exec-log"})).json()
+        created = next(c for c in chain if c["id"] == turn["created_checkpoint_id"])
+        assert created["computer_id"] == turn["computer_id"]
+
+        # Nothing to record: a create without exec, and a computer that never existed.
+        plain = await create_computer(long_client)
+        try:
+            assert (await long_client.get(f"/computers/{plain}/exec_log")).status_code == 404
+        finally:
+            await destroy_computer(long_client, plain)
+        assert (await long_client.get("/computers/comp-never/exec_log")).status_code == 404
+    finally:
+        chain = (await long_client.get("/checkpoints", params={"label": "test-exec-log"})).json()
+        for c in chain:
+            await delete_checkpoint(long_client, c["id"])

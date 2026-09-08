@@ -30,6 +30,7 @@ async def test_migrations_apply(tmp_path: Path) -> None:
     assert "computers" in tables
     assert "checkpoints" in tables
     assert "deferred_queue" in tables
+    assert "exec_log" in tables
 
 
 async def test_migrations_idempotent(tmp_path: Path) -> None:

@@ -22,6 +22,7 @@ def test_generic_names_map_every_field() -> None:
             "MSHKN_THIN_VOLUME_SECTORS": "1234",
             "MSHKN_SSH_KEY_PATH": "/root/.ssh/other",
             "MSHKN_DOMAIN": "example.test",
+            "MSHKN_EXEC_LOG_RETENTION_SECONDS": "3600",
         }
     )
     assert cfg.port == 9000
@@ -30,6 +31,7 @@ def test_generic_names_map_every_field() -> None:
     assert cfg.thin_volume_sectors == 1234
     assert cfg.ssh_key_path == Path("/root/.ssh/other")
     assert cfg.domain == "example.test"
+    assert cfg.exec_log_retention_seconds == 3600
 
 
 def test_aliases_keep_working_and_win() -> None:

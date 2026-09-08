@@ -741,3 +741,74 @@ async def test_ingress_logs(
         assert any(log["status"] == "completed" for log in logs)
     finally:
         await delete_rule(client, rule_id)
+
+
+# ---------------------------------------------------------------------------
+# T13.14 — An ingress trigger can be followed to its output (#58)
+# ---------------------------------------------------------------------------
+
+STARLARK_CREATE_EXEC_LOG = """
+def transform(req):
+    return {
+        "action": "create",
+        "exec": "echo from-ingress-turn",
+        "self_destruct": True,
+        "label": "test-ingress-exec-log",
+    }
+"""
+
+STARLARK_FORK_MISSING = """
+def transform(req):
+    return {"action": "fork", "checkpoint_id": "ckpt-does-not-exist", "exec": "true"}
+"""
+
+
+async def _settled_log(client: httpx.AsyncClient, rule_id: str, timeout: float = 90.0) -> Any:
+    """The rule's one log entry once its async action has left `accepted`."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        resp = await client.get(f"/ingress_rules/{rule_id}/logs")
+        resp.raise_for_status()
+        logs = resp.json()
+        assert len(logs) == 1, f"one trigger must be one log entry, got {logs}"
+        if logs[0]["status"] != "accepted":
+            return logs[0]
+        assert asyncio.get_running_loop().time() < deadline, f"still accepted: {logs[0]}"
+        await asyncio.sleep(1.0)
+
+
+@pytest.mark.asyncio
+async def test_async_ingress_log_leads_to_the_exec_log(
+    client: httpx.AsyncClient,
+    long_client: httpx.AsyncClient,
+    ingress_client: httpx.AsyncClient,
+) -> None:
+    rule = await create_rule(client, "exec-log", STARLARK_CREATE_EXEC_LOG, response_mode="async")
+    try:
+        resp = await ingress_client.post(f"/ingress/{rule['id']}", json={})
+        assert resp.status_code == 202
+        entry = await _settled_log(client, rule["id"])
+        assert entry["status"] == "completed", entry
+        assert entry["computer_id"].startswith("comp-")
+        assert entry["error_message"] is None
+        log = (await long_client.get(f"/computers/{entry['computer_id']}/exec_log")).json()
+        assert "from-ingress-turn" in log["stdout"] and log["exit_code"] == 0
+        assert log["created_checkpoint_id"].startswith("ckpt-")
+        assert log["label"] == "test-ingress-exec-log"
+    finally:
+        await delete_rule(client, rule["id"])
+        chain = (await client.get("/checkpoints", params={"label": "test-ingress-exec-log"})).json()
+        for c in chain:
+            await delete_checkpoint(client, c["id"])
+
+    failing = await create_rule(
+        client, "exec-log-fail", STARLARK_FORK_MISSING, response_mode="async"
+    )
+    try:
+        resp = await ingress_client.post(f"/ingress/{failing['id']}", json={})
+        assert resp.status_code == 202
+        entry = await _settled_log(client, failing["id"])
+        assert entry["status"] == "failed" and entry["computer_id"] is None, entry
+        assert "not found" in entry["error_message"].lower()
+    finally:
+        await delete_rule(client, failing["id"])

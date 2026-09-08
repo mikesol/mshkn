@@ -55,6 +55,22 @@ class UploadResponse(BaseModel):
     path: str
 
 
+class ExecLogResponse(BaseModel):
+    """What an ephemeral run did, readable after its computer is gone (#58)."""
+
+    computer_id: str
+    source_checkpoint_id: str | None = None
+    created_checkpoint_id: str | None = None
+    label: str | None = None
+    command: str
+    exit_code: int
+    stdout: str
+    stderr: str
+    stdout_truncated: bool
+    stderr_truncated: bool
+    created_at: str
+
+
 class ComputerStatusResponse(BaseModel):
     computer_id: str
     status: str
@@ -223,6 +239,7 @@ class IngressLogResponse(BaseModel):
     starlark_result: dict[str, Any] | None
     error_message: str | None
     created_at: str
+    computer_id: str | None = None
 
 
 # --- system ------------------------------------------------------------------

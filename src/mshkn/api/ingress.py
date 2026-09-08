@@ -195,6 +195,7 @@ async def get_rule_logs(
             starlark_result=(json.loads(log.starlark_result) if log.starlark_result else None),
             error_message=log.error_message,
             created_at=log.created_at,
+            computer_id=log.computer_id,
         )
         for log in await rt.ingress.logs(account, rule_id)
     ]

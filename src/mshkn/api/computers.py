@@ -19,6 +19,7 @@ from mshkn.api.schemas import (
     DestroyResponse,
     ExecBgResponse,
     ExecKillResponse,
+    ExecLogResponse,
     ExecRequest,
     UploadResponse,
     create_response,
@@ -136,6 +137,30 @@ async def exec_kill(
     if result.exit_code != 0:
         return ExecKillResponse(status="not_found", stderr=result.stderr)
     return ExecKillResponse(status="killed")
+
+
+@router.get("/{computer_id}/exec_log", response_model=ExecLogResponse)
+async def exec_log(
+    computer_id: str,
+    request: Request,
+    account: Account = _require_account,
+) -> ExecLogResponse:
+    """The record of the exec that ran on create or fork, kept after the computer is gone."""
+    rt = get_runtime(request)
+    log = await rt.lifecycle.exec_log(account, computer_id)
+    return ExecLogResponse(
+        computer_id=log.computer_id,
+        source_checkpoint_id=log.source_checkpoint_id,
+        created_checkpoint_id=log.created_checkpoint_id,
+        label=log.label,
+        command=log.command,
+        exit_code=log.exit_code,
+        stdout=log.stdout,
+        stderr=log.stderr,
+        stdout_truncated=log.stdout_truncated,
+        stderr_truncated=log.stderr_truncated,
+        created_at=log.created_at,
+    )
 
 
 @router.post("/{computer_id}/upload", response_model=UploadResponse)

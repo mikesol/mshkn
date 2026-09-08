@@ -452,6 +452,14 @@ Walk through every single API endpoint:
 - `sleep 30` with `timeout_seconds: 2` → the stream ends within 10 s, the exit event is 137 (killed), and nothing reports success.
 - **A killed command that reports exit 0 is a lie, and this is where it gets caught.**
 
+### T7.10 — The Output of an Ephemeral Turn Outlives the Computer
+
+- Fork a labelled checkpoint with `exec` that prints to stdout and stderr and exits non-zero, `self_destruct: true`. The computer is gone (`status` → 404).
+- `GET /computers/{id}/exec_log` → 200 with the command, the exit code, the stdout and the stderr the response carried, `source_checkpoint_id` = the checkpoint forked, `created_checkpoint_id` = the checkpoint the turn produced, and the chain's label.
+- The created checkpoint in `GET /checkpoints?label=` names the computer, so the record is reachable from the chain alone.
+- A computer created without `exec` → 404, as is a computer that never existed. (Another account's key → 404 is pinned in the flow tier, `tests/flow/test_exec_log.py`; the live host has one account.)
+- **A turn that lives under a second and leaves no record cannot be debugged; this is the record.**
+
 ---
 
 ## Phase 8: "Security, Because I Don't Trust You" (Isolation & Auth)
@@ -767,6 +775,13 @@ The ingress mapping layer lets external webhooks trigger disposable computers vi
 - Fork from a labeled checkpoint. While the computer is running, trigger the ingress again.
 - Does the second request get deferred (202)?
 - After the first computer self-destructs, does the deferred request execute?
+
+### T13.14 — An Ingress Trigger Can Be Followed to Its Output
+
+- Trigger an async rule whose action creates a computer with `exec` and `self_destruct`. The trigger returns 202.
+- Once the action has run, `GET /ingress_rules/{id}/logs` shows one entry for the trigger, status `completed`, with a `computer_id`.
+- `GET /computers/{computer_id}/exec_log` returns the exec's output and a `created_checkpoint_id`.
+- An async action that fails leaves that same entry `failed` with the error and no `computer_id`.
 
 ---
 
