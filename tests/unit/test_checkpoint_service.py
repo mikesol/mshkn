@@ -428,3 +428,23 @@ async def test_labels_lock_independently(db: aiosqlite.Connection, tmp_path: Pat
 
     assert all(isinstance(outcome, Computer) for _, outcome in results)
     assert len(host.hypervisor.restored) - restores_before == 3
+
+
+async def test_label_locks_exist_only_while_held(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    """A lock entry lives from the first waiter to the last release; a label
+    that 404s or a chain that is idle leaves nothing behind."""
+    checkpoints, computers, _host = await _services(db, tmp_path)
+    await _chain(checkpoints, computers, "chain")
+    with pytest.raises(NotFound):
+        await checkpoints.fork_by_label(ACCOUNT, "missing", SPEC, exclusive=None, recipe_id=None)
+    assert checkpoints._label_locks == {}
+
+    await asyncio.gather(
+        checkpoints.fork_by_label(
+            ACCOUNT, "chain", SPEC, exclusive="defer_on_conflict", recipe_id=None
+        ),
+        checkpoints.fork_by_label(
+            ACCOUNT, "chain", SPEC, exclusive="defer_on_conflict", recipe_id=None
+        ),
+    )
+    assert checkpoints._label_locks == {}

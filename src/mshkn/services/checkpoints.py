@@ -9,7 +9,8 @@ import logging
 import shutil
 import tempfile
 import uuid
-from dataclasses import dataclass
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,6 +39,8 @@ from mshkn.services.merge import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     import aiosqlite
 
     from mshkn.config import Config
@@ -65,6 +68,14 @@ class Deferred:
     deferred_id: str
 
 
+@dataclass
+class _LabelLock:
+    """One label's admission lock and the number of holders and waiters on it."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
 class CheckpointService:
     def __init__(
         self,
@@ -87,8 +98,9 @@ class CheckpointService:
         # has a row, and a fork by label cannot read a head that a concurrent
         # fork is about to replace. Process-local is correct: the server is one
         # asyncio process (the socket registry in §5 is process-local for the
-        # same reason). The exec runs outside the lock.
-        self._label_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        # same reason). The exec runs outside the lock. An entry exists only
+        # while someone holds or waits for it, so labels do not accumulate.
+        self._label_locks: dict[tuple[str, str], _LabelLock] = {}
 
     @staticmethod
     def upload_task_key(checkpoint_id: str) -> str:
@@ -293,8 +305,20 @@ class CheckpointService:
 
     # -- exclusive fork ------------------------------------------------------
 
-    def _label_lock(self, account_id: str, label: str) -> asyncio.Lock:
-        return self._label_locks.setdefault((account_id, label), asyncio.Lock())
+    @asynccontextmanager
+    async def _label_lock(self, account_id: str, label: str) -> AsyncIterator[None]:
+        key = (account_id, label)
+        entry = self._label_locks.get(key)
+        if entry is None:
+            entry = self._label_locks[key] = _LabelLock()
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.users -= 1
+            if entry.users == 0 and self._label_locks.get(key) is entry:
+                del self._label_locks[key]
 
     async def fork_by_label(
         self,
