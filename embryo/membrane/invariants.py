@@ -24,9 +24,15 @@ def door_is_open(policy: Policy) -> bool:
 
 
 def may_invoke(principal: str, verb: Verb, policy: Policy) -> bool:
+    """§4: a verb's `allow` says who may invoke it, and "policy may widen or
+    narrow this". So policy answers for every principal it names — widening
+    past `allow`, or narrowing to nothing — and `allow` answers only where
+    policy is silent. Root is neither's to refuse (§10.1)."""
     if principal == ROOT:
         return True
-    return principal in verb.allow or policy.grant(principal).allows(verb.name)
+    if principal in policy.principals:
+        return policy.grant(principal).allows(verb.name)
+    return principal in verb.allow
 
 
 def may_propose(principal: str, policy: Policy) -> bool:

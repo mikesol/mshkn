@@ -93,7 +93,11 @@ def test_invariants_refuse_what_they_must() -> None:
     assert refuse_approval(fine, state) is None
 
 
-def test_may_invoke_and_may_propose_union_verb_allow_with_policy() -> None:
+def test_policy_decides_for_the_principals_it_names_and_allow_decides_otherwise() -> None:
+    """Spec §4: `allow` lists who may invoke a verb, and "policy may widen or
+    narrow this". So policy is consulted first for every principal it names,
+    and the declaration's `allow` only answers for principals policy is silent
+    about. Root is neither's to grant or refuse (§10.1)."""
     verb = parse_verb({**VERB, "allow": ["telegram:bob"]})
     policy = parse_policy(
         {
@@ -103,11 +107,32 @@ def test_may_invoke_and_may_propose_union_verb_allow_with_policy() -> None:
         }
     )
     assert may_invoke("root", verb, policy) and may_propose("root", policy)
+    # policy widens: it names ssh:mike, whom the declaration's allow does not
     assert may_invoke("ssh:mike", verb, policy) and may_propose("ssh:mike", policy)
+    # policy is silent about telegram:bob, so the declaration's allow answers
     assert may_invoke("telegram:bob", verb, policy) and not may_propose("telegram:bob", policy)
     assert not may_invoke("anonymous", verb, policy) and not may_propose("anonymous", policy)
     assert not door_is_open(policy)
     assert door_is_open(parse_policy({"principals": {}, "hooks": ["verify_ssh"], "door": "open"}))
+
+
+def test_policy_narrows_a_verb_that_allows_the_principal_by_name() -> None:
+    """The narrowing half of spec §4. A verb whose declaration allows ssh:mike
+    is still refused to ssh:mike once policy names them with an empty invoke
+    list; without that clause `disable` on the whole verb would be root's only
+    lever, and policy would not be the narrowing instrument §4 says it is."""
+    verb = parse_verb({**VERB, "allow": ["ssh:mike"]})
+    narrowed = parse_policy(
+        {
+            "principals": {"ssh:mike": {"invoke": [], "propose": True}},
+            "hooks": [],
+            "door": "closed",
+        }
+    )
+    assert not may_invoke("ssh:mike", verb, narrowed)
+    assert may_invoke("root", verb, narrowed)  # §10.1: root is not policy's to narrow
+    silent = parse_policy({"principals": {}, "hooks": [], "door": "closed"})
+    assert may_invoke("ssh:mike", verb, silent)
 
 
 async def test_approve_a_verb_builds_it_and_the_catalog_follows(tmp_path: Path) -> None:

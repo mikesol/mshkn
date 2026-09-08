@@ -55,6 +55,11 @@ def test_parse_verb_fills_defaults() -> None:
         ({"requires": [{"kind": "secret"}]}, "requires"),
         ({"chain": "other/x"}, "verb/"),
         ({"description": ""}, "description"),
+        # §4: allow lists namespaced principals. root is never a declaration's
+        # to grant (§10.1) and what anonymous may do is policy's to say (§6).
+        ({"allow": ["root"]}, "allow"),
+        ({"allow": ["anonymous"]}, "allow"),
+        ({"allow": ["mike"]}, "allow"),
     ],
 )
 def test_parse_verb_refuses(patch: dict[str, Any], reason: str) -> None:

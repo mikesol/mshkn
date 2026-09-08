@@ -31,6 +31,7 @@ DEFAULT_NEEDS: dict[str, Any] = {"ram": "256MB", "cores": 1}
 
 NAME_RE = re.compile(r"^[a-z0-9_]+$")
 NAMESPACE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+NAMESPACED_PRINCIPAL_RE = re.compile(r"^[a-z][a-z0-9_]*:[A-Za-z0-9_.@+-]+$")
 PRINCIPAL_RE = re.compile(r"^(root|anonymous|[a-z][a-z0-9_]*:[A-Za-z0-9_.@+-]+)$")
 PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 PROPOSAL_STATUSES: frozenset[str] = frozenset(
@@ -141,14 +142,17 @@ def _requirements(raw: object) -> tuple[Requirement, ...]:
     return tuple(out)
 
 
-def _principals(raw: object, where: str) -> tuple[str, ...]:
+def _namespaced_principals(raw: object, where: str) -> tuple[str, ...]:
+    """§4: a verb's `allow` names namespaced principals only. `root` is never a
+    declaration's to grant (§10.1), and what `anonymous` may invoke is the
+    policy document's to say (§6 step 4), so neither may appear here."""
     if raw is None:
         return ()
     if not isinstance(raw, list) or not all(isinstance(p, str) for p in raw):
         raise DeclarationError(f"{where} must be a list of principals")
     for p in raw:
-        if not PRINCIPAL_RE.match(p):
-            raise DeclarationError(f"{where}: {p!r} is not a principal")
+        if not NAMESPACED_PRINCIPAL_RE.match(p):
+            raise DeclarationError(f"{where}: {p!r} is not a namespaced principal (<ns>:<name>)")
     return tuple(raw)
 
 
@@ -212,7 +216,7 @@ def parse_verb(doc: object) -> Verb:
         asserts=asserts,
         needs=needs,
         timeout_seconds=timeout,
-        allow=_principals(d.get("allow"), "verb.allow"),
+        allow=_namespaced_principals(d.get("allow"), "verb.allow"),
         requires=_requirements(d.get("requires")),
     )
 
