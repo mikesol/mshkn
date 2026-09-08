@@ -8,8 +8,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from membrane.memory import Provenance, visible_from
-from membrane.model import Completion
+from membrane.model import Completion, ToolCall
 from membrane.mshkn import CheckpointInfo, Deferred, MshknError, RecipeInfo, RunResult
+
+
+def text_completion(text: str) -> Completion:
+    return Completion(text=text, calls=(), content=[{"type": "text", "text": text}])
+
+
+def tool_call_completion(name: str, **input: Any) -> Completion:  # noqa: A002
+    call = ToolCall(id=f"tu_{name}", name=name, input=input)
+    return Completion(
+        text="",
+        calls=(call,),
+        content=[{"type": "tool_use", "id": call.id, "name": name, "input": input}],
+    )
 
 
 @dataclass
