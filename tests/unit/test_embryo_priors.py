@@ -16,6 +16,7 @@ from sse_starlette.event import ensure_bytes
 
 from mshkn.services.recipes import BASE_IMAGE, dockerfile_base_image, image_name
 from mshkn.services.starlark import execute_transform, validate_starlark
+from tests.support_embryo import LITURGY
 
 EMBRYO = Path(__file__).resolve().parents[2] / "embryo"
 
@@ -94,6 +95,18 @@ def test_hatch_script_makes_the_calls_the_spec_lists() -> None:
     }
     assert "set -euo pipefail" in script
     assert (EMBRYO / "liturgy.md").read_text().count("| ") > 20
+
+
+def test_the_liturgy_the_tiers_send_is_the_liturgy_the_repository_publishes() -> None:
+    """`LITURGY` is the script the flow and E2E tiers speak; `embryo/liturgy.md`
+    is the table a reader sees (spec §9). Nothing else in the suite would notice
+    the two drifting apart, so every turn's words are pinned here. Turn 2 is
+    split around its `{key}` placeholder, which the document writes as an
+    ellipsis."""
+    published = (EMBRYO / "liturgy.md").read_text()
+    for turn, words in LITURGY.items():
+        for part in words.split("{key}"):
+            assert part in published, (turn, part)
 
 
 def _expand(expression: str, wheel_name: str) -> str:

@@ -68,7 +68,9 @@ async def test_list_approve_reject_disable_revert_round_trip(brain_dir: Path) ->
     out, code = await _run(brain_dir, ["root", "list"], api)
     listing = json.loads(out)
     assert (
-        code == 0 and listing["door"] == {"status": "closed", "hooks": []} and listing["turn"] == 0
+        code == 0
+        and listing["door"] == {"status": "closed", "hooks": [], "hooks_ready": []}
+        and listing["turn"] == 0
     )
     assert [p["id"] for p in listing["proposals"]] == ["p-1", "p-2"] and listing["catalog"] == {}
     out, code = await _run(brain_dir, ["root", "approve", "p-1"], api)
@@ -119,6 +121,39 @@ async def test_list_state_reports_chain_heads(brain_dir: Path) -> None:
     listing = json.loads(await list_state(api, state, Brain(brain_dir)))
     assert listing["catalog"]["counter"]["chain_head"] == "ckpt-b"
     assert listing["catalog"]["counter"]["chain_length"] == 2
+
+
+async def test_list_state_separates_the_declared_hooks_from_the_ready_ones(
+    brain_dir: Path,
+) -> None:
+    """The door is fail-closed while no hook can run (`principal_for` skips a
+    hook that is not `ready`), but `door_is_open` looks only at the declared
+    names, so `list` would say `open` with nothing able to name a caller.
+    `hooks_ready` is the effective state root reads before trusting the door."""
+    from membrane.declarations import parse_verb
+    from membrane.state import CatalogEntry
+
+    open_policy = {**CLOSED, "hooks": ["verify_ssh"], "door": "open"}
+    (brain_dir / "policy.json").write_text(json.dumps(open_policy))
+    api, state = FakeMshkn(), State()
+    hook = parse_verb({**VERB, "name": "verify_ssh", "asserts": "ssh"})
+    state.catalog["verify_ssh"] = CatalogEntry(
+        verb=hook, status="building", recipe_id="r", proposal_id="p-1"
+    )
+    listing = json.loads(await list_state(api, state, Brain(brain_dir)))
+    assert listing["door"] == {"status": "open", "hooks": ["verify_ssh"], "hooks_ready": []}
+
+    state.catalog["verify_ssh"].status = "ready"
+    listing = json.loads(await list_state(api, state, Brain(brain_dir)))
+    assert listing["door"] == {
+        "status": "open",
+        "hooks": ["verify_ssh"],
+        "hooks_ready": ["verify_ssh"],
+    }
+
+    state.catalog["verify_ssh"].status = "disabled"
+    listing = json.loads(await list_state(api, state, Brain(brain_dir)))
+    assert listing["door"]["hooks_ready"] == []
 
 
 async def test_root_rejects_unknown_command_directly(brain_dir: Path) -> None:

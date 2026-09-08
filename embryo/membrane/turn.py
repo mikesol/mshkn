@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from membrane.memory import MemoryStore
     from membrane.model import Model
     from membrane.mshkn import MshknApi
-    from membrane.state import Brain, InboxItem, State
+    from membrane.state import Brain, CatalogEntry, InboxItem, State
 
 Door = Literal["api", "ingress"]
 TURN_DEADLINE = 240.0
@@ -221,14 +221,15 @@ async def say(
         ):
             continue
 
-        def make(verb_entry: Any) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
+        def make(
+            verb_entry: CatalogEntry,
+        ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
+            recipe_id = verb_entry.recipe_id
+            assert recipe_id is not None  # the loop above filtered on it
+
             async def handler(inp: dict[str, Any]) -> dict[str, Any]:
                 return await invoke(
-                    api,
-                    verb_entry.verb,
-                    inp,
-                    recipe_id=verb_entry.recipe_id,
-                    remaining=deadline - now(),
+                    api, verb_entry.verb, inp, recipe_id=recipe_id, remaining=deadline - now()
                 )
 
             return handler
@@ -271,6 +272,10 @@ async def say(
         turn=turn,
         principal=principal,
         door=door,
+        # What the principal was offered, not only what the model called: §10.7
+        # is an authorization claim about the tool list, and this is what makes
+        # it readable from the exec_log alone (§10.5).
+        offered=sorted(tools),
         tools=[_tool_summary(c) for c in result.calls],
         proposals=proposals_made,
         memory_written=write_memory,

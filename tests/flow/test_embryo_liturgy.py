@@ -150,7 +150,13 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     # the hook is in the catalog (building) with an asserts namespace, so the door may open now;
     # until the hook is ready, a public say yields anonymous (spec §6 step 1)
     assert (await embryo.root("approve", "p-2")).startswith("p-2 applied")
-    assert (await embryo.listing())["door"] == {"status": "open", "hooks": ["verify_ssh"]}
+    # the door is open and the hook is declared, but its recipe is still building,
+    # so no hook can name a caller yet: hooks_ready is what root reads for that
+    assert (await embryo.listing())["door"] == {
+        "status": "open",
+        "hooks": ["verify_ssh"],
+        "hooks_ready": [],
+    }
 
     # turn 3: the build failed; the log is in the inbox; the model re-proposes
     # with supersedes; approve
@@ -201,6 +207,9 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     embryo.script_output(hook, {"payload": json.dumps(unsigned6)}, "", code=1)
     audit, reply = await embryo.public_say(unsigned6)
     assert audit["principal"] == "anonymous" and audit["tools"] == []
+    # the audit line says what was offered, not only what was called, so §10.7
+    # is readable from the exec_log without trusting the model to stay quiet
+    assert audit["offered"] == []
 
     # turn 7: page_title, trialled first, then proposed and approved
     signed7 = {"msg": LITURGY[7], "sig": "c2ln"}
@@ -248,7 +257,11 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert all(e["status"] == "ready" for e in listing["catalog"].values())
     assert listing["catalog"]["counter"]["chain_length"] == 2
     assert listing["principals"] == ["ssh:mike"]
-    assert listing["door"]["status"] == "open"
+    assert listing["door"] == {
+        "status": "open",
+        "hooks": ["verify_ssh"],
+        "hooks_ready": ["verify_ssh"],
+    }
     # memory: root's and mike's facts are recalled from the real store; the three
     # anonymous knocks along the way (the early one, turn 5, and turn 6's) left
     # nothing (spec §9, §10.7).

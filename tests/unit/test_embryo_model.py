@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from membrane.config import Settings
-from membrane.model import MAX_TOKENS, AnthropicModel, Completion, ToolCall, build_model
+from membrane.model import MAX_TOKENS, AnthropicModel, ToolCall, build_model
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -110,8 +110,3 @@ def test_build_model_picks_the_kind(tmp_path: Path) -> None:
         )
     )
     assert isinstance(real, AnthropicModel) and real.model_id == "claude-opus-5"
-
-
-def test_completion_is_a_value() -> None:
-    c = Completion(text="t", calls=(), content=[])
-    assert c == Completion("t", (), [])

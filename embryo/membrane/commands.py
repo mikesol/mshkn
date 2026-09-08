@@ -43,11 +43,20 @@ async def list_state(api: MshknApi, state: State, brain: Brain) -> str:
             "chain_head": head,
             "chain_length": length,
         }
+    # A declared hook only names a caller once its recipe is ready: principal_for
+    # skips every other entry and the turn falls back to anonymous. `status` is
+    # what policy says, `hooks_ready` is what the door can actually do (§10.6).
+    hooks_ready = [
+        hook
+        for hook in policy.hooks
+        if (hook_entry := state.catalog.get(hook)) is not None and hook_entry.status == "ready"
+    ]
     listing = {
         "turn": state.turn,
         "door": {
             "status": "open" if door_is_open(policy) else "closed",
             "hooks": list(policy.hooks),
+            "hooks_ready": hooks_ready,
         },
         "policy": policy.to_doc(),
         "principals": sorted(state.principals),

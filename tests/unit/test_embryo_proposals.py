@@ -4,12 +4,19 @@ no approval can do (§10); losing a power is as primitive as gaining one."""
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 import pytest
-from membrane.declarations import DeclarationError, Proposal, Verb, parse_policy, parse_verb
-from membrane.invariants import door_is_open, may_invoke, may_propose, refuse_approval
-from membrane.proposals import approve, disable, propose, reject, revert
+from membrane.declarations import (
+    DeclarationError,
+    Proposal,
+    ProposalKind,
+    Verb,
+    parse_policy,
+    parse_verb,
+)
+from membrane.invariants import MUTABLE, door_is_open, may_invoke, may_propose, refuse_approval
+from membrane.proposals import WRITES, approve, disable, propose, reject, revert
 from membrane.state import Brain, CatalogEntry, State
 
 from tests.support_embryo import FakeMshkn
@@ -91,6 +98,14 @@ def test_invariants_refuse_what_they_must() -> None:
     assert "anonymous" in (refuse_approval(anon, state) or "")
     fine = propose(state, _verb_proposal(VERB))
     assert refuse_approval(fine, state) is None
+
+
+def test_every_proposal_kind_writes_exactly_one_mutable_thing() -> None:
+    """§10.3: an approval changes self.md, policy.json or the catalog and
+    nothing else. There is no proposal kind that names the membrane, the seed,
+    the invariants or the scoped key, and `approve` asserts that itself."""
+    assert set(get_args(ProposalKind)) == set(WRITES)
+    assert set(WRITES.values()) == set(MUTABLE)
 
 
 def test_policy_decides_for_the_principals_it_names_and_allow_decides_otherwise() -> None:

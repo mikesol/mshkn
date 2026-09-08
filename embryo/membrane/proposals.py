@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from membrane.declarations import DeclarationError, parse_policy, parse_proposal
-from membrane.invariants import refuse_approval
+from membrane.invariants import MUTABLE, refuse_approval
 from membrane.mshkn import MshknError
 from membrane.state import CatalogEntry, CatalogStatus, InboxItem
 from membrane.verbs import submit_recipe
@@ -15,6 +15,13 @@ if TYPE_CHECKING:
     from membrane.declarations import Proposal
     from membrane.mshkn import MshknApi
     from membrane.state import Brain, State
+
+
+# §10.3: the one mutable thing each proposal kind writes. The invariant is
+# structural — these are the only three kinds `parse_proposal` accepts, so
+# nothing can name the membrane, the seed, the invariants or the scoped key —
+# and this is the map `approve` checks itself against MUTABLE with.
+WRITES: dict[str, str] = {"verb": "catalog", "policy": "policy.json", "prompt": "self.md"}
 
 
 def _supersede_target(state: State, proposal: Proposal) -> Proposal | None:
@@ -68,6 +75,8 @@ async def approve(api: MshknApi, state: State, brain: Brain, proposal_id: str) -
     reason = refuse_approval(proposal, state)
     if reason is not None:
         return f"{proposal.id} refused: {reason}"
+    # Everything below writes exactly one of MUTABLE and nothing else (§10.3).
+    assert WRITES[proposal.kind] in MUTABLE
     if proposal.kind == "verb":
         verb = proposal.verb
         assert verb is not None

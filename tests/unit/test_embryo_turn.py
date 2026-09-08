@@ -167,7 +167,11 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
         door="ingress",
         deadline=1e9,
     )
-    assert _audit(out)["principal"] == "ssh:mike"
+    audit = _audit(out)
+    assert audit["principal"] == "ssh:mike"
+    # §10.7 is provable from the audit line alone: what was offered, not only
+    # what was called. An authenticated principal who may propose gets all three.
+    assert audit["offered"] == ["propose", "remember", "try", "verify_ssh"]
     _, messages, tools = model.calls[0]
     assert "recall:\n- who hatched me: mike" in messages[0]["content"]
     assert {t["name"] for t in tools} == {"remember", "try", "propose", "verify_ssh"}
@@ -187,7 +191,9 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
         door="ingress",
         deadline=1e9,
     )
-    assert _audit(out)["principal"] == "anonymous"
+    audit = _audit(out)
+    assert audit["principal"] == "anonymous"
+    assert audit["offered"] == []  # §10.7: anonymous is offered no reserved tool
     _, messages, tools = model.calls[0]
     # messages[0] is now history from the first turn; the current turn's
     # composed input is the last message. Assert its header so this doesn't
@@ -284,7 +290,10 @@ async def test_authenticated_without_propose_rights_gets_remember_only(tmp_path:
         door="ingress",
         deadline=1e9,
     )
-    assert _audit(out)["principal"] == "ssh:mike"
+    audit = _audit(out)
+    assert audit["principal"] == "ssh:mike"
+    # authenticated but may_propose is false: remember, and neither try nor propose
+    assert audit["offered"] == ["remember"]
     _, _, tools = model.calls[0]
     assert {t["name"] for t in tools} == {"remember"}
 

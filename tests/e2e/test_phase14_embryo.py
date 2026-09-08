@@ -198,23 +198,29 @@ async def doors(hatched: Hatched) -> AsyncIterator[Doors]:
     ):
         doors = Doors(client, public, hatched)
         yield doors
+
         # Teardown, best effort: the account is left as this module found it. The door and
         # the key go, then every checkpoint the run made — the brain chain, the counter's
         # chain, and the one each self-destructing verb computer left behind, which holds
-        # its recipe open — and then the recipes themselves. Errors are ignored: this is
-        # cleanup, and a failing test has already said what went wrong.
+        # its recipe open — and then the recipes themselves. Every step is wrapped, so one
+        # failing delete cannot abort the ones after it and leave the account dirty; a
+        # failing test has already said what went wrong.
+        async def drop(path: str) -> None:
+            with suppress(Exception):
+                await client.delete(path)
+
         recipes = {hatched.recipe_id}
         with suppress(Exception):
             listing = await doors.listing()
             recipes.update(p["recipe_id"] for p in listing["proposals"] if p["recipe_id"])
-        hatched.notes["recipes"] = sorted(recipes)
-        await client.delete(f"/ingress_rules/{hatched.rule_id}")
-        await client.delete(f"/keys/{hatched.key_id}")
-        for ckpt in (await client.get("/checkpoints")).json():
-            if ckpt["label"] in ("brain", "verb/counter") or ckpt["recipe_id"] in recipes:
-                await client.delete(f"/checkpoints/{ckpt['id']}")
+        await drop(f"/ingress_rules/{hatched.rule_id}")
+        await drop(f"/keys/{hatched.key_id}")
+        with suppress(Exception):
+            for ckpt in (await client.get("/checkpoints")).json():
+                if ckpt["label"] in ("brain", "verb/counter") or ckpt["recipe_id"] in recipes:
+                    await drop(f"/checkpoints/{ckpt['id']}")
         for recipe_id in recipes:
-            await client.delete(f"/recipes/{recipe_id}")
+            await drop(f"/recipes/{recipe_id}")
 
 
 class TestPhase14Embryo:
@@ -250,7 +256,12 @@ class TestPhase14Embryo:
             listing = await doors.wait_ready("verify_ssh")
         assert (await doors.root("approve", door_pid)).startswith(f"{door_pid} applied")
         listing = await doors.listing()
-        assert listing["door"] == {"status": "open", "hooks": ["verify_ssh"]}
+        # the hook is ready above, so the door is open *and* able to name a caller
+        assert listing["door"] == {
+            "status": "open",
+            "hooks": ["verify_ssh"],
+            "hooks_ready": ["verify_ssh"],
+        }
         print(f"T14.2 hook ready and door open in {time.monotonic() - started:.0f}s")
 
     async def test_t14_3_signed_is_mike_unsigned_is_anonymous(self, doors: Doors) -> None:
@@ -259,6 +270,9 @@ class TestPhase14Embryo:
         assert reply.startswith("You are ssh:mike.")
         audit, reply = await doors.public_say({"msg": LITURGY[4]})
         assert audit["principal"] == "anonymous" and audit["memory_written"] is False
+        # §10.7 read from outside the brain: an unsigned knock is offered no tool
+        # at all, whatever the model then chose to say
+        assert audit["offered"] == [], audit
         assert "will not act or remember" in reply
         forged = {"msg": LITURGY[4], "sig": _sign(doors.hatched.key_dir, "something else")["sig"]}
         audit, _ = await doors.public_say(forged)
