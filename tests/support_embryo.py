@@ -3,7 +3,9 @@ list-backed memory. The flow tier uses the real app instead of FakeMshkn."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +25,20 @@ def tool_call_completion(name: str, **input: Any) -> Completion:  # noqa: A002
         calls=(call,),
         content=[{"type": "tool_use", "id": call.id, "name": name, "input": input}],
     )
+
+
+def b64(obj: Any) -> str:
+    """A `say` payload: a string is used as-is, anything else is JSON first."""
+    text = obj if isinstance(obj, str) else json.dumps(obj)
+    return base64.b64encode(text.encode()).decode()
+
+
+def split_output(out: str) -> tuple[dict[str, Any], str]:
+    """A turn's whole stdout, split into its parsed audit line and the reply
+    (everything after it, proposals included)."""
+    first, _, rest = out.partition("\n")
+    assert first.startswith("audit ")
+    return dict(json.loads(first[len("audit ") :])), rest
 
 
 @dataclass
