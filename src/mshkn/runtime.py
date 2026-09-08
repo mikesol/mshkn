@@ -188,6 +188,9 @@ class Runtime:
     async def start(self) -> None:
         """Recover host state and start the reaper. Called from the app lifespan."""
         await self.allocator.initialize(self.db, self.host.blocks)
+        resumed = await self.computers.resume_teardowns()
+        if resumed:
+            logger.info("Startup: finished %d interrupted teardown(s)", resumed)
         reaped = await self.reaper.reap_dead()
         if reaped:
             logger.info("Startup: reaped %d dead VM(s)", reaped)

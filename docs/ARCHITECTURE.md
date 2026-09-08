@@ -63,7 +63,7 @@ Domain errors are mapped in one place, `src/mshkn/api/errors.py`, which handles 
 
 `mshkn.runtime.Runtime` is the composition root. `Runtime.build(config, db, host, *, http)` constructs, in dependency order: `mshkn.runtime.BackgroundTasks`, `SlotAllocator`, the HTTP client, the alert deque, `RecipeService`, `ComputerService`, `CheckpointService`, `Lifecycle`, `IngressService`, `Reaper`, and the exec `RateLimiter` (80 requests per 10 seconds per API key, checked on the exec endpoint only). The `http` client is what callbacks are delivered with; tests pass one whose transport is an in-process receiver.
 
-`Runtime.start()`: `SlotAllocator.initialize` (derive free slots and the next volume id from the database and the pool), `Reaper.reap_dead` once, refresh the active-computers gauge from the database, spawn `Reaper.run` under the task key `reaper`.
+`Runtime.start()`: `SlotAllocator.initialize` (derive free slots and the next volume id from the database and the pool), `ComputerService.resume_teardowns` (finish any teardown a previous process claimed but did not complete), `Reaper.reap_dead` once, refresh the active-computers gauge from the database, spawn `Reaper.run` under the task key `reaper`.
 
 `Runtime.close()`: cancel the reaper, drain background tasks (checkpoint uploads, callbacks, deferred drains, recipe builds) with a timeout, close the HTTP client, the SSH pool, the Caddy client, then the database.
 
@@ -97,8 +97,8 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 | Service | Owns |
 |---|---|
-| `mshkn.services.allocator.SlotAllocator` | Free slot set and next thin-volume id, both derived at start from the database and `BlockStore.max_volume_id`; `acquire`, `acquire_volume_id`, `release_slot` under one lock. |
-| `mshkn.services.computers.ComputerService` | `create`, `fork`, `destroy`, `cleanup_dead`, guest operations (`exec`, `stream`, `exec_bg`, `exec_logs`, `exec_kill`, `upload`, `download`, `metrics`), ownership checks (`get_owned`, `get_running`), the active gauge. |
+| `mshkn.services.allocator.SlotAllocator` | Free slot set and next thin-volume id, both derived at start from the database (every non-destroyed row holds its slot) and `BlockStore.max_volume_id`; `acquire`, `acquire_volume_id`, `release_slot` under one lock. `release_slot` refuses, with a warning, a slot that is not held. |
+| `mshkn.services.computers.ComputerService` | `create`, `fork`, `destroy`, `cleanup_dead`, `resume_teardowns`, guest operations (`exec`, `stream`, `exec_bg`, `exec_logs`, `exec_kill`, `upload`, `download`, `metrics`), ownership checks (`get_owned`, `get_running`), the active gauge. |
 | `mshkn.services.checkpoints.CheckpointService` | `create` (the single implementation for API, self-destruct and idle triggers), `delete`, `prune`, `merge`, `fork_or_defer`, `latest_for_label`, `source_label`. |
 | `mshkn.services.lifecycle.Lifecycle` | `run_ephemeral` (exec → optional self-destruct checkpoint → destroy → callback → drain), `drain_after_destroy`, `drain_deferred`. |
 | `mshkn.services.recipes.RecipeService` | Recipe rows and the build pipeline (`docker build` → export → thin volume → template snapshot), serialised per account and de-duplicated per template key. |
@@ -116,7 +116,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 **Process-local (rebuilt at start).** The allocator's free-slot set and next volume id; the SSH connection pool; the hypervisor's staging lock and its pid-to-socket registry; ingress rate limiters (keyed by internal rule id); the exec rate limiter; the alert deque; background tasks. A restart loses in-flight uploads and callbacks (the reaper and the next checkpoint create recover the rest).
 
-**Kernel and daemons.** Tap devices, dm-thin mappings, Firecracker processes, Caddy routes. `Runtime.start` reaps computers whose Firecracker process is gone and re-derives slots and volume ids from the database and the pool; a resource with no database row is not reclaimed, so on the test host `scripts/e2e.sh` clears whatever a previous run left behind.
+**Kernel and daemons.** Tap devices, dm-thin mappings, Firecracker processes, Caddy routes. `Runtime.start` finishes interrupted teardowns, reaps computers whose Firecracker process is gone and re-derives slots and volume ids from the database and the pool; a resource with no database row is not reclaimed, so on the test host `scripts/e2e.sh` clears whatever a previous run left behind.
 
 ## 6. Lifecycle of a computer
 
@@ -133,9 +133,11 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 **Exec.** `exec`, `stream` and `exec_bg` touch `last_exec_at`; the log, kill, upload, download and metrics calls do not. `stream` yields `(stream, line)` pairs as the SSH session produces them; the router turns them into `stdout`, `stderr` and a final `exit` event, and any failure becomes an `error` event followed by `exit 255`. `timeout_seconds` on the request (60 by default, 1 to 600) bounds the command: a process still running at the deadline is killed and its exit event is 137. The kill happens inside the guest (`timeout --preserve-status -s KILL`), because sshd ignores the SSH signal request, so that 137 arrives as an ordinary exit status; the host's own deadline, five seconds later, is the backstop, and a kill it lands reports 128 plus the signal instead. A process that ends with neither a status nor a signal reports 255, so a killed command never reads as a success.
 
-**Destroy** (`ComputerService.destroy`, timed `op="destroy"`): remove the Caddy route, kill the VM (which unlinks its API socket), remove the thin volume, tear down the tap, release the slot, evict the SSH connection, mark the row `destroyed`, refresh the gauge. Destroying an already destroyed computer is a no-op.
+**Destroy** (`ComputerService.destroy`, timed `op="destroy"`): claim the teardown, then remove the Caddy route, kill the VM (which unlinks its API socket), evict the SSH connection, remove the thin volume, tear down the tap, mark the row `destroyed`, refresh the gauge, and release the slot last. The claim is one statement, `UPDATE computers SET status = 'destroying' WHERE id = ? AND status = 'running'` (`claim_teardown`), and only the caller whose update changed the row runs the pass: a destroy that finds the computer already `destroying` or `destroyed` returns at once and leaves the work to the owner. Every step of the pass runs whatever the earlier ones did, so a claimed computer always ends `destroyed` with its slot released; the first failing step is re-raised as `HostError` afterwards, so the caller and the error metric see it. A computer that is `destroying` is still listed by its owner, counts towards the VM limit, and rejects guest operations.
 
-**Dead VM** (`Reaper.reap_dead` → `ComputerService.cleanup_dead`): when a running computer's Firecracker pid is gone, the same teardown runs, tolerant of resources that are already gone; the reaper catches a failure per computer, so one broken computer does not block the others.
+**Dead VM** (`Reaper.reap_dead` → `ComputerService.cleanup_dead`): when a running computer's Firecracker pid is gone, the same claim and the same pass run, tolerant of resources that are already gone. The reaper works from a snapshot of the running computers, so a destroy can land in between; `cleanup_dead` then loses the claim, returns `False` without touching the host, and is not counted as a reap. The reaper catches a failure per computer, so one broken computer does not block the others.
+
+**Interrupted teardown** (`ComputerService.resume_teardowns`): a row still `destroying` when the process starts belongs to a teardown the previous process claimed and did not finish. `Runtime.start` runs the pass for each such row before the reaper starts and before any request is served, which is why no claim is needed then.
 
 **Idle** (`Reaper.reap_idle`): a running computer whose `last_exec_at` (or `created_at`) is older than `idle_timeout_seconds` is checkpointed with trigger `idle` and label `auto-idle-timeout` (or its chain's label), then destroyed and its label drained.
 
@@ -175,7 +177,8 @@ Slot N gives host address `172.16.N.1`, VM address `172.16.N.2`, tap `tapN` and 
 - **Checkpoint upload and delete do not race.** Delete cancels the upload task by key before removing files.
 - **Deferred requests are claimed once.** The drain's `DELETE … RETURNING` makes two drains on one label safe.
 - **Dead VMs are reaped**, at startup and every reaper cycle, tolerant of resources that are already gone, and the reaper catches a failure per computer so one broken computer does not block the others.
-- **Known gaps** are tracked as issues: #70 (a REST destroy and the dead-VM reaper can tear down the same computer concurrently), #66 (an abandoned bring-up can leave a Firecracker that had already spawned), #67 (the socket registry is process-local).
+- **One teardown per computer.** `destroy`, `cleanup_dead` and the idle reap all go through `claim_teardown`; the loser of the race does nothing. `SlotAllocator.release_slot` refuses a slot that is not held, so even a stray second release cannot hand one slot to two VMs.
+- **Known gaps** are tracked as issues: #66 (an abandoned bring-up can leave a Firecracker that had already spawned), #67 (the socket registry is process-local).
 
 ## 12. Observability
 

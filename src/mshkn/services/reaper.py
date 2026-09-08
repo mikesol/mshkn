@@ -105,8 +105,8 @@ class Reaper:
                 "Reaping dead VM %s (PID %d gone)", computer.id, computer.firecracker_pid
             )
             try:
-                await self.computers.cleanup_dead(computer)
-                reaped += 1
+                if await self.computers.cleanup_dead(computer):
+                    reaped += 1
             except Exception:
                 logger.exception("Failed to reap VM %s", computer.id)
         return reaped

@@ -22,6 +22,7 @@ from mshkn.db.checkpoints import (
     list_prunable_checkpoints,
 )
 from mshkn.db.computers import (
+    claim_teardown,
     count_active_computers,
     count_active_computers_by_account,
     get_active_computer_for_label,
@@ -63,6 +64,7 @@ if TYPE_CHECKING:
 __all__ = [
     "cache_bare_template",
     "claim_deferred_by_label",
+    "claim_teardown",
     "clear_bare_template",
     "connect",
     "count_active_computers",

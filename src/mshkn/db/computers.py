@@ -106,6 +106,21 @@ async def update_computer_status(
     await db.commit()
 
 
+async def claim_teardown(db: aiosqlite.Connection, computer_id: str) -> bool:
+    """Move a running computer to `destroying`; True for the one caller that did it.
+
+    The teardown belongs to whoever flips the row. A destroy and the dead-VM
+    reaper racing for the same computer both call this, and only one of them
+    sees True (#70).
+    """
+    cursor = await db.execute(
+        "UPDATE computers SET status = ? WHERE id = ? AND status = ?",
+        (ComputerStatus.DESTROYING, computer_id, ComputerStatus.RUNNING),
+    )
+    await db.commit()
+    return cursor.rowcount == 1
+
+
 async def update_last_exec_at(db: aiosqlite.Connection, computer_id: str, timestamp: str) -> None:
     await db.execute("UPDATE computers SET last_exec_at = ? WHERE id = ?", (timestamp, computer_id))
     await db.commit()

@@ -61,10 +61,10 @@ async def test_reap_dead_isolates_a_failing_cleanup(
     host.hypervisor.alive.clear()  # both processes died
     original = computers.cleanup_dead
 
-    async def cleanup(computer: Computer) -> None:
+    async def cleanup(computer: Computer) -> bool:
         if computer.id == a.id:
             raise RuntimeError("stuck")
-        await original(computer)
+        return await original(computer)
 
     monkeypatch.setattr(computers, "cleanup_dead", cleanup)
 

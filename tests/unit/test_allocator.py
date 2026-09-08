@@ -101,3 +101,47 @@ async def test_initialize_derives_state_from_db_and_pool(db: aiosqlite.Connectio
     await alloc.acquire()
     await alloc.acquire()
     assert (await alloc.acquire())[0] == 4  # next after tap3
+
+
+async def test_releasing_a_slot_that_is_not_held_is_refused(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A second release of the same slot must not put it in circulation twice."""
+    alloc = SlotAllocator()
+    await alloc.acquire()  # slot 1
+    await alloc.acquire()  # slot 2
+    await alloc.release_slot(1)
+    await alloc.release_slot(1)  # a late teardown of a computer already released
+    await alloc.release_slot(9)  # never handed out
+    assert alloc.free_slots == frozenset({1})
+    assert (await alloc.acquire())[0] == 1
+    assert (await alloc.acquire())[0] == 3
+    refused = [r for r in caplog.records if "not held" in r.getMessage()]
+    assert [r.levelname for r in refused] == ["WARNING", "WARNING"]
+
+
+async def test_initialize_holds_the_slots_of_computers_still_being_torn_down(
+    db: aiosqlite.Connection,
+) -> None:
+    """A teardown the previous process did not finish still owns its tap until it is resumed."""
+    await insert_account(db, Account(id="acct-1", api_key="k", vm_limit=10, created_at="t"))
+    await insert_computer(
+        db,
+        Computer(
+            id="comp-a",
+            account_id="acct-1",
+            thin_volume_id=120,
+            tap_device="tap2",
+            vm_ip="172.16.2.2",
+            socket_path="/tmp/fc-mshkn-comp-a.socket",
+            firecracker_pid=1,
+            status=ComputerStatus.DESTROYING,
+            created_at="t",
+            last_exec_at=None,
+        ),
+    )
+    alloc = SlotAllocator()
+    await alloc.initialize(db, FakeHost().blocks)
+    assert alloc.free_slots == frozenset({1})
+    assert (await alloc.acquire())[0] == 1
+    assert (await alloc.acquire())[0] == 3

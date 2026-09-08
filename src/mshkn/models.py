@@ -8,6 +8,7 @@ from typing import Literal
 class ComputerStatus(StrEnum):
     CREATING = "creating"
     RUNNING = "running"
+    DESTROYING = "destroying"
     DESTROYED = "destroyed"
 
 

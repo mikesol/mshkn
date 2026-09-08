@@ -9,10 +9,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from mshkn.db import (
+    claim_teardown,
     count_active_computers,
     count_active_computers_by_account,
     get_computer,
     insert_computer,
+    list_all_computers,
     update_computer_status,
     update_last_exec_at,
 )
@@ -42,23 +44,46 @@ STATUS_METRICS_TIMEOUT_SECONDS = 15.0
 async def _best_effort(
     what: str, action: Awaitable[object], computer_id: str
 ) -> BaseException | None:
-    """Await one cleanup step. Never raises.
+    """Await one cleanup step. Never raises; returns what went wrong, if anything.
 
-    Ordinary exceptions are logged and swallowed. An interruption --
+    An ordinary failure is logged and returned. An interruption --
     ``CancelledError`` above all, but also ``KeyboardInterrupt`` and
-    ``SystemExit`` -- is returned instead so the caller can finish the
-    remaining steps and re-raise it afterwards. Deferring cancellation by the
-    length of a cleanup pass is much cheaper than abandoning a half-released
-    slot.
+    ``SystemExit`` -- is returned too, so the caller can finish the remaining
+    steps and re-raise it afterwards. Deferring cancellation by the length of
+    a cleanup pass is much cheaper than abandoning a half-released slot.
     """
     try:
         await action
-    except Exception:
-        logger.debug("%s during abandon failed for %s", what, computer_id, exc_info=True)
+    except Exception as exc:
+        logger.warning("%s failed for %s: %s: %s", what, computer_id, type(exc).__name__, exc)
+        return exc
     except BaseException as exc:
-        logger.debug("%s during abandon was interrupted for %s", what, computer_id)
+        logger.debug("%s was interrupted for %s", what, computer_id)
         return exc
     return None
+
+
+class _CleanupPass:
+    """Runs cleanup steps to the end, remembering the first failure and the first interruption.
+
+    Both matter separately: an interruption has to propagate once the pass
+    is over, while a failure is the caller's to report (or to tolerate).
+    """
+
+    def __init__(self, computer_id: str) -> None:
+        self.computer_id = computer_id
+        self.failure: tuple[str, Exception] | None = None
+        self.interrupted: BaseException | None = None
+
+    async def step(self, what: str, action: Awaitable[object]) -> None:
+        outcome = await _best_effort(what, action, self.computer_id)
+        if outcome is None:
+            return
+        if isinstance(outcome, Exception):
+            if self.failure is None:
+                self.failure = (what, outcome)
+        elif self.interrupted is None:
+            self.interrupted = outcome
 
 
 class ComputerService:
@@ -301,27 +326,22 @@ class ComputerService:
         what has to be cleared, and remove_route is a no-op when there is none.
         """
         logger.warning("Abandoning computer %s after a failed bring-up", computer_id)
-        interrupted: BaseException | None = None
-
-        async def step(what: str, action: Awaitable[object]) -> None:
-            nonlocal interrupted
-            stopped = await _best_effort(what, action, computer_id)
-            if stopped is not None and interrupted is None:
-                interrupted = stopped
-
-        await step("route removal", self.host.proxy.remove_route(computer_id))
+        cleanup = _CleanupPass(computer_id)
+        await cleanup.step("route removal", self.host.proxy.remove_route(computer_id))
         if vm is not None:
-            await step("kill", self.host.hypervisor.kill(vm.pid))
-            await step("evict", self.host.guest.evict(vm.vm_ip))
-        await step("volume removal", self.host.blocks.remove(volume_id=volume_id, name=volume_name))
-        await step("teardown", self.host.hypervisor.teardown_slot(slot))
-        await step("status update", self._mark_destroyed(computer_id))
+            await cleanup.step("kill", self.host.hypervisor.kill(vm.pid))
+            await cleanup.step("evict", self.host.guest.evict(vm.vm_ip))
+        await cleanup.step(
+            "volume removal", self.host.blocks.remove(volume_id=volume_id, name=volume_name)
+        )
+        await cleanup.step("teardown", self.host.hypervisor.teardown_slot(slot))
+        await cleanup.step("status update", self._mark_destroyed(computer_id))
         # The row may already have been inserted, so the gauge has to be reset
         # from the database like every other state change (spec §10).
-        await step("gauge", self.refresh_active_gauge())
-        await step("slot release", self.allocator.release_slot(slot))
-        if interrupted is not None:
-            raise interrupted
+        await cleanup.step("gauge", self.refresh_active_gauge())
+        await cleanup.step("slot release", self.allocator.release_slot(slot))
+        if cleanup.interrupted is not None:
+            raise cleanup.interrupted
 
     async def _mark_destroyed(self, computer_id: str) -> None:
         stored = await get_computer(self.db, computer_id)
@@ -331,25 +351,32 @@ class ComputerService:
     # -- destroy -------------------------------------------------------------
 
     async def destroy(self, computer_id: str) -> None:
+        """Tear a computer down. A no-op when it is already destroyed or being destroyed.
+
+        The teardown is claimed atomically in the database first (#70): a
+        destroy that arrives while the dead-VM reaper, an idle reap or another
+        destroy already owns it returns at once and leaves the work to the
+        owner, whose pass runs to the end. A step that fails does not stop the
+        pass -- nobody else will tear the computer down after the claim -- but
+        it is re-raised as ``HostError`` once the row is `destroyed` and the
+        slot released, so the caller and the error metric both see it.
+        """
         computer = await get_computer(self.db, computer_id)
         if computer is None:
             raise NotFound(f"Computer {computer_id} not found")
         if computer.status == ComputerStatus.DESTROYED:
             logger.info("Computer %s already destroyed", computer_id)
             return
+        if not await claim_teardown(self.db, computer_id):
+            logger.info("Computer %s is already being torn down", computer_id)
+            return
         async with timed("destroy"):
-            await self.host.proxy.remove_route(computer_id)
-            if computer.firecracker_pid is not None:
-                await self.host.hypervisor.kill(computer.firecracker_pid)
-            await self.host.blocks.remove(
-                volume_id=computer.thin_volume_id, name=computer.volume_name
-            )
-            await self.host.hypervisor.teardown_slot(computer.slot)
-            await self.allocator.release_slot(computer.slot)
-            if computer.vm_ip:
-                await self.host.guest.evict(computer.vm_ip)
-            await update_computer_status(self.db, computer_id, ComputerStatus.DESTROYED)
-        await self.refresh_active_gauge()
+            cleanup = await self._teardown(computer)
+            if cleanup.failure is not None:
+                what, exc = cleanup.failure
+                raise HostError(
+                    f"destroy of {computer_id}: {what} failed: {type(exc).__name__}: {exc}"
+                ) from exc
         logger.info(
             "Destroyed computer %s",
             computer_id,
@@ -361,26 +388,66 @@ class ComputerService:
             },
         )
 
-    async def cleanup_dead(self, computer: Computer) -> None:
-        """Release a VM whose Firecracker process is already gone. Every step is best-effort."""
-        await self.host.proxy.remove_route(computer.id)
-        if computer.firecracker_pid is not None:
-            # The process is gone; kill() is what releases the API socket recorded for it.
-            await self.host.hypervisor.kill(computer.firecracker_pid)
-        await self.host.blocks.remove(volume_id=computer.thin_volume_id, name=computer.volume_name)
-        try:
-            await self.host.hypervisor.teardown_slot(computer.slot)
-        except Exception:
-            logger.debug("TAP removal failed for %s (may already be gone)", computer.id)
-        await self.allocator.release_slot(computer.slot)
-        if computer.vm_ip:
-            try:
-                await self.host.guest.evict(computer.vm_ip)
-            except Exception:
-                logger.debug("SSH eviction failed for %s", computer.id)
-        await update_computer_status(self.db, computer.id, ComputerStatus.DESTROYED)
-        await self.refresh_active_gauge()
+    async def cleanup_dead(self, computer: Computer) -> bool:
+        """Release a VM whose Firecracker process is already gone.
+
+        Returns False without touching the host when the teardown is (or was)
+        someone else's: the reaper's snapshot of a running computer may
+        predate a destroy that has since claimed it (#70). Every step is
+        best-effort, because the resources of a dead VM may already be gone.
+        """
+        if not await claim_teardown(self.db, computer.id):
+            logger.info("Dead VM %s is already being torn down", computer.id)
+            return False
+        await self._teardown(computer)
         logger.info("Reaped dead VM %s", computer.id)
+        return True
+
+    async def resume_teardowns(self) -> int:
+        """Finish the teardowns a previous process claimed but did not complete.
+
+        Called once at startup, before the reaper and before any request is
+        served, so a row still `destroying` cannot belong to anyone else.
+        """
+        interrupted = [
+            c for c in await list_all_computers(self.db) if c.status == ComputerStatus.DESTROYING
+        ]
+        for computer in interrupted:
+            logger.warning("Resuming the interrupted teardown of computer %s", computer.id)
+            await self._teardown(computer)
+        return len(interrupted)
+
+    async def _teardown(self, computer: Computer) -> _CleanupPass:
+        """The one teardown pass, for a computer whose teardown the caller has claimed.
+
+        Every step runs whatever the previous ones did. The slot is released
+        last, after the tap and the volume are gone: a slot handed back while
+        its VM is still alive poisons the next create that lands on it. An
+        interruption is re-raised once the pass is over; a failure is left
+        on the returned pass for the caller to report.
+        """
+        cleanup = _CleanupPass(computer.id)
+        await cleanup.step("route removal", self.host.proxy.remove_route(computer.id))
+        if computer.firecracker_pid is not None:
+            # On a dead VM the process is gone; kill() is what releases the
+            # API socket recorded for it.
+            await cleanup.step("kill", self.host.hypervisor.kill(computer.firecracker_pid))
+        if computer.vm_ip:
+            await cleanup.step("evict", self.host.guest.evict(computer.vm_ip))
+        await cleanup.step(
+            "volume removal",
+            self.host.blocks.remove(volume_id=computer.thin_volume_id, name=computer.volume_name),
+        )
+        await cleanup.step("teardown", self.host.hypervisor.teardown_slot(computer.slot))
+        await cleanup.step(
+            "status update",
+            update_computer_status(self.db, computer.id, ComputerStatus.DESTROYED),
+        )
+        await cleanup.step("gauge", self.refresh_active_gauge())
+        await cleanup.step("slot release", self.allocator.release_slot(computer.slot))
+        if cleanup.interrupted is not None:
+            raise cleanup.interrupted
+        return cleanup
 
     # -- guest operations ----------------------------------------------------
 
