@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+from mshkn.errors import InvalidInput
+
 
 class ComputerStatus(StrEnum):
     CREATING = "creating"
@@ -59,6 +61,127 @@ class Account:
     created_at: str
 
 
+# The scope document of a scoped key (#88). Three optional fields; an absent
+# field means "none". `create_from` is "*" (any recipe on the account) or the
+# set of recipe ids the key may create from, where "bare" stands for no recipe.
+BARE = "bare"
+
+
+@dataclass(frozen=True)
+class Scopes:
+    recipes_create: bool = False
+    recipes_read: bool = False
+    create_from: Literal["*"] | tuple[str, ...] = ()
+    labels: tuple[str, ...] = ()
+
+    def may_create_from(self, recipe_id: str | None) -> bool:
+        if self.create_from == "*":
+            return recipe_id is not None
+        return (BARE if recipe_id is None else recipe_id) in self.create_from
+
+    def covers_label(self, label: str | None) -> bool:
+        """True when the label starts with one of the prefixes; no label is never covered."""
+        if not label:
+            return False
+        return any(label.startswith(prefix) for prefix in self.labels)
+
+    def to_document(self) -> dict[str, object]:
+        doc: dict[str, object] = {}
+        recipes: dict[str, bool] = {}
+        if self.recipes_create:
+            recipes["create"] = True
+        if self.recipes_read:
+            recipes["read"] = True
+        if recipes:
+            doc["recipes"] = recipes
+        if self.create_from == "*":
+            doc["computers"] = {"create_from": "*"}
+        elif self.create_from:
+            doc["computers"] = {"create_from": list(self.create_from)}
+        if self.labels:
+            doc["labels"] = list(self.labels)
+        return doc
+
+
+@dataclass(frozen=True)
+class ApiKey:
+    """A scoped key: a second credential on an account that can only do what
+    its scopes say. The secret is returned once, on creation."""
+
+    id: str
+    account_id: str
+    secret: str
+    scopes: Scopes
+    label: str | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class Principal:
+    """Who is calling: the account, and the scoped key when the bearer was one.
+
+    ``key`` is None for the account key, which is unrestricted.
+    """
+
+    account: Account
+    key: ApiKey | None = None
+
+    @property
+    def scopes(self) -> Scopes | None:
+        return None if self.key is None else self.key.scopes
+
+
+def _reject(message: str) -> InvalidInput:
+    return InvalidInput(f"Invalid scopes: {message}")
+
+
+def _section(document: dict[str, object], name: str, allowed: set[str]) -> dict[str, object]:
+    section = document.get(name, {})
+    if not isinstance(section, dict):
+        raise _reject(f"{name} must be an object")
+    unknown = sorted(set(section) - allowed)
+    if unknown:
+        raise _reject(f"unknown {name} fields {unknown}")
+    return section
+
+
+def _flag(section: dict[str, object], name: str, where: str) -> bool:
+    value = section.get(name, False)
+    if not isinstance(value, bool):
+        raise _reject(f"{where}.{name} must be a boolean")
+    return value
+
+
+def _strings(value: object, where: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise _reject(f"{where} must be a list of strings")
+    return value
+
+
+def parse_scopes(document: object) -> Scopes:
+    """The scope document as a Scopes, or InvalidInput naming what is wrong."""
+    if not isinstance(document, dict):
+        raise _reject("must be an object")
+    unknown = sorted(set(document) - {"recipes", "computers", "labels"})
+    if unknown:
+        raise _reject(f"unknown fields {unknown}")
+    recipes = _section(document, "recipes", {"create", "read"})
+    computers = _section(document, "computers", {"create_from"})
+    raw_from = computers.get("create_from", [])
+    create_from: Literal["*"] | tuple[str, ...] = (
+        "*" if raw_from == "*" else tuple(_strings(raw_from, "computers.create_from"))
+    )
+    labels = tuple(_strings(document.get("labels", []), "labels"))
+    if any(not label for label in labels):
+        raise _reject("labels must not contain an empty prefix")
+    return Scopes(
+        recipes_create=_flag(recipes, "create", "recipes"),
+        recipes_read=_flag(recipes, "read", "recipes"),
+        create_from=create_from,
+        labels=labels,
+    )
+
+
 @dataclass
 class Recipe:
     id: str
@@ -92,6 +215,7 @@ class Computer:
     last_exec_at: str | None
     source_checkpoint_id: str | None = None
     recipe_id: str | None = None
+    api_key_id: str | None = None  # the scoped key that created it; None for the account key
 
     @property
     def slot(self) -> int:

@@ -328,6 +328,7 @@ class CheckpointService:
         *,
         exclusive: ExclusiveMode | None,
         recipe_id: str | None,
+        api_key_id: str | None = None,
     ) -> tuple[Checkpoint, Computer | Deferred]:
         """Advance the chain `label` as one operation: resolve its head, admit
         the fork, and insert the computer row, all under the label's lock.
@@ -340,7 +341,12 @@ class CheckpointService:
             if head is None:
                 raise NotFound(f"No checkpoint with label '{label}'")
             outcome = await self._admit(
-                account, head, spec, recipe_id=recipe_id, exclusive=exclusive
+                account,
+                head,
+                spec,
+                recipe_id=recipe_id,
+                exclusive=exclusive,
+                api_key_id=api_key_id,
             )
         return head, outcome
 
@@ -352,16 +358,27 @@ class CheckpointService:
         *,
         recipe_id: str | None,
         exclusive: ExclusiveMode | None,
+        api_key_id: str | None = None,
     ) -> Computer | Deferred:
         """Fork a checkpoint by id. A labelled checkpoint takes its label's lock,
         so a fork by id cannot slip past a concurrent fork by label."""
         if not checkpoint.label:
             return await self._admit(
-                account, checkpoint, spec, recipe_id=recipe_id, exclusive=exclusive
+                account,
+                checkpoint,
+                spec,
+                recipe_id=recipe_id,
+                exclusive=exclusive,
+                api_key_id=api_key_id,
             )
         async with self._label_lock(account.id, checkpoint.label):
             return await self._admit(
-                account, checkpoint, spec, recipe_id=recipe_id, exclusive=exclusive
+                account,
+                checkpoint,
+                spec,
+                recipe_id=recipe_id,
+                exclusive=exclusive,
+                api_key_id=api_key_id,
             )
 
     async def _admit(
@@ -372,8 +389,10 @@ class CheckpointService:
         *,
         recipe_id: str | None,
         exclusive: ExclusiveMode | None,
+        api_key_id: str | None,
     ) -> Computer | Deferred:
-        """The active-computer check and the fork; the caller holds the label's lock."""
+        """The active-computer check and the fork; the caller holds the label's lock.
+        `api_key_id` is the scoped key forking, recorded on the new computer (#88)."""
         if exclusive is not None and checkpoint.label:
             active = await get_active_computer_for_label(self.db, account.id, checkpoint.label)
             if active is not None:
@@ -399,7 +418,9 @@ class CheckpointService:
                     datetime.now(UTC).isoformat(),
                 )
                 return Deferred(deferred_id)
-        return await self.computers.fork(account, checkpoint, recipe_id=recipe_id)
+        return await self.computers.fork(
+            account, checkpoint, recipe_id=recipe_id, api_key_id=api_key_id
+        )
 
 
 def _merge_into(parent: Path, fork_a: Path, fork_b: Path, output: Path) -> MergeResult:

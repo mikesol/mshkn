@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from mshkn.api.deps import get_runtime, require_account
+from mshkn.api import scopes
+from mshkn.api.deps import get_runtime, require_principal
 from mshkn.api.schemas import (
     CheckpointSummary,
     DeferredResponse,
@@ -26,13 +27,13 @@ from mshkn.models import ExecSpec
 from mshkn.services.checkpoints import Deferred
 
 if TYPE_CHECKING:
-    from mshkn.models import Account
+    from mshkn.models import Principal
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/checkpoints", tags=["checkpoints"])
 
-_require_account = Depends(require_account)
+_require_principal = Depends(require_principal)
 
 
 def _deferred(forked: Deferred) -> JSONResponse:
@@ -51,9 +52,11 @@ def _deferred(forked: Deferred) -> JSONResponse:
 async def fork_by_label(
     body: ForkByLabelRequest,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> ForkResponse | JSONResponse:
     """Advance a labelled chain: fork its newest checkpoint, atomically."""
+    account = principal.account
+    scopes.require_label(principal, body.label)
     rt = get_runtime(request)
     spec = ExecSpec(
         command=body.exec,
@@ -63,7 +66,12 @@ async def fork_by_label(
         meta_exec=body.meta_exec,
     )
     head, forked = await rt.checkpoints.fork_by_label(
-        account, body.label, spec, exclusive=body.exclusive, recipe_id=body.recipe_id
+        account,
+        body.label,
+        spec,
+        exclusive=body.exclusive,
+        recipe_id=body.recipe_id,
+        api_key_id=scopes.key_id(principal),
     )
     if isinstance(forked, Deferred):
         return _deferred(forked)
@@ -80,11 +88,13 @@ async def fork_checkpoint(
     checkpoint_id: str,
     request: Request,
     body: ForkRequest | None = None,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> ForkResponse | JSONResponse:
+    account = principal.account
     rt = get_runtime(request)
     body = body or ForkRequest()
     ckpt = await rt.checkpoints.get_owned(account, checkpoint_id)
+    scopes.require_checkpoint_label(principal, ckpt)
     spec = ExecSpec(
         command=body.exec,
         self_destruct=body.self_destruct,
@@ -93,7 +103,12 @@ async def fork_checkpoint(
         meta_exec=body.meta_exec,
     )
     forked = await rt.checkpoints.fork_or_defer(
-        account, ckpt, spec, recipe_id=body.recipe_id, exclusive=body.exclusive
+        account,
+        ckpt,
+        spec,
+        recipe_id=body.recipe_id,
+        exclusive=body.exclusive,
+        api_key_id=scopes.key_id(principal),
     )
     if isinstance(forked, Deferred):
         return _deferred(forked)
@@ -106,8 +121,10 @@ async def merge_checkpoints(
     parent_id: str,
     body: MergeRequest,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> MergeResponse:
+    account = principal.account
+    scopes.require_account_key(principal)
     rt = get_runtime(request)
     outcome = await rt.checkpoints.merge(account, parent_id, body.checkpoint_a, body.checkpoint_b)
     return MergeResponse(
@@ -122,8 +139,9 @@ async def merge_checkpoints(
 async def list_checkpoints(
     request: Request,
     label: str | None = None,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> list[CheckpointSummary]:
+    account = principal.account
     rt = get_runtime(request)
     return [
         CheckpointSummary(
@@ -139,7 +157,9 @@ async def list_checkpoints(
             pinned=c.pinned,
             created_at=c.created_at,
         )
-        for c in await rt.checkpoints.list(account, label=label)
+        for c in scopes.visible_checkpoints(
+            principal, await rt.checkpoints.list(account, label=label)
+        )
     ]
 
 
@@ -147,9 +167,11 @@ async def list_checkpoints(
 async def delete_checkpoint(
     checkpoint_id: str,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> DeleteResponse:
+    account = principal.account
     rt = get_runtime(request)
     ckpt = await rt.checkpoints.get_owned(account, checkpoint_id)
+    scopes.require_checkpoint_label(principal, ckpt)
     await rt.checkpoints.delete(ckpt)
     return DeleteResponse(status="deleted")

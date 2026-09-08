@@ -16,7 +16,7 @@ from urllib.parse import parse_qs
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 
-from mshkn.api.deps import get_runtime, require_account
+from mshkn.api.deps import get_runtime, require_account_key
 from mshkn.api.schemas import (
     AcceptedResponse,
     DeferredResponse,
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ingress"])
 
-_require_account = Depends(require_account)
+_require_account = Depends(require_account_key)
 
 
 def _rule_to_response(rule: IngressRule, domain: str) -> IngressRuleResponse:

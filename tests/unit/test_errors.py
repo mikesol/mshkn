@@ -8,6 +8,7 @@ from mshkn.errors import (
     BadRequest,
     ConfigError,
     Conflict,
+    Forbidden,
     HostError,
     InvalidInput,
     LimitExceeded,
@@ -106,3 +107,10 @@ async def test_transform_error_keeps_its_structured_detail() -> None:
 
 def test_detail_defaults_to_none() -> None:
     assert NotFound("x").detail is None
+
+
+async def test_forbidden_maps_to_403_with_message() -> None:
+    assert await _status(Forbidden("scope computers.create_from does not allow rcp-1")) == (
+        403,
+        {"detail": "scope computers.create_from does not allow rcp-1"},
+    )

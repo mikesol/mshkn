@@ -11,8 +11,8 @@ Dependency direction is strict: `mshkn.api` → `mshkn.services` → `mshkn.host
 A request passes through:
 
 1. The request-id middleware in `src/mshkn/app.py`: it takes `X-Request-Id` or mints one, stores it in the logging contextvar so every log line carries it, and echoes it in the response.
-2. `mshkn.api.deps.require_account`: `Authorization: Bearer <api key>` is looked up in the `accounts` table; a missing or unknown key is 401. The unauthenticated routes are the ingress trigger and the three system endpoints (`GET /health`, `GET /metrics`, `GET /alerts`).
-3. A router in `src/mshkn/api/`. Handlers resolve the runtime (`mshkn.api.deps.get_runtime`), call one service method, and shape the result with a model from `src/mshkn/api/schemas.py`. Orchestration does not live in routers.
+2. `mshkn.api.deps.require_principal`: `Authorization: Bearer <secret>` is looked up in `accounts.api_key` first and then in `api_keys.secret`, and resolves to a `mshkn.models.Principal` (the account, plus the scoped key when the bearer was one); a missing or unknown secret is 401. Routes a scoped key may never call depend on `mshkn.api.deps.require_account_key` instead and answer 403 to one. The unauthenticated routes are the ingress trigger and the three system endpoints (`GET /health`, `GET /metrics`, `GET /alerts`).
+3. A router in `src/mshkn/api/`. Handlers resolve the runtime (`mshkn.api.deps.get_runtime`), run the scope checks of `src/mshkn/api/scopes.py` (§1a), call one service method, and shape the result with a model from `src/mshkn/api/schemas.py`. Orchestration does not live in routers.
 4. A service in `src/mshkn/services/`, which talks to the host boundary and the database.
 
 Domain errors are mapped in one place, `src/mshkn/api/errors.py`, which handles `mshkn.errors.MshknError` and its subclasses:
@@ -20,6 +20,7 @@ Domain errors are mapped in one place, `src/mshkn/api/errors.py`, which handles 
 | Exception (`mshkn.errors`) | Status | Body |
 |---|---|---|
 | `NotFound` | 404 | `{"detail": <message>}` |
+| `Forbidden` | 403 | message naming the scope that stopped a scoped key |
 | `Conflict` | 409 | message |
 | `BadRequest` | 400 | message (for example exec on a computer that is not running) |
 | `InvalidInput` | 422 | the `detail` payload when the error carries one (validation lists), else the message |
@@ -57,13 +58,38 @@ Domain errors are mapped in one place, `src/mshkn/api/errors.py`, which handles 
 | `POST /ingress_rules/{rule_id}/test` | dry-run the transform against a synthetic request |
 | `GET /ingress_rules/{rule_id}/logs` | recent trigger outcomes |
 | `GET /ingress/{rule_id}`, `POST /ingress/{rule_id}`, `PUT /ingress/{rule_id}`, `PATCH /ingress/{rule_id}` | the unauthenticated trigger: parse the body, `IngressService.trigger` |
+| `POST /keys`, `GET /keys`, `DELETE /keys/{key_id}` | `KeyService.create` (the secret is returned once), `list` (never the secret), `delete`; account key only |
 | `GET /health` | subsystem checks |
 | `GET /metrics` | Prometheus exposition |
 | `GET /alerts` | the runtime's alert deque |
 
+### 1a. Tenancy: two kinds of credential
+
+An account has one unrestricted credential, `accounts.api_key`, created with `python -m mshkn accounts create`. It can also mint any number of **scoped keys** (`api_keys` table, `migrations/012_api_keys.sql`, `mshkn.services.keys.KeyService`), each carrying a scope document that says what the key may do. A scoped key exists so that a credential can live somewhere less trusted than the operator's shell (the embryo's brain VM holds one): compromise of everything that key can reach must not confer powers the account did not grant.
+
+The scope document (`mshkn.models.Scopes`, parsed by `mshkn.models.parse_scopes`, which rejects unknown fields with 422) has three optional fields; an absent field means none:
+
+```json
+{"recipes": {"create": true, "read": true}, "computers": {"create_from": "*"}, "labels": ["verb/"]}
+```
+
+| Route | Account key | Scoped key |
+|---|---|---|
+| `POST /recipes` | always | `recipes.create` |
+| `GET /recipes`, `GET /recipes/{recipe_id}` | always | `recipes.read` |
+| `DELETE /recipes/{recipe_id}` | always | never |
+| `POST /computers` | always | the `recipe_id` (or `"bare"` for none) must be allowed by `computers.create_from` (`"*"` is any recipe on the account, never bare); a `label` must start with one of `labels`. The computer records the key in `computers.api_key_id` |
+| every other `/computers/{computer_id}/…` route | always | only when `computers.api_key_id` is this key; a checkpoint `label` must start with one of `labels` |
+| `GET /checkpoints` | everything | only checkpoints whose label starts with one of `labels`; an unlabelled checkpoint is never visible |
+| `POST /checkpoints/{checkpoint_id}/fork`, `DELETE /checkpoints/{checkpoint_id}` | always | the checkpoint's label must start with one of `labels`; a fork records the key on the new computer |
+| `POST /checkpoints/fork` | always | the body's `label` must start with one of `labels`, checked before the head is resolved; the fork records the key |
+| `POST /checkpoints/{parent_id}/merge`, `/ingress_rules*`, `/keys*` | always | never |
+
+A request outside scope is a 403 raised in the router before any service runs, with a detail naming the scope. Ownership by account (404 for another account's resource) is checked first, so a scoped key learns nothing about other accounts' ids. `GET /alerts` is unauthenticated and stays so: a scoped key sees there what anyone sees. A computer the deferred drain forks on a label's behalf belongs to the account, not to any key.
+
 ## 2. Runtime and wiring
 
-`mshkn.runtime.Runtime` is the composition root. `Runtime.build(config, db, host, *, http)` constructs, in dependency order: `mshkn.runtime.BackgroundTasks`, `SlotAllocator`, the HTTP client, the alert deque, `RecipeService`, `ComputerService`, `CheckpointService`, `Lifecycle`, `IngressService`, `Reaper`, and the exec `RateLimiter` (80 requests per 10 seconds per API key, checked on the exec endpoint only). The `http` client is what callbacks are delivered with; tests pass one whose transport is an in-process receiver.
+`mshkn.runtime.Runtime` is the composition root. `Runtime.build(config, db, host, *, http)` constructs, in dependency order: `mshkn.runtime.BackgroundTasks`, `SlotAllocator`, the HTTP client, the alert deque, `RecipeService`, `ComputerService`, `CheckpointService`, `Lifecycle`, `IngressService`, `KeyService`, `Reaper`, and the exec `RateLimiter` (80 requests per 10 seconds per API key, checked on the exec endpoint only). The `http` client is what callbacks are delivered with; tests pass one whose transport is an in-process receiver.
 
 `Runtime.start()`: `SlotAllocator.initialize` (derive free slots and the next volume id from the database and the pool), `ComputerService.resume_teardowns` (finish any teardown a previous process claimed but did not complete), `Reaper.reap_dead` once, refresh the active-computers gauge from the database, spawn `Reaper.run` under the task key `reaper`.
 
@@ -100,11 +126,12 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 | Service | Owns |
 |---|---|
 | `mshkn.services.allocator.SlotAllocator` | Free slot set and next thin-volume id, both derived at start from the database (every non-destroyed row holds its slot) and `BlockStore.max_volume_id`; `acquire`, `acquire_volume_id`, `release_slot` under one lock. `release_slot` refuses, with a warning, a slot that is not held. |
-| `mshkn.services.computers.ComputerService` | `create`, `fork`, `destroy`, `cleanup_dead`, `resume_teardowns`, guest operations (`exec`, `stream`, `exec_bg`, `exec_logs`, `exec_kill`, `upload`, `download`, `metrics`), ownership checks (`get_owned`, `get_running`), the active gauge. |
+| `mshkn.services.computers.ComputerService` | `create`, `fork`, `destroy`, `cleanup_dead`, `resume_teardowns`, guest operations (`exec`, `stream`, `exec_bg`, `exec_logs`, `exec_kill`, `upload`, `download`, `metrics`), ownership checks (`get_owned`, `get_running`, `get_record`), the active gauge. |
 | `mshkn.services.checkpoints.CheckpointService` | `create` (the single implementation for API, self-destruct and idle triggers), `delete`, `prune`, `merge`, `fork_by_label` and `fork_or_defer` (admission to a labelled chain under a per-label lock), `latest_for_label`, `source_label`. |
 | `mshkn.services.lifecycle.Lifecycle` | `run_ephemeral` (exec → exec-log row → optional self-destruct checkpoint → destroy → callback → drain), `exec_log`, `expire_exec_logs`, `drain_after_destroy`, `drain_deferred`. |
 | `mshkn.services.recipes.RecipeService` | Recipe rows and the build pipeline (`docker build` → export → thin volume → template snapshot), serialised per account and de-duplicated per template key. |
 | `mshkn.services.ingress.IngressService` | Rule CRUD, `enabled_rule`, `trigger` (Starlark transform → `ForkAction`/`CreateAction` → outcome), per-rule rate limiters, trigger logs (one row per trigger, brought to its final status and the computer it ran on). |
+| `mshkn.services.keys.KeyService` | Scoped keys (§1a): `create` (mints the id and the secret), `list`, `delete`. |
 | `mshkn.services.reaper.Reaper` | `reap_dead`, `reap_idle`, prune, exec-log expiry, `check_host` (pool, root filesystem and RAM thresholds), the 60-second cycle. |
 | `mshkn.services.merge` | `three_way_merge`, a function over three directory trees that writes a fourth. |
 | `mshkn.services.callback.deliver_callback` | POST with retries and backoff; never raises. |
@@ -112,7 +139,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 ## 5. State ownership
 
-**Durable (SQLite, `src/mshkn/db/`).** One file, opened with `PRAGMA busy_timeout=5000`, `journal_mode=WAL` and `synchronous=NORMAL`. Tables: `accounts`, `computers`, `checkpoints`, `recipes`, `snapshot_templates`, `deferred_queue`, `ingress_rules`, `ingress_log`, `exec_log`, plus `_migrations` (applied migration names). `capability_cache`, from `migrations/001_initial.sql` and rebuilt by `migrations/004_capability_cache_volume_id.sql`, still exists in the schema but no code reads or writes it; `migrations/009_recipes.sql` replaced what used it without dropping the table. Migrations in `migrations/` are sequential and applied once each, in name order. Litestream replicates the file to R2. Each `db/` module holds one table's column tuple, one row mapper and its queries, ingress rules and their log sharing one; there is no ORM.
+**Durable (SQLite, `src/mshkn/db/`).** One file, opened with `PRAGMA busy_timeout=5000`, `journal_mode=WAL` and `synchronous=NORMAL`. Tables: `accounts`, `api_keys`, `computers`, `checkpoints`, `recipes`, `snapshot_templates`, `deferred_queue`, `ingress_rules`, `ingress_log`, `exec_log`, plus `_migrations` (applied migration names). `capability_cache`, from `migrations/001_initial.sql` and rebuilt by `migrations/004_capability_cache_volume_id.sql`, still exists in the schema but no code reads or writes it; `migrations/009_recipes.sql` replaced what used it without dropping the table. Migrations in `migrations/` are sequential and applied once each, in name order. Litestream replicates the file to R2. Each `db/` module holds one table's column tuple, one row mapper and its queries, ingress rules and their log sharing one; there is no ORM.
 
 **Durable (disk).** The thin pool `mshkn-pool` with base volume 0 (the export of the `mshkn-base` image, written by `python -m mshkn base-volume`), one volume per computer (`mshkn-<computer id>`), one per checkpoint (`mshkn-ckpt-<checkpoint id>`), and one per recipe base (`mshkn-recipe-<recipe id>`). Checkpoint snapshot files under `checkpoint_local_dir/<checkpoint id>/` (`vmstate`, `memory`), mirrored to R2 under `<account id>/<checkpoint id>/`, and template snapshots under `checkpoint_local_dir/templates/<key>/`.
 

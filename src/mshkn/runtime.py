@@ -25,6 +25,7 @@ from mshkn.services.allocator import SlotAllocator
 from mshkn.services.checkpoints import CheckpointService
 from mshkn.services.computers import ComputerService
 from mshkn.services.ingress import IngressService
+from mshkn.services.keys import KeyService
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.reaper import Reaper
 from mshkn.services.recipes import RecipeService
@@ -136,6 +137,7 @@ class Runtime:
     checkpoints: CheckpointService
     lifecycle: Lifecycle
     ingress: IngressService
+    keys: KeyService
     reaper: Reaper
     alerts: deque[Alert]
     http: httpx.AsyncClient
@@ -172,6 +174,7 @@ class Runtime:
             checkpoints=checkpoints,
             lifecycle=lifecycle,
             ingress=ingress,
+            keys=KeyService(db),
             reaper=reaper,
             alerts=alerts,
             http=client,

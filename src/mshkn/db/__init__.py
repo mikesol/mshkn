@@ -11,6 +11,13 @@ from typing import TYPE_CHECKING
 import aiosqlite
 
 from mshkn.db.accounts import get_account_by_id, get_account_by_key, insert_account, list_accounts
+from mshkn.db.api_keys import (
+    delete_api_key,
+    get_api_key,
+    get_api_key_by_secret,
+    insert_api_key,
+    list_api_keys_by_account,
+)
 from mshkn.db.checkpoints import (
     delete_checkpoint,
     get_checkpoint,
@@ -77,6 +84,7 @@ __all__ = [
     "count_active_computers",
     "count_active_computers_by_account",
     "count_recipe_references",
+    "delete_api_key",
     "delete_checkpoint",
     "delete_exec_logs_before",
     "delete_failed_recipes_by_hash",
@@ -85,6 +93,8 @@ __all__ = [
     "get_account_by_id",
     "get_account_by_key",
     "get_active_computer_for_label",
+    "get_api_key",
+    "get_api_key_by_secret",
     "get_bare_template",
     "get_checkpoint",
     "get_computer",
@@ -96,6 +106,7 @@ __all__ = [
     "get_recipe",
     "get_recipe_by_content_hash",
     "insert_account",
+    "insert_api_key",
     "insert_checkpoint",
     "insert_computer",
     "insert_deferred",
@@ -106,6 +117,7 @@ __all__ = [
     "list_account_ids_with_checkpoints",
     "list_accounts",
     "list_all_computers",
+    "list_api_keys_by_account",
     "list_checkpoints_by_account",
     "list_ingress_logs",
     "list_ingress_rules_by_account",

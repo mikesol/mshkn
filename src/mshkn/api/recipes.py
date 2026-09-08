@@ -7,15 +7,16 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from mshkn.api.deps import get_runtime, require_account
+from mshkn.api import scopes
+from mshkn.api.deps import get_runtime, require_principal
 from mshkn.api.schemas import CreateRecipeRequest, DeleteResponse, RecipeResponse
 
 if TYPE_CHECKING:
-    from mshkn.models import Account, Recipe
+    from mshkn.models import Principal, Recipe
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
 
-_require_account = Depends(require_account)
+_require_principal = Depends(require_principal)
 
 
 def _recipe_to_response(recipe: Recipe) -> RecipeResponse:
@@ -39,8 +40,10 @@ def _recipe_to_response(recipe: Recipe) -> RecipeResponse:
 async def create_recipe(
     request: Request,
     body: CreateRecipeRequest,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> JSONResponse:
+    account = principal.account
+    scopes.require_recipes_create(principal)
     rt = get_runtime(request)
     recipe, created = await rt.recipes.create(account, body.dockerfile)
     return JSONResponse(
@@ -53,8 +56,10 @@ async def create_recipe(
 async def get_recipe_endpoint(
     recipe_id: str,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> RecipeResponse:
+    account = principal.account
+    scopes.require_recipes_read(principal)
     rt = get_runtime(request)
     return _recipe_to_response(await rt.recipes.get(account, recipe_id))
 
@@ -62,8 +67,10 @@ async def get_recipe_endpoint(
 @router.get("", response_model=list[RecipeResponse])
 async def list_recipes(
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> list[RecipeResponse]:
+    account = principal.account
+    scopes.require_recipes_read(principal)
     rt = get_runtime(request)
     return [_recipe_to_response(r) for r in await rt.recipes.list(account)]
 
@@ -72,8 +79,10 @@ async def list_recipes(
 async def delete_recipe_endpoint(
     recipe_id: str,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> DeleteResponse:
+    account = principal.account
+    scopes.require_account_key(principal)
     rt = get_runtime(request)
     await rt.recipes.delete(account, recipe_id)
     return DeleteResponse(status="deleted")

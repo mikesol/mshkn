@@ -21,6 +21,10 @@ class NotFound(MshknError):  # noqa: N818 -- name is part of the public API cont
     """A referenced resource does not exist (or is not visible to the caller)."""
 
 
+class Forbidden(MshknError):  # noqa: N818 -- name is part of the public API contract
+    """The credential is valid but its scopes do not allow the request (#88)."""
+
+
 class Conflict(MshknError):  # noqa: N818 -- name is part of the public API contract
     """The operation is valid but the resource is in the wrong state for it."""
 

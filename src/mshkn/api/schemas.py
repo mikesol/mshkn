@@ -246,6 +246,27 @@ class IngressLogResponse(BaseModel):
     computer_id: str | None = None
 
 
+# --- keys --------------------------------------------------------------------
+
+
+class CreateKeyRequest(BaseModel):
+    scopes: dict[str, Any]
+    label: str | None = None
+
+
+class KeyResponse(BaseModel):
+    id: str
+    label: str | None = None
+    scopes: dict[str, Any]
+    created_at: str
+
+
+class KeyCreatedResponse(KeyResponse):
+    """The one response that carries the secret."""
+
+    secret: str
+
+
 # --- system ------------------------------------------------------------------
 
 

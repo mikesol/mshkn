@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from mshkn.errors import (
     BadRequest,
     Conflict,
+    Forbidden,
     HostError,
     InvalidInput,
     LimitExceeded,
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _STATUS_BY_TYPE: tuple[tuple[type[MshknError], int], ...] = (
     (NotFound, 404),
+    (Forbidden, 403),
     (Conflict, 409),
     (BadRequest, 400),
     (InvalidInput, 422),
