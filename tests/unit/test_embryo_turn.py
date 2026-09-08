@@ -8,13 +8,20 @@ from typing import TYPE_CHECKING, Any
 from membrane.declarations import parse_policy, parse_verb, render_command
 from membrane.hooks import principal_for
 from membrane.memory import Provenance
-from membrane.model import Completion, ToolCall
 from membrane.proposals import approve, propose
 from membrane.scripted import ScriptedModel
 from membrane.state import Brain, CatalogEntry, Exchange, InboxItem, State
 from membrane.turn import DOOR_CLOSED, compose_input, decode_payload, history_from, say
 
-from tests.support_embryo import FakeMshkn, ListMemory, StubModel, b64, split_output
+from tests.support_embryo import (
+    FakeMshkn,
+    ListMemory,
+    StubModel,
+    b64,
+    split_output,
+    text_completion,
+    tool_call_completion,
+)
 from tests.unit.test_embryo_declarations import VERB
 from tests.unit.test_embryo_proposals import CLOSED, HOOK
 
@@ -32,19 +39,6 @@ def _brain(tmp_path: Path, policy: dict[str, Any] = CLOSED) -> Brain:
     (tmp_path / "policy.json").write_text(json.dumps(policy))
     (tmp_path / "seed.md").write_text("SEED")
     return Brain(tmp_path)
-
-
-def _text(text: str) -> Completion:
-    return Completion(text=text, calls=(), content=[{"type": "text", "text": text}])
-
-
-def _call(name: str, **input: Any) -> Completion:  # noqa: A002
-    call = ToolCall(id="tu", name=name, input=input)
-    return Completion(
-        text="",
-        calls=(call,),
-        content=[{"type": "tool_use", "id": "tu", "name": name, "input": input}],
-    )
 
 
 def _audit(out: str) -> dict[str, Any]:
@@ -93,7 +87,7 @@ def test_history_is_the_last_ten_exchanges() -> None:
 
 async def test_root_turn_with_no_calls(tmp_path: Path) -> None:
     brain, state, api, memory = _brain(tmp_path), State(), FakeMshkn(), ListMemory()
-    model = StubModel([_text("I am an embryo.")])
+    model = StubModel([text_completion("I am an embryo.")])
     out = await say(
         brain=brain,
         state=state,
@@ -117,7 +111,7 @@ async def test_root_turn_with_no_calls(tmp_path: Path) -> None:
 async def test_system_prompt_is_seed_then_self(tmp_path: Path) -> None:
     brain = _brain(tmp_path)
     brain.write_self("I verify.")
-    model = StubModel([_text("ok")])
+    model = StubModel([text_completion("ok")])
     await say(
         brain=brain,
         state=State(),
@@ -132,7 +126,7 @@ async def test_system_prompt_is_seed_then_self(tmp_path: Path) -> None:
 
 
 async def test_closed_door_answers_one_line_and_never_calls_the_model(tmp_path: Path) -> None:
-    brain, state, model = _brain(tmp_path), State(), StubModel([_text("never")])
+    brain, state, model = _brain(tmp_path), State(), StubModel([text_completion("never")])
     out = await say(
         brain=brain,
         state=state,
@@ -162,7 +156,7 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
     payload = json.dumps({"msg": "Who am I?", "sig": "good"})
     api.outputs[render_command(hook, {"payload": payload})] = (0, "mike\n", "")
     memory.add("who hatched me: mike", Provenance("root", "api", 0))  # shares a word with the query
-    model = StubModel([_text("You are ssh:mike.")])
+    model = StubModel([text_completion("You are ssh:mike.")])
     out = await say(
         brain=brain,
         state=state,
@@ -179,7 +173,7 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
     assert {t["name"] for t in tools} == {"remember", "try", "propose", "verify_ssh"}
     assert "ssh:mike" in state.principals and memory.entries[-1][1].principal == "ssh:mike"
 
-    model = StubModel([_text("I do not know you.")])
+    model = StubModel([text_completion("I do not know you.")])
     bad = json.dumps({"msg": "Who am I?", "sig": "bad"})
     api.outputs[render_command(hook, {"payload": bad})] = (1, "", "verify failed")
     before = len(memory.entries)
@@ -196,7 +190,9 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
     assert _audit(out)["principal"] == "anonymous"
     _, messages, tools = model.calls[0]
     # messages[0] is now history from the first turn; the current turn's
-    # composed input is the last message.
+    # composed input is the last message. Assert its header so this doesn't
+    # depend on there being exactly one history exchange.
+    assert messages[-1]["content"].startswith("[turn 2 | principal anonymous | door ingress]\n")
     assert tools == [] and "recall:\n\n" in messages[-1]["content"]
     assert len(memory.entries) == before and state.window[-1].principal == "anonymous"
 
@@ -243,7 +239,9 @@ async def test_hooks_fail_closed_when_not_ready_or_malformed() -> None:
 
 async def test_propose_tool_reports_a_declaration_error_as_invalid(tmp_path: Path) -> None:
     brain, state, api, memory = _brain(tmp_path), State(), FakeMshkn(), ListMemory()
-    model = StubModel([_call("propose", title="verb with no kind"), _text("noted")])
+    model = StubModel(
+        [tool_call_completion("propose", title="verb with no kind"), text_completion("noted")]
+    )
     out = await say(
         brain=brain,
         state=state,
@@ -275,7 +273,7 @@ async def test_authenticated_without_propose_rights_gets_remember_only(tmp_path:
     )
     good = json.dumps({"msg": "hi", "sig": "good"})
     api.outputs[render_command(hook, {"payload": good})] = (0, "mike\n", "")
-    model = StubModel([_text("ok")])
+    model = StubModel([text_completion("ok")])
     out = await say(
         brain=brain,
         state=state,
@@ -314,7 +312,7 @@ async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticat
     bad = json.dumps({"msg": "hi", "sig": "bad"})
     api.outputs[render_command(hook, {"payload": bad})] = (1, "", "verify failed")
 
-    model = StubModel([_text("I do not know you.")])
+    model = StubModel([text_completion("I do not know you.")])
     out = await say(
         brain=brain,
         state=state,
@@ -333,7 +331,7 @@ async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticat
     assert len(state.inbox) == 1 and "page_title failed to build" in state.inbox[0].text
 
     # Root's next turn drains it.
-    model = StubModel([_text("Noted.")])
+    model = StubModel([text_completion("Noted.")])
     out = await say(
         brain=brain,
         state=state,
@@ -346,7 +344,9 @@ async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticat
     )
     _, messages, _ = model.calls[0]
     # messages[0] is history from the anonymous turn above; the composed
-    # input for this turn is the last message.
+    # input for this turn is the last message. Assert its header so this
+    # doesn't depend on there being exactly one history exchange.
+    assert messages[-1]["content"].startswith("[turn 2 | principal root | door api]\n")
     assert "inbox:\n- verb page_title failed to build" in messages[-1]["content"]
     assert state.inbox == []
 
@@ -356,9 +356,9 @@ async def test_tools_run_and_proposals_are_appended_in_full(tmp_path: Path) -> N
     proposal = {"kind": "verb", "title": "page_title", "rationale": "r", "verb": VERB}
     model = StubModel(
         [
-            _call("remember", text="mike hatched me"),
-            _call("propose", **proposal),
-            _text("Proposed p-1."),
+            tool_call_completion("remember", text="mike hatched me"),
+            tool_call_completion("propose", **proposal),
+            text_completion("Proposed p-1."),
         ]
     )
     out = await say(
@@ -388,7 +388,12 @@ async def test_a_ready_verb_is_a_tool_and_builds_are_polled_first(tmp_path: Path
     await approve(api, state, brain, p.id)
     verb = parse_verb(VERB)
     api.outputs[render_command(verb, {"url": "https://example.com"})] = (0, "Example Domain\n", "")
-    model = StubModel([_call("page_title", url="https://example.com"), _text("Example Domain")])
+    model = StubModel(
+        [
+            tool_call_completion("page_title", url="https://example.com"),
+            text_completion("Example Domain"),
+        ]
+    )
     out = await say(
         brain=brain,
         state=state,
