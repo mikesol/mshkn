@@ -114,3 +114,37 @@ async def test_idle_reap_preserves_the_source_label(
         assert len(chain) == 2 and {c["parent_id"] for c in chain} == {None, ckpt}
         idle = await flow.client.get("/checkpoints", params={"label": "auto-idle-timeout"})
         assert idle.json() == [], "the fork kept its source label instead of the idle one"
+
+
+async def test_prune_keeps_the_head_of_a_chain_advanced_by_self_destruct_forks(
+    flow_factory: Callable[..., AbstractAsyncContextManager[Flow]],
+) -> None:
+    """A verb chain that is not invoked while other checkpoints are made keeps its
+    head: the reaper prunes the chain's history and everything else beyond the
+    retention count, and the label still resolves to the last fork's checkpoint."""
+    async with flow_factory(checkpoint_retention_count=1) as flow:
+        host = flow.host
+        host.guest.script["sync"] = ExecResult(0, "", "")
+        host.guest.script["echo step"] = ExecResult(0, "step\n", "")
+        base = (await flow.client.post("/computers", json={})).json()["computer_id"]
+        head = (
+            await flow.client.post(f"/computers/{base}/checkpoint", json={"label": "verb"})
+        ).json()["checkpoint_id"]
+        for _ in range(3):
+            resp = await flow.client.post(
+                f"/checkpoints/{head}/fork", json={"exec": "echo step", "self_destruct": True}
+            )
+            assert resp.status_code == 200
+            head = resp.json()["created_checkpoint_id"]
+        others = [
+            (await flow.client.post(f"/computers/{base}/checkpoint", json={})).json()[
+                "checkpoint_id"
+            ]
+            for _ in range(2)
+        ]
+        await flow.runtime.reaper.cycle()
+        chain = (await flow.client.get("/checkpoints", params={"label": "verb"})).json()
+        assert chain and chain[0]["checkpoint_id"] == head
+        assert [c["id"] for c in chain] == [head], "the chain's history went, its head stayed"
+        ids = {c["id"] for c in (await flow.client.get("/checkpoints")).json()}
+        assert ids == {head, others[-1]}

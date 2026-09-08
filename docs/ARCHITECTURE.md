@@ -150,7 +150,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 **Delete** cancels the upload task first, then removes the thin volume, the local directory and the R2 prefix, then the row.
 
-**Prune** (`Reaper` cycle) keeps the newest `checkpoint_retention_count` unpinned checkpoints per account and deletes the rest. Pinned checkpoints are never pruned. Deleting a checkpoint leaves its computer's `exec_log` row alone; that row goes on its own clock (`exec_log_retention_seconds`).
+**Prune** (`Reaper` cycle, `list_prunable_checkpoints` in `src/mshkn/db/checkpoints.py`) never deletes a pinned checkpoint or the newest checkpoint of any label on the account; of the rest it keeps the newest `checkpoint_retention_count` per account and deletes everything older, oldest first. A labelled chain is therefore durable by construction: its history is pruned, its head never is, and a chain is removed by deleting its checkpoints by label. Deleting a checkpoint leaves its computer's `exec_log` row alone; that row goes on its own clock (`exec_log_retention_seconds`).
 
 **Fork or defer** (`CheckpointService.fork_or_defer`): with `exclusive` set and a labelled checkpoint, an active computer on that label means either `Conflict` (`error_on_conflict`) or a row in `deferred_queue` and a `Deferred` result (`defer_on_conflict`). Otherwise it is a plain fork.
 

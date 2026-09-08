@@ -120,19 +120,25 @@ async def delete_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> Non
 async def list_prunable_checkpoints(
     db: aiosqlite.Connection, account_id: str, keep_count: int
 ) -> list[Checkpoint]:
-    """Return unpinned checkpoints beyond the keep_count newest, oldest first.
+    """Return the checkpoints retention may delete, oldest first.
 
-    Pinned checkpoints are never returned. The keep_count newest unpinned
-    checkpoints are preserved; everything older is returned for pruning.
+    Never returned: pinned checkpoints, and for every distinct label on the
+    account the newest checkpoint carrying it, so a labelled chain is durable
+    by construction: its history is pruned, its head never is. Of the rest the
+    keep_count newest are preserved and everything older is returned.
     """
+    columns = ", ".join(COLUMNS)
     cursor = await db.execute(
-        _SELECT + " WHERE account_id = ? AND pinned = 0 ORDER BY created_at DESC",
+        "SELECT " + columns + " FROM ("
+        "SELECT " + columns + ", "
+        "ROW_NUMBER() OVER (PARTITION BY label ORDER BY created_at DESC) AS newest_of_label "
+        "FROM checkpoints WHERE account_id = ?"
+        ") WHERE pinned = 0 AND (label IS NULL OR newest_of_label > 1) "
+        "ORDER BY created_at DESC",
         (account_id,),
     )
     rows = list(await cursor.fetchall())
-    # Skip the first keep_count (newest), return the rest
-    excess = rows[keep_count:]
-    return [_row_to_checkpoint(r) for r in excess]
+    return [_row_to_checkpoint(r) for r in reversed(rows[keep_count:])]
 
 
 async def list_account_ids_with_checkpoints(db: aiosqlite.Connection) -> list[str]:

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .conftest import (
+    checkpoint_computer,
     create_computer,
     destroy_computer,
     managed_computer,
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
     import httpx
 
 MSHKN_SERVER = os.environ.get("MSHKN_SERVER")
+RETENTION = 5  # MSHKN_CHECKPOINT_RETENTION on the live host (DEPLOY.md)
 
 # ---------------------------------------------------------------------------
 # T6.1 — Orchestrator Crash Recovery
@@ -98,8 +100,10 @@ class TestT63S3Unavailable:
 class TestT64CheckpointRetention:
     """Old checkpoints should be garbage-collected per retention policy.
 
-    These tests assume MSHKN_CHECKPOINT_RETENTION is set to 5 on the server
-    for testing purposes.
+    These tests assume MSHKN_CHECKPOINT_RETENTION is set to RETENTION on the
+    server. Retention keeps pinned checkpoints and the newest checkpoint of
+    every label, so the pruning tests use unlabelled checkpoints: one label
+    per checkpoint would make each one a head that is never pruned.
     """
 
     async def _list_checkpoint_ids(self, client: httpx.AsyncClient) -> set[str]:
@@ -111,8 +115,8 @@ class TestT64CheckpointRetention:
     async def test_excess_checkpoints_pruned(self, client: httpx.AsyncClient) -> None:
         """Create more checkpoints than the retention limit; oldest should be pruned.
 
-        Cleans up existing checkpoints first, then creates 8 (retention=5),
-        waits for the reaper to prune, and verifies at most 5 remain.
+        Cleans up existing checkpoints first, then creates 8 unlabelled ones
+        (retention=5), waits for the reaper to prune, and verifies at most 5 remain.
         """
         import time
 
@@ -127,11 +131,8 @@ class TestT64CheckpointRetention:
 
         try:
             # Create 8 checkpoints
-            for i in range(8):
-                resp = await client.post(
-                    f"/computers/{computer_id}/checkpoint",
-                    json={"label": f"retention-test-{i}"},
-                )
+            for _ in range(8):
+                resp = await client.post(f"/computers/{computer_id}/checkpoint", json={})
                 resp.raise_for_status()
                 checkpoint_ids.append(resp.json()["checkpoint_id"])
                 await asyncio.sleep(0.5)
@@ -157,7 +158,7 @@ class TestT64CheckpointRetention:
     async def test_pinned_checkpoint_retained(self, client: httpx.AsyncClient) -> None:
         """Pinned checkpoints should survive retention pruning.
 
-        Creates 8 checkpoints, pins the 3rd one, waits for pruning.
+        Creates 8 unlabelled checkpoints, pins the 3rd one, waits for pruning.
         The pinned one should survive even though it's old.
         """
         import time
@@ -170,7 +171,7 @@ class TestT64CheckpointRetention:
             for i in range(8):
                 resp = await client.post(
                     f"/computers/{computer_id}/checkpoint",
-                    json={"label": f"pin-test-{i}", "pin": (i == 2)},
+                    json={"pin": (i == 2)},
                 )
                 resp.raise_for_status()
                 checkpoint_ids.append(resp.json()["checkpoint_id"])
@@ -183,8 +184,8 @@ class TestT64CheckpointRetention:
             while time.time() < deadline:
                 await asyncio.sleep(10)
                 all_ids = await self._list_checkpoint_ids(client)
-                total = len(all_ids)
-                # 5 unpinned + 1 pinned = 6 max
+                total = len(all_ids & set(checkpoint_ids))
+                # of this test's 8: 5 unpinned + 1 pinned = 6 max
                 if total <= 6:
                     assert pinned_id in all_ids, "Pinned checkpoint was deleted!"
                     return
@@ -196,6 +197,51 @@ class TestT64CheckpointRetention:
             for cid in checkpoint_ids:
                 with contextlib.suppress(Exception):
                     await client.delete(f"/checkpoints/{cid}")
+
+    async def test_chain_head_survives_pruning(self, long_client: httpx.AsyncClient) -> None:
+        """A labelled chain advanced by self-destruct forks past the retention
+        count, then pushed out of the newest RETENTION by unlabelled checkpoints,
+        keeps its head: retention keeps the newest checkpoint of every label.
+        """
+        import time
+
+        label = f"chain-head-{os.urandom(4).hex()}"
+        computer_id = await create_computer(long_client)
+        chain: list[str] = []
+        others: list[str] = []
+        try:
+            head = await checkpoint_computer(long_client, computer_id, label=label)
+            chain.append(head)
+            for _ in range(RETENTION + 1):
+                resp = await long_client.post(
+                    f"/checkpoints/{head}/fork",
+                    json={"exec": "echo step", "self_destruct": True},
+                )
+                resp.raise_for_status()
+                head = resp.json()["created_checkpoint_id"]
+                chain.append(head)
+            for _ in range(RETENTION):
+                others.append(await checkpoint_computer(long_client, computer_id))
+                await asyncio.sleep(0.5)
+
+            listed: list[dict[str, object]] = []
+            deadline = time.time() + 150
+            while time.time() < deadline:
+                await asyncio.sleep(10)
+                resp = await long_client.get("/checkpoints", params={"label": label})
+                resp.raise_for_status()
+                listed = resp.json()
+                if len(listed) < len(chain):
+                    break
+            assert len(listed) < len(chain), "the reaper never pruned the chain's history"
+            assert listed and listed[0]["checkpoint_id"] == head, (
+                "the chain's head was pruned with its history"
+            )
+        finally:
+            await destroy_computer(long_client, computer_id)
+            for cid in chain + others:
+                with contextlib.suppress(Exception):
+                    await long_client.delete(f"/checkpoints/{cid}")
 
 
 # ---------------------------------------------------------------------------
