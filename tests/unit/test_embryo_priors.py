@@ -96,6 +96,39 @@ def test_hatch_script_makes_the_calls_the_spec_lists() -> None:
     assert (EMBRYO / "liturgy.md").read_text().count("| ") > 20
 
 
+def _expand(expression: str, wheel_name: str) -> str:
+    """What the shell makes of a path expression from hatch.sh, with WHEEL_NAME set."""
+    result = subprocess.run(
+        ["bash", "-c", f'WHEEL_NAME={shlex.quote(wheel_name)}; printf "%s" "{expression}"'],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return result.stdout
+
+
+def test_the_wheel_is_uploaded_and_installed_under_its_own_pep427_name() -> None:
+    """pip reads a wheel's distribution, version and compatibility tags off its
+    filename (PEP 427) and refuses one that carries none, so uploading the build
+    as a bare `membrane.whl` aborts every hatch at `pip install` with
+    "membrane.whl is not a valid wheel filename" (spec §8). The name must be the
+    one `uv build` produced, and the upload and the install must name one file."""
+    script = (EMBRYO / "hatch.sh").read_text()
+    assert "membrane.whl" not in script, "the wheel must keep its own filename"
+    assert re.search(r'WHEEL_NAME="\$\(basename "\$WHEEL"\)"', script) is not None, script
+
+    upload = re.search(r'^upload "\$CID" "([^"]+)" "\$WHEEL"$', script, re.M)
+    assert upload is not None, "hatch.sh must upload $WHEEL to a quoted path"
+    installed = re.search(r"pip install --no-deps -q (\S+)", script)
+    assert installed is not None, "hatch.sh must pip install the uploaded wheel"
+
+    built = "membrane-0.1.0-py3-none-any.whl"  # what `uv build --package membrane` writes
+    uploaded_path = _expand(upload.group(1), built)
+    installed_path = _expand(installed.group(1), built)
+    assert uploaded_path == installed_path, (uploaded_path, installed_path)
+    assert Path(uploaded_path).name == built
+
+
 def test_run_parses_the_exit_code_from_a_real_crlf_sse_stream() -> None:
     """mshkn's exec endpoint answers over server-sent events separated by CRLF
     (sse_starlette's default), not bare LF; the exit-code parse in hatch.sh's

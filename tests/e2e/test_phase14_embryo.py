@@ -96,6 +96,8 @@ class Doors:
         self, client: httpx.AsyncClient, public: httpx.AsyncClient, hatched: Hatched
     ) -> None:
         self.client, self.public, self.hatched = client, public, hatched
+        # every principal the public door minted, in order, for §10.1 in T14.7
+        self.public_principals: list[str] = []
 
     async def root_say(self, text: str) -> tuple[dict[str, Any], str]:
         return split_output(await _fork_brain(self.client, f"membrane root say {b64(text)}"))
@@ -133,7 +135,9 @@ class Doors:
             assert resp.status_code == 200, resp.text
             body = resp.json()
             assert body["exec_exit_code"] == 0, body
-            return split_output(str(body["exec_stdout"]))
+            audit, reply = split_output(str(body["exec_stdout"]))
+            self.public_principals.append(str(audit["principal"]))
+            return audit, reply
 
     async def wait_ready(self, verb: str) -> dict[str, Any]:
         deadline = time.monotonic() + BUILD_TIMEOUT
@@ -161,6 +165,11 @@ def hatched(tmp_path_factory: pytest.TempPathFactory) -> Hatched:
         "MSHKN_API_KEY": API_KEY,
         "BRAIN_API_URL": BRAIN_API_URL,
         "MEMBRANE_MODEL": "scripted",
+        # Emptied, not inherited: hatch.sh writes whichever of these it is given into the
+        # brain's .env, and the scripted model must not be handed a developer's model keys
+        # (its `[ -n ... ]` guards skip an empty value).
+        "ANTHROPIC_API_KEY": "",
+        "OPENAI_API_KEY": "",
     }
     started = time.monotonic()
     proc = subprocess.run(
@@ -297,8 +306,12 @@ class TestPhase14Embryo:
         assert set(listing["catalog"]) == {"verify_ssh", "page_title", "counter"}
         assert all(e["status"] == "ready" for e in listing["catalog"].values())
         assert listing["catalog"]["counter"]["chain_length"] == 2
-        assert listing["principals"] == ["ssh:mike"] and "root" not in listing["principals"]
+        assert listing["principals"] == ["ssh:mike"]
         assert listing["door"]["status"] == "open"
+        # §10.1: public input never becomes root. The liturgy knocks nine times on the
+        # public door, and no knock was ever granted root, whatever it claimed to be.
+        assert len(doors.public_principals) == 9, doors.public_principals
+        assert set(doors.public_principals) == {"ssh:mike", "anonymous"}, doors.public_principals
         # no undeclared capability: every recipe the run added to the account is the brain's
         # or a proposal's
         recipes = {r["recipe_id"] for r in (await doors.client.get("/recipes")).json()}
@@ -312,7 +325,7 @@ class TestPhase14Embryo:
         # turn's computer carries its audit line before its reply
         logs = (await doors.client.get(f"/ingress_rules/{doors.hatched.rule_id}/logs")).json()
         completed = [e for e in logs if e["status"] == "completed" and e["computer_id"]]
-        assert len(completed) >= 8, logs
+        assert len(completed) == 9, logs
         log = await doors.client.get(f"/computers/{completed[0]['computer_id']}/exec_log")
         assert log.status_code == 200, log.text
         assert log.json()["stdout"].startswith("audit "), log.json()["stdout"][:200]
