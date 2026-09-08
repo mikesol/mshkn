@@ -4,7 +4,7 @@ plain JSON tools, or the scripted model that plays the liturgy."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from membrane.config import Settings
@@ -64,8 +64,7 @@ def build_model(settings: Settings) -> Model:
     if settings.model == "scripted":
         from membrane.scripted import ScriptedModel
 
-        # ScriptedModel is a stub until Task 12; it will structurally satisfy Model then.
-        return cast("Model", ScriptedModel())
+        return ScriptedModel()
     import anthropic
 
     return AnthropicModel(
