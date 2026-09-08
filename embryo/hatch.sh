@@ -52,6 +52,7 @@ run() { # computer_id command  (exec over SSE; fails unless the exit event is 0)
 echo "building the membrane wheel" >&2
 (cd "$HERE/.." && uv build --package membrane --out-dir "$TMP/dist" >&2)
 WHEEL="$(ls "$TMP"/dist/membrane-*.whl)"
+WHEEL_NAME="$(basename "$WHEEL")"
 
 echo "minting the brain's scoped key" >&2
 KEY_JSON="$(api POST /keys "$(jq -cn --argjson s "$SCOPES" '{scopes: $s, label: "brain"}')")"
@@ -75,7 +76,8 @@ done
 
 echo "creating the brain" >&2
 CID="$(api POST /computers "$(jq -cn --arg r "$RECIPE_ID" '{recipe_id: $r, needs: {ram: "512MB", cores: 2}}')" | jq -r .computer_id)"
-upload "$CID" /tmp/membrane.whl "$WHEEL"
+# pip reads the version and the tags off the filename (PEP 427), so the wheel keeps its name.
+upload "$CID" "/tmp/$WHEEL_NAME" "$WHEEL"
 upload "$CID" /brain/seed.md "$HERE/seed.md"
 upload "$CID" /brain/policy.json "$HERE/policy.json"
 {
@@ -87,7 +89,7 @@ upload "$CID" /brain/policy.json "$HERE/policy.json"
   true
 } > "$TMP/env"
 upload "$CID" /brain/.env "$TMP/env"
-run "$CID" "/brain/venv/bin/pip install --no-deps -q /tmp/membrane.whl && ln -sf /brain/venv/bin/membrane /usr/local/bin/membrane && chmod 600 /brain/.env && : > /brain/self.md && membrane root list > /dev/null"
+run "$CID" "/brain/venv/bin/pip install --no-deps -q /tmp/$WHEEL_NAME && ln -sf /brain/venv/bin/membrane /usr/local/bin/membrane && chmod 600 /brain/.env && : > /brain/self.md && membrane root list > /dev/null"
 
 echo "checkpointing as brain" >&2
 CKPT_ID="$(api POST "/computers/$CID/checkpoint" '{"label": "brain"}' | jq -r .checkpoint_id)"
