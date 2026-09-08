@@ -18,7 +18,7 @@ from mshkn.db import (
     set_exec_log_checkpoint,
 )
 from mshkn.errors import NotFound
-from mshkn.models import CheckpointTrigger, EphemeralResult, ExecLog, ExecSpec
+from mshkn.models import CheckpointTrigger, Computer, EphemeralResult, ExecLog, ExecSpec
 from mshkn.services.callback import deliver_callback
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     import httpx
 
     from mshkn.host import ExecResult
-    from mshkn.models import Account, Checkpoint, Computer
+    from mshkn.models import Account, Checkpoint
     from mshkn.runtime import BackgroundTasks
     from mshkn.services.checkpoints import CheckpointService
     from mshkn.services.computers import ComputerService
@@ -178,7 +178,9 @@ class Lifecycle:
         """Process every queued fork for a label on one new computer.
 
         The claim is a single DELETE … RETURNING, so a destroy and an idle reap
-        draining the same label at once cannot both fork. Each request's exec
+        draining the same label at once cannot both fork; the fork itself goes
+        through `CheckpointService.fork_by_label`, so the head it advances is
+        the one every other fork on the label sees. Each request's exec
         is written to /tmp/exec/N.txt; the command run is the last meta_exec if
         any, else the execs joined by newlines; self_destruct if any asked;
         callback_url is the last one given.
@@ -187,36 +189,17 @@ class Lifecycle:
         if not items:
             return
         try:
-            latest = await self.checkpoints.latest_for_label(account, label)
-            if latest is None:
-                logger.warning("No checkpoints found with label %s for deferred processing", label)
-                return
             payloads = [json.loads(d.request_payload) for d in items]
             recipe_id = next(
                 (p["recipe_id"] for p in reversed(payloads) if p.get("recipe_id")), None
             )
-            computer = await self.computers.fork(
-                account, latest, recipe_id=recipe_id or latest.recipe_id
-            )
             execs = [p.get("exec") or "" for p in payloads]
-            writes = ["mkdir -p /tmp/exec"]
-            for i, cmd in enumerate(execs):
-                escaped = cmd.replace("'", "'\\''")
-                writes.append(f"printf '%s' '{escaped}' > /tmp/exec/{i}.txt")
-            await self.computers.exec(computer, " && ".join(writes))
             meta_exec = next(
                 (p["meta_exec"] for p in reversed(payloads) if p.get("meta_exec")), None
             )
             command = meta_exec or "\n".join(c for c in execs if c)
-            if not command:
-                logger.info(
-                    "Deferred batch for %s had no command; computer %s left running",
-                    label,
-                    computer.id,
-                )
-                return
             spec = ExecSpec(
-                command=command,
+                command=command or None,
                 self_destruct=any(p.get("self_destruct") for p in payloads),
                 callback_url=next(
                     (p["callback_url"] for p in reversed(payloads) if p.get("callback_url")), None
@@ -224,6 +207,27 @@ class Lifecycle:
                 label=label,
                 meta_exec=meta_exec,
             )
+            try:
+                latest, forked = await self.checkpoints.fork_by_label(
+                    account, label, spec, exclusive=None, recipe_id=recipe_id
+                )
+            except NotFound:
+                logger.warning("No checkpoints found with label %s for deferred processing", label)
+                return
+            assert isinstance(forked, Computer)  # exclusive=None never defers
+            computer = forked
+            writes = ["mkdir -p /tmp/exec"]
+            for i, cmd in enumerate(execs):
+                escaped = cmd.replace("'", "'\\''")
+                writes.append(f"printf '%s' '{escaped}' > /tmp/exec/{i}.txt")
+            await self.computers.exec(computer, " && ".join(writes))
+            if not command:
+                logger.info(
+                    "Deferred batch for %s had no command; computer %s left running",
+                    label,
+                    computer.id,
+                )
+                return
             outcome = await self.run_ephemeral(account, computer, spec, source_checkpoint=latest)
             logger.info(
                 "Processed %d deferred request(s) for label %s -> computer %s (exit=%s)",

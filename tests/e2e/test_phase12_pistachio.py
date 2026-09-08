@@ -1,12 +1,14 @@
 """E2E tests for pistachio compute model primitives.
 
 Tests exec-on-create (#31), self-destruct (#32), callback URL (#33),
-label lookup (#29), and exclusive restore (#30).
+label lookup (#29), exclusive restore (#30), and fork by label (#89, T12.1).
 """
 
 from __future__ import annotations
 
 import asyncio
+import uuid
+from typing import Any
 
 import httpx  # noqa: TC002
 import pytest
@@ -568,3 +570,100 @@ async def test_exec_log_outlives_the_self_destructed_computer(
         chain = (await long_client.get("/checkpoints", params={"label": "test-exec-log"})).json()
         for c in chain:
             await delete_checkpoint(long_client, c["id"])
+
+
+# ---------------------------------------------------------------------------
+# T12.1 — Fork by label advances a chain atomically
+# ---------------------------------------------------------------------------
+
+
+async def _chain(client: httpx.AsyncClient, label: str) -> list[dict[str, Any]]:
+    resp = await client.get("/checkpoints", params={"label": label})
+    resp.raise_for_status()
+    chain: list[dict[str, Any]] = resp.json()
+    return chain
+
+
+async def _wait_for_chain_length(client: httpx.AsyncClient, label: str, n: int) -> None:
+    for _ in range(120):
+        if len(await _chain(client, label)) >= n:
+            return
+        await asyncio.sleep(0.5)
+    raise AssertionError(f"chain {label!r} did not reach {n} checkpoints")
+
+
+async def _delete_chain(client: httpx.AsyncClient, label: str) -> None:
+    for c in await _chain(client, label):
+        await delete_checkpoint(client, c["id"])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_forks_by_label_with_error_on_conflict_advance_the_chain_once(
+    long_client: httpx.AsyncClient,
+) -> None:
+    """Two POST /checkpoints/fork {label, exclusive: error_on_conflict} at once:
+    one 200, one 409, and exactly one new head whose parent is the old head."""
+    label = f"t12-error-{uuid.uuid4().hex[:8]}"
+    comp_id = await create_computer(long_client)
+    head = await checkpoint_computer(long_client, comp_id, label=label)
+    await destroy_computer(long_client, comp_id)
+    body = {
+        "label": label,
+        "exclusive": "error_on_conflict",
+        "exec": "echo turn",
+        "self_destruct": True,
+    }
+    try:
+        first, second = await asyncio.gather(
+            long_client.post("/checkpoints/fork", json=body),
+            long_client.post("/checkpoints/fork", json=body),
+        )
+        assert sorted([first.status_code, second.status_code]) == [200, 409], (
+            first.text,
+            second.text,
+        )
+        ok = first if first.status_code == 200 else second
+        assert ok.json()["checkpoint_id"] == head
+        assert "turn" in ok.json()["exec_stdout"]
+        chain = await _chain(long_client, label)
+        assert [c["id"] for c in chain[1:]] == [head], "exactly one new head"
+        assert chain[0]["parent_id"] == head
+        assert chain[0]["id"] == ok.json()["created_checkpoint_id"]
+    finally:
+        await _delete_chain(long_client, label)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_forks_by_label_with_defer_on_conflict_run_in_order(
+    long_client: httpx.AsyncClient,
+) -> None:
+    """Two POST /checkpoints/fork {label, exclusive: defer_on_conflict} at once:
+    one 200, one 202, and after the drain two new checkpoints in order."""
+    label = f"t12-defer-{uuid.uuid4().hex[:8]}"
+    comp_id = await create_computer(long_client)
+    head = await checkpoint_computer(long_client, comp_id, label=label)
+    await destroy_computer(long_client, comp_id)
+    body = {
+        "label": label,
+        "exclusive": "defer_on_conflict",
+        "exec": "echo turn",
+        "self_destruct": True,
+    }
+    try:
+        first, second = await asyncio.gather(
+            long_client.post("/checkpoints/fork", json=body),
+            long_client.post("/checkpoints/fork", json=body),
+        )
+        assert sorted([first.status_code, second.status_code]) == [200, 202], (
+            first.text,
+            second.text,
+        )
+        queued = first if first.status_code == 202 else second
+        assert queued.json()["status"] == "queued"
+        await _wait_for_chain_length(long_client, label, 3)
+        newest, middle, oldest = await _chain(long_client, label)
+        assert oldest["id"] == head
+        assert middle["parent_id"] == head
+        assert newest["parent_id"] == middle["id"]
+    finally:
+        await _delete_chain(long_client, label)

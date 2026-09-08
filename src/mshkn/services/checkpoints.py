@@ -1,4 +1,5 @@
-"""Checkpoints: the one create implementation, delete/prune, merge, exclusive fork (spec §6.3)."""
+"""Checkpoints: the one create implementation, delete/prune, merge, and the
+locked admission to a labelled chain: fork by label and exclusive fork (spec §6.3)."""
 
 from __future__ import annotations
 
@@ -80,6 +81,14 @@ class CheckpointService:
         self.allocator = allocator
         self.computers = computers
         self.tasks = tasks
+        # Admission to a labelled chain is serialised per (account, label): head
+        # resolution, the active-computer check and the computer insert happen
+        # under one lock, so two forks cannot both pass the check before either
+        # has a row, and a fork by label cannot read a head that a concurrent
+        # fork is about to replace. Process-local is correct: the server is one
+        # asyncio process (the socket registry in §5 is process-local for the
+        # same reason). The exec runs outside the lock.
+        self._label_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     @staticmethod
     def upload_task_key(checkpoint_id: str) -> str:
@@ -284,6 +293,33 @@ class CheckpointService:
 
     # -- exclusive fork ------------------------------------------------------
 
+    def _label_lock(self, account_id: str, label: str) -> asyncio.Lock:
+        return self._label_locks.setdefault((account_id, label), asyncio.Lock())
+
+    async def fork_by_label(
+        self,
+        account: Account,
+        label: str,
+        spec: ExecSpec,
+        *,
+        exclusive: ExclusiveMode | None,
+        recipe_id: str | None,
+    ) -> tuple[Checkpoint, Computer | Deferred]:
+        """Advance the chain `label` as one operation: resolve its head, admit
+        the fork, and insert the computer row, all under the label's lock.
+
+        Returns the head that was forked (or that the deferral was queued
+        against) with the outcome. NotFound when no checkpoint carries the label.
+        """
+        async with self._label_lock(account.id, label):
+            head = await self.latest_for_label(account, label)
+            if head is None:
+                raise NotFound(f"No checkpoint with label '{label}'")
+            outcome = await self._admit(
+                account, head, spec, recipe_id=recipe_id, exclusive=exclusive
+            )
+        return head, outcome
+
     async def fork_or_defer(
         self,
         account: Account,
@@ -293,6 +329,27 @@ class CheckpointService:
         recipe_id: str | None,
         exclusive: ExclusiveMode | None,
     ) -> Computer | Deferred:
+        """Fork a checkpoint by id. A labelled checkpoint takes its label's lock,
+        so a fork by id cannot slip past a concurrent fork by label."""
+        if not checkpoint.label:
+            return await self._admit(
+                account, checkpoint, spec, recipe_id=recipe_id, exclusive=exclusive
+            )
+        async with self._label_lock(account.id, checkpoint.label):
+            return await self._admit(
+                account, checkpoint, spec, recipe_id=recipe_id, exclusive=exclusive
+            )
+
+    async def _admit(
+        self,
+        account: Account,
+        checkpoint: Checkpoint,
+        spec: ExecSpec,
+        *,
+        recipe_id: str | None,
+        exclusive: ExclusiveMode | None,
+    ) -> Computer | Deferred:
+        """The active-computer check and the fork; the caller holds the label's lock."""
         if exclusive is not None and checkpoint.label:
             active = await get_active_computer_for_label(self.db, account.id, checkpoint.label)
             if active is not None:

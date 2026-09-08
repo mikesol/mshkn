@@ -1,5 +1,5 @@
-"""Checkpoint endpoints: fork (with the exclusive-restore deferral), merge,
-list and delete. The work itself lives in mshkn.services.checkpoints."""
+"""Checkpoint endpoints: fork by id or by label (with the exclusive-restore
+deferral), merge, list and delete. The work itself lives in mshkn.services.checkpoints."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from mshkn.api.schemas import (
     CheckpointSummary,
     DeferredResponse,
     DeleteResponse,
+    ForkByLabelRequest,
     ForkRequest,
     ForkResponse,
     MergeConflict,
@@ -32,6 +33,42 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/checkpoints", tags=["checkpoints"])
 
 _require_account = Depends(require_account)
+
+
+def _deferred(forked: Deferred) -> JSONResponse:
+    return JSONResponse(
+        status_code=202,
+        content=DeferredResponse(deferred_id=forked.deferred_id, status="queued").model_dump(),
+    )
+
+
+# Declared before /{checkpoint_id}/fork so "fork" is not read as a checkpoint id.
+@router.post(
+    "/fork",
+    response_model=ForkResponse,
+    responses={202: {"model": DeferredResponse}},
+)
+async def fork_by_label(
+    body: ForkByLabelRequest,
+    request: Request,
+    account: Account = _require_account,
+) -> ForkResponse | JSONResponse:
+    """Advance a labelled chain: fork its newest checkpoint, atomically."""
+    rt = get_runtime(request)
+    spec = ExecSpec(
+        command=body.exec,
+        self_destruct=body.self_destruct,
+        callback_url=body.callback_url,
+        label=None,
+        meta_exec=body.meta_exec,
+    )
+    head, forked = await rt.checkpoints.fork_by_label(
+        account, body.label, spec, exclusive=body.exclusive, recipe_id=body.recipe_id
+    )
+    if isinstance(forked, Deferred):
+        return _deferred(forked)
+    outcome = await rt.lifecycle.run_ephemeral(account, forked, spec, source_checkpoint=head)
+    return fork_response(forked, head.id, outcome)
 
 
 @router.post(
@@ -59,10 +96,7 @@ async def fork_checkpoint(
         account, ckpt, spec, recipe_id=body.recipe_id, exclusive=body.exclusive
     )
     if isinstance(forked, Deferred):
-        return JSONResponse(
-            status_code=202,
-            content=DeferredResponse(deferred_id=forked.deferred_id, status="queued").model_dump(),
-        )
+        return _deferred(forked)
     outcome = await rt.lifecycle.run_ephemeral(account, forked, spec, source_checkpoint=ckpt)
     return fork_response(forked, ckpt.id, outcome)
 

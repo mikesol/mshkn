@@ -352,14 +352,6 @@ class IngressService:
     async def execute(self, account: Account, action: dict[str, Any]) -> IngressResult:
         if action["action"] == "fork":
             fork = ForkAction.model_validate(action)
-            if fork.checkpoint_id is not None:
-                checkpoint = await self.checkpoints.get_owned(account, fork.checkpoint_id)
-            else:
-                assert fork.label is not None
-                latest = await self.checkpoints.latest_for_label(account, fork.label)
-                if latest is None:
-                    raise NotFound(f"No checkpoint with label '{fork.label}'")
-                checkpoint = latest
             spec = ExecSpec(
                 command=fork.exec,
                 self_destruct=fork.self_destruct,
@@ -367,9 +359,21 @@ class IngressService:
                 label=None,
                 meta_exec=fork.meta_exec,
             )
-            forked = await self.checkpoints.fork_or_defer(
-                account, checkpoint, spec, recipe_id=checkpoint.recipe_id, exclusive=fork.exclusive
-            )
+            forked: Computer | Deferred
+            if fork.checkpoint_id is not None:
+                checkpoint = await self.checkpoints.get_owned(account, fork.checkpoint_id)
+                forked = await self.checkpoints.fork_or_defer(
+                    account,
+                    checkpoint,
+                    spec,
+                    recipe_id=checkpoint.recipe_id,
+                    exclusive=fork.exclusive,
+                )
+            else:
+                assert fork.label is not None
+                checkpoint, forked = await self.checkpoints.fork_by_label(
+                    account, fork.label, spec, exclusive=fork.exclusive, recipe_id=None
+                )
             if isinstance(forked, Deferred):
                 return forked
             outcome = await self.lifecycle.run_ephemeral(

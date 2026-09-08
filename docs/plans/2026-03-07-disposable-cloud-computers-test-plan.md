@@ -689,6 +689,20 @@ The design doc now promises structured logging, Prometheus metrics, Grafana dash
 
 ---
 
+## Phase 12: "Advance the Head or Don't" (Labelled Chains)
+
+The brain chain and every verb chain in the embryo are labelled checkpoint chains advanced by `POST /checkpoints/fork` with `label` in the body. If "advance the head of X" is not one operation, two callers arriving together either fork the same head twice or one forks a head the other has already replaced, and the chain silently diverges. `tests/e2e/test_phase12_pistachio.py` holds this phase alongside the compute-model primitives it builds on (exec on create and fork, self-destruct, callbacks, label lookup, exclusive restore, the deferred batch, the exec log).
+
+### T12.1 — Fork by Label Advances a Chain Atomically
+
+- Checkpoint a computer with a label and destroy the computer, so the chain has one head and no active computer.
+- Send two `POST /checkpoints/fork {label, exclusive: "error_on_conflict", exec, self_destruct: true}` at the same time. One is 200, one is 409. Afterwards the label has exactly one new head, and its `parent_id` is the old head.
+- Repeat with `exclusive: "defer_on_conflict"` on a fresh label: one 200, one 202 `queued`. Once the drain has run, the chain has two new checkpoints in order: the first's parent is the old head, the second's parent is the first.
+- `POST /checkpoints/fork` with a label nobody has is 404, as is another account's label (pinned in the flow tier).
+- **The flow tier pins the same scenario over the fake host (`tests/flow/test_exclusive.py`); this is the proof that the lock holds on a real host with real fork latency.**
+
+---
+
 ## Phase 13: "Can It Take a Punch?" (Ingress Mapping)
 
 The ingress mapping layer lets external webhooks trigger disposable computers via user-defined Starlark transformation rules. If this layer is fragile, every integration built on it is fragile. So we test the full pipeline: rule CRUD, Starlark execution, and actual VM creation through the ingress endpoint.

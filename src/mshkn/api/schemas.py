@@ -113,6 +113,10 @@ class ForkRequest(BaseModel):
     meta_exec: str | None = None
 
 
+class ForkByLabelRequest(ForkRequest):
+    label: str
+
+
 class ForkResponse(BaseModel):
     computer_id: str
     checkpoint_id: str
