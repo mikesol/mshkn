@@ -271,15 +271,16 @@ Recorded so the next reviewer does not raise them again.
 - **A separate control-plane service, secret broker and audit log.** mshkn is the control plane; #88 and #89 make that literally true; `exec_log` is the audit sink; #91 is the broker.
 - **Separate conversational state per principal.** Later.
 
-## 15. Checks at plan time
+## 15. Facts checked before the plan
 
-Facts this design leans on that were read from the code or need one experiment:
+Checked on 2026-09-08 against the code, the live host and a scratch venv (`mem0ai` 2.0.20, `anthropic` 1.4.0, `openai` 3.8.0). The plan may rely on these without re-deriving them.
 
-- A fork's exec runs with `ComputerService.exec`'s 300 s default and ingress cannot set it. The membrane's deadline is 240 s.
-- Sandboxed Starlark has `repr` and no `base64` or `json`; the payload is base64 by the sender.
-- Sync ingress returns the fork body including `exec_stdout`.
-- `exclusive` on a fork takes `error_on_conflict` or `defer_on_conflict`; the brain uses the first, verb chains the second.
-- A VM reaching `api.mshkn.dev` on its own host through NAT is untested. One curl from a VM settles it before the plan is written.
-- The `exec_log` keeps 8 KiB head and tail; a full proposal in a reply may exceed that. Audit lines print first; raise the cap or split the record if the tail loses proposals.
-- mem0's on-disk store configuration and whether it accepts a custom embedder; how provenance is attached to a memory (metadata on add, filter on search).
-- The brain at 512 MB and 2 cores is enough for Python, mem0 and the SDK; measure on the first live run.
+- **A fork's exec runs with `ComputerService.exec`'s 300 s default** and ingress cannot set it. The membrane's deadline is 240 s.
+- **Sandboxed Starlark has `repr` and no `base64` or `json`**; the payload is base64 by the sender.
+- **Sync ingress and the fork endpoint return `exec_stdout` in full.** `EphemeralResult` carries the raw stdout; only the `exec_log` copy is truncated, to 8 KiB head and tail (`EXEC_LOG_OUTPUT_BYTES` in `src/mshkn/services/lifecycle.py`). So a proposal in a reply always reaches curl whole; the audit copy may lose the middle. Audit lines print first, and the plan decides whether to raise the constant or record proposals by hash in the audit lines.
+- **`exclusive` on a fork takes `error_on_conflict` or `defer_on_conflict`**; the brain uses the first, verb chains the second.
+- **A VM reaches `api.mshkn.dev` on its own host.** From a bare computer on the live host: `getent` resolves the name to the host's public address, a TCP connect to 443 succeeds, and `curl https://api.mshkn.dev/health` returns 200 over the VM's NAT egress. The bare base has `curl`. Nothing to build.
+- **mem0 supports everything §7 needs.** `Memory.from_config` with `vector_store: qdrant` and `path` plus `on_disk: true` creates a local store (files under the path, no server); `llm: anthropic` is a built-in provider; `embedder: openai` is built in. `add()` takes `metadata` and `search()` and `get_all()` take `filters`, which is how provenance is attached and filtered. `add(infer=False)` stores text without an LLM call.
+- **Two routes to a scripted embedder with no third-party key.** `embedder: fastembed` runs a local ONNX model (default `thenlper/gte-large`; pulls `onnxruntime`, `tokenizers`, `huggingface-hub`, and downloads the model on first use, so the recipe must fetch it at build time). Or `EmbedderFactory.provider_to_class` is a plain dict, so the membrane can register a deterministic hash embedder for scripted mode (`EmbeddingBase` is two methods, `embed` and `embed_batch`). The plan takes the second: lighter, deterministic, and scripted mode then makes no external call at all when combined with `infer=False`.
+- **mem0 phones home by default.** `MEM0_TELEMETRY` defaults to `"True"` and instantiating `Memory` creates a PostHog client. The brain recipe sets `MEM0_TELEMETRY=False`; the invariant that the brain reaches nothing but the two model services depends on it.
+- **The brain fits in 512 MB.** Resident memory in the scratch venv: 77 MB after importing the two SDKs, 134 MB after importing mem0, 144 MB with a `Memory` instantiated on an on-disk qdrant store. Site-packages are 135 MB on disk (`qdrant-client`, `numpy`, `sqlalchemy` come with mem0). 256 MB would be tight; 512 MB and 2 cores stand.
