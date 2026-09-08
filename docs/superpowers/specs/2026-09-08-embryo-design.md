@@ -20,7 +20,7 @@ The sentence the whole design serves, from the review: *the agent may generate a
 | 2 | How does a person talk to it? | curl. Conversation through an ingress rule in `sync` mode; the reply is the exec's stdout. Root commands through the authenticated fork-by-label endpoint. No client code. |
 | 3 | What runs in the brain? | A loop of about forty lines over plain JSON tool definitions and the Anthropic SDK, billed through the API. Not Claude Code: its power is the built-in tools we would have to switch off, and its permission model is a second, proprietary place to lock down what a JSON tool list already states. |
 | 4 | What can the brain do besides reason? | Three rules. **State is free for authenticated principals**: it may remember. **Action goes only through verbs**: no shell, no files, no network, no keys. **Capability is gated**: it may propose a change to itself; a human approves. A fourth tool, `try`, lets it test a declaration before proposing it, on a computer with no authority. |
-| 5 | What is a verb? | A declaration (§4) whose invocation is a mshkn computer: ephemeral, a checkpoint chain, or a chain reachable by ingress. Nothing mshkn can do is inexpressible; "not expressible" is not a rejection reason. Every verb declares its effect. |
+| 5 | What is a verb? | A declaration (§4) whose invocation is a mshkn computer: ephemeral or a checkpoint chain (a chain reachable by ingress is specified for later). Nothing mshkn can do is inexpressible; "not expressible" is not a rejection reason. Every verb declares its effect. |
 | 6 | What does approval mean? | The declaration does it. The membrane executes the proposal exactly as written. What the proposal needs and cannot supply is declared in `requires` and blocks approval until root provides it. |
 | 7 | Who is root, and what does the brain hold? | Root is the mshkn account, minted only by the authenticated door; no hook can produce it. The brain holds a **scoped key** (#88) that can run verbs and nothing else: it cannot fork `brain`, so it cannot approve. The account key never enters a VM. |
 | 8 | Memory? | mem0, in-process, on-disk under `/brain`, so it rides in every checkpoint. Every memory carries its provenance. Anthropic for extraction, OpenAI for embeddings. |
@@ -33,7 +33,7 @@ The sentence the whole design serves, from the review: *the agent may generate a
 Three parts, one of which we build.
 
 - **The brain chain.** The checkpoint chain labelled `brain`. Its head is the agent. A fork of the head is a turn. The disk holds the membrane's code and state, the turn window, the mem0 store, the brain's scoped key and, until #92, the model keys. Every interaction, including a read-only one, leaves a checkpoint; retention prunes the old ones and the membrane pins nothing on this chain (the head is always the newest).
-- **The membrane.** The program we build. It is the only thing that runs in the brain VM. It owns the catalog, the policy, the principals, the proposals, the inbox, the turn window and the memory store; it invokes the model; it invokes verbs on the model's behalf with the scoped key; it applies approved proposals; it enforces the invariants in §10. The model has no way to reach any of its files or the network except through the tools the membrane offers on that turn.
+- **The membrane.** The program we build. It is the only thing that runs in the brain VM. It owns the catalog, the policy, the principals, the proposals, the inbox, the turn window and the memory store; it invokes the model; it invokes verbs on the model's behalf with the scoped key; it applies approved proposals, which with that key means building recipes and replacing its own files, nothing on the account beyond `verb/` chains; it enforces the invariants in §10. The model has no way to reach any of its files or the network except through the tools the membrane offers on that turn.
 - **Verbs.** Declarations the agent proposes and root approves. Each runs on its own computer from its own recipe. The brain holds no verb code and no verb state.
 
 The three rules in one sentence: the brain can change its own state freely, can change its own capabilities only with approval, and can act on the world only through verbs. The fourth tool, `try`, is not an exception: a trial runs on a computer with no secrets, no chain and no policy, and installs nothing.
@@ -50,8 +50,8 @@ A verb is one JSON document, carried inside a proposal (§5) or a trial:
 | `dockerfile` | The recipe. Its final stage must be `FROM mshkn-base`; mshkn rejects anything else with a 422 before any build, and the membrane reports that as a failed proposal or trial. |
 | `entrypoint` | A command template over the params, e.g. `/verb/run.sh {{url}}`. The membrane shell-quotes every value before substitution. It runs as the computer's `exec`; its stdout is the result, its exit code is reported with it. |
 | `effect` | `local` (touches only its own chain), `read` (reads the world), `communicate` (sends to a person or system), `transact` (spends or commits), `administer` (changes mshkn or the agent). The embryo approves only `local` and `read` (§10). |
-| `state` | `ephemeral`, `chain` or `event` (below). |
-| `chain` | For `chain` and `event`: the label the state lives under, default `verb/<name>`. Several verbs may name the same chain. |
+| `state` | `ephemeral` or `chain` (below). `event` is specified but not in the embryo (§13). |
+| `chain` | For `chain`: the label the state lives under, default `verb/<name>`. Several verbs may name the same chain. |
 | `asserts` | For a verb used as a pre-turn hook: the identity namespace it may assert, e.g. `ssh`. Its stdout `mike` becomes the principal `ssh:mike`. A hook may not assert `root` or `system`. |
 | `needs` | Resources, as mshkn's `needs`. Default 256 MB, 1 core. |
 | `timeout_seconds` | Bounded by the fork exec's 300 s budget minus the membrane's own deadline. |
@@ -64,7 +64,7 @@ The manifest half of the declaration (everything but `dockerfile` and `entrypoin
 
 - **`ephemeral`.** Every invocation is `POST /computers {recipe_id, exec, self_destruct: true}`. Nothing survives.
 - **`chain`.** The first invocation is `POST /computers` from the recipe with `label` set to the chain and `self_destruct`, which leaves the chain's first checkpoint. Every later invocation forks the chain by label (#89) with `exclusive: defer_on_conflict` and `self_destruct`. State is the disk; invocations are serialised by mshkn; a deferred invocation runs when the current one self-destructs, with `meta_exec` batching as mshkn already does. Retention keeps the newest checkpoint of every label (#93), so a chain's history is pruned but its head, which is its state, never is. (Pinning cannot do this: `pinned` is set only on `POST /computers/{id}/checkpoint`, never on a self-destruct checkpoint, and nothing unpins.)
-- **`event`.** A `chain` verb that is also reachable from outside. On approval the membrane creates an ingress rule whose transform forks the chain with the verb's entrypoint over the event body, so webhooks land on the verb, not on the brain. In the embryo there is no verb-to-brain push: the verb collects, and the brain reads what arrived by invoking the verb when asked. Push needs a token the verb could present to the brain's door, which is the vault (#91).
+- **`event`** (specified, not in the embryo). A `chain` verb that is also reachable from outside: on approval the membrane creates an ingress rule whose transform forks the chain with the verb's entrypoint over the event body, so webhooks land on the verb, not on the brain. It cannot be built yet: approval runs inside the brain with the brain's scoped key, and #88 gives a scoped key no access to `/ingress_rules`. It needs an ingress-rule scope (a rule owned by a key, its actions checked against the key's label prefixes when it fires) and, for verb-to-brain push, the vault (#91). Neither is needed by the liturgy.
 
 ### Known limit
 
@@ -251,7 +251,7 @@ The liturgy is spoken N times (across models where useful), and the result is ho
 
 - **#91, account secrets injected at exec.** The piece of work immediately after the embryo lands. Not optional.
 - **#92, rewire the embryo onto #91.** The piece after that: `/brain/.env` goes, no brain checkpoint holds any credential, `provide` exists, the liturgy gains a `requires` turn.
-- Verb-to-brain push for `event` verbs (needs #91).
+- The `event` state kind: an ingress-rule scope for scoped keys, then verb-to-brain push (needs #91).
 - The invocation-time confirmation protocol for `communicate`, `transact` and `administer` effects, designed when the first such verb is proposed.
 - Amending a proposal before approval.
 - Proposals as GitHub pull requests.
