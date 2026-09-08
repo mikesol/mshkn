@@ -113,6 +113,14 @@ class ComputerService:
             raise NotFound("Computer not found")
         return computer
 
+    async def get_record(self, account: Account, computer_id: str) -> Computer:
+        """The row whatever its status: what a scoped key's ownership check reads
+        on a route that outlives the computer (exec_log)."""
+        computer = await get_computer(self.db, computer_id)
+        if computer is None or computer.account_id != account.id:
+            raise NotFound("Computer not found")
+        return computer
+
     async def get_running(self, account: Account, computer_id: str) -> Computer:
         computer = await get_computer(self.db, computer_id)
         if computer is None or computer.account_id != account.id:
@@ -135,7 +143,12 @@ class ComputerService:
     # -- create / fork -------------------------------------------------------
 
     async def create(
-        self, account: Account, *, recipe_id: str | None, resources: Resources
+        self,
+        account: Account,
+        *,
+        recipe_id: str | None,
+        resources: Resources,
+        api_key_id: str | None = None,
     ) -> Computer:
         # timed() wraps the preconditions too, so a rejected create still counts
         # as an error of kind="domain".
@@ -155,6 +168,7 @@ class ComputerService:
                 source_checkpoint=None,
                 resources=resources,
                 files_for=lambda: self._template_for(recipe, resources),
+                api_key_id=api_key_id,
             )
         computers_created_total.labels(source="create").inc()
         logger.info(
@@ -172,7 +186,12 @@ class ComputerService:
         return computer
 
     async def fork(
-        self, account: Account, checkpoint: Checkpoint, *, recipe_id: str | None
+        self,
+        account: Account,
+        checkpoint: Checkpoint,
+        *,
+        recipe_id: str | None,
+        api_key_id: str | None = None,
     ) -> Computer:
         async with timed("fork"):
             if checkpoint.thin_volume_id is None:
@@ -185,6 +204,7 @@ class ComputerService:
                 source_checkpoint=checkpoint,
                 resources=DEFAULT_RESOURCES,
                 files_for=lambda: self._snapshot_files_for(checkpoint),
+                api_key_id=api_key_id,
             )
         computers_created_total.labels(source="fork").inc()
         logger.info(
@@ -241,6 +261,7 @@ class ComputerService:
         source_checkpoint: Checkpoint | None,
         resources: Resources,
         files_for: Callable[[], Awaitable[SnapshotFiles | None]],
+        api_key_id: str | None,
     ) -> Computer:
         """Snap the disk, boot or restore, warm SSH, record, route.
 
@@ -288,6 +309,7 @@ class ComputerService:
                 last_exec_at=None,
                 source_checkpoint_id=source_checkpoint.id if source_checkpoint else None,
                 recipe_id=recipe_id,
+                api_key_id=api_key_id,
             )
             await insert_computer(self.db, computer)
             await self.host.proxy.add_route(computer_id, vm.vm_ip)

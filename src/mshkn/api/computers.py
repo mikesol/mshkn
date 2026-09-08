@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sse_starlette.sse import EventSourceResponse
 
-from mshkn.api.deps import get_runtime, require_account
+from mshkn.api import scopes
+from mshkn.api.deps import get_runtime, require_principal
 from mshkn.api.schemas import (
     CheckpointRequest,
     CheckpointResponse,
@@ -31,14 +32,14 @@ from mshkn.resources import Resources
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from mshkn.models import Account
+    from mshkn.models import Principal
     from mshkn.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/computers", tags=["computers"])
 
-_require_account = Depends(require_account)
+_require_principal = Depends(require_principal)
 
 
 def _check_rate_limit(rt: Runtime, request: Request) -> None:
@@ -52,11 +53,19 @@ def _check_rate_limit(rt: Runtime, request: Request) -> None:
 async def create_computer(
     request: Request,
     body: CreateRequest,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> CreateResponse:
+    account = principal.account
+    scopes.require_create_from(principal, body.recipe_id)
+    scopes.require_label(principal, body.label)
     rt = get_runtime(request)
     resources = Resources.from_needs(body.needs)
-    computer = await rt.computers.create(account, recipe_id=body.recipe_id, resources=resources)
+    computer = await rt.computers.create(
+        account,
+        recipe_id=body.recipe_id,
+        resources=resources,
+        api_key_id=scopes.key_id(principal),
+    )
     spec = ExecSpec(
         command=body.exec,
         self_destruct=body.self_destruct,
@@ -73,11 +82,13 @@ async def exec_command(
     computer_id: str,
     body: ExecRequest,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> EventSourceResponse:
+    account = principal.account
     rt = get_runtime(request)
     _check_rate_limit(rt, request)
     computer = await rt.computers.get_running(account, computer_id)
+    scopes.require_computer_owner(principal, computer)
 
     async def event_stream() -> AsyncIterator[dict[str, str]]:
         try:
@@ -99,10 +110,12 @@ async def exec_bg(
     computer_id: str,
     body: ExecRequest,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> ExecBgResponse:
+    account = principal.account
     rt = get_runtime(request)
     computer = await rt.computers.get_running(account, computer_id)
+    scopes.require_computer_owner(principal, computer)
     return ExecBgResponse(pid=await rt.computers.exec_bg(computer, body.command))
 
 
@@ -111,10 +124,12 @@ async def exec_logs(
     computer_id: str,
     pid: int,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> EventSourceResponse:
+    account = principal.account
     rt = get_runtime(request)
     computer = await rt.computers.get_running(account, computer_id)
+    scopes.require_computer_owner(principal, computer)
 
     async def event_stream() -> AsyncIterator[dict[str, str]]:
         for line in await rt.computers.exec_logs(computer, pid):
@@ -129,10 +144,12 @@ async def exec_kill(
     computer_id: str,
     pid: int,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> ExecKillResponse:
+    account = principal.account
     rt = get_runtime(request)
     computer = await rt.computers.get_running(account, computer_id)
+    scopes.require_computer_owner(principal, computer)
     result = await rt.computers.exec_kill(computer, pid)
     if result.exit_code != 0:
         return ExecKillResponse(status="not_found", stderr=result.stderr)
@@ -143,10 +160,12 @@ async def exec_kill(
 async def exec_log(
     computer_id: str,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> ExecLogResponse:
     """The record of the exec that ran on create or fork, kept after the computer is gone."""
+    account = principal.account
     rt = get_runtime(request)
+    scopes.require_computer_owner(principal, await rt.computers.get_record(account, computer_id))
     log = await rt.lifecycle.exec_log(account, computer_id)
     return ExecLogResponse(
         computer_id=log.computer_id,
@@ -168,10 +187,12 @@ async def upload_file(
     computer_id: str,
     request: Request,
     path: str = Query(..., description="Remote file path"),
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> UploadResponse:
+    account = principal.account
     rt = get_runtime(request)
     computer = await rt.computers.get_running(account, computer_id)
+    scopes.require_computer_owner(principal, computer)
     await rt.computers.upload(computer, path, await request.body())
     return UploadResponse(status="uploaded", path=path)
 
@@ -181,10 +202,12 @@ async def download_file(
     computer_id: str,
     request: Request,
     path: str = Query(..., description="Remote file path"),
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> Response:
+    account = principal.account
     rt = get_runtime(request)
     computer = await rt.computers.get_running(account, computer_id)
+    scopes.require_computer_owner(principal, computer)
     data = await rt.computers.download(computer, path)
     return Response(content=data, media_type="application/octet-stream")
 
@@ -193,10 +216,12 @@ async def download_file(
 async def computer_status(
     computer_id: str,
     request: Request,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> ComputerStatusResponse:
+    account = principal.account
     rt = get_runtime(request)
     computer = await rt.computers.get_owned(account, computer_id)
+    scopes.require_computer_owner(principal, computer)
     response = ComputerStatusResponse(
         computer_id=computer.id,
         status=computer.status,
@@ -224,10 +249,13 @@ async def checkpoint_computer(
     computer_id: str,
     request: Request,
     body: CheckpointRequest | None = None,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> CheckpointResponse:
+    account = principal.account
+    scopes.require_label(principal, body.label if body else None)
     rt = get_runtime(request)
     computer = await rt.computers.get_running(account, computer_id)
+    scopes.require_computer_owner(principal, computer)
     ckpt = await rt.checkpoints.create(
         computer,
         label=body.label if body else None,
@@ -241,10 +269,12 @@ async def checkpoint_computer(
 async def destroy_computer(
     request: Request,
     computer_id: str,
-    account: Account = _require_account,
+    principal: Principal = _require_principal,
 ) -> DestroyResponse:
+    account = principal.account
     rt = get_runtime(request)
     computer = await rt.computers.get_owned(account, computer_id)
+    scopes.require_computer_owner(principal, computer)
     await rt.computers.destroy(computer.id)
     await rt.lifecycle.drain_after_destroy(account, computer)
     return DestroyResponse(status=ComputerStatus.DESTROYED)

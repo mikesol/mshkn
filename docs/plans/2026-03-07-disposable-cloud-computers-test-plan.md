@@ -496,6 +496,12 @@ Walk through every single API endpoint:
 - Checkpoints from tenant A are not accessible by downloading raw S3 URLs from tenant B.
 - S3 paths include tenant scoping.
 
+### T8.7 — A Scoped Key Can Only Do What Its Scopes Say
+
+- With the account key, checkpoint a computer as `brain` and as `verb/t87`, then mint a scoped key with `labels: ["verb/"]` (#88).
+- The scoped key gets 403 forking the `brain` checkpoint and an empty list from `GET /checkpoints?label=brain`.
+- The scoped key forks the `verb/` checkpoint, can exec on the fork it created, and gets 403 on the account's own computer.
+
 ---
 
 ## Phase 9: "The Economics Are a Fantasy" (Cost Validation)

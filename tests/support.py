@@ -21,6 +21,7 @@ def computer_row(
     source_checkpoint_id: str | None = None,
     recipe_id: str | None = None,
     last_exec_at: str | None = None,
+    api_key_id: str | None = None,
 ) -> Computer:
     return Computer(
         id=id if id is not None else f"comp-{n}",
@@ -35,6 +36,7 @@ def computer_row(
         last_exec_at=last_exec_at,
         source_checkpoint_id=source_checkpoint_id,
         recipe_id=recipe_id,
+        api_key_id=api_key_id,
     )
 
 

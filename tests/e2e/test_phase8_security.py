@@ -18,7 +18,9 @@ import pytest
 
 from .conftest import (
     API_URL,
+    checkpoint_computer,
     create_computer,
+    delete_checkpoint,
     destroy_computer,
     exec_command,
     managed_computer,
@@ -350,3 +352,63 @@ class TestT86CheckpointDataIsolation:
         4. Verify the bucket policy denies unauthenticated access
         """
         pytest.fail("Not implemented: R2 checkpoint blob public-access check")
+
+
+# ---------------------------------------------------------------------------
+# T8.7 — A scoped key can only do what its scopes say
+# ---------------------------------------------------------------------------
+
+
+class TestT87ScopedKey:
+    """A scoped key (#88) forks under its label prefixes and nothing else."""
+
+    async def test_scoped_key_forks_verb_but_not_brain(
+        self, client: httpx.AsyncClient, long_client: httpx.AsyncClient
+    ) -> None:
+        """The brain's key forks a `verb/`-labelled checkpoint and is refused a `brain` one."""
+        computer_id = await create_computer(client)
+        brain_ckpt = verb_ckpt = key_id = None
+        forked: str | None = None
+        try:
+            brain_ckpt = await checkpoint_computer(client, computer_id, label="brain")
+            verb_ckpt = await checkpoint_computer(client, computer_id, label="verb/t87")
+            minted = await client.post(
+                "/keys",
+                json={
+                    "scopes": {"computers": {"create_from": "*"}, "labels": ["verb/"]},
+                    "label": "t87",
+                },
+            )
+            assert minted.status_code == 200, minted.text
+            key_id = minted.json()["id"]
+            scoped_headers = {
+                "Authorization": f"Bearer {minted.json()['secret']}",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(
+                base_url=API_URL, headers=scoped_headers, timeout=120.0
+            ) as scoped:
+                refused = await scoped.post(f"/checkpoints/{brain_ckpt}/fork", json={})
+                assert refused.status_code == 403, refused.text
+                assert "labels" in refused.json()["detail"]
+                listed = await scoped.get("/checkpoints", params={"label": "brain"})
+                assert listed.status_code == 200 and listed.json() == []
+
+                allowed = await scoped.post(f"/checkpoints/{verb_ckpt}/fork", json={})
+                assert allowed.status_code == 200, allowed.text
+                forked = allowed.json()["computer_id"]
+                # the fork belongs to the key: it can exec on it, and root still can too
+                result = await exec_command(scoped, forked, "echo scoped_ok")
+                assert "scoped_ok" in result.stdout
+                # root's computer is not its own
+                refused = await scoped.get(f"/computers/{computer_id}/status")
+                assert refused.status_code == 403, refused.text
+        finally:
+            if forked:
+                await destroy_computer(long_client, forked)
+            await destroy_computer(client, computer_id)
+            for ckpt in (brain_ckpt, verb_ckpt):
+                if ckpt:
+                    await delete_checkpoint(client, ckpt)
+            if key_id:
+                await client.delete(f"/keys/{key_id}")

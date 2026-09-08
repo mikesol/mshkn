@@ -24,6 +24,7 @@ COLUMNS: tuple[str, ...] = (
     "last_exec_at",
     "source_checkpoint_id",
     "recipe_id",
+    "api_key_id",
 )
 _SELECT = "SELECT " + ", ".join(COLUMNS) + " FROM computers"
 
@@ -45,6 +46,7 @@ def _row_to_computer(row: Sequence[object]) -> Computer:
             None if d["source_checkpoint_id"] is None else str(d["source_checkpoint_id"])
         ),
         recipe_id=None if d["recipe_id"] is None else str(d["recipe_id"]),
+        api_key_id=None if d["api_key_id"] is None else str(d["api_key_id"]),
     )
 
 
@@ -65,6 +67,7 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
             computer.last_exec_at,
             computer.source_checkpoint_id,
             computer.recipe_id,
+            computer.api_key_id,
         ),
     )
     await db.commit()
