@@ -7,6 +7,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
+from membrane.memory import Provenance, visible_from
 from membrane.mshkn import CheckpointInfo, Deferred, MshknError, RecipeInfo, RunResult
 
 
@@ -109,3 +110,23 @@ class FakeMshkn:
             )
             for i, c in reversed(list(enumerate(ids)))
         ]
+
+
+@dataclass
+class ListMemory:
+    entries: list[tuple[str, Provenance]] = field(default_factory=list)
+
+    def recall(self, query: str, *, principal: str) -> list[str]:
+        visible = visible_from(principal)
+        words = set(query.lower().split())
+        return [
+            text
+            for text, prov in self.entries
+            if (visible is None or prov.principal in visible) and words & set(text.lower().split())
+        ]
+
+    def add(self, text: str, provenance: Provenance) -> None:
+        self.entries.append((text, provenance))
+
+    def close(self) -> None:
+        return None
