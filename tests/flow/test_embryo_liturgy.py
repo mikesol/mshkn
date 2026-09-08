@@ -14,7 +14,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 from membrane.cli import run
+from membrane.config import load_settings
 from membrane.declarations import parse_verb, render_command
+from membrane.memory import USER_ID, Mem0Store
 from membrane.mshkn import Mshkn
 from membrane.scripted import COUNTER, PAGE_TITLE, VERIFY_SSH
 
@@ -71,6 +73,21 @@ class Embryo:
         self.flow.host.guest.script[cmd] = ExecResult(code, stdout, "")
         return cmd
 
+    def memory_texts(self) -> list[str]:
+        """Every fact mem0 holds for the brain, read directly off disk with
+        get_all (no embedding similarity, so nothing can be missed by a query
+        that scores badly). Only safe between commands: `run()` always closes
+        its own store before returning (membrane.cli.run's `owned_memory`
+        finally-clause), so the qdrant path is free whenever `_run` has
+        returned."""
+        settings = load_settings(self.brain)
+        store = Mem0Store.open(settings, self.brain / "memory")
+        try:
+            found = store.memory.get_all(filters={"user_id": USER_ID}, top_k=100)
+            return [str(r["memory"]) for r in found.get("results", [])]
+        finally:
+            store.close()
+
 
 @pytest.fixture
 async def embryo(
@@ -112,7 +129,12 @@ async def embryo(
 async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     # turn 1: root say; three tools, closed door, no proposals
     audit, reply = await embryo.root_say(LITURGY[1])
-    assert audit["principal"] == "root" and audit["tools"] == [] and "door is closed" in reply
+    assert audit["principal"] == "root" and audit["tools"] == [] and audit["proposals"] == []
+    # spec §9 turn 1's outcome: "a reply naming its three tools honestly and that
+    # its public door is closed. No proposals."
+    assert "remember" in reply and "try" in reply and "propose" in reply
+    assert "door is closed" in reply
+    assert "proposal p-" not in reply
     listing = await embryo.listing()
     assert listing["proposals"] == [] and listing["door"]["status"] == "closed"
 
@@ -153,14 +175,32 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     audit, reply = await embryo.public_say(unsigned)
     assert audit["principal"] == "anonymous" and audit["memory_written"] is False
     assert "will not act or remember" in reply
+    # spec §9 turn 5's outcome checked against the real on-disk mem0 store, not
+    # just the flag that gates the write: no fact was ever attributed to
+    # anonymous (turn 3's early knock included), while root's and mike's
+    # authenticated exchanges up to here (e.g. turn 4's "Who am I?") are there.
+    texts = embryo.memory_texts()
+    assert texts and not any(t.startswith("anonymous:") for t in texts)
+    assert any(t.startswith("ssh:mike:") and "Who am I" in t for t in texts)
+    assert any(t.startswith("root:") for t in texts)
 
-    # turn 6: authorization
+    # turn 6: authorization — load-bearing (spec §9): turns 7 and 9 need
+    # ssh:mike to be allowed to propose, and anonymous must be allowed nothing.
     signed6 = {"msg": LITURGY[6], "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(signed6)}, "mike\n")
     audit, reply = await embryo.public_say(signed6)
     assert audit["principal"] == "ssh:mike" and audit["proposals"][0]["id"] == "p-4"
     assert (await embryo.root("approve", "p-4")).startswith("p-4 applied")
-    assert (await embryo.listing())["policy"]["principals"]["ssh:mike"]["propose"] is True
+    policy = (await embryo.listing())["policy"]["principals"]
+    assert policy["ssh:mike"] == {"invoke": "*", "propose": True}
+    assert policy["anonymous"] == {"invoke": [], "propose": False}
+    # behavioural proof, not just the document: an anonymous knock now, under
+    # the applied policy, is offered no tools at all (§10.7: anonymous may
+    # never propose, and its invoke list is empty).
+    unsigned6 = {"msg": "anyone?"}
+    embryo.script_output(hook, {"payload": json.dumps(unsigned6)}, "", code=1)
+    audit, reply = await embryo.public_say(unsigned6)
+    assert audit["principal"] == "anonymous" and audit["tools"] == []
 
     # turn 7: page_title, trialled first, then proposed and approved
     signed7 = {"msg": LITURGY[7], "sig": "c2ln"}
@@ -209,10 +249,13 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert listing["catalog"]["counter"]["chain_length"] == 2
     assert listing["principals"] == ["ssh:mike"]
     assert listing["door"]["status"] == "open"
-    # memory: root's and mike's facts are recalled; anonymous left nothing
-    state = json.loads((embryo.brain / "state.json").read_text())
-    anonymous_turns = [w["principal"] for w in state["window"]].count("anonymous")
-    assert anonymous_turns == 2  # turn 5, and the early knock
+    # memory: root's and mike's facts are recalled from the real store; the three
+    # anonymous knocks along the way (the early one, turn 5, and turn 6's) left
+    # nothing (spec §9, §10.7).
+    texts = embryo.memory_texts()
+    assert texts and not any(t.startswith("anonymous:") for t in texts)
+    assert any(t.startswith("root:") for t in texts)
+    assert any(t.startswith("ssh:mike:") for t in texts)
 
 
 async def test_the_transform_dry_runs_to_the_public_say(flow: Flow) -> None:
