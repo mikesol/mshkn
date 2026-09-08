@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from membrane.memory import Provenance, visible_from
+from membrane.model import Completion
 from membrane.mshkn import CheckpointInfo, Deferred, MshknError, RecipeInfo, RunResult
 
 
@@ -130,3 +131,21 @@ class ListMemory:
 
     def close(self) -> None:
         return None
+
+
+@dataclass
+class StubModel:
+    script: list[Completion] = field(default_factory=list)
+    calls: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = field(
+        default_factory=list
+    )
+
+    async def complete(
+        self, *, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> Completion:
+        self.calls.append((system, [dict(m) for m in messages], list(tools)))
+        if not self.script:
+            return Completion(
+                text="(no script)", calls=(), content=[{"type": "text", "text": "(no script)"}]
+            )
+        return self.script.pop(0)
