@@ -806,6 +806,53 @@ The ingress mapping layer lets external webhooks trigger disposable computers vi
 
 ---
 
+## Phase 14: "The Embryo" (The First Real Agent)
+
+The first agent built on the product, specified in `docs/superpowers/specs/2026-09-08-embryo-design.md` §11. A membrane runs inside a `brain` checkpoint chain, holds a scoped key, and grows verbs only by proposal and approval. `embryo/hatch.sh` hatches it, and the fixed liturgy of §9 is spoken to it through both doors. The phase runs the scripted model, so it is deterministic and needs no third-party key; the same words spoken to a real model are the measure recorded afterwards, not a test. The seven tests share one hatched embryo and run in order.
+
+### T14.1 — It Hatches and Names What It Is
+
+- `embryo/hatch.sh` mints the scoped key, builds the brain recipe, installs the membrane, checkpoints the brain and opens a closed door, printing one JSON line.
+- Turn 1 through root's door replies with its three tools (remember, try and propose) and that its public door is closed, calling no tool and proposing nothing.
+- `membrane root list` agrees: the door is `closed` and there are no proposals.
+
+### T14.2 — The Hook Builds and the Door Opens
+
+- Turn 2 names the hatcher's public key. The model trials a signature-verifying verb and proposes it, then proposes a policy that adds it as a pre-turn hook and opens the door. Both proposals reach the caller whole in the reply.
+- Root approves the verb; `list` is polled until it is `ready`. A failed build puts the log in the inbox, and turn 3 ("check your build") proposes a fix with `supersedes`, which is approved in turn.
+- Root approves the policy; `list` then shows the door `open` with `verify_ssh` as its only hook.
+
+### T14.3 — Signed Is a Person, Unsigned Is Anonymous
+
+- A payload signed with `ssh-keygen -Y sign` through the public door yields principal `ssh:mike`, and the reply says so.
+- The same words unsigned yield `anonymous`: the reply declines to act and the audit line records that nothing was written to memory.
+- A forged payload, carrying a real signature over different words, also yields `anonymous`.
+
+### T14.4 — Authorization Is Decided and Recorded
+
+- A signed turn 6 proposes a policy in which the verified principal may invoke anything and propose, and `anonymous` may do neither.
+- Root approves it, and `list` shows both entries exactly as proposed.
+
+### T14.5 — A Verb Runs on Its Own Computer
+
+- A signed turn 7 asks for a verb that reports a page's title. The model trials the declaration, the trial runs, and it proposes the verb; root approves and `list` is polled until `ready`.
+- Invoking it on `https://example.com` replies "Example Domain".
+- The computer that ran it is gone (`GET /computers/{computer_id}/status` is 404) and `GET /computers/{computer_id}/exec_log` still carries the output.
+
+### T14.6 — A Chain Verb Keeps Its Own State
+
+- A signed turn 9 asks for a verb that counts its calls; the approved declaration is a chain verb, built for the first time.
+- Two invocations reply 1 and then 2.
+- `GET /checkpoints` for the label `verb/counter` shows two checkpoints.
+
+### T14.7 — The Postconditions, Checked From Outside the Brain
+
+- The catalog holds exactly the three approved verbs, all `ready`, with the counter's chain two long; the only principal is `ssh:mike`, never `root`; the door is open.
+- No undeclared capability: every recipe the run added to the account belongs to the brain or to an approved proposal.
+- The audit sink is outside the brain: `GET /ingress_rules/{rule_id}/logs` lists every public turn with its `computer_id`, and that computer's `exec_log` begins with the turn's audit line.
+
+---
+
 ## Pass/Fail Criteria
 
 | Category | Pass | Fail |
@@ -823,6 +870,7 @@ The ingress mapping layer lets external webhooks trigger disposable computers vi
 | The loop (Phase 10) | Recipes build within the cap, broken ones say why, forks diverge, listeners survive, the scripted agent finishes | Any step of the loop that can't complete, or a rebuild no faster than a cold build |
 | Observability (Phase 11) | Metrics accurate within 10% of reality, alerts fire within 1 min, status tool matches shell output, DAG fully reconstructible | Metrics lie, alerts don't fire, status is decorative, or DAG has broken parent pointers |
 | Ingress (Phase 13) | Rule CRUD works, Starlark transforms execute correctly, ingress triggers fork/create, rate limiting enforced, logs recorded | Any CRUD failure, Starlark escape, or silent ingress failure |
+| The embryo (Phase 14) | The liturgy reaches every postcondition of the embryo spec §11 with the scripted model | Any postcondition unmet, or a turn that needs a human to write anything after hatching |
 
 ---
 

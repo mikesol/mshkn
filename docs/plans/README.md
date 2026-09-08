@@ -1,6 +1,6 @@
 # Plans index
 
-Every design and implementation document in this repository, with its status as of 2026-09-07 (main after PR #64). Status is judged from the code, not from what the document says about itself. The documents are historical records and are not edited, with one exception: the test plan is the definition of done, and a `spec-change` issue may revise it (#76 replaced Phase 10 and added T7.9 on 2026-09-07; #58 added T7.10 and T13.14 on 2026-09-08). Otherwise this index is what changes.
+Every design and implementation document in this repository, with its status as of 2026-09-08 (the `embryo` branch). Status is judged from the code, not from what the document says about itself. The documents are historical records and are not edited, with one exception: the test plan is the definition of done, and a `spec-change` issue may revise it (#76 replaced Phase 10 and added T7.9 on 2026-09-07; #58 added T7.10 and T13.14 on 2026-09-08). Otherwise this index is what changes.
 
 Statuses: **implemented**, **partially implemented**, **not implemented** (in the test plan, no code, tracked in an issue), **in progress** (the plan being executed), **superseded by …**, **retired** (never built, not replaced), **reference** (not a plan).
 
@@ -9,7 +9,7 @@ Statuses: **implemented**, **partially implemented**, **not implemented** (in th
 | Document | What it proposed | Status | Evidence |
 |---|---|---|---|
 | `docs/plans/2026-03-07-disposable-cloud-computers-design.md` | The product: disposable Firecracker VMs identified by checkpoints, fork and merge, Nix capability layers, sleep-for-free economics. | partially implemented: the computer, checkpoint, fork and merge model is live; the Nix capability layer was replaced by Docker recipes | `src/mshkn/services/computers.py`, `src/mshkn/services/checkpoints.py`, `src/mshkn/services/recipes.py` |
-| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 169 end-to-end tests, T0 to T13. | reference; the suite is `tests/e2e/`. Four tests (T8.6, T9.1, T11.2 and the audit-log check) fail as `Not implemented` until built (#65). Phase 10 and T7.9 were revised by #76 (`docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md`) and landed with PR 7; T7.10 and T13.14 (exec log retention) landed with #58; T8.7 (scoped keys) with #88; T12.1 (fork by label) with #89. | `tests/e2e/` collects 169 |
+| `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` | The definition of done: 176 end-to-end tests, T0 to T14. | reference; the suite is `tests/e2e/`. Four tests (T8.6, T9.1, T11.2 and the audit-log check) fail as `Not implemented` until built (#65). Phase 10 and T7.9 were revised by #76 (`docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.md`) and landed with PR 7; T7.10 and T13.14 (exec log retention) landed with #58; T8.7 (scoped keys) with #88; T12.1 (fork by label) with #89. Phase 14 (the embryo, seven tests) was added on 2026-09-08 from `docs/superpowers/specs/2026-09-08-embryo-design.md` §11. | `tests/e2e/` collects 176 |
 | `docs/plans/2026-03-08-roadmap.md` | Prioritised backlog from the first E2E run. | partially implemented: see the breakdown below | |
 | `docs/plans/2026-03-08-orchestrator-design.md` | One FastAPI process over Firecracker, dm-thin, R2, Nix and SQLite. | partially implemented: everything but Nix; the module layout became `host/`, `services/`, `db/` in the quality overhaul | `src/mshkn/app.py`, `src/mshkn/host/`, `src/mshkn/services/` |
 | `docs/plans/2026-03-08-orchestrator-implementation.md` | Task plan for the orchestrator. | implemented, later restructured by PRs 2 to 4 of the quality overhaul | `src/mshkn/runtime.py` |
@@ -48,6 +48,10 @@ Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.
 |---|---|---|
 | `docs/superpowers/plans/2026-09-07-pr7a-one-base.md` | #79 | implemented (merged 2026-09-07) |
 | `docs/superpowers/plans/2026-09-07-pr7-workload-proof.md` | #81 | implemented (merged 2026-09-07) |
+
+## The embryo (2026-09)
+
+Spec: `docs/superpowers/specs/2026-09-08-embryo-design.md`. Plan: `docs/superpowers/plans/2026-09-08-embryo.md`. The first real agent built on mshkn: a membrane in a `brain` checkpoint chain with a scoped key, an authenticated door and a public one, and a catalog of verbs that grows only by proposal and approval. Status: **implemented**. Evidence: the `membrane` package and the priors in `embryo/`, the liturgy end to end over the fake host in `tests/flow/test_embryo_liturgy.py`, and Phase 14 of the test plan on the live host in `tests/e2e/test_phase14_embryo.py`.
 
 ## Roadmap breakdown (`docs/plans/2026-03-08-roadmap.md`)
 

@@ -18,6 +18,7 @@ This is a single-host research system with no users. The API changes without not
 - **Reaper.** Dead VMs are cleaned up, idle VMs are checkpointed and destroyed after `MSHKN_IDLE_TIMEOUT` seconds, old checkpoints are pruned (pinned ones and the newest checkpoint of every label are kept), and thin-pool and host RAM pressure raise alerts at `GET /alerts`.
 - **Observability.** JSON logs with request ids, Prometheus metrics at `GET /metrics`, subsystem health at `GET /health`.
 - **Tenancy.** API keys with a per-account VM limit and an exec rate limit. Accounts are created with `python -m mshkn accounts create`. An account can mint scoped keys (`POST /keys`) that may only create computers from named recipes, and only see, checkpoint and fork under given label prefixes; a scoped key can reach only the computers it created and never the account's ingress rules, merges, recipe deletions or keys (`docs/ARCHITECTURE.md` §1a).
+- **The embryo.** `embryo/` is the first agent built on mshkn: a membrane that lives in a `brain` checkpoint chain, holds a scoped key, speaks through an authenticated door and a public one, and grows verbs only by proposing them and having root approve them. `embryo/hatch.sh` brings one into existence; `docs/superpowers/specs/2026-09-08-embryo-design.md` is the design.
 
 `docs/ARCHITECTURE.md` explains how these fit together.
 
@@ -26,7 +27,7 @@ This is a single-host research system with no users. The API changes without not
 - More than one host. Slots, taps, thin volumes and the checkpoint directory are local to the machine; a checkpoint cannot be restored on another host.
 - Billing, quotas beyond the VM limit, or any notion of a user beyond an API key.
 - An HTTP forwarding endpoint (#59).
-- Four of the 169 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
+- Four of the 176 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
 
 ## Layout
 
@@ -67,7 +68,7 @@ uv run pytest tests/flow      # the real app and services over the fake host
 MSHKN_SERVER=root@<ip> scripts/e2e.sh   # pushes, deploys, runs tests/e2e on the live server
 ```
 
-The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 159 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.
+The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 166 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.
 
 The full local gate, which is what CI runs (`.github/workflows/ci.yml`) after `uv sync --frozen`:
 
