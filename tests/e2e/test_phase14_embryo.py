@@ -189,20 +189,22 @@ async def doors(hatched: Hatched) -> AsyncIterator[Doors]:
     ):
         doors = Doors(client, public, hatched)
         yield doors
-        # Teardown, best effort: the door, the key, every brain and verb checkpoint, then the
-        # recipes this run made (the brain's, and every proposal's). Errors are ignored: this
-        # is cleanup, and a failing test has already said what went wrong.
+        # Teardown, best effort: the account is left as this module found it. The door and
+        # the key go, then every checkpoint the run made — the brain chain, the counter's
+        # chain, and the one each self-destructing verb computer left behind, which holds
+        # its recipe open — and then the recipes themselves. Errors are ignored: this is
+        # cleanup, and a failing test has already said what went wrong.
+        recipes = {hatched.recipe_id}
         with suppress(Exception):
             listing = await doors.listing()
-            hatched.notes["recipes"] = [
-                p["recipe_id"] for p in listing["proposals"] if p["recipe_id"]
-            ]
+            recipes.update(p["recipe_id"] for p in listing["proposals"] if p["recipe_id"])
+        hatched.notes["recipes"] = sorted(recipes)
         await client.delete(f"/ingress_rules/{hatched.rule_id}")
         await client.delete(f"/keys/{hatched.key_id}")
-        for label in ("brain", "verb/counter"):
-            for ckpt in (await client.get("/checkpoints", params={"label": label})).json():
+        for ckpt in (await client.get("/checkpoints")).json():
+            if ckpt["label"] in ("brain", "verb/counter") or ckpt["recipe_id"] in recipes:
                 await client.delete(f"/checkpoints/{ckpt['id']}")
-        for recipe_id in (*hatched.notes.get("recipes", []), hatched.recipe_id):
+        for recipe_id in recipes:
             await client.delete(f"/recipes/{recipe_id}")
 
 
