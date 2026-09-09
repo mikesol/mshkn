@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -29,6 +30,29 @@ AUTH = {"Authorization": "Bearer test-key"}
 OTHER_AUTH = {"Authorization": "Bearer other-key"}
 
 
+class HostRouter(httpx.AsyncBaseTransport):
+    """One in-process transport per hostname: the callback receiver, and whatever
+    a test mounts (a relay target, the scripted model server)."""
+
+    def __init__(self, routes: dict[str, httpx.AsyncBaseTransport]) -> None:
+        self.routes = routes
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        transport = self.routes.get(request.url.host)
+        if transport is None:
+            raise httpx.ConnectError(f"no route to {request.url.host}")
+        return await transport.handle_async_request(request)
+
+
+async def _public_resolver(hostname: str) -> list[str]:
+    """Every in-process host resolves to a public address, so the guard lets it through."""
+    return ["93.184.216.34"]
+
+
+async def _no_sleep(seconds: float) -> None:
+    return None
+
+
 @dataclass
 class Flow:
     app: FastAPI
@@ -37,6 +61,7 @@ class Flow:
     client: AsyncClient
     other_client: AsyncClient
     received: list[dict[str, Any]]
+    targets: dict[str, httpx.AsyncBaseTransport]
 
 
 def _receiver(received: list[dict[str, Any]]) -> FastAPI:
@@ -70,10 +95,13 @@ async def _build_flow(config: Config, tmp_path: Path) -> AsyncIterator[Flow]:
     )
     host = FakeHost()
     received: list[dict[str, Any]] = []
-    callbacks = AsyncClient(
-        transport=ASGITransport(app=_receiver(received)), base_url="http://receiver"
-    )
+    targets: dict[str, httpx.AsyncBaseTransport] = {
+        "receiver": ASGITransport(app=_receiver(received))
+    }
+    callbacks = AsyncClient(transport=HostRouter(targets), base_url="http://receiver")
     runtime = Runtime.build(config, db, host, http=callbacks)
+    runtime.relay.resolve = _public_resolver
+    runtime.relay.sleep = _no_sleep
     # start() would also spawn the reaper loop; the flow tier drives everything
     # explicitly, so only the allocator's startup recovery runs here.
     await runtime.allocator.initialize(db, host.blocks)
@@ -93,6 +121,7 @@ async def _build_flow(config: Config, tmp_path: Path) -> AsyncIterator[Flow]:
                 client=client,
                 other_client=other_client,
                 received=received,
+                targets=targets,
             )
         finally:
             await runtime.tasks.drain(timeout=2.0)
