@@ -94,6 +94,10 @@ class Scopes:
     recipes_read: bool = False
     create_from: Literal["*"] | tuple[str, ...] = ()
     labels: tuple[str, ...] = ()
+    # The relay (#110): URL prefixes the key may have called, and the one wake-up
+    # it may cause. Both or neither; a key without them may relay nowhere.
+    relay_targets: tuple[str, ...] = ()
+    relay_deliver: RelayDelivery | None = None
 
     def may_create_from(self, recipe_id: str | None) -> bool:
         if self.create_from == "*":
@@ -105,6 +109,13 @@ class Scopes:
         if not label:
             return False
         return any(label.startswith(prefix) for prefix in self.labels)
+
+    @property
+    def has_relay(self) -> bool:
+        return bool(self.relay_targets) and self.relay_deliver is not None
+
+    def may_relay_to(self, target: str) -> bool:
+        return any(target.startswith(prefix) for prefix in self.relay_targets)
 
     def to_document(self) -> dict[str, object]:
         doc: dict[str, object] = {}
@@ -121,6 +132,12 @@ class Scopes:
             doc["computers"] = {"create_from": list(self.create_from)}
         if self.labels:
             doc["labels"] = list(self.labels)
+        if self.has_relay:
+            assert self.relay_deliver is not None
+            doc["relay"] = {
+                "targets": list(self.relay_targets),
+                "deliver": {"label": self.relay_deliver.label, "exec": self.relay_deliver.exec},
+            }
         return doc
 
 
@@ -183,7 +200,7 @@ def parse_scopes(document: object) -> Scopes:
     """The scope document as a Scopes, or InvalidInput naming what is wrong."""
     if not isinstance(document, dict):
         raise _reject("must be an object")
-    unknown = sorted(set(document) - {"recipes", "computers", "labels"})
+    unknown = sorted(set(document) - {"recipes", "computers", "labels", "relay"})
     if unknown:
         raise _reject(f"unknown fields {unknown}")
     recipes = _section(document, "recipes", {"create", "read"})
@@ -195,11 +212,27 @@ def parse_scopes(document: object) -> Scopes:
     labels = tuple(_strings(document.get("labels", []), "labels"))
     if any(not label for label in labels):
         raise _reject("labels must not contain an empty prefix")
+    relay_targets: tuple[str, ...] = ()
+    relay_deliver: RelayDelivery | None = None
+    if "relay" in document:
+        relay = _section(document, "relay", {"targets", "deliver"})
+        relay_targets = tuple(_strings(relay.get("targets"), "relay.targets"))
+        if not relay_targets or any(not t for t in relay_targets):
+            raise _reject("relay.targets must be a non-empty list of non-empty prefixes")
+        deliver = relay.get("deliver")
+        if not isinstance(deliver, dict) or set(deliver) != {"label", "exec"}:
+            raise _reject("relay.deliver must be an object with label and exec")
+        label, command = deliver["label"], deliver["exec"]
+        if not isinstance(label, str) or not label or not isinstance(command, str) or not command:
+            raise _reject("relay.deliver.label and relay.deliver.exec must be non-empty strings")
+        relay_deliver = RelayDelivery(label=label, exec=command)
     return Scopes(
         recipes_create=_flag(recipes, "create", "recipes"),
         recipes_read=_flag(recipes, "read", "recipes"),
         create_from=create_from,
         labels=labels,
+        relay_targets=relay_targets,
+        relay_deliver=relay_deliver,
     )
 
 

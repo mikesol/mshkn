@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from mshkn.errors import InvalidInput
-from mshkn.models import Scopes, parse_scopes
+from mshkn.models import RelayDelivery, Scopes, parse_scopes
 
 BRAIN = {
     "recipes": {"create": True, "read": True},
@@ -81,3 +81,49 @@ def test_labels_are_prefixes_and_unlabelled_is_never_covered() -> None:
 def test_an_empty_prefix_is_rejected() -> None:
     with pytest.raises(InvalidInput):
         parse_scopes({"labels": [""]})
+
+
+RELAY = {
+    "relay": {
+        "targets": ["https://api.anthropic.com/"],
+        "deliver": {"label": "brain", "exec": "membrane resume"},
+    }
+}
+
+
+def test_the_relay_section_pins_targets_and_one_delivery() -> None:
+    scopes = parse_scopes({**BRAIN, **RELAY})
+    assert scopes.relay_targets == ("https://api.anthropic.com/",)
+    assert scopes.relay_deliver == RelayDelivery(label="brain", exec="membrane resume")
+    assert scopes.has_relay
+    assert scopes.may_relay_to("https://api.anthropic.com/v1/messages")
+    assert not scopes.may_relay_to("https://api.anthropic.com.evil.example/v1/messages")
+    assert not scopes.may_relay_to("http://api.anthropic.com/v1/messages")
+    assert scopes.to_document() == {**BRAIN, **RELAY}
+
+
+def test_without_the_section_a_key_may_relay_nowhere() -> None:
+    scopes = parse_scopes(BRAIN)
+    assert not scopes.has_relay and scopes.relay_deliver is None
+    assert not scopes.may_relay_to("https://api.anthropic.com/v1/messages")
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        {},
+        {"targets": []},
+        {"targets": ["https://a/"]},
+        {"deliver": {"label": "brain", "exec": "membrane resume"}},
+        {"targets": "https://a/", "deliver": {"label": "brain", "exec": "x"}},
+        {"targets": ["https://a/"], "deliver": {"label": "", "exec": "x"}},
+        {"targets": ["https://a/"], "deliver": {"label": "brain", "exec": ""}},
+        {"targets": ["https://a/"], "deliver": {"label": "brain"}},
+        {"targets": ["https://a/"], "deliver": {"label": "brain", "exec": "x", "extra": 1}},
+        {"targets": ["https://a/"], "deliver": "brain"},
+        {"targets": [""], "deliver": {"label": "brain", "exec": "x"}},
+    ],
+)
+def test_rejects_a_malformed_relay_section(section: dict[str, object]) -> None:
+    with pytest.raises(InvalidInput):
+        parse_scopes({"relay": section})
