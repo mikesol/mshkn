@@ -29,7 +29,6 @@ ACCOUNT = account_row(api_key="k", vm_limit=2)
 
 async def _clear_last_exec_at(db: aiosqlite.Connection, computer_id: str) -> None:
     await db.execute("UPDATE computers SET last_exec_at = NULL WHERE id = ?", (computer_id,))
-    await db.commit()
 
 
 async def _service(

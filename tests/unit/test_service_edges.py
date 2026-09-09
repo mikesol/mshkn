@@ -182,7 +182,6 @@ async def test_destroy_of_a_computer_without_a_pid_or_ip_still_releases_it(
     await db.execute(
         "UPDATE computers SET firecracker_pid = NULL, vm_ip = '' WHERE id = ?", (computer.id,)
     )
-    await db.commit()
     evicted_before = list(host.guest.evicted)
 
     await computers.destroy(computer.id)

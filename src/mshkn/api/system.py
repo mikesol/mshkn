@@ -30,8 +30,17 @@ def _firecracker_present(config: Config) -> str:
 
 
 async def _database(rt: Runtime) -> str:
+    """A read proves the file answers; the reaper's cycles prove it takes writes.
+
+    Reads worked throughout #105 while every write failed, so a read alone
+    reported `ok` for the whole incident.
+    """
     cursor = await rt.db.execute("SELECT 1")
     await cursor.fetchone()
+    failures = rt.reaper.consecutive_failures
+    if failures:
+        noun = "failure" if failures == 1 else "failures"
+        return f"reaper: {failures} consecutive cycle {noun}, last: {rt.reaper.last_failure}"
     return "ok"
 
 

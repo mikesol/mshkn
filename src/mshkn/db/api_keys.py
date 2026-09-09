@@ -48,7 +48,6 @@ async def insert_api_key(db: aiosqlite.Connection, key: ApiKey) -> None:
             key.created_at,
         ),
     )
-    await db.commit()
 
 
 async def get_api_key(db: aiosqlite.Connection, key_id: str) -> ApiKey | None:
@@ -72,4 +71,3 @@ async def list_api_keys_by_account(db: aiosqlite.Connection, account_id: str) ->
 
 async def delete_api_key(db: aiosqlite.Connection, key_id: str) -> None:
     await db.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
-    await db.commit()

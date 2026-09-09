@@ -65,6 +65,9 @@ class Reaper:
         self.alerts = alerts
         self._disk_usage = disk_usage
         self._meminfo_path = meminfo_path
+        # Cycles that failed since the last one that did not; /health reads them (#105).
+        self.consecutive_failures = 0
+        self.last_failure: str | None = None
 
     async def run(self, interval: float = 60.0) -> None:
         logger.info(
@@ -77,8 +80,13 @@ class Reaper:
             await asyncio.sleep(interval)
             try:
                 await self.cycle()
-            except Exception:
-                logger.exception("Reaper cycle failed")
+            except Exception as exc:
+                self.consecutive_failures += 1
+                self.last_failure = f"{type(exc).__name__}: {exc}"
+                logger.exception("Reaper cycle failed (%d in a row)", self.consecutive_failures)
+            else:
+                self.consecutive_failures = 0
+                self.last_failure = None
 
     async def cycle(self) -> None:
         dead = await self.reap_dead()

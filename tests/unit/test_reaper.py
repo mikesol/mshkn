@@ -91,7 +91,6 @@ async def test_idle_vm_is_checkpointed_with_trigger_idle_and_its_label_and_drain
     fork = await computers.fork(ACCOUNT, source, recipe_id=None)
     stale = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     await db.execute("UPDATE computers SET created_at = ? WHERE id = ?", (stale, fork.id))
-    await db.commit()
     await insert_deferred(
         db, "def-1", "chain", "acct-1", '{"checkpoint_id": "x", "exec": "echo q"}', "t"
     )
@@ -114,7 +113,6 @@ async def test_idle_vm_without_a_source_gets_the_default_label(
     computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
     stale = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     await db.execute("UPDATE computers SET created_at = ? WHERE id = ?", (stale, computer.id))
-    await db.commit()
     assert await reaper.reap_idle() == 1
     assert (await checkpoints.latest_for_label(ACCOUNT, IDLE_LABEL)) is not None
 
@@ -124,7 +122,6 @@ async def test_recent_exec_keeps_a_vm_alive(db: aiosqlite.Connection, tmp_path: 
     computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
     stale = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     await db.execute("UPDATE computers SET created_at = ? WHERE id = ?", (stale, computer.id))
-    await db.commit()
     await computers.exec(computer, "true")  # touches last_exec_at
     assert await reaper.reap_idle() == 0
 
@@ -151,7 +148,6 @@ async def test_reap_dead_leaves_a_computer_another_teardown_has_claimed_alone(
     computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
     host.hypervisor.alive.pop(computer.firecracker_pid or -1)
     await db.execute("UPDATE computers SET status = 'destroying' WHERE id = ?", (computer.id,))
-    await db.commit()
 
     assert await reaper.reap_dead() == 0
 
@@ -187,7 +183,6 @@ async def test_a_computer_with_an_exec_in_flight_is_not_idle(
     computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
     stale = (datetime.now(UTC) - timedelta(seconds=600)).isoformat()
     await db.execute("UPDATE computers SET created_at = ? WHERE id = ?", (stale, computer.id))
-    await db.commit()
     computers.busy.add(computer.id)
     assert await reaper.reap_idle() == 0
     stored = await get_computer(db, computer.id)

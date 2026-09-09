@@ -86,7 +86,6 @@ async def insert_ingress_rule(db: aiosqlite.Connection, rule: IngressRule) -> No
             rule.updated_at,
         ),
     )
-    await db.commit()
 
 
 async def get_ingress_rule_by_id(db: aiosqlite.Connection, rule_id: str) -> IngressRule | None:
@@ -121,7 +120,6 @@ async def update_ingress_rule(db: aiosqlite.Connection, rule: IngressRule) -> No
             rule.internal_id,
         ),
     )
-    await db.commit()
 
 
 async def rotate_ingress_rule_id(db: aiosqlite.Connection, internal_id: str, new_id: str) -> None:
@@ -129,17 +127,17 @@ async def rotate_ingress_rule_id(db: aiosqlite.Connection, internal_id: str, new
         "UPDATE ingress_rules SET id=?, updated_at=datetime('now') WHERE internal_id=?",
         (new_id, internal_id),
     )
-    await db.commit()
 
 
 async def delete_ingress_rule(db: aiosqlite.Connection, rule_id: str) -> None:
-    # Get internal_id first to cascade-delete logs
-    cursor = await db.execute("SELECT internal_id FROM ingress_rules WHERE id=?", (rule_id,))
-    row = await cursor.fetchone()
-    if row:
-        await db.execute("DELETE FROM ingress_log WHERE rule_internal_id=?", (row[0],))
-        await db.execute("DELETE FROM ingress_rules WHERE id=?", (rule_id,))
-        await db.commit()
+    """Delete a rule and its log. Two statements, log first: a failure between them
+    leaves a rule whose next delete converges, never log rows without a rule."""
+    await db.execute(
+        "DELETE FROM ingress_log WHERE rule_internal_id IN "
+        "(SELECT internal_id FROM ingress_rules WHERE id = ?)",
+        (rule_id,),
+    )
+    await db.execute("DELETE FROM ingress_rules WHERE id = ?", (rule_id,))
 
 
 async def insert_ingress_log(db: aiosqlite.Connection, log: IngressLog) -> None:
@@ -156,7 +154,6 @@ async def insert_ingress_log(db: aiosqlite.Connection, log: IngressLog) -> None:
             log.computer_id,
         ),
     )
-    await db.commit()
 
 
 async def update_ingress_log(
@@ -172,7 +169,6 @@ async def update_ingress_log(
         "UPDATE ingress_log SET status=?, error_message=?, computer_id=? WHERE id=?",
         (status, error_message, computer_id, log_id),
     )
-    await db.commit()
 
 
 async def list_ingress_logs(

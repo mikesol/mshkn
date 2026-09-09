@@ -146,7 +146,6 @@ async def test_delete_refuses_referenced_recipes_and_removes_the_volume(
     with pytest.raises(Conflict):
         await service.delete(ACCOUNT, recipe.id)
     await db.execute("UPDATE computers SET status = 'destroyed'")
-    await db.commit()
     await service.delete(ACCOUNT, recipe.id)
     assert ("remove", (100, f"mshkn-recipe-{recipe.id}")) in host.blocks.calls
     with pytest.raises(NotFound):

@@ -69,7 +69,6 @@ async def insert_exec_log(db: aiosqlite.Connection, log: ExecLog) -> None:
             log.created_at,
         ),
     )
-    await db.commit()
 
 
 async def set_exec_log_checkpoint(
@@ -79,7 +78,6 @@ async def set_exec_log_checkpoint(
         "UPDATE exec_log SET created_checkpoint_id = ? WHERE computer_id = ?",
         (checkpoint_id, computer_id),
     )
-    await db.commit()
 
 
 async def get_exec_log(db: aiosqlite.Connection, computer_id: str) -> ExecLog | None:
@@ -91,5 +89,4 @@ async def get_exec_log(db: aiosqlite.Connection, computer_id: str) -> ExecLog | 
 async def delete_exec_logs_before(db: aiosqlite.Connection, cutoff: str) -> int:
     """Delete every row created before the ISO-8601 cutoff; return how many went."""
     cursor = await db.execute("DELETE FROM exec_log WHERE created_at < ?", (cutoff,))
-    await db.commit()
     return cursor.rowcount

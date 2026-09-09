@@ -33,7 +33,6 @@ async def _account(db: aiosqlite.Connection, api_key: str = "test-key-123") -> N
         "INSERT INTO accounts (id, api_key, vm_limit, created_at) VALUES (?, ?, ?, ?)",
         ("acct-test", api_key, 10, "2026-01-01T00:00:00Z"),
     )
-    await db.commit()
 
 
 async def _app(db: aiosqlite.Connection, tmp_path: Path) -> FastAPI:
@@ -346,3 +345,22 @@ async def test_trigger_invalid_action_502(db: aiosqlite.Connection, tmp_path: Pa
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/ingress/ir_bad_action")
     assert resp.status_code == 502
+
+
+async def test_delete_rule_takes_its_log_with_it(db: aiosqlite.Connection) -> None:
+    await _account(db, "test-key")
+    await insert_ingress_rule(db, _make_rule())
+    await insert_ingress_log(
+        db,
+        IngressLog(
+            id="log-001",
+            rule_internal_id="int-001",
+            status=IngressLogStatus.COMPLETED,
+            starlark_result="{}",
+            error_message=None,
+            created_at="2026-01-01T00:00:00Z",
+        ),
+    )
+    await delete_ingress_rule(db, "ir_test123")
+    assert await get_ingress_rule_by_id(db, "ir_test123") is None
+    assert await list_ingress_logs(db, "int-001") == []

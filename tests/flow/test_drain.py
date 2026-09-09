@@ -42,7 +42,6 @@ async def test_destroy_and_idle_reap_racing_on_one_label_fork_exactly_once(
         await flow.runtime.db.execute(
             "UPDATE computers SET created_at = ? WHERE id = ?", (stale, active)
         )
-        await flow.runtime.db.commit()
         restored_before = len(host.hypervisor.restored)
         await asyncio.gather(
             flow.client.delete(f"/computers/{active}"), flow.runtime.reaper.cycle()

@@ -70,7 +70,6 @@ async def insert_computer(db: aiosqlite.Connection, computer: Computer) -> None:
             computer.api_key_id,
         ),
     )
-    await db.commit()
 
 
 async def count_active_computers(db: aiosqlite.Connection) -> int:
@@ -106,7 +105,6 @@ async def update_computer_status(
     db: aiosqlite.Connection, computer_id: str, status: ComputerStatus
 ) -> None:
     await db.execute("UPDATE computers SET status = ? WHERE id = ?", (status, computer_id))
-    await db.commit()
 
 
 async def claim_teardown(db: aiosqlite.Connection, computer_id: str) -> bool:
@@ -120,13 +118,11 @@ async def claim_teardown(db: aiosqlite.Connection, computer_id: str) -> bool:
         "UPDATE computers SET status = ? WHERE id = ? AND status = ?",
         (ComputerStatus.DESTROYING, computer_id, ComputerStatus.RUNNING),
     )
-    await db.commit()
     return cursor.rowcount == 1
 
 
 async def update_last_exec_at(db: aiosqlite.Connection, computer_id: str, timestamp: str) -> None:
     await db.execute("UPDATE computers SET last_exec_at = ? WHERE id = ?", (timestamp, computer_id))
-    await db.commit()
 
 
 async def get_active_computer_for_label(
