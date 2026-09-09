@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     import aiosqlite
 
     from mshkn.config import Config
-    from mshkn.models import Account, RelayDelivery, RetryPolicy
+    from mshkn.models import Account, Checkpoint, Computer, RelayDelivery, RetryPolicy
     from mshkn.runtime import BackgroundTasks
     from mshkn.services.checkpoints import CheckpointService
     from mshkn.services.lifecycle import Lifecycle
@@ -287,9 +287,12 @@ class RelayService:
 
     async def deliver(self, job: RelayJob) -> None:
         """Wake the target chain: fork the label with the pinned exec plus the job
-        id, self-destructing, deferred behind a running fork (spec §5). A fork that
-        raises is retried with the job's policy; after that the delivery is failed
-        and the job keeps its result: the brain's next command settles it itself."""
+        id, self-destructing, deferred behind a running fork (spec §5). A fork
+        that raises is retried with the job's policy; after that the delivery is
+        failed and the job keeps its result: the brain's next command settles it
+        itself. Once a fork is admitted the retry loop is over — a `run_ephemeral`
+        failure after that (a full dm-thin pool, say) is recorded on the delivery
+        without ever forking a second computer or touching the job's own result."""
         assert job.deliver is not None
         account = await get_account_by_id(self.db, job.account_id)
         if account is None:
@@ -304,23 +307,14 @@ class RelayService:
             meta_exec=None,
         )
         policy = job.retry
+        head: Checkpoint | None = None
+        forked: Computer | Deferred | None = None
         for attempt in range(policy.attempts):
             job.delivery_attempts = attempt + 1
             try:
                 head, forked = await self.checkpoints.fork_by_label(
                     account, job.deliver.label, spec, exclusive="defer_on_conflict", recipe_id=None
                 )
-                if isinstance(forked, Deferred):
-                    job.delivery_deferred_id = forked.deferred_id
-                else:
-                    job.delivery_computer_id = forked.id
-                job.delivery_status, job.delivery_error = DeliveryStatus.DELIVERED, None
-                await self._save(job)
-                if not isinstance(forked, Deferred):
-                    await self.lifecycle.run_ephemeral(
-                        account, forked, spec, source_checkpoint=head
-                    )
-                return
             except Exception as exc:
                 job.delivery_error = f"{type(exc).__name__}: {exc}"
                 logger.warning(
@@ -329,5 +323,24 @@ class RelayService:
                 await self._save(job)
                 if attempt + 1 < policy.attempts:
                     await self.sleep(policy.delay(attempt))
-        job.delivery_status = DeliveryStatus.FAILED
-        await self._save(job)
+                continue
+            if isinstance(forked, Deferred):
+                job.delivery_deferred_id, job.delivery_computer_id = forked.deferred_id, None
+            else:
+                job.delivery_computer_id, job.delivery_deferred_id = forked.id, None
+            job.delivery_status, job.delivery_error = DeliveryStatus.DELIVERED, None
+            await self._save(job)
+            break
+        else:
+            job.delivery_status = DeliveryStatus.FAILED
+            await self._save(job)
+            return
+        if isinstance(forked, Deferred):
+            return
+        assert head is not None
+        try:
+            await self.lifecycle.run_ephemeral(account, forked, spec, source_checkpoint=head)
+        except Exception as exc:
+            job.delivery_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("relay %s delivery run_ephemeral failed: %s", job.id, exc)
+            await self._save(job)

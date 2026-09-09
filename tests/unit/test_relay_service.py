@@ -439,3 +439,34 @@ async def test_a_fork_that_raises_is_retried_then_the_delivery_fails(
     assert job.delivery_status == DeliveryStatus.FAILED and job.delivery_attempts == 3
     assert job.delivery_error is not None and "NotFound" in job.delivery_error
     assert relay.slept == [1.0, 2.0]
+
+
+async def test_run_ephemeral_failing_after_a_good_fork_never_forks_again(
+    db: aiosqlite.Connection, tmp_path: Path, account: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dm-thin pool filling after the fork is admitted must not turn into a
+    second fork, and must not touch the job's own settled result."""
+    relay = Relay(db, tmp_path, lambda _: httpx.Response(200, json={"answer": 42}))
+    await _chain(relay, db, "brain")
+    fork_calls = 0
+    real_fork_by_label = relay.service.checkpoints.fork_by_label
+
+    async def counting_fork_by_label(*args: Any, **kwargs: Any) -> Any:
+        nonlocal fork_calls
+        fork_calls += 1
+        return await real_fork_by_label(*args, **kwargs)
+
+    monkeypatch.setattr(relay.service.checkpoints, "fork_by_label", counting_fork_by_label)
+
+    async def exploding_run_ephemeral(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("dm-thin pool full")
+
+    monkeypatch.setattr(relay.service.lifecycle, "run_ephemeral", exploding_run_ephemeral)
+    job = await relay.settled(
+        await relay.submit(deliver=RelayDelivery(label="brain", exec="membrane resume"))
+    )
+    assert job.status == RelayStatus.COMPLETED and job.response_body == {"answer": 42}
+    assert job.delivery_status == DeliveryStatus.DELIVERED
+    assert job.delivery_error is not None and "dm-thin pool full" in job.delivery_error
+    assert job.delivery_deferred_id is None and job.delivery_computer_id is not None
+    assert fork_calls == 1
