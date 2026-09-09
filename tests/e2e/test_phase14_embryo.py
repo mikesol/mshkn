@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 EMBRYO = Path(__file__).resolve().parents[2] / "embryo"
 BRAIN_API_URL = os.environ.get("MSHKN_BRAIN_API_URL", "https://api.mshkn.dev")
 TURN_TIMEOUT = 330.0
+TURN_WAIT = 3600.0
 BUILD_TIMEOUT = 600.0
 
 # `approve` on a verb proposal (membrane.proposals.approve): the id, the status the
@@ -53,6 +54,7 @@ class Hatched:
     key_dir: Path
     pubkey: str
     notes: dict[str, Any] = field(default_factory=dict)
+    server_id: str | None = None
 
 
 async def _fork_brain(client: httpx.AsyncClient, command: str) -> str:
@@ -100,13 +102,45 @@ class Doors:
         self.public_principals: list[str] = []
 
     async def root_say(self, text: str) -> tuple[dict[str, Any], str]:
-        return split_output(await _fork_brain(self.client, f"membrane root say {b64(text)}"))
+        return await self._spoken(await self.root("say", b64(text)))
 
     async def root(self, *argv: str) -> str:
         return await _fork_brain(self.client, "membrane root " + " ".join(argv))
 
     async def listing(self) -> dict[str, Any]:
         return dict(json.loads(await self.root("list")))
+
+    async def await_turn(self, turn: int) -> tuple[dict[str, Any], str]:
+        """`list` until the turn is in the window (relay design §7): the reply and the
+        closing audit line live there, written by the fork that closed the turn."""
+        deadline = time.monotonic() + TURN_WAIT
+        while True:
+            listing = await self.listing()
+            for entry in listing["window"]:
+                if entry["turn"] == turn:
+                    return dict(entry["audit"]), str(entry["output"])
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"turn {turn} did not close within {TURN_WAIT:.0f} s")
+            await asyncio.sleep(3)
+
+    async def _spoken(self, out: str) -> tuple[dict[str, Any], str]:
+        audit, rest = split_output(out)
+        if "job" not in audit:
+            if "queued" in audit:
+                raise RuntimeError("a turn was still pending when the next was spoken")
+            return audit, rest
+        return await self.await_turn(int(audit["turn"]))
+
+    async def touch(self) -> None:
+        """The scripted server is a computer with only a background process; the idle
+        reaper does not count that as activity (relay design §12), so a command keeps it."""
+        if self.hatched.server_id:
+            resp = await self.client.post(
+                f"/computers/{self.hatched.server_id}/exec",
+                json={"command": "true"},
+                timeout=60.0,
+            )
+            assert resp.status_code == 200, resp.text
 
     async def approve_verb(self, proposal_id: str, verb: str) -> str:
         """root approve on a verb proposal; asserts the whole reply and returns the
@@ -135,9 +169,14 @@ class Doors:
             assert resp.status_code == 200, resp.text
             body = resp.json()
             assert body["exec_exit_code"] == 0, body
-            audit, reply = split_output(str(body["exec_stdout"]))
-            self.public_principals.append(str(audit["principal"]))
-            return audit, reply
+            out = str(body["exec_stdout"])
+            break
+        # The principal is recorded from the start audit line (the ack), before
+        # waiting for the turn to close, so an anonymous knock that is offered no
+        # tool and never reaches the relay is still counted (§10.1 in T14.7).
+        audit, _ = split_output(out)
+        self.public_principals.append(str(audit["principal"]))
+        return await self._spoken(out)
 
     async def wait_ready(self, verb: str) -> dict[str, Any]:
         deadline = time.monotonic() + BUILD_TIMEOUT
@@ -214,6 +253,8 @@ async def doors(hatched: Hatched) -> AsyncIterator[Doors]:
             listing = await doors.listing()
             recipes.update(p["recipe_id"] for p in listing["proposals"] if p["recipe_id"])
         await drop(f"/ingress_rules/{hatched.rule_id}")
+        if hatched.server_id:
+            await drop(f"/computers/{hatched.server_id}")
         await drop(f"/keys/{hatched.key_id}")
         with suppress(Exception):
             for ckpt in (await client.get("/checkpoints")).json():
@@ -225,6 +266,7 @@ async def doors(hatched: Hatched) -> AsyncIterator[Doors]:
 
 class TestPhase14Embryo:
     async def test_t14_1_turn_1_names_its_tools_and_the_closed_door(self, doors: Doors) -> None:
+        await doors.touch()
         assert doors.hatched.ingress_url.endswith(f"/ingress/{doors.hatched.rule_id}")
         audit, reply = await doors.root_say(LITURGY[1])
         assert audit["principal"] == "root" and audit["door"] == "api" and audit["tools"] == []
@@ -235,6 +277,7 @@ class TestPhase14Embryo:
     async def test_t14_2_turn_2_and_3_the_hook_builds_and_the_door_opens(
         self, doors: Doors
     ) -> None:
+        await doors.touch()
         started = time.monotonic()
         audit, reply = await doors.root_say(LITURGY[2].format(key=doors.hatched.pubkey))
         assert [t["name"] for t in audit["tools"]] == ["try", "propose", "propose"], audit
@@ -265,6 +308,7 @@ class TestPhase14Embryo:
         print(f"T14.2 hook ready and door open in {time.monotonic() - started:.0f}s")
 
     async def test_t14_3_signed_is_mike_unsigned_is_anonymous(self, doors: Doors) -> None:
+        await doors.touch()
         audit, reply = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[4]))
         assert audit["principal"] == "ssh:mike", audit
         assert reply.startswith("You are ssh:mike.")
@@ -279,6 +323,7 @@ class TestPhase14Embryo:
         assert audit["principal"] == "anonymous"
 
     async def test_t14_4_turn_6_authorization(self, doors: Doors) -> None:
+        await doors.touch()
         audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[6]))
         pid = audit["proposals"][0]["id"]
         assert (await doors.root("approve", pid)).startswith(f"{pid} applied")
@@ -287,6 +332,7 @@ class TestPhase14Embryo:
         assert listing["policy"]["principals"]["anonymous"] == {"invoke": [], "propose": False}
 
     async def test_t14_5_page_title_from_a_self_destructed_computer(self, doors: Doors) -> None:
+        await doors.touch()
         audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[7]))
         assert [t["name"] for t in audit["tools"]] == ["try", "propose"], audit
         assert audit["tools"][0]["status"] == "done", audit
@@ -303,6 +349,7 @@ class TestPhase14Embryo:
         assert log.status_code == 200 and "Example Domain" in log.json()["stdout"]
 
     async def test_t14_6_counter_chain_has_two_checkpoints(self, doors: Doors) -> None:
+        await doors.touch()
         audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[9]))
         pid = audit["proposals"][0]["id"]
         # No trial preceded this one, so approval is the first build of the counter.
@@ -316,6 +363,7 @@ class TestPhase14Embryo:
         assert len(chain) == 2
 
     async def test_t14_7_postconditions_and_the_audit_outside_the_brain(self, doors: Doors) -> None:
+        await doors.touch()
         listing = await doors.listing()
         assert set(listing["catalog"]) == {"verify_ssh", "page_title", "counter"}
         assert all(e["status"] == "ready" for e in listing["catalog"].values())
@@ -343,3 +391,10 @@ class TestPhase14Embryo:
         log = await doors.client.get(f"/computers/{completed[0]['computer_id']}/exec_log")
         assert log.status_code == 200, log.text
         assert log.json()["stdout"].startswith("audit "), log.json()["stdout"][:200]
+        # the turn was a chain of forks: the ingress log's computer holds the start audit
+        # line and the acknowledgement; the relay job it names was delivered to `brain`
+        first = log.json()["stdout"].splitlines()
+        assert first[0].startswith("audit ") and json.loads(first[1])["job"].startswith("rj-")
+        job = await doors.client.get(f"/relay/{json.loads(first[1])['job']}")
+        assert job.status_code == 200 and job.json()["delivery"]["label"] == "brain"
+        assert job.json()["delivery"]["status"] == "delivered"
