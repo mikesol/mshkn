@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from membrane.declarations import Policy, Proposal, Verb, parse_policy, parse_proposal, parse_verb
+from membrane.model import zero_usage
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -93,6 +94,51 @@ class Exchange:
     door: str
     input: str
     reply: str
+    # What the door printed after the audit line (the reply with the proposals
+    # appended) and the turn's closing audit fields, so `list` can show a turn
+    # that closed in a fork nobody was watching (relay design §6).
+    output: str = ""
+    audit: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Pending:
+    """The in-flight turn (relay design §6): what `say` began, the messages sent
+    so far, the relay job in flight, and the turn's bookkeeping."""
+
+    turn: int
+    principal: str
+    door: str
+    message: str
+    payload: str
+    messages: list[dict[str, Any]]
+    offered: list[str]
+    job: str
+    hooks: list[dict[str, Any]] = field(default_factory=list)
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    made: list[str] = field(default_factory=list)
+    model_calls: int = 0
+    usage: dict[str, int] = field(default_factory=zero_usage)
+    forks: int = 1
+    started_at: str = ""
+    memory_written: bool = False
+
+    def to_doc(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_doc(cls, doc: dict[str, Any]) -> Pending:
+        return cls(**doc)
+
+
+@dataclass(frozen=True)
+class Queued:
+    """A message that arrived while a turn was pending; its hooks already ran."""
+
+    principal: str
+    door: str
+    message: str
+    payload: str
 
 
 @dataclass
@@ -103,6 +149,8 @@ class State:
     trials: dict[str, Trial] = field(default_factory=dict)
     inbox: list[InboxItem] = field(default_factory=list)
     window: list[Exchange] = field(default_factory=list)
+    pending: Pending | None = None
+    queue: list[Queued] = field(default_factory=list)
     principals: set[str] = field(default_factory=set)
     policy: Policy = field(default_factory=lambda: Policy(principals={}, hooks=(), door="closed"))
     self_description: str = ""
@@ -140,9 +188,13 @@ class State:
                     "door": e.door,
                     "input": e.input,
                     "reply": e.reply,
+                    "output": e.output,
+                    "audit": e.audit,
                 }
                 for e in self.window
             ],
+            "pending": None if self.pending is None else self.pending.to_doc(),
+            "queue": [asdict(q) for q in self.queue],
             "principals": sorted(self.principals),
             "policy": self.policy.to_doc(),
             "self_description": self.self_description,
@@ -165,6 +217,8 @@ class State:
             trials={k: Trial.from_doc(v) for k, v in doc["trials"].items()},
             inbox=[InboxItem(**i) for i in doc["inbox"]],
             window=[Exchange(**e) for e in doc["window"]],
+            pending=None if doc.get("pending") is None else Pending.from_doc(doc["pending"]),
+            queue=[Queued(**q) for q in doc.get("queue", [])],
             principals=set(doc["principals"]),
             policy=parse_policy(doc["policy"]),
             self_description=doc["self_description"],

@@ -70,3 +70,15 @@ def test_effort_is_optional_and_validated(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text(base + "MEMBRANE_EFFORT=turbo\n")
     with pytest.raises(ValueError, match="MEMBRANE_EFFORT"):
         load_settings(tmp_path)
+
+
+def test_the_model_base_url_defaults_to_anthropic_and_loses_its_trailing_slash(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".env").write_text("MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n")
+    assert load_settings(tmp_path).anthropic_base_url == "https://api.anthropic.com"
+    (tmp_path / ".env").write_text(
+        "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n"
+        "ANTHROPIC_BASE_URL=https://8000-comp-1.mshkn.dev/\n"
+    )
+    assert load_settings(tmp_path).anthropic_base_url == "https://8000-comp-1.mshkn.dev"
