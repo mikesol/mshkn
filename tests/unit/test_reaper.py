@@ -189,3 +189,23 @@ async def test_a_computer_with_an_exec_in_flight_is_not_idle(
     assert stored is not None and stored.status is ComputerStatus.RUNNING
     computers.busy.discard(computer.id)
     assert await reaper.reap_idle() == 1
+
+
+async def test_the_cycle_expires_relay_jobs_with_the_exec_log_retention(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    from dataclasses import replace
+
+    from mshkn.db import get_relay_job, insert_relay_job
+    from tests.unit.test_relay_db import job_row
+
+    reaper, _, _, _ = await _reaper(db, tmp_path)
+    await insert_relay_job(db, job_row("rj-old", created_at="2026-01-01T00:00:00+00:00"))
+    await insert_relay_job(db, job_row("rj-new", created_at=datetime.now(UTC).isoformat()))
+    assert await reaper.expire_relay_jobs() == 1
+    assert await get_relay_job(db, "rj-old") is None
+    assert await get_relay_job(db, "rj-new") is not None
+    reaper.config = replace(reaper.config, exec_log_retention_seconds=0)
+    await insert_relay_job(db, job_row("rj-older", created_at="2025-01-01T00:00:00+00:00"))
+    assert await reaper.expire_relay_jobs() == 0, "0 keeps every job"
+    await reaper.cycle()  # the cycle runs it without raising

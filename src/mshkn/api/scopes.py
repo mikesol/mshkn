@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mshkn.errors import Forbidden
+from mshkn.errors import Forbidden, InvalidInput, NotFound
 
 if TYPE_CHECKING:
-    from mshkn.models import Checkpoint, Computer, Principal
+    from mshkn.models import Checkpoint, Computer, Principal, RelayJob
 
 
 def require_account_key(principal: Principal) -> None:
@@ -75,3 +75,23 @@ def visible_checkpoints(principal: Principal, checkpoints: list[Checkpoint]) -> 
 def key_id(principal: Principal) -> str | None:
     """What to record on a computer this principal creates."""
     return None if principal.key is None else principal.key.id
+
+
+def require_relay(principal: Principal, target: str, *, deliver_in_body: bool) -> None:
+    """`POST /relay`: a scoped key needs the relay section, a target under its
+    prefixes, and no `deliver` of its own (the scope pins it, #110)."""
+    scopes = principal.scopes
+    if scopes is None:
+        return
+    if not scopes.has_relay:
+        raise Forbidden("Scope relay is not granted to this key")
+    if not scopes.may_relay_to(target):
+        raise Forbidden(f"Scope relay.targets does not allow {target}")
+    if deliver_in_body:
+        raise InvalidInput("deliver is pinned by this key's scope and may not be given")
+
+
+def require_relay_job_owner(principal: Principal, job: RelayJob) -> None:
+    """`GET /relay/{job_id}`: a scoped key sees only the jobs it created."""
+    if principal.key is not None and job.api_key_id != principal.key.id:
+        raise NotFound("Relay job not found")

@@ -29,6 +29,7 @@ from mshkn.services.keys import KeyService
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.reaper import Reaper
 from mshkn.services.recipes import RecipeService
+from mshkn.services.relay import RelayService
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -138,6 +139,7 @@ class Runtime:
     lifecycle: Lifecycle
     ingress: IngressService
     keys: KeyService
+    relay: RelayService
     reaper: Reaper
     alerts: deque[Alert]
     http: httpx.AsyncClient
@@ -161,6 +163,7 @@ class Runtime:
         checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
         lifecycle = Lifecycle(db, computers, checkpoints, tasks, client)
         ingress = IngressService(db, computers, checkpoints, lifecycle, tasks)
+        relay = RelayService(config, db, checkpoints, lifecycle, tasks, client)
         reaper = Reaper(config, db, host, computers, checkpoints, lifecycle, alerts)
         return cls(
             config=config,
@@ -175,6 +178,7 @@ class Runtime:
             lifecycle=lifecycle,
             ingress=ingress,
             keys=KeyService(db),
+            relay=relay,
             reaper=reaper,
             alerts=alerts,
             http=client,
@@ -197,6 +201,9 @@ class Runtime:
         reaped = await self.reaper.reap_dead()
         if reaped:
             logger.info("Startup: reaped %d dead VM(s)", reaped)
+        resumed_jobs = await self.relay.resume()
+        if resumed_jobs:
+            logger.info("Startup: re-running %d unsettled relay job(s)", resumed_jobs)
         await self.computers.refresh_active_gauge()
         self.tasks.spawn(self.reaper.run(), name="reaper", key="reaper")
 
