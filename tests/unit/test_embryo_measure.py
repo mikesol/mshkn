@@ -439,8 +439,10 @@ class FakeDoors:
         refuse: set[str] | None = None,
         polls_to_ready: int = 1,
         policy_first: bool = False,
+        deadline_first: bool = False,
     ) -> None:
         self.policy_first = policy_first
+        self.deadline_first = deadline_first
         self.fail_first = fail_first or set()
         self.never_ready = never_ready or set()
         self.open_door = open_door
@@ -488,6 +490,16 @@ class FakeDoors:
         made: list[dict[str, Any]] = []
         if text == LITURGY[1]:
             return self._reply(_audit(), "I have remember, try and propose. My door is closed.")
+        if text.startswith(LITURGY[2][:30]) and self.deadline_first:
+            # the trial's build outlived the turn (live run 2026-09-09-run-5)
+            self.deadline_first = False
+            self.pending_door = True
+            audit = _audit(tools=[{"name": "try", "status": "building", "trial": "t-1"}])
+            audit["stopped"] = "deadline"
+            return self._reply(audit, "I ran out of time before finishing this turn.")
+        if text == LITURGY[3] and getattr(self, "pending_door", False):
+            self.pending_door = False
+            text = LITURGY[2]  # the check of the trial ends in the two proposals
         if text.startswith(LITURGY[2][:30]):
             door_policy = {
                 "principals": {
@@ -798,6 +810,16 @@ async def test_a_proposal_refused_before_its_build_is_approved_again_after_it(
         ("p-1", "p-1 applied: p"),
     ]
     assert turns[2].audit["principal"] == "ssh:mike"
+
+
+async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) -> None:
+    doors = FakeDoors(deadline_first=True)
+    key_dir, pubkey = _keys(tmp_path)
+    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    assert [t.label for t in turns][:4] == ["1", "2", "3-repair-1", "4"]
+    assert turns[1].audit["stopped"] == "deadline" and turns[1].approvals == []
+    assert [a["id"] for a in turns[2].approvals] == ["p-1", "p-2"]
+    assert turns[3].audit["principal"] == "ssh:mike"
 
 
 async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:

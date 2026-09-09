@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-09T08:21:48+00:00",
+ "command": "say",
+ "computer_id": "comp-c3c329d8429a",
+ "detail": {
+  "msg": "Who am I?"
+ },
+ "door": "ingress",
+ "n": 8,
+ "seconds": 3.3984735780395567,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"closed\": true, \"door\": \"ingress\", \"principal\": null}\nThe public door is closed.\n"
+}

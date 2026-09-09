@@ -580,17 +580,27 @@ async def speak_liturgy(
         turn.commands += spent(since)
         return listing
 
+    def unfinished(turn: Turn) -> bool:
+        """Ended on the deadline, the cap or the token budget without proposing: the
+        trial it started is in the inbox, and turn 3 lets it finish (liturgy turn 3)."""
+        stopped = turn.audit.get("stopped")
+        return stopped in ("deadline", "cap", "max_tokens") and not turn.audit.get("proposals")
+
     async def settle(turn: Turn) -> None:
-        """Approvals, builds, and at most MAX_REPAIRS rounds of turn 3 for a failed build."""
+        """Approvals, builds, and at most MAX_REPAIRS rounds of turn 3 for a failed
+        build or a turn that ran out before proposing."""
         listing = await approve_pending(turn)
+        current = turn
         repairs = 0
         while repairs < MAX_REPAIRS:
             failed = sorted(n for n, e in listing["catalog"].items() if e["status"] == "failed")
-            if not failed:
+            if not failed and not unfinished(current):
                 return
             repairs += 1
-            log.write(f"  build failed for {', '.join(failed)}; turn 3, repair {repairs}\n")
-            listing = await approve_pending(await root_turn(f"3-repair-{repairs}", LITURGY[3]))
+            why = f"build failed for {', '.join(failed)}" if failed else "the turn ran out"
+            log.write(f"  {why}; turn 3, repair {repairs}\n")
+            current = await root_turn(f"3-repair-{repairs}", LITURGY[3])
+            listing = await approve_pending(current)
 
     async def root_turn(label: str, words: str) -> Turn:
         since = mark()

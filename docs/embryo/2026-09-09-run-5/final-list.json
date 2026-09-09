@@ -1,0 +1,48 @@
+{
+ "catalog": {},
+ "door": {
+  "hooks": [],
+  "hooks_ready": [],
+  "status": "closed"
+ },
+ "inbox": 1,
+ "policy": {
+  "door": "closed",
+  "hooks": [],
+  "principals": {
+   "anonymous": {
+    "invoke": [],
+    "propose": false
+   }
+  }
+ },
+ "principals": [],
+ "proposals": [],
+ "trials": [
+  {
+   "id": "t-1",
+   "recipe_id": "rcp-48c7e3404a61",
+   "status": "done",
+   "verb": "probe"
+  },
+  {
+   "id": "t-2",
+   "recipe_id": "rcp-3ba14ed5082a",
+   "status": "failed",
+   "verb": "probe_sig"
+  },
+  {
+   "id": "t-3",
+   "recipe_id": "rcp-52446e52139e",
+   "status": "done",
+   "verb": "probe_sig"
+  },
+  {
+   "id": "t-4",
+   "recipe_id": "rcp-29414c1f0729",
+   "status": "done",
+   "verb": "hook_test"
+  }
+ ],
+ "turn": 2
+}
