@@ -438,7 +438,9 @@ class FakeDoors:
         counts: tuple[str, str] = ("1\n", "2\n"),
         refuse: set[str] | None = None,
         polls_to_ready: int = 1,
+        policy_first: bool = False,
     ) -> None:
+        self.policy_first = policy_first
         self.fail_first = fail_first or set()
         self.never_ready = never_ready or set()
         self.open_door = open_door
@@ -487,21 +489,20 @@ class FakeDoors:
         if text == LITURGY[1]:
             return self._reply(_audit(), "I have remember, try and propose. My door is closed.")
         if text.startswith(LITURGY[2][:30]):
-            made.append(self._propose("verb", "verify_ssh", asserts="ssh"))
-            made.append(
-                self._propose(
-                    "policy",
-                    "door",
-                    policy={
-                        "principals": {
-                            "ssh:mike": {"invoke": [], "propose": True},
-                            "anonymous": {"invoke": [], "propose": False},
-                        },
-                        "hooks": ["verify_ssh"],
-                        "door": "open",
-                    },
-                )
-            )
+            door_policy = {
+                "principals": {
+                    "ssh:mike": {"invoke": [], "propose": True},
+                    "anonymous": {"invoke": [], "propose": False},
+                },
+                "hooks": ["verify_ssh"],
+                "door": "open",
+            }
+            if self.policy_first:
+                made.append(self._propose("policy", "door", policy=door_policy))
+                made.append(self._propose("verb", "verify_ssh", asserts="ssh"))
+            else:
+                made.append(self._propose("verb", "verify_ssh", asserts="ssh"))
+                made.append(self._propose("policy", "door", policy=door_policy))
         elif text == LITURGY[3]:
             self.repairs += 1
             failed = [n for n, e in self.catalog.items() if e["status"] == "failed"]
@@ -618,6 +619,9 @@ class FakeDoors:
         if pid in self.refuse:
             return f"{pid} refused: an effect the embryo does not approve\n"
         if proposal["kind"] == "policy":
+            missing = [h for h in proposal["policy"]["hooks"] if h not in self.catalog]
+            if missing:  # the membrane's invariant (§10.6): a door needs its hook
+                return f"{pid} refused: hook {missing[0]} is not a verb in the catalog\n"
             proposal["status"] = "applied"
             self.policy = proposal["policy"]
             return f"{pid} applied: policy replaced; effective from the next turn\n"
@@ -756,6 +760,44 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
     assert result["page_title"]["evidence"]["computer_id"] == "comp-title"
     assert result["counter"]["evidence"]["counts"] == [1, 2]
     assert "Turn 8" in log.getvalue()
+
+
+async def test_verbs_are_approved_before_the_policies_that_name_them(tmp_path: Path) -> None:
+    """Live run 2026-09-09-run-5: the model proposed the door policy as p-1 and the
+    hook as p-2; approving in id order had the policy refused ("hook ... is not a
+    verb in the catalog") and the door stayed closed until the next pass."""
+    doors = FakeDoors(policy_first=True)
+    key_dir, pubkey = _keys(tmp_path)
+    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    assert [a["id"] for a in turns[1].approvals] == ["p-2", "p-1"]
+    assert all("refused" not in a["result"] for a in turns[1].approvals), turns[1].approvals
+    assert turns[2].audit["principal"] == "ssh:mike"
+
+
+async def test_a_proposal_refused_before_its_build_is_approved_again_after_it(
+    tmp_path: Path,
+) -> None:
+    doors = FakeDoors(policy_first=True)
+    original = doors.root
+
+    async def refuse_once(*argv: str) -> str:
+        # a first approval of the policy is refused whatever the order
+        if argv[0] == "approve" and argv[1] == "p-1" and not getattr(doors, "seen", False):
+            doors.seen = True  # type: ignore[attr-defined]
+            doors.sent.append(("api", "approve", argv[1:]))
+            return "p-1 refused: not yet\n"
+        return await original(*argv)
+
+    doors.root = refuse_once  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    results = [(a["id"], a["result"][:14]) for a in turns[1].approvals]
+    assert results == [
+        ("p-2", "p-2 building: "),
+        ("p-1", "p-1 refused: n"),
+        ("p-1", "p-1 applied: p"),
+    ]
+    assert turns[2].audit["principal"] == "ssh:mike"
 
 
 async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:

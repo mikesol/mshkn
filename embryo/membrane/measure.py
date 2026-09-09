@@ -547,13 +547,12 @@ async def speak_liturgy(
         """The command numbers sent since `since` (commands are numbered from 1, in order)."""
         return list(range(since + 1, len(doors.sent) + 1))
 
-    async def approve_pending(turn: Turn) -> dict[str, Any]:
-        """Decide every pending proposal, then wait for the builds; returns the listing."""
-        since = mark()
-        listing = await doors.listing()
-        for proposal in listing["proposals"]:
-            if proposal["status"] != "pending":
-                continue
+    async def decide(turn: Turn, proposals: list[dict[str, Any]]) -> None:
+        """Approve or reject each proposal, verbs before the policies and prompts
+        that may name them (a door policy is refused until its hook is in the
+        catalog, §10.6), recording every result."""
+        order = {"verb": 0, "policy": 1, "prompt": 2}
+        for proposal in sorted(proposals, key=lambda p: order.get(str(p.get("kind")), 3)):
             reason = approver.decide(proposal)
             if reason is None:
                 result = await doors.root("approve", proposal["id"])
@@ -565,7 +564,19 @@ async def speak_liturgy(
                 {"id": proposal["id"], "decision": decision, "result": result.rstrip("\n")}
             )
             log.write(f"  {proposal['id']} {decision}: {result.rstrip()}\n")
+
+    async def approve_pending(turn: Turn) -> dict[str, Any]:
+        """Decide every pending proposal, wait for the builds, and give whatever was
+        refused one more chance once the builds are in; returns the listing."""
+        since = mark()
+        listing = await doors.listing()
+        await decide(turn, [p for p in listing["proposals"] if p["status"] == "pending"])
         listing = await doors.wait_builds()
+        refused = {a["id"] for a in turn.approvals if "refused" in a["result"]}
+        again = [p for p in listing["proposals"] if p["status"] == "pending" and p["id"] in refused]
+        if again:
+            await decide(turn, again)
+            listing = await doors.wait_builds()
         turn.commands += spent(since)
         return listing
 

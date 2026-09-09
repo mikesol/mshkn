@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-09T08:02:55+00:00",
+ "command": "list",
+ "computer_id": "comp-d8a338b6f2bc",
+ "detail": [],
+ "door": "api",
+ "n": 3,
+ "seconds": 2.3519140490097925,
+ "status": 200,
+ "stderr": "",
+ "stdout": "{\n \"catalog\": {},\n \"door\": {\n  \"hooks\": [],\n  \"hooks_ready\": [],\n  \"status\": \"closed\"\n },\n \"inbox\": 0,\n \"policy\": {\n  \"door\": \"closed\",\n  \"hooks\": [],\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   }\n  }\n },\n \"principals\": [],\n \"proposals\": [],\n \"trials\": [\n  {\n   \"id\": \"t-1\",\n   \"recipe_id\": \"rcp-25e592ef914e\",\n   \"status\": \"done\",\n   \"verb\": \"probe\"\n  }\n ],\n \"turn\": 1\n}\n"
+}
