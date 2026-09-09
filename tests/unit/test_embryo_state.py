@@ -163,7 +163,15 @@ def test_pending_queue_and_the_windows_audit_round_trip(tmp_path: Path) -> None:
         started_at="2026-09-09T10:00:00+00:00",
         memory_written=True,
     )
-    state.queue.append(Queued(principal="root", door="api", message="next", payload="next"))
+    state.queue.append(
+        Queued(
+            principal="ssh:mike",
+            door="ingress",
+            message="next",
+            payload='{"msg": "next", "sig": "s"}',
+            hooks=[{"name": "verify_ssh", "status": "ok", "principal": "ssh:mike"}],
+        )
+    )
     state.window.append(
         Exchange(
             turn=2,
@@ -179,6 +187,11 @@ def test_pending_queue_and_the_windows_audit_round_trip(tmp_path: Path) -> None:
     loaded = Brain(tmp_path).state()
     assert loaded == state
     assert loaded.pending is not None and loaded.pending.job == "rj-1"
+    # the hooks that named the queued message's principal survive the save: the
+    # fork that starts that turn is not the one that ran them.
+    assert loaded.queue[0].hooks == [
+        {"name": "verify_ssh", "status": "ok", "principal": "ssh:mike"}
+    ]
 
 
 def test_a_fresh_state_has_no_pending_turn_and_an_empty_queue() -> None:

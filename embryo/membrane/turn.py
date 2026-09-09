@@ -342,7 +342,13 @@ async def say(ctx: Context, *, payload_b64: str, door: Door) -> str:
         )
     if ctx.state.pending is not None:
         ctx.state.queue.append(
-            Queued(principal=principal, door=door, message=message, payload=payload_text)
+            Queued(
+                principal=principal,
+                door=door,
+                message=message,
+                payload=payload_text,
+                hooks=hook_runs,
+            )
         )
         position = len(ctx.state.queue)
         queued = audit_line(door=door, principal=principal, hooks=hook_runs, queued=position)
@@ -424,9 +430,6 @@ async def continue_turn(ctx: Context, message: dict[str, Any]) -> str:
         return await close_turn(ctx, text=completion.text, stopped="done")
     pending.messages.append({"role": "assistant", "content": completion.content})
     tools = build_tools(ctx, pending)
-    # §10.7 is an authorization claim about the tool list, and the turn's list is
-    # every fork's: a verb approved while the model thought was offered too.
-    pending.offered = sorted(set(pending.offered) | set(tools))
     before = len(pending.calls)
     results, outcome = await run_calls(
         completion, tools, pending, deadline=ctx.deadline, now=ctx.now
@@ -436,6 +439,10 @@ async def continue_turn(ctx: Context, message: dict[str, Any]) -> str:
     pending.messages.append({"role": "user", "content": results})
     previous = pending.job
     pending.forks += 1
+    # §10.7 is an authorization claim about the tool list, and the turn's list is
+    # every request's: a verb approved while the model thought is offered by the
+    # request below, and a fork that ends on the cap posts none, so offers none.
+    pending.offered = sorted(set(pending.offered) | set(tools))
     await post_request(ctx, pending, tools)
     summaries = [_tool_summary(c) for c in pending.calls[before:]]
     continued = audit_line(
@@ -513,6 +520,6 @@ async def close_turn(ctx: Context, *, text: str, stopped: str) -> str:
             door=head.door,
             message=head.message,
             payload_text=head.payload,
-            hook_runs=[],
+            hook_runs=head.hooks,
         )
     return result

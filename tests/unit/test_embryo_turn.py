@@ -32,6 +32,7 @@ from membrane.turn import (
     say,
     settle,
 )
+from membrane.verbs import poll_builds
 
 from tests.support_embryo import (
     FakeMshkn,
@@ -445,9 +446,41 @@ async def test_a_say_while_a_turn_is_pending_is_queued_and_runs_next(tmp_path: P
     assert _posted(ctx)["messages"][0]["content"] == "[root via api] first"
 
 
-async def test_tools_are_rebuilt_from_the_current_catalog_on_every_fork(tmp_path: Path) -> None:
-    from membrane.verbs import poll_builds
+async def test_a_queued_turns_closing_audit_carries_the_hooks_that_named_it(
+    tmp_path: Path,
+) -> None:
+    """The hooks of a queued message run at queue time, in a different fork from
+    the one that closes its turn. The closing audit line is what authorization is
+    read from (§10.5), so it must carry them rather than deny them."""
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, policy=OPEN, api=api)
+    hook = parse_verb(HOOK)
+    info = await api.create_recipe(hook.dockerfile)
+    await api.get_recipe(info.id)
+    ctx.state.catalog["verify_ssh"] = CatalogEntry(
+        verb=hook, status="ready", recipe_id=info.id, proposal_id="p-1"
+    )
+    good = json.dumps({"msg": "Who am I?", "sig": "good"})
+    api.outputs[render_command(hook, {"payload": good})] = (0, "mike\n", "")
+    api.relay_answers.extend(
+        [message_of(text_completion("first")), message_of(text_completion("You are ssh:mike."))]
+    )
+    await say(ctx, payload_b64=b64("root goes first"), door="api")
+    queued, ack = _ack(
+        await say(ctx, payload_b64=b64({"msg": "Who am I?", "sig": "good"}), door="ingress")
+    )
+    assert ack == {"queued": 1} and queued["principal"] == "ssh:mike"
+    assert queued["hooks"][0]["name"] == "verify_ssh"
+    assert ctx.state.queue[0].hooks == queued["hooks"]
+    await resume(ctx, "rj-1")  # closes root's turn and starts the queued one
+    pending = ctx.state.pending
+    assert pending is not None and pending.turn == 2
+    audit, reply = split_output(await resume(ctx, pending.job))
+    assert reply == "You are ssh:mike.\n" and audit["principal"] == "ssh:mike"
+    assert audit["hooks"] == queued["hooks"]
 
+
+async def test_tools_are_rebuilt_from_the_current_catalog_on_every_fork(tmp_path: Path) -> None:
     api = FakeMshkn()
     ctx = _ctx(tmp_path, api=api)
     await say(ctx, payload_b64=b64("go"), door="api")
@@ -476,6 +509,31 @@ async def test_tools_are_rebuilt_from_the_current_catalog_on_every_fork(tmp_path
     ]
     # the closing audit names every tool the turn offered, not only the first fork's
     audit, _ = split_output(await resume(ctx, ctx.state.pending.job))
+    assert audit["offered"] == ["page_title", "propose", "remember", "try"]
+
+
+async def test_a_turn_that_ends_on_the_cap_claims_no_tools_it_never_offered(
+    tmp_path: Path,
+) -> None:
+    """The fork that hits the cap builds tools for a request it never posts. The
+    audit must not deny a verb it offered, and must not claim one it did not."""
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, api=api)
+    api.relay_answers.extend(
+        message_of(tool_call_completion("remember", text=f"fact {i}")) for i in range(21)
+    )
+    await say(ctx, payload_b64=b64("count"), door="api")
+    # root approves a verb after the first request went out; the fork that would
+    # have offered it is the one the cap ends.
+    p = propose(ctx.state, {"kind": "verb", "title": "t", "rationale": "r", "verb": VERB})
+    await approve(api, ctx.state, p.id)
+    ctx.state.inbox.extend(await poll_builds(api, ctx.state))
+    out = ""
+    while (pending := ctx.state.pending) is not None:
+        out = await resume(ctx, pending.job)
+    audit, _ = split_output(out)
+    assert audit["stopped"] == "cap" and len(audit["tools"]) == 20
+    # page_title rode on the 20 requests that were posted, but not on the 21st
     assert audit["offered"] == ["page_title", "propose", "remember", "try"]
 
 

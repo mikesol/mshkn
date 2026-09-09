@@ -133,12 +133,16 @@ class Pending:
 
 @dataclass(frozen=True)
 class Queued:
-    """A message that arrived while a turn was pending; its hooks already ran."""
+    """A message that arrived while a turn was pending. Its hooks ran at queue
+    time to name the principal, so the runs ride with it: the closing audit line
+    of the turn it becomes is the record authorization is read from (§10.5), and
+    it has to stand alone."""
 
     principal: str
     door: str
     message: str
     payload: str
+    hooks: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
