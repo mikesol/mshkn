@@ -1233,8 +1233,8 @@ def test_hatch_runs_the_script_with_the_keys_and_the_real_model(
         "http://api/ingress/rule-1", "rule-1", "key-1", "rcp-brain", "ck-brain"
     )
     assert out.read_text() == (
-        "ANTHROPIC_API_KEY=sk-a\nBRAIN_API_URL=https://api.mshkn.dev\nMEMBRANE_MODEL=anthropic\n"
-        "MEMBRANE_EFFORT=\nMEMBRANE_MODEL_ID=claude-opus-5\nMSHKN_API_KEY=k\n"
+        "ANTHROPIC_API_KEY=sk-a\nBRAIN_API_URL=https://api.mshkn.dev\nMEMBRANE_EFFORT=\n"
+        "MEMBRANE_MODEL=anthropic\nMEMBRANE_MODEL_ID=claude-opus-5\nMSHKN_API_KEY=k\n"
         "MSHKN_API_URL=http://api\nOPENAI_API_KEY=oa\n"
     )
 

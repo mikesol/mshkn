@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-09T09:04:04+00:00",
+ "command": "say",
+ "computer_id": "comp-a9e6a1cfd351",
+ "detail": "check your build",
+ "door": "api",
+ "n": 7,
+ "seconds": 252.83619817503495,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\nError parsing extraction response: Expecting ',' delimiter: line 1 column 1063 (char 1062)\n",
+ "stdout": "audit {\"door\": \"api\", \"hooks\": [], \"memory_written\": true, \"model_calls\": 1, \"offered\": [\"propose\", \"remember\", \"try\"], \"principal\": \"root\", \"proposals\": [], \"stopped\": \"deadline\", \"tools\": [], \"turn\": 3, \"usage\": {\"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"input_tokens\": 4145, \"output_tokens\": 2}}\nI ran out of time before finishing this turn.\n"
+}
