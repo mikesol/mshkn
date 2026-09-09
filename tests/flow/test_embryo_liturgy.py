@@ -190,8 +190,9 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert any(t.startswith("ssh:mike:") and "Who am I" in t for t in texts)
     assert any(t.startswith("root:") for t in texts)
 
-    # turn 6: authorization — load-bearing (spec §9): turns 7 and 9 need
-    # ssh:mike to be allowed to propose, and anonymous must be allowed nothing.
+    # turn 6: authorization — load-bearing for invocation (spec §9): turns 8 and 9
+    # need ssh:mike to be allowed to invoke (propose was granted at turn 2), and
+    # anonymous must be allowed nothing.
     signed6 = {"msg": LITURGY[6], "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(signed6)}, "mike\n")
     audit, reply = await embryo.public_say(signed6)
