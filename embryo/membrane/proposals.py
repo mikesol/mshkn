@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from membrane.declarations import DeclarationError, parse_policy, parse_proposal
+from membrane.declarations import DeclarationError, parse_proposal
 from membrane.invariants import MUTABLE, refuse_approval
 from membrane.mshkn import MshknError
 from membrane.state import CatalogEntry, CatalogStatus, InboxItem
@@ -14,14 +14,16 @@ from membrane.verbs import submit_recipe
 if TYPE_CHECKING:
     from membrane.declarations import Proposal
     from membrane.mshkn import MshknApi
-    from membrane.state import Brain, State
+    from membrane.state import State
 
 
-# §10.3: the one mutable thing each proposal kind writes. The invariant is
-# structural — these are the only three kinds `parse_proposal` accepts, so
-# nothing can name the membrane, the seed, the invariants or the scoped key —
-# and this is the map `approve` checks itself against MUTABLE with.
-WRITES: dict[str, str] = {"verb": "catalog", "policy": "policy.json", "prompt": "self.md"}
+# §10.3: the one mutable thing each proposal kind writes, named as the State
+# field it is. The invariant is structural — these are the only three kinds
+# `parse_proposal` accepts, so nothing can name the membrane, the seed, the
+# invariants or the scoped key — and this is the map `approve` checks itself
+# against MUTABLE with. Every write lands in state.json, committed by the one
+# atomic save at the end of the command (#100); nothing is written here.
+WRITES: dict[str, str] = {"verb": "catalog", "policy": "policy", "prompt": "self_description"}
 
 
 def _supersede_target(state: State, proposal: Proposal) -> Proposal | None:
@@ -68,7 +70,7 @@ def _get(state: State, proposal_id: str) -> Proposal:
     return state.proposals[proposal_id]
 
 
-async def approve(api: MshknApi, state: State, brain: Brain, proposal_id: str) -> str:
+async def approve(api: MshknApi, state: State, proposal_id: str) -> str:
     proposal = _get(state, proposal_id)
     if proposal.status != "pending":
         return f"{proposal.id} is {proposal.status}, not pending"
@@ -113,13 +115,13 @@ async def approve(api: MshknApi, state: State, brain: Brain, proposal_id: str) -
         return f"{proposal.id} {status}: verb {verb.name} recipe {info.id}"
     if proposal.kind == "policy":
         assert proposal.policy is not None
-        state.previous_policy = brain.policy().to_doc()
-        brain.write_policy(proposal.policy)
+        state.previous_policy = state.policy
+        state.policy = proposal.policy
         state.applied_policy = proposal.id
     else:
         assert proposal.prompt is not None
-        state.previous_prompt = brain.self_description()
-        brain.write_self(proposal.prompt)
+        state.previous_prompt = state.self_description
+        state.self_description = proposal.prompt
         state.applied_prompt = proposal.id
     proposal.status = "applied"
     target = _supersede_target(state, proposal)
@@ -152,14 +154,14 @@ def disable(state: State, verb_name: str) -> str:
     return f"{verb_name} disabled"
 
 
-def revert(state: State, brain: Brain, proposal_id: str) -> str:
+def revert(state: State, proposal_id: str) -> str:
     proposal = _get(state, proposal_id)
     if (
         proposal.kind == "policy"
         and state.applied_policy == proposal_id
         and state.previous_policy is not None
     ):
-        brain.write_policy(parse_policy(state.previous_policy))
+        state.policy = state.previous_policy
         state.applied_policy = None
         state.previous_policy = None
     elif (
@@ -167,7 +169,7 @@ def revert(state: State, brain: Brain, proposal_id: str) -> str:
         and state.applied_prompt == proposal_id
         and state.previous_prompt is not None
     ):
-        brain.write_self(state.previous_prompt)
+        state.self_description = state.previous_prompt
         state.applied_prompt = None
         state.previous_prompt = None
     else:

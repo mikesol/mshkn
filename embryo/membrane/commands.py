@@ -28,8 +28,8 @@ USAGE = (
 )
 
 
-async def list_state(api: MshknApi, state: State, brain: Brain) -> str:
-    policy = brain.policy()
+async def list_state(api: MshknApi, state: State) -> str:
+    policy = state.policy
     catalog: dict[str, Any] = {}
     for name, entry in state.catalog.items():
         head, length = (None, 0)
@@ -108,15 +108,15 @@ async def root(
     state.inbox.extend(await poll_trials(api, state, remaining=deadline - now()))
     try:
         if command == "list":
-            return await list_state(api, state, brain), 0
+            return await list_state(api, state), 0
         if command == "approve":
-            return (await approve(api, state, brain, args[0])) + "\n", 0
+            return (await approve(api, state, args[0])) + "\n", 0
         if command == "reject":
             return reject(state, args[0], _decode(args[1])) + "\n", 0
         if command == "disable":
             return disable(state, args[0]) + "\n", 0
         if command == "revert":
-            return revert(state, brain, args[0]) + "\n", 0
+            return revert(state, args[0]) + "\n", 0
         # cli.run's _valid() never lets an unknown command reach here, but
         # root() must be safe when called directly too (P13): no
         # fall-through to revert for a command it does not recognize.

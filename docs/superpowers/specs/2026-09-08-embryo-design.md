@@ -180,9 +180,9 @@ The priors, the state before turn 1:
 | `/brain/membrane` | The code. Not reachable by the model. |
 | `/brain/.env` | The scoped key, the two model keys, the API URL. Not reachable by the model. Gone after #92. |
 | `/brain/seed.md` | Fixed. Says what it is, the three rules and `try`, what a verb and a proposal are, the effects it may be granted, how to name what it needs, that it has no principals, no verbs and no policy of its own yet, and that its public door is closed until it proposes a way to know who is speaking. |
-| `/brain/self.md` | The mutable self-description. Empty. |
-| `/brain/policy.json` | `root` may invoke everything and propose; `anonymous` may invoke nothing and propose nothing; no pre-turn hooks; the public door is closed. |
-| catalog, proposals, trials, inbox, turn window, memory | Empty. |
+| `/brain/policy.json` | The initial policy, read once to seed the first `state.json`: `root` may invoke everything and propose; `anonymous` may invoke nothing and propose nothing; no pre-turn hooks; the public door is closed. |
+| `/brain/state.json` | Absent until the first command writes it. It is the one mutable document (#100): the policy, the self-description (empty), the catalog, proposals, trials, inbox and turn window (all empty), replaced atomically on every save. |
+| memory | Empty. |
 | Tools on turn 1 | `remember`, `try`, `propose`. |
 
 ## 9. The liturgy
@@ -210,7 +210,7 @@ Policy is a JSON document, not code, and there are things no policy, proposal or
 
 1. Public input never becomes `root`. `root` is minted only by the authenticated door; no hook may assert `root` or `system`.
 2. The brain never holds a control-plane credential. Its key is scoped (#88) and cannot fork `brain`.
-3. Approval cannot modify the membrane, the seed, the invariants or the scoped key. Only `self.md`, `policy.json` and the catalog change.
+3. Approval cannot modify the membrane, the seed, the invariants or the scoped key. Only the self-description, the policy and the catalog change, and all three live in `state.json`, committed by the one atomic save at the end of the command.
 4. Secrets are delivered only by declared scope, and never to the brain (#91, #92).
 5. The audit sink cannot be disabled: every turn prints its audit lines before its reply, and mshkn's `exec_log` keeps them outside the brain.
 6. The public door is closed while policy declares no pre-turn hook.

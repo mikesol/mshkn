@@ -4,6 +4,7 @@ no approval can do (§10); losing a power is as primitive as gaining one."""
 from __future__ import annotations
 
 import json
+from dataclasses import fields
 from typing import TYPE_CHECKING, Any, get_args
 
 import pytest
@@ -101,11 +102,14 @@ def test_invariants_refuse_what_they_must() -> None:
 
 
 def test_every_proposal_kind_writes_exactly_one_mutable_thing() -> None:
-    """§10.3: an approval changes self.md, policy.json or the catalog and
-    nothing else. There is no proposal kind that names the membrane, the seed,
-    the invariants or the scoped key, and `approve` asserts that itself."""
+    """§10.3: an approval changes the self-description, the policy or the
+    catalog and nothing else, and all three are fields of State, so the one
+    atomic save commits them (#100). There is no proposal kind that names the
+    membrane, the seed, the invariants or the scoped key, and `approve`
+    asserts that itself."""
     assert set(get_args(ProposalKind)) == set(WRITES)
     assert set(WRITES.values()) == set(MUTABLE)
+    assert set(MUTABLE) <= {f.name for f in fields(State)}
 
 
 def test_policy_decides_for_the_principals_it_names_and_allow_decides_otherwise() -> None:
@@ -151,95 +155,93 @@ def test_policy_narrows_a_verb_that_allows_the_principal_by_name() -> None:
 
 
 async def test_approve_a_verb_builds_it_and_the_catalog_follows(tmp_path: Path) -> None:
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(state, _verb_proposal(VERB))
-    line = await approve(api, state, brain, p.id)
+    line = await approve(api, state, p.id)
     assert line.startswith("p-1 building") and p.status == "building"
     entry = state.catalog["page_title"]
     assert (
         entry.status == "building" and entry.recipe_id == p.recipe_id and entry.proposal_id == "p-1"
     )
     assert api.calls[0] == ("create_recipe", {"dockerfile": VERB["dockerfile"]})
-    assert "not pending" in await approve(api, state, brain, p.id)
+    assert "not pending" in await approve(api, state, p.id)
 
 
 async def test_approve_refuses_by_reason_and_changes_nothing(tmp_path: Path) -> None:
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(state, _verb_proposal({**VERB, "effect": "transact"}))
-    line = await approve(api, state, brain, p.id)
+    line = await approve(api, state, p.id)
     assert line.startswith("p-1 refused") and "transact" in line
     assert p.status == "pending" and state.catalog == {} and api.calls == []
 
 
 async def test_a_wrong_base_fails_immediately_with_the_detail_as_log(tmp_path: Path) -> None:
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     api.reject_dockerfiles["FROM python:3.12"] = "recipes must be built FROM mshkn-base"
     p = propose(state, _verb_proposal({**VERB, "dockerfile": "FROM python:3.12"}))
-    line = await approve(api, state, brain, p.id)
+    line = await approve(api, state, p.id)
     assert line.startswith("p-1 failed") and p.status == "failed" and "mshkn-base" in (p.log or "")
     assert state.catalog["page_title"].status == "failed"
 
 
 async def test_requires_blocks_until_the_vault_exists(tmp_path: Path) -> None:
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(
         state,
         _verb_proposal({**VERB, "requires": [{"kind": "secret", "name": "gh", "scope": "repo"}]}),
     )
-    line = await approve(api, state, brain, p.id)
+    line = await approve(api, state, p.id)
     assert line.startswith("p-1 blocked") and "gh" in line and p.status == "blocked"
     assert api.calls == [] and state.catalog == {}
 
 
 async def test_policy_and_prompt_apply_and_revert(tmp_path: Path) -> None:
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     hook = propose(state, _verb_proposal(HOOK))
-    await approve(api, state, brain, hook.id)
+    await approve(api, state, hook.id)
     opening = {
         "principals": {"ssh:mike": {"invoke": "*", "propose": True}},
         "hooks": ["verify_ssh"],
         "door": "open",
     }
     pol = propose(state, {"kind": "policy", "title": "open", "rationale": "r", "policy": opening})
-    assert (await approve(api, state, brain, pol.id)).startswith("p-2 applied")
-    assert brain.policy() == parse_policy(opening) and state.applied_policy == "p-2"
-    assert state.previous_policy == CLOSED
+    assert (await approve(api, state, pol.id)).startswith("p-2 applied")
+    assert state.policy == parse_policy(opening) and state.applied_policy == "p-2"
+    assert state.previous_policy == parse_policy(CLOSED)
     prm = propose(
         state, {"kind": "prompt", "title": "self", "rationale": "r", "prompt": "I verify."}
     )
-    assert (await approve(api, state, brain, prm.id)).startswith("p-3 applied")
-    assert brain.self_description() == "I verify." and state.applied_prompt == "p-3"
-    assert revert(state, brain, "p-2").startswith(
-        "p-2 reverted"
-    ) and brain.policy() == parse_policy(CLOSED)
+    assert (await approve(api, state, prm.id)).startswith("p-3 applied")
+    assert state.self_description == "I verify." and state.applied_prompt == "p-3"
+    assert revert(state, "p-2").startswith("p-2 reverted") and state.policy == parse_policy(CLOSED)
     assert pol.status == "reverted" and state.applied_policy is None
-    assert revert(state, brain, "p-3").startswith("p-3 reverted") and brain.self_description() == ""
-    assert "not applied" in revert(state, brain, "p-3")
+    assert revert(state, "p-3").startswith("p-3 reverted") and state.self_description == ""
+    assert "not applied" in revert(state, "p-3")
 
 
 async def test_supersedes_replaces_the_catalog_entry_and_marks_the_old_proposal(
     tmp_path: Path,
 ) -> None:
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     first = propose(state, _verb_proposal(VERB))
-    await approve(api, state, brain, first.id)
+    await approve(api, state, first.id)
     dup = propose(state, _verb_proposal(VERB))
-    assert "already" in await approve(api, state, brain, dup.id) and dup.status == "pending"
+    assert "already" in await approve(api, state, dup.id) and dup.status == "pending"
     fix = propose(
         state,
         _verb_proposal({**VERB, "dockerfile": "FROM mshkn-base\nRUN true # fix"}, supersedes="p-1"),
     )
-    assert (await approve(api, state, brain, fix.id)).startswith("p-3 building")
+    assert (await approve(api, state, fix.id)).startswith("p-3 building")
     assert first.status == "superseded" and state.catalog["page_title"].proposal_id == "p-3"
 
 
 async def test_reject_and_disable(tmp_path: Path) -> None:
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(state, _verb_proposal(VERB))
     assert reject(state, p.id, "no") == "p-1 rejected: no" and p.status == "rejected"
     assert state.inbox[-1].kind == "rejection" and "no" in state.inbox[-1].text
     q = propose(state, _verb_proposal(CHAIN_VERB))
-    await approve(api, state, brain, q.id)
+    await approve(api, state, q.id)
     state.catalog["counter"].status = "ready"
     line = disable(state, "counter")
     entry = state.catalog["counter"]
@@ -247,7 +249,7 @@ async def test_reject_and_disable(tmp_path: Path) -> None:
     assert q.status == "disabled"
     assert "no verb" in disable(state, "nope")
     with pytest.raises(KeyError):
-        await approve(api, state, brain, "p-99")
+        await approve(api, state, "p-99")
 
 
 def test_refuse_approval_also_catches_a_verb_built_outside_parse_verb() -> None:
@@ -269,9 +271,9 @@ def test_refuse_approval_also_catches_a_verb_built_outside_parse_verb() -> None:
 
 
 async def test_a_hook_naming_a_verb_with_no_asserts_is_refused(tmp_path: Path) -> None:
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     plain = propose(state, _verb_proposal(VERB))
-    await approve(api, state, brain, plain.id)
+    await approve(api, state, plain.id)
     opening = propose(
         state,
         {
@@ -285,9 +287,9 @@ async def test_a_hook_naming_a_verb_with_no_asserts_is_refused(tmp_path: Path) -
 
 
 async def test_approve_marks_a_superseded_policy(tmp_path: Path) -> None:
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     first = propose(state, {"kind": "policy", "title": "p", "rationale": "r", "policy": CLOSED})
-    await approve(api, state, brain, first.id)
+    await approve(api, state, first.id)
     second = propose(
         state,
         {
@@ -298,7 +300,7 @@ async def test_approve_marks_a_superseded_policy(tmp_path: Path) -> None:
             "supersedes": first.id,
         },
     )
-    await approve(api, state, brain, second.id)
+    await approve(api, state, second.id)
     assert first.status == "superseded"
 
 
@@ -325,16 +327,16 @@ def test_propose_forces_pending_status_and_clears_recipe_and_log() -> None:
 async def test_a_rejected_supersede_leaves_a_ready_verb_untouched(tmp_path: Path) -> None:
     """Finding 2 / ruling T8-R1: a 422 at approval fails the proposal, not the
     working verb a rejected supersede was meant to replace."""
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     first = propose(state, _verb_proposal(VERB))
-    await approve(api, state, brain, first.id)
+    await approve(api, state, first.id)
     state.catalog["page_title"].status = "ready"
     bad_dockerfile = "FROM mshkn-base\nRUN true # fix"
     api.reject_dockerfiles[bad_dockerfile] = "recipes must be built FROM mshkn-base"
     fix = propose(
         state, _verb_proposal({**VERB, "dockerfile": bad_dockerfile}, supersedes=first.id)
     )
-    line = await approve(api, state, brain, fix.id)
+    line = await approve(api, state, fix.id)
     assert line.startswith("p-2 failed") and fix.status == "failed"
     assert state.catalog["page_title"].status == "ready"
     assert state.catalog["page_title"].proposal_id == "p-1"
@@ -360,9 +362,9 @@ def test_supersedes_a_different_verb_is_refused_at_propose() -> None:
 
 async def test_reject_refuses_anything_not_pending_or_blocked(tmp_path: Path) -> None:
     """Finding 4: reject cannot undo an approval; it mirrors approve's guard."""
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     pol = propose(state, {"kind": "policy", "title": "p", "rationale": "r", "policy": CLOSED})
-    await approve(api, state, brain, pol.id)
+    await approve(api, state, pol.id)
     line = reject(state, pol.id, "too late")
     assert line == "p-1 is applied, not pending or blocked"
     assert pol.status == "applied" and state.inbox == []
@@ -370,9 +372,9 @@ async def test_reject_refuses_anything_not_pending_or_blocked(tmp_path: Path) ->
 
 async def test_reject_accepts_a_blocked_proposal(tmp_path: Path) -> None:
     """Finding 4: a blocked proposal (unmet requires) can still be rejected."""
-    api, state, brain = FakeMshkn(), State(), _brain(tmp_path)
+    api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(state, _verb_proposal({**VERB, "requires": [{"kind": "secret", "name": "gh"}]}))
-    await approve(api, state, brain, p.id)
+    await approve(api, state, p.id)
     assert p.status == "blocked"
     assert reject(state, p.id, "not needed") == "p-1 rejected: not needed"
     assert p.status == "rejected"

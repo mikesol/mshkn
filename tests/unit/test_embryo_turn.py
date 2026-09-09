@@ -41,6 +41,11 @@ def _brain(tmp_path: Path, policy: dict[str, Any] = CLOSED) -> Brain:
     return Brain(tmp_path)
 
 
+def _brain_state(tmp_path: Path, policy: dict[str, Any] = CLOSED) -> tuple[Brain, State]:
+    brain = _brain(tmp_path, policy)
+    return brain, brain.state()
+
+
 def _audit(out: str) -> dict[str, Any]:
     audit, _ = split_output(out)
     return audit
@@ -86,7 +91,7 @@ def test_history_is_the_last_ten_exchanges() -> None:
 
 
 async def test_root_turn_with_no_calls(tmp_path: Path) -> None:
-    brain, state, api, memory = _brain(tmp_path), State(), FakeMshkn(), ListMemory()
+    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
     model = StubModel([text_completion("I am an embryo.")])
     out = await say(
         brain=brain,
@@ -110,11 +115,12 @@ async def test_root_turn_with_no_calls(tmp_path: Path) -> None:
 
 async def test_system_prompt_is_seed_then_self(tmp_path: Path) -> None:
     brain = _brain(tmp_path)
-    brain.write_self("I verify.")
+    state = brain.state()
+    state.self_description = "I verify."
     model = StubModel([text_completion("ok")])
     await say(
         brain=brain,
-        state=State(),
+        state=state,
         api=FakeMshkn(),
         model=model,
         memory=ListMemory(),
@@ -126,7 +132,7 @@ async def test_system_prompt_is_seed_then_self(tmp_path: Path) -> None:
 
 
 async def test_closed_door_answers_one_line_and_never_calls_the_model(tmp_path: Path) -> None:
-    brain, state, model = _brain(tmp_path), State(), StubModel([text_completion("never")])
+    brain, state, model = *_brain_state(tmp_path), StubModel([text_completion("never")])
     out = await say(
         brain=brain,
         state=state,
@@ -146,7 +152,7 @@ async def test_closed_door_answers_one_line_and_never_calls_the_model(tmp_path: 
 
 
 async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path: Path) -> None:
-    brain, state, api, memory = _brain(tmp_path, OPEN), State(), FakeMshkn(), ListMemory()
+    brain, state, api, memory = *_brain_state(tmp_path, OPEN), FakeMshkn(), ListMemory()
     hook = parse_verb(HOOK)
     info = await api.create_recipe(hook.dockerfile)
     await api.get_recipe(info.id)
@@ -244,7 +250,7 @@ async def test_hooks_fail_closed_when_not_ready_or_malformed() -> None:
 
 
 async def test_propose_tool_reports_a_declaration_error_as_invalid(tmp_path: Path) -> None:
-    brain, state, api, memory = _brain(tmp_path), State(), FakeMshkn(), ListMemory()
+    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
     model = StubModel(
         [tool_call_completion("propose", title="verb with no kind"), text_completion("noted")]
     )
@@ -270,7 +276,7 @@ async def test_authenticated_without_propose_rights_gets_remember_only(tmp_path:
         "hooks": ["verify_ssh"],
         "door": "open",
     }
-    brain, state, api, memory = _brain(tmp_path, no_propose), State(), FakeMshkn(), ListMemory()
+    brain, state, api, memory = *_brain_state(tmp_path, no_propose), FakeMshkn(), ListMemory()
     hook = parse_verb(HOOK)
     info = await api.create_recipe(hook.dockerfile)
     await api.get_recipe(info.id)
@@ -305,7 +311,7 @@ async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticat
     denies anonymous `try`/`propose`). An anonymous turn still polls builds
     and trials so a failure lands in the inbox, but composes its input with
     an empty inbox and leaves `state.inbox` untouched for root's next turn."""
-    brain, state, api, memory = _brain(tmp_path, OPEN), State(), FakeMshkn(), ListMemory()
+    brain, state, api, memory = *_brain_state(tmp_path, OPEN), FakeMshkn(), ListMemory()
     hook = parse_verb(HOOK)
     hook_info = await api.create_recipe(hook.dockerfile)
     await api.get_recipe(hook_info.id)
@@ -361,7 +367,7 @@ async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticat
 
 
 async def test_tools_run_and_proposals_are_appended_in_full(tmp_path: Path) -> None:
-    brain, state, api, memory = _brain(tmp_path), State(), FakeMshkn(), ListMemory()
+    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
     proposal = {"kind": "verb", "title": "page_title", "rationale": "r", "verb": VERB}
     model = StubModel(
         [
@@ -392,9 +398,9 @@ async def test_tools_run_and_proposals_are_appended_in_full(tmp_path: Path) -> N
 
 
 async def test_a_ready_verb_is_a_tool_and_builds_are_polled_first(tmp_path: Path) -> None:
-    brain, state, api, memory = _brain(tmp_path), State(), FakeMshkn(), ListMemory()
+    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
     p = propose(state, {"kind": "verb", "title": "t", "rationale": "r", "verb": VERB})
-    await approve(api, state, brain, p.id)
+    await approve(api, state, p.id)
     verb = parse_verb(VERB)
     api.outputs[render_command(verb, {"url": "https://example.com"})] = (0, "Example Domain\n", "")
     model = StubModel(
@@ -445,7 +451,7 @@ async def test_scripted_model_liturgy_turn_2_tries_and_proposes(tmp_path: Path) 
     consume `ToolCall.input` exactly as `membrane.scripted.ScriptedModel`
     emits it. Liturgy turn 2 (spec §9): a real declaration is `try`-ed, then
     two full proposal documents are `propose`-d."""
-    brain, state, api, memory = _brain(tmp_path), State(), FakeMshkn(), ListMemory()
+    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
     message = (
         "Your public door is closed because you cannot tell who is speaking. "
         "Propose a way to know that a message there comes from me, and open the door. "

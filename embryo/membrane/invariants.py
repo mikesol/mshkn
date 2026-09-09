@@ -13,9 +13,10 @@ if TYPE_CHECKING:
     from membrane.declarations import Policy, Proposal, Verb
     from membrane.state import State
 
-# §10.3: only these change on approval. The membrane, the seed, the invariants
-# and the scoped key are not proposal kinds, so nothing can name them.
-MUTABLE = ("self.md", "policy.json", "catalog")
+# §10.3: only these fields of State change on approval; all three live in
+# state.json. The membrane, the seed, the invariants and the scoped key are not
+# proposal kinds, so nothing can name them.
+MUTABLE = ("self_description", "policy", "catalog")
 
 
 def door_is_open(policy: Policy) -> bool:
