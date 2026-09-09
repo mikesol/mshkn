@@ -262,7 +262,10 @@ class TestPhase15Relay:
             # An assertion above could fail with the sleeper still in flight; leaving it
             # orphaned would run it against a client the fixture is about to close and
             # could leave a stray checkpoint the `chain` fixture's teardown never sees.
+            # CancelledError derives from BaseException, not Exception: suppressing only
+            # Exception here would let it override a real assertion error propagating
+            # out of the `try`, so both are named explicitly.
             if not sleeper.done():
                 sleeper.cancel()
-            with suppress(Exception):
+            with suppress(asyncio.CancelledError, Exception):
                 await sleeper
