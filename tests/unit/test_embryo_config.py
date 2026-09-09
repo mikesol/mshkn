@@ -59,3 +59,14 @@ def test_default_brain_comes_from_the_environment(
     (tmp_path / ".env").write_text("MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n")
     monkeypatch.setenv("MEMBRANE_BRAIN", str(tmp_path))
     assert load_settings().brain == tmp_path
+
+
+def test_effort_is_optional_and_validated(tmp_path: Path) -> None:
+    base = "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n"
+    (tmp_path / ".env").write_text(base)
+    assert load_settings(tmp_path).effort is None
+    (tmp_path / ".env").write_text(base + "MEMBRANE_EFFORT=medium\n")
+    assert load_settings(tmp_path).effort == "medium"
+    (tmp_path / ".env").write_text(base + "MEMBRANE_EFFORT=turbo\n")
+    with pytest.raises(ValueError, match="MEMBRANE_EFFORT"):
+        load_settings(tmp_path)

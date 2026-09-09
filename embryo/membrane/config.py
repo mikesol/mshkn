@@ -12,6 +12,7 @@ DEFAULT_BRAIN = Path("/brain")
 DEFAULT_MODEL_ID = "claude-opus-5"
 
 ModelKind = Literal["anthropic", "scripted"]
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,10 @@ class Settings:
     model_id: str
     anthropic_api_key: str | None
     openai_api_key: str | None
+    # `output_config.effort` for every completion; None leaves the API's default (high).
+    # The measure sets it per run (#106): at the default, Opus 5 can think for the whole
+    # 240 s turn on the hard turns.
+    effort: str | None = None
 
 
 def parse_env(text: str) -> dict[str, str]:
@@ -53,6 +58,9 @@ def load_settings(brain: Path | None = None) -> Settings:
         raise ValueError(f"MEMBRANE_MODEL must be anthropic or scripted, not {model!r}")
     anthropic_key = env.get("ANTHROPIC_API_KEY") or None
     openai_key = env.get("OPENAI_API_KEY") or None
+    effort = env.get("MEMBRANE_EFFORT") or None
+    if effort is not None and effort not in EFFORTS:
+        raise ValueError(f"MEMBRANE_EFFORT must be one of {', '.join(EFFORTS)}, not {effort!r}")
     if model == "anthropic":
         for name, value in (("ANTHROPIC_API_KEY", anthropic_key), ("OPENAI_API_KEY", openai_key)):
             if value is None:
@@ -65,4 +73,5 @@ def load_settings(brain: Path | None = None) -> Settings:
         model_id=env.get("MEMBRANE_MODEL_ID", DEFAULT_MODEL_ID),
         anthropic_api_key=anthropic_key,
         openai_api_key=openai_key,
+        effort=effort,
     )

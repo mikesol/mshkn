@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-09T08:59:47+00:00",
+ "command": "say",
+ "computer_id": "comp-39365f0d24a7",
+ "detail": "Your public door is closed because you cannot tell who is speaking. Propose a way to know that a message there comes from me, and open the door. My public key is ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHUHNtBMzAdra/taqSIFDBSLctWBjNuQeUW5G0QoIv9d mike",
+ "door": "api",
+ "n": 4,
+ "seconds": 253.31556398799876,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\nError parsing extraction response: Expecting ',' delimiter: line 1 column 1021 (char 1020)\n",
+ "stdout": "audit {\"door\": \"api\", \"hooks\": [], \"memory_written\": true, \"model_calls\": 1, \"offered\": [\"propose\", \"remember\", \"try\"], \"principal\": \"root\", \"proposals\": [], \"stopped\": \"deadline\", \"tools\": [], \"turn\": 2, \"usage\": {\"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"input_tokens\": 3925, \"output_tokens\": 5}}\nI ran out of time before finishing this turn. I have your key. Before I spend a proposal on it, let me prove the ear works end-to-end on a throwaway computer \u2014 including the failure cases, which matter more than the success case.\n"
+}

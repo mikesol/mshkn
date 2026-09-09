@@ -70,9 +70,10 @@ class Model(Protocol):
 
 
 class AnthropicModel:
-    def __init__(self, client: Any, model_id: str) -> None:
+    def __init__(self, client: Any, model_id: str, effort: str | None = None) -> None:
         self.client = client
         self.model_id = model_id
+        self.effort = effort
 
     async def complete(
         self,
@@ -94,6 +95,8 @@ class AnthropicModel:
         }
         if tools:
             kwargs["tools"] = tools
+        if self.effort is not None:
+            kwargs["output_config"] = {"effort": self.effort}
         timed_out = False
         async with self.client.messages.stream(**kwargs) as stream:
             try:
@@ -131,5 +134,7 @@ def build_model(settings: Settings) -> Model:
     import anthropic
 
     return AnthropicModel(
-        anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key), settings.model_id
+        anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key),
+        settings.model_id,
+        settings.effort,
     )

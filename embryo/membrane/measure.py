@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
 import httpx
 
-from membrane.config import DEFAULT_MODEL_ID, parse_env
+from membrane.config import DEFAULT_MODEL_ID, EFFORTS, parse_env
 from membrane.declarations import RESERVED_NAMESPACES
 from membrane.liturgy import COUNT, LITURGY
 from membrane.model import add_usage, zero_usage
@@ -74,10 +74,15 @@ class MeasureSettings:
     anthropic_api_key: str
     openai_api_key: str
     model_id: str
+    effort: str | None = None
 
 
 def load_measure_settings(
-    env_file: Path, environ: Mapping[str, str], *, model_id: str | None = None
+    env_file: Path,
+    environ: Mapping[str, str],
+    *,
+    model_id: str | None = None,
+    effort: str | None = None,
 ) -> MeasureSettings:
     """The operator's `.env` (git-ignored) under the environment: the four
     required keys, `BRAIN_API_URL` if the brain dials a different address."""
@@ -93,6 +98,7 @@ def load_measure_settings(
         anthropic_api_key=values["ANTHROPIC_API_KEY"],
         openai_api_key=values["OPENAI_API_KEY"],
         model_id=model_id or DEFAULT_MODEL_ID,
+        effort=effort,
     )
 
 
@@ -485,6 +491,7 @@ def hatch(settings: MeasureSettings, script: Path, *, log: TextIO) -> Hatched:
         "BRAIN_API_URL": settings.brain_api_url,
         "MEMBRANE_MODEL": "anthropic",
         "MEMBRANE_MODEL_ID": settings.model_id,
+        "MEMBRANE_EFFORT": settings.effort or "",
         "ANTHROPIC_API_KEY": settings.anthropic_api_key,
         "OPENAI_API_KEY": settings.openai_api_key,
     }
@@ -884,6 +891,7 @@ async def run_once(
             summary = {
                 "run": out_dir.name,
                 "model": settings.model_id,
+                "effort": settings.effort,
                 "membrane": membrane_version(),
                 "started": started.isoformat(timespec="seconds"),
                 "ended": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -943,12 +951,17 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
     parser.add_argument("--env", type=Path, default=Path(".env"))
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--model", default=None, help=f"model id (default {DEFAULT_MODEL_ID})")
+    parser.add_argument(
+        "--effort", choices=EFFORTS, default=None, help="output_config.effort (default the API's)"
+    )
     parser.add_argument("--date", default=datetime.now(UTC).date().isoformat())
     parser.add_argument("--keep", action="store_true", help="leave the brain on the account")
     parser.add_argument("--hatch", type=Path, default=HATCH)
     args = parser.parse_args(argv)
     try:
-        settings = load_measure_settings(args.env, os.environ, model_id=args.model)
+        settings = load_measure_settings(
+            args.env, os.environ, model_id=args.model, effort=args.effort
+        )
     except ValueError as exc:
         log.write(f"{exc}\n")
         return 2

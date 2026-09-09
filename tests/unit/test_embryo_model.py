@@ -207,3 +207,11 @@ async def test_the_turns_clock_ends_a_completion_and_keeps_its_words() -> None:
     )
     assert out.stop_reason == DEADLINE and out.text == "So far" and out.calls == ()
     assert out.content[1]["name"] == "try"  # the snapshot is kept whole in content
+
+
+async def test_effort_goes_out_as_output_config_only_when_set() -> None:
+    client = _Client(_Response([_Block("text", text="a")]))
+    await AnthropicModel(client, "m").complete(system="s", messages=[], tools=[])
+    assert "output_config" not in client.messages.calls[0]
+    await AnthropicModel(client, "m", "medium").complete(system="s", messages=[], tools=[])
+    assert client.messages.calls[1]["output_config"] == {"effort": "medium"}

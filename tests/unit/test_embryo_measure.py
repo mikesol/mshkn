@@ -90,10 +90,10 @@ def test_settings_come_from_the_env_file_and_the_environment_wins(tmp_path: Path
         model_id="claude-opus-5",
     )
     with_brain = load_measure_settings(
-        env, {"BRAIN_API_URL": "http://10.0.0.1:8000"}, model_id="claude-sonnet-5"
+        env, {"BRAIN_API_URL": "http://10.0.0.1:8000"}, model_id="claude-sonnet-5", effort="medium"
     )
     assert with_brain.brain_api_url == "http://10.0.0.1:8000"
-    assert with_brain.model_id == "claude-sonnet-5"
+    assert with_brain.model_id == "claude-sonnet-5" and with_brain.effort == "medium"
 
 
 def test_a_missing_key_is_named(tmp_path: Path) -> None:
@@ -1193,7 +1193,8 @@ def _stub_hatch(tmp_path: Path, *, fail: bool = False) -> Path:
     else:
         body += (
             "env | grep -E '^(MSHKN_API_URL|MSHKN_API_KEY|BRAIN_API_URL|MEMBRANE_MODEL"
-            '|MEMBRANE_MODEL_ID|ANTHROPIC_API_KEY|OPENAI_API_KEY)=\' | sort > "$HATCH_ENV_OUT"\n'
+            "|MEMBRANE_MODEL_ID|MEMBRANE_EFFORT|ANTHROPIC_API_KEY|OPENAI_API_KEY)='"
+            ' | sort > "$HATCH_ENV_OUT"\n'
             "echo '"
             + json.dumps(
                 {
@@ -1233,7 +1234,8 @@ def test_hatch_runs_the_script_with_the_keys_and_the_real_model(
     )
     assert out.read_text() == (
         "ANTHROPIC_API_KEY=sk-a\nBRAIN_API_URL=https://api.mshkn.dev\nMEMBRANE_MODEL=anthropic\n"
-        "MEMBRANE_MODEL_ID=claude-opus-5\nMSHKN_API_KEY=k\nMSHKN_API_URL=http://api\nOPENAI_API_KEY=oa\n"
+        "MEMBRANE_EFFORT=\nMEMBRANE_MODEL_ID=claude-opus-5\nMSHKN_API_KEY=k\n"
+        "MSHKN_API_URL=http://api\nOPENAI_API_KEY=oa\n"
     )
 
 
