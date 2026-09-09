@@ -71,6 +71,13 @@ from mshkn.db.recipes import (
     update_recipe_status,
     update_recipe_template,
 )
+from mshkn.db.relay import (
+    delete_relay_jobs_before,
+    get_relay_job,
+    insert_relay_job,
+    list_relay_jobs_by_status,
+    update_relay_job,
+)
 from mshkn.db.templates import cache_bare_template, clear_bare_template, get_bare_template
 
 if TYPE_CHECKING:
@@ -92,6 +99,7 @@ __all__ = [
     "delete_failed_recipes_by_hash",
     "delete_ingress_rule",
     "delete_recipe",
+    "delete_relay_jobs_before",
     "get_account_by_id",
     "get_account_by_key",
     "get_active_computer_for_label",
@@ -107,6 +115,7 @@ __all__ = [
     "get_max_recipe_volume_id",
     "get_recipe",
     "get_recipe_by_content_hash",
+    "get_relay_job",
     "insert_account",
     "insert_api_key",
     "insert_checkpoint",
@@ -116,6 +125,7 @@ __all__ = [
     "insert_ingress_log",
     "insert_ingress_rule",
     "insert_recipe",
+    "insert_relay_job",
     "list_account_ids_with_checkpoints",
     "list_accounts",
     "list_all_computers",
@@ -125,6 +135,7 @@ __all__ = [
     "list_ingress_rules_by_account",
     "list_prunable_checkpoints",
     "list_recipes_by_account",
+    "list_relay_jobs_by_status",
     "rotate_ingress_rule_id",
     "run_migrations",
     "set_exec_log_checkpoint",
@@ -136,6 +147,7 @@ __all__ = [
     "update_recipe_build_result",
     "update_recipe_status",
     "update_recipe_template",
+    "update_relay_job",
 ]
 
 

@@ -35,6 +35,19 @@ class IngressLogStatus(StrEnum):
     FAILED = "failed"
 
 
+class RelayStatus(StrEnum):
+    QUEUED = "queued"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class DeliveryStatus(StrEnum):
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+
+
 ExclusiveMode = Literal["error_on_conflict", "defer_on_conflict"]
 
 
@@ -65,6 +78,14 @@ class Account:
 # field means "none". `create_from` is "*" (any recipe on the account) or the
 # set of recipe ids the key may create from, where "bare" stands for no recipe.
 BARE = "bare"
+
+
+@dataclass(frozen=True)
+class RelayDelivery:
+    """The wake-up a relay job causes: fork `label` with `exec <job_id>`."""
+
+    label: str
+    exec: str
 
 
 @dataclass(frozen=True)
@@ -327,3 +348,54 @@ class IngressLog:
     error_message: str | None
     created_at: str
     computer_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Lampas's policy: exponential backoff, min(initial * 2^attempt, max)."""
+
+    attempts: int = 3
+    initial_delay_ms: int = 1000
+    max_delay_ms: int = 30000
+
+    def delay(self, attempt: int) -> float:
+        """Seconds to wait after the zero-based `attempt` failed."""
+        exponent: int = 2**attempt
+        delay_ms: int = min(self.initial_delay_ms * exponent, self.max_delay_ms)
+        return delay_ms / 1000
+
+    def to_document(self) -> dict[str, int]:
+        return {
+            "attempts": self.attempts,
+            "initial_delay_ms": self.initial_delay_ms,
+            "max_delay_ms": self.max_delay_ms,
+        }
+
+
+@dataclass
+class RelayJob:
+    """One upstream HTTP call plus at most one delivery (#110)."""
+
+    id: str
+    account_id: str
+    api_key_id: str | None
+    status: RelayStatus
+    target: str
+    method: str
+    forward_headers: dict[str, str] | None
+    body: object
+    retry: RetryPolicy
+    timeout_seconds: int
+    deliver: RelayDelivery | None
+    attempts: int
+    error: str | None
+    response_status: int | None
+    response_headers: dict[str, str] | None
+    response_body: object
+    delivery_status: DeliveryStatus | None
+    delivery_attempts: int
+    delivery_computer_id: str | None
+    delivery_deferred_id: str | None
+    delivery_error: str | None
+    created_at: str
+    updated_at: str
