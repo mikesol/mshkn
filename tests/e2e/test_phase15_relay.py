@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 import httpx  # noqa: TC002
@@ -15,7 +16,7 @@ import pytest
 from tests.e2e.conftest import checkpoint_computer, create_computer, destroy_computer
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
 JOB_TIMEOUT = 120.0
 
@@ -59,14 +60,30 @@ def _delivered(job: dict[str, Any]) -> bool:
     )
 
 
-async def _wait_exec_log(client: httpx.AsyncClient, computer_id: str) -> dict[str, Any]:
+def _has_checkpoint(log: dict[str, Any]) -> bool:
+    """`Lifecycle.run_ephemeral` inserts the exec log row before it takes the
+    checkpoint: `created_checkpoint_id` starts null and is filled in only after
+    the guest is synced and snapshotted. A caller that needs the checkpoint id
+    (or a caller whose fixture teardown will list the chain) must wait for this,
+    not stop at the log's first appearance."""
+    return bool(log.get("created_checkpoint_id"))
+
+
+async def _wait_exec_log(
+    client: httpx.AsyncClient,
+    computer_id: str,
+    *,
+    ready: Callable[[dict[str, Any]], bool] | None = None,
+) -> dict[str, Any]:
     deadline = time.monotonic() + JOB_TIMEOUT
     while time.monotonic() < deadline:
         resp = await client.get(f"/computers/{computer_id}/exec_log")
         if resp.status_code == 200:
-            return dict(resp.json())
+            log = dict(resp.json())
+            if ready is None or ready(log):
+                return log
         await asyncio.sleep(2)
-    raise TimeoutError(f"no exec log for {computer_id}")
+    raise TimeoutError(f"exec log for {computer_id} did not settle in {JOB_TIMEOUT}s")
 
 
 class TestPhase15Relay:
@@ -74,15 +91,22 @@ class TestPhase15Relay:
     async def test_t15_1_a_job_to_a_public_target_is_delivered_to_a_chain(
         self, long_client: httpx.AsyncClient, chain: str
     ) -> None:
+        # A distinctive secret in a forwarded header: the relay's credential property
+        # is that it never comes back in any response, and it deletes the headers off
+        # the job once the upstream call settles. Neither field exists on the response
+        # model, but the raw text is what a leak would actually show up in.
+        secret = uuid.uuid4().hex
         resp = await long_client.post(
             "/relay",
             json={
                 "target": "https://example.com/",
                 "method": "GET",
+                "forward_headers": {"x-relay-secret": secret},
                 "deliver": {"label": chain, "exec": "echo woke"},
             },
         )
         assert resp.status_code == 202, resp.text
+        assert secret not in resp.text
         job_id = resp.json()["job_id"]
         job = await _wait(long_client, job_id, _delivered)
         assert job["status"] == "completed" and job["attempts"] == 1, job
@@ -90,12 +114,15 @@ class TestPhase15Relay:
         assert job["delivery"]["status"] == "delivered" and job["delivery"]["computer_id"], job[
             "delivery"
         ]
-        log = await _wait_exec_log(long_client, job["delivery"]["computer_id"])
+        log = await _wait_exec_log(
+            long_client, job["delivery"]["computer_id"], ready=_has_checkpoint
+        )
         assert log["command"] == f"echo woke {job_id}" and job_id in log["stdout"]
         assert log["label"] == chain and log["created_checkpoint_id"]
         heads = (await long_client.get("/checkpoints", params={"label": chain})).json()
         assert len(heads) == 2
-        assert "forward_headers" not in resp.text and "forward_headers" not in str(job)
+        reread = await long_client.get(f"/relay/{job_id}")
+        assert secret not in str(job) and secret not in reread.text
 
     @pytest.mark.asyncio
     async def test_t15_2_the_guard_refuses_the_host(self, client: httpx.AsyncClient) -> None:
@@ -108,6 +135,10 @@ class TestPhase15Relay:
         ):
             resp = await client.post("/relay", json={"target": target})
             assert resp.status_code == 422, (target, resp.text)
+            # FastAPI's own validation errors are also 422 with a `detail` list; the
+            # guard's own refusal is a string naming itself, so this tells the two apart.
+            detail = resp.json()["detail"]
+            assert isinstance(detail, str) and "target refused" in detail, (target, detail)
 
     @pytest.mark.asyncio
     async def test_t15_3_a_scoped_key_is_held_to_its_scope(
@@ -128,6 +159,7 @@ class TestPhase15Relay:
         assert minted_relay.status_code == 200, minted_relay.text
         scoped = {"Authorization": f"Bearer {minted_relay.json()['secret']}"}
         other_minted = await long_client.post("/keys", json={"scopes": scope, "label": "t15-other"})
+        assert other_minted.status_code == 200, other_minted.text
         other = {"Authorization": f"Bearer {other_minted.json()['secret']}"}
         try:
             assert (
@@ -168,7 +200,11 @@ class TestPhase15Relay:
             assert (await long_client.get(f"/relay/{job_id}", headers=scoped)).status_code == 200
             assert (await long_client.get(f"/relay/{job_id}", headers=other)).status_code == 404
             assert (await long_client.get(f"/relay/{job_id}")).status_code == 200
-            log = await _wait_exec_log(long_client, job["delivery"]["computer_id"])
+            # Waited on the checkpoint, not just the log's existence, so the `chain`
+            # fixture's teardown below lists a settled chain (same race as T15.1).
+            log = await _wait_exec_log(
+                long_client, job["delivery"]["computer_id"], ready=_has_checkpoint
+            )
             assert log["command"] == f"echo pinned {job_id}"
         finally:
             for key in (minted, minted_relay, other_minted):
@@ -190,30 +226,43 @@ class TestPhase15Relay:
                 timeout=120.0,
             )
         )
-        await asyncio.sleep(10)  # the sleeper's fork is admitted and running
-        resp = await long_client.post(
-            "/relay",
-            json={
-                "target": "https://example.com/",
-                "method": "GET",
-                "deliver": {"label": chain, "exec": "echo woke"},
-            },
-        )
-        assert resp.status_code == 202, resp.text
-        job_id = resp.json()["job_id"]
-        job = await _wait(long_client, job_id, _delivered)
-        assert job["delivery"]["status"] == "delivered" and job["delivery"]["deferred_id"], job[
-            "delivery"
-        ]
-        assert job["delivery"]["computer_id"] is None
-        slept = await sleeper
-        assert slept.status_code == 200 and slept.json()["exec_exit_code"] == 0, slept.text
-        deadline = time.monotonic() + JOB_TIMEOUT
-        while time.monotonic() < deadline:
-            heads = (await long_client.get("/checkpoints", params={"label": chain})).json()
-            if len(heads) == 3:
-                break
-            await asyncio.sleep(3)
-        assert len(heads) == 3, "the sleeper's checkpoint, then the drained wake-up's"
-        log = await _wait_exec_log(long_client, heads[0]["computer_id"])
-        assert log["command"].endswith(f"echo woke {job_id}") and job_id in log["stdout"]
+        try:
+            # The sleeper's fork is admitted and running. If a cold fork takes longer
+            # than this cushion to be admitted, the relay's fork below lands before the
+            # sleeper's and the failure surfaces on the sleeper's own status assertion,
+            # not on the deferral this test is actually about.
+            await asyncio.sleep(10)
+            resp = await long_client.post(
+                "/relay",
+                json={
+                    "target": "https://example.com/",
+                    "method": "GET",
+                    "deliver": {"label": chain, "exec": "echo woke"},
+                },
+            )
+            assert resp.status_code == 202, resp.text
+            job_id = resp.json()["job_id"]
+            job = await _wait(long_client, job_id, _delivered)
+            assert job["delivery"]["status"] == "delivered" and job["delivery"]["deferred_id"], job[
+                "delivery"
+            ]
+            assert job["delivery"]["computer_id"] is None
+            slept = await sleeper
+            assert slept.status_code == 200 and slept.json()["exec_exit_code"] == 0, slept.text
+            deadline = time.monotonic() + JOB_TIMEOUT
+            while time.monotonic() < deadline:
+                heads = (await long_client.get("/checkpoints", params={"label": chain})).json()
+                if len(heads) == 3:
+                    break
+                await asyncio.sleep(3)
+            assert len(heads) == 3, "the sleeper's checkpoint, then the drained wake-up's"
+            log = await _wait_exec_log(long_client, heads[0]["computer_id"])
+            assert log["command"].endswith(f"echo woke {job_id}") and job_id in log["stdout"]
+        finally:
+            # An assertion above could fail with the sleeper still in flight; leaving it
+            # orphaned would run it against a client the fixture is about to close and
+            # could leave a stray checkpoint the `chain` fixture's teardown never sees.
+            if not sleeper.done():
+                sleeper.cancel()
+            with suppress(Exception):
+                await sleeper

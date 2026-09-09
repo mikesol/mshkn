@@ -38,6 +38,10 @@ BRAIN_API_URL = os.environ.get("MSHKN_BRAIN_API_URL", "https://api.mshkn.dev")
 TURN_TIMEOUT = 330.0
 TURN_WAIT = 3600.0
 BUILD_TIMEOUT = 600.0
+# The host's idle reaper fires at 1800s and does not count the scripted model
+# server's background process as activity, so a long poll must touch it well
+# before then; well under half the reaper's window, not on every iteration.
+TOUCH_INTERVAL = 300.0
 
 # `approve` on a verb proposal (membrane.proposals.approve): the id, the status the
 # recipe was in the instant it was submitted, the verb and its recipe.
@@ -100,6 +104,7 @@ class Doors:
         self.client, self.public, self.hatched = client, public, hatched
         # every principal the public door minted, in order, for §10.1 in T14.7
         self.public_principals: list[str] = []
+        self._touched_at = time.monotonic()
 
     async def root_say(self, text: str) -> tuple[dict[str, Any], str]:
         return await self._spoken(await self.root("say", b64(text)))
@@ -121,6 +126,7 @@ class Doors:
                     return dict(entry["audit"]), str(entry["output"])
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"turn {turn} did not close within {TURN_WAIT:.0f} s")
+            await self._keep_alive()
             await asyncio.sleep(3)
 
     async def _spoken(self, out: str) -> tuple[dict[str, Any], str]:
@@ -141,6 +147,13 @@ class Doors:
                 timeout=60.0,
             )
             assert resp.status_code == 200, resp.text
+        self._touched_at = time.monotonic()
+
+    async def _keep_alive(self) -> None:
+        """Called from inside a long polling loop: touches the scripted server once
+        `TOUCH_INTERVAL` has passed since the last touch, not on every iteration."""
+        if time.monotonic() - self._touched_at >= TOUCH_INTERVAL:
+            await self.touch()
 
     async def approve_verb(self, proposal_id: str, verb: str) -> str:
         """root approve on a verb proposal; asserts the whole reply and returns the
@@ -185,6 +198,7 @@ class Doors:
             entry = listing["catalog"].get(verb)
             if entry and entry["status"] in ("ready", "failed"):
                 return listing
+            await self._keep_alive()
             await asyncio.sleep(5)
         raise TimeoutError(f"{verb} did not build in {BUILD_TIMEOUT}s")
 
