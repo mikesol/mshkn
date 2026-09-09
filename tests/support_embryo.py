@@ -170,10 +170,18 @@ class StubModel:
         default_factory=list
     )
 
+    timeouts: list[float | None] = field(default_factory=list)
+
     async def complete(
-        self, *, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        timeout: float | None = None,
     ) -> Completion:
         self.calls.append((system, [dict(m) for m in messages], list(tools)))
+        self.timeouts.append(timeout)
         if not self.script:
             return Completion(
                 text="(no script)", calls=(), content=[{"type": "text", "text": "(no script)"}]

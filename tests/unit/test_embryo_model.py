@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from membrane.config import Settings
 from membrane.model import (
+    DEADLINE,
     MAX_TOKENS,
     USAGE_KEYS,
     AnthropicModel,
@@ -37,19 +39,42 @@ class _Response:
         return {"content": [vars(b) for b in self.content]}
 
 
-class _Messages:
-    def __init__(self, response: _Response) -> None:
-        self.response = response
-        self.calls: list[dict[str, Any]] = []
+class _Stream:
+    """The SDK's AsyncMessageStream as the model uses it: get_final_message() and the
+    snapshot of what has arrived so far. `hang` makes the final message never come."""
 
-    async def create(self, **kwargs: Any) -> _Response:
-        self.calls.append(kwargs)
+    def __init__(self, response: _Response, *, hang: bool = False) -> None:
+        self.response, self.hang = response, hang
+
+    async def __aenter__(self) -> _Stream:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def get_final_message(self) -> _Response:
+        if self.hang:
+            await asyncio.sleep(3600)
+        return self.response
+
+    @property
+    def current_message_snapshot(self) -> _Response:
         return self.response
 
 
+class _Messages:
+    def __init__(self, response: _Response, *, hang: bool = False) -> None:
+        self.response, self.hang = response, hang
+        self.calls: list[dict[str, Any]] = []
+
+    def stream(self, **kwargs: Any) -> _Stream:
+        self.calls.append(kwargs)
+        return _Stream(self.response, hang=self.hang)
+
+
 class _Client:
-    def __init__(self, response: _Response) -> None:
-        self.messages = _Messages(response)
+    def __init__(self, response: _Response, *, hang: bool = False) -> None:
+        self.messages = _Messages(response, hang=hang)
 
 
 async def test_complete_maps_blocks_to_text_and_calls() -> None:
@@ -163,4 +188,19 @@ async def test_stop_reason_is_kept() -> None:
     response.stop_reason = "max_tokens"  # type: ignore[attr-defined]
     out = await AnthropicModel(_Client(response), "m").complete(system="s", messages=[], tools=[])
     assert out.stop_reason == "max_tokens"
-    assert MAX_TOKENS == 16000  # the SDK's non-streaming ceiling; thinking counts against it
+    assert MAX_TOKENS == 64000  # streamed, so no HTTP timeout bounds it; the turn's clock does
+
+
+async def test_the_turns_clock_ends_a_completion_and_keeps_its_words() -> None:
+    """#106: a completion is streamed and bounded by the time left in the turn; at the
+    deadline the text so far is the completion, a half-built call is not a call."""
+    response = _Response(
+        [_Block("text", text="So far"), _Block("tool_use", id="tu", name="try", input={})]
+    )
+    response.stop_reason = None  # type: ignore[attr-defined]
+    client = _Client(response, hang=True)
+    out = await AnthropicModel(client, "m").complete(
+        system="s", messages=[], tools=[], timeout=0.01
+    )
+    assert out.stop_reason == DEADLINE and out.text == "So far" and out.calls == ()
+    assert out.content[1]["name"] == "try"  # the snapshot is kept whole in content

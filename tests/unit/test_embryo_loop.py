@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from membrane.loop import CAP, CAP_REACHED, OUT_OF_TIME, OUT_OF_TOKENS, Tool, run_loop
-from membrane.model import Completion, ToolCall, zero_usage
+from membrane.model import DEADLINE, Completion, ToolCall, zero_usage
 
 from tests.support_embryo import StubModel, text_completion, tool_call_completion
 
@@ -181,3 +181,25 @@ async def test_an_exhausted_output_budget_ends_the_turn_honestly() -> None:
     )
     # a call that arrived with a truncated response is not run
     assert out.stopped == "max_tokens" and out.calls == [] and out.text == f"{OUT_OF_TOKENS} I will"
+
+
+async def test_each_completion_gets_the_time_left_and_a_deadline_stop_ends_the_turn() -> None:
+    clock = iter([0.0, 0.0, 100.0, 100.0, 100.0, 100.0])
+    model = StubModel(
+        [
+            tool_call_completion("echo", x=1),
+            Completion(text="partial", calls=(), content=[], stop_reason=DEADLINE),
+        ]
+    )
+    out = await run_loop(
+        model,
+        system="s",
+        history=[],
+        user="go",
+        tools={"echo": ECHO},
+        deadline=240.0,
+        now=lambda: next(clock),
+    )
+    assert model.timeouts == [240.0, 140.0]
+    assert out.stopped == "deadline" and out.text == f"{OUT_OF_TIME} partial"
+    assert out.model_calls == 2 and len(out.calls) == 1

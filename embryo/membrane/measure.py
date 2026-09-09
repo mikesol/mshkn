@@ -960,16 +960,23 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
         out_dir = _next_run_dir(args.out, args.date)
         # The hatcher's private key lives in a temp dir, never beside the evidence.
         key_dir = Path(tempfile.mkdtemp(prefix="measure-keys-"))
-        summary = asyncio.run(
-            run_once(
-                settings,
-                out_dir,
-                approver,
-                hatch_script=args.hatch,
-                key_dir=key_dir,
-                keep=args.keep,
-                log=log,
+        try:
+            summary = asyncio.run(
+                run_once(
+                    settings,
+                    out_dir,
+                    approver,
+                    hatch_script=args.hatch,
+                    key_dir=key_dir,
+                    keep=args.keep,
+                    log=log,
+                )
             )
-        )
+        except RuntimeError as exc:
+            # The run's directory holds what it had (run.json names the error); the
+            # brain was torn down; the next run is a new embryo.
+            log.write(f"{out_dir.name} aborted: {str(exc)[:300]}\n")
+            all_ok = False
+            continue
         all_ok = all_ok and bool(summary["ok"])
     return 0 if all_ok else 1

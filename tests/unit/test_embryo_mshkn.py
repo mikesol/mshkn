@@ -213,3 +213,16 @@ async def test_create_computer_without_a_label_omits_it_from_the_payload() -> No
         recipe_id="rcp-1", command="echo hi", needs={}, label=None, timeout=30.0
     )
     assert result == RunResult("comp-3", 0, "", "", None)
+
+
+async def test_a_transport_error_is_an_mshkn_error() -> None:
+    """#109: a timeout during a trial's create_computer crashed the turn."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    api = Mshkn(httpx.AsyncClient(base_url="http://api", transport=httpx.MockTransport(handler)))
+    with pytest.raises(MshknError) as info:
+        await api.get_recipe("rcp-1")
+    assert info.value.status == 0 and "ReadTimeout" in info.value.detail
+    await api.aclose()

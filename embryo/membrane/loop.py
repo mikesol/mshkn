@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
-from membrane.model import add_usage, zero_usage
+from membrane.model import DEADLINE, add_usage, zero_usage
 
 if TYPE_CHECKING:
     from membrane.model import Model
@@ -62,12 +62,18 @@ async def run_loop(
         )
 
     while True:
-        if now() >= deadline:
+        left = deadline - now()
+        if left <= 0:
             return finish(f"{OUT_OF_TIME} {last_text}".strip(), "deadline")
-        completion = await model.complete(system=system, messages=messages, tools=definitions)
+        completion = await model.complete(
+            system=system, messages=messages, tools=definitions, timeout=left
+        )
         model_calls += 1
         usage = add_usage(usage, completion.usage)
         last_text = completion.text or last_text
+        if completion.stop_reason == DEADLINE:
+            # the clock ran out mid-response: keep the words, end the turn
+            return finish(f"{OUT_OF_TIME} {last_text}".strip(), "deadline")
         if completion.stop_reason == "max_tokens":
             # The budget ran out mid-response (live run 2026-09-09-run-1, turn 2: all
             # of it thinking). Whatever calls arrived are not run: the response they

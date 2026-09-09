@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-09T08:36:19+00:00",
+ "command": "say",
+ "computer_id": "comp-824805b448af",
+ "detail": "check your build",
+ "door": "api",
+ "n": 7,
+ "seconds": 200.91147294198163,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\nError parsing extraction response: Expecting ',' delimiter: line 1 column 1739 (char 1738)\n",
+ "stdout": "audit {\"door\": \"api\", \"hooks\": [], \"memory_written\": true, \"model_calls\": 1, \"offered\": [\"propose\", \"remember\", \"try\"], \"principal\": \"root\", \"proposals\": [], \"stopped\": \"max_tokens\", \"tools\": [], \"turn\": 3, \"usage\": {\"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"input_tokens\": 3461, \"output_tokens\": 16000}}\nI ran out of output tokens before finishing this turn. I'll answer both questions, and the second one first \u2014 the build is where the problem is.\n\nTwo things in trial t-8 are wrong, and only one of them is the hook:\n\n- **`nokeyfile -> [root@mshkn]`** \u2014 fail-open. If the allowed-signers file is missing, the hook must name nobody. Naming root when the key is gone is the worst bug a door can have.\n- **`INJECTION SUCCEEDED` / exit 2 / `/verb/trial.sh: 19: \": not found`** \u2014 the crash and the injection are almost certainly in my *trial harness's* quoting, not in the hook, since `injection -> []` was silent. I don't get to assume that. I'm re-running with a harness that builds every payload with `jq` and never interpolates a payload into a shell string.\n\nThe new run.sh loads the key from a candidate list and exits silently if none is non-empty, and pulls `msg`/`sig` through `strings` so a non-string `msg` can't slip past.\n"
+}

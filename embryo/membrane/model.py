@@ -3,6 +3,7 @@ plain JSON tools, or the scripted model that plays the liturgy."""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -12,8 +13,10 @@ if TYPE_CHECKING:
     from membrane.config import Settings
 
 # The output budget of one completion. Thinking counts against it (the model thinks by
-# default), and 16000 is the largest a non-streaming request may ask for.
-MAX_TOKENS = 16000
+# default). Completions are streamed, so the budget is not bounded by an HTTP timeout;
+# what bounds a completion is the time left in the turn (#106).
+MAX_TOKENS = 64000
+DEADLINE = "deadline"  # a stop_reason of our own: the turn's clock ran out mid-response
 # The token counts of one completion, as the Messages API reports them
 # (`response.usage`); summed per turn and printed in the audit line so the cost
 # of a run is read from mshkn's exec_log (#101).
@@ -57,7 +60,12 @@ class Completion:
 
 class Model(Protocol):
     async def complete(
-        self, *, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        timeout: float | None = None,
     ) -> Completion: ...
 
 
@@ -67,8 +75,17 @@ class AnthropicModel:
         self.model_id = model_id
 
     async def complete(
-        self, *, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        timeout: float | None = None,
     ) -> Completion:
+        """One streamed completion, bounded by `timeout` seconds. When the clock runs
+        out mid-response, what was produced so far is the completion: its text is
+        kept, its calls are dropped (a half-built call is not a call), and its
+        stop_reason is DEADLINE so the loop ends the turn honestly (#106)."""
         kwargs: dict[str, Any] = {
             "model": self.model_id,
             "max_tokens": MAX_TOKENS,
@@ -77,13 +94,19 @@ class AnthropicModel:
         }
         if tools:
             kwargs["tools"] = tools
-        response = await self.client.messages.create(**kwargs)
+        timed_out = False
+        async with self.client.messages.stream(**kwargs) as stream:
+            try:
+                response = await asyncio.wait_for(stream.get_final_message(), timeout)
+            except TimeoutError:
+                timed_out = True
+                response = stream.current_message_snapshot
         texts: list[str] = []
         calls: list[ToolCall] = []
         for block in response.content:
             if block.type == "text":
                 texts.append(block.text)
-            elif block.type == "tool_use":
+            elif block.type == "tool_use" and not timed_out:
                 calls.append(ToolCall(id=block.id, name=block.name, input=dict(block.input)))
         content: list[dict[str, Any]] = response.model_dump()["content"]
         return Completion(
@@ -91,7 +114,7 @@ class AnthropicModel:
             calls=tuple(calls),
             content=content,
             usage=usage_of(response),
-            stop_reason=getattr(response, "stop_reason", None),
+            stop_reason=DEADLINE if timed_out else getattr(response, "stop_reason", None),
         )
 
 
