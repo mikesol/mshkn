@@ -56,6 +56,7 @@ POSTCONDITIONS = (
 )
 ROOT_COMMANDS = frozenset({"say", "list", "approve", "reject"})
 TURN_TIMEOUT = 330.0
+TURN_WAIT = 3600.0
 BUILD_TIMEOUT = 600.0
 CONFLICT_INTERVAL = 3.0
 BUILD_INTERVAL = 5.0
@@ -248,6 +249,7 @@ class Hatched:
     key_id: str
     recipe_id: str
     checkpoint_id: str
+    server_id: str | None = None
 
 
 def b64(obj: Any) -> str:
@@ -357,8 +359,29 @@ class Doors:
 
         return await self._turn("api", argv[0], detail, send)
 
+    async def await_turn(self, turn: int) -> tuple[dict[str, Any], str]:
+        """`list` until the turn is in the window (relay design §7): the reply and the
+        closing audit line live there, written by the fork that closed the turn."""
+        deadline = self.now() + TURN_WAIT
+        while True:
+            listing = await self.listing()
+            for entry in listing["window"]:
+                if entry["turn"] == turn:
+                    return dict(entry["audit"]), str(entry["output"])
+            if self.now() >= deadline:
+                raise RuntimeError(f"turn {turn} did not close within {TURN_WAIT:.0f} s")
+            await self.sleep(BUILD_INTERVAL)
+
+    async def _spoken(self, out: str) -> tuple[dict[str, Any], str]:
+        audit, rest = split_output(out)
+        if "job" not in audit:
+            if "queued" in audit:
+                raise RuntimeError("a turn was still pending when the next was spoken")
+            return audit, rest
+        return await self.await_turn(int(audit["turn"]))
+
     async def root_say(self, text: str) -> tuple[dict[str, Any], str]:
-        return split_output(await self.root("say", b64(text)))
+        return await self._spoken(await self.root("say", b64(text)))
 
     async def public_say(self, payload: Any) -> tuple[dict[str, Any], str]:
         async def send() -> httpx.Response:
@@ -369,7 +392,7 @@ class Doors:
                 timeout=TURN_TIMEOUT,
             )
 
-        return split_output(await self._turn("ingress", "say", payload, send))
+        return await self._spoken(await self._turn("ingress", "say", payload, send))
 
     async def listing(self) -> dict[str, Any]:
         return dict(json.loads(await self.root("list")))
@@ -408,9 +431,10 @@ class Doors:
         return [dict(c) for c in response.json()]
 
     async def teardown(self, hatched: Hatched, listing: dict[str, Any] | None) -> None:
-        """The account as the run found it, best effort: the door, the key, every
-        checkpoint on `brain`, on a verb chain or from a proposal's recipe, then
-        the recipes. A failing delete does not stop the ones after it."""
+        """The account as the run found it, best effort: the scripted model's server
+        (if any), the door, the key, every checkpoint on `brain`, on a verb chain or
+        from a proposal's recipe, then the recipes. A failing delete does not stop
+        the ones after it."""
 
         async def drop(path: str) -> None:
             with suppress(httpx.HTTPError):
@@ -419,6 +443,8 @@ class Doors:
         recipes = {hatched.recipe_id}
         if listing:
             recipes.update(p["recipe_id"] for p in listing["proposals"] if p.get("recipe_id"))
+        if hatched.server_id is not None:
+            await drop(f"/computers/{hatched.server_id}")
         await drop(f"/ingress_rules/{hatched.rule_id}")
         await drop(f"/keys/{hatched.key_id}")
         try:

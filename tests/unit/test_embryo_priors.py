@@ -91,13 +91,14 @@ def test_hatch_script_makes_the_calls_the_spec_lists() -> None:
     )
     for call in calls:
         assert call in script, call
-    scopes = re.search(r"SCOPES='(\{.*\})'", script)
-    assert scopes is not None
-    assert json.loads(scopes.group(1)) == {
-        "recipes": {"create": True, "read": True},
-        "computers": {"create_from": "*"},
-        "labels": ["verb/"],
-    }
+    assert 'SCOPES="$(jq -cn --arg t "$ANTHROPIC_BASE_URL/"' in script
+    for piece in (
+        "recipes: {create: true, read: true}",
+        'computers: {create_from: "*"}',
+        'labels: ["verb/"]',
+        'relay: {targets: [$t], deliver: {label: "brain", exec: "membrane resume"}}',
+    ):
+        assert piece in script, piece
     assert "set -euo pipefail" in script
     assert (EMBRYO / "liturgy.md").read_text().count("| ") > 20
 

@@ -17,6 +17,7 @@ import pytest
 from membrane.liturgy import COUNT, LITURGY
 from membrane.measure import (
     POSTCONDITIONS,
+    TURN_WAIT,
     AskApprover,
     AutoApprover,
     Doors,
@@ -168,14 +169,51 @@ class FakeApi:
     exec_logs: dict[str, dict[str, Any]] = field(default_factory=dict)
     gone: set[str] = field(default_factory=set)
     fail_deletes: bool = False
+    turns: dict[int, tuple[dict[str, Any], str]] = field(default_factory=dict)
+    next_turn: int = 1
+
+    def _listing(self) -> dict[str, Any]:
+        return {
+            "catalog": {},
+            "proposals": [],
+            "policy": {"principals": {}},
+            "pending": None,
+            "queue": [],
+            "window": [
+                {
+                    "turn": n,
+                    "principal": audit.get("principal"),
+                    "door": audit.get("door"),
+                    "input": "",
+                    "reply": reply,
+                    "output": reply,
+                    "audit": audit,
+                }
+                for n, (audit, reply) in self.turns.items()
+            ],
+        }
 
     def _stdout(self, command: str) -> str:
+        is_say = command.startswith("membrane root say ") or command.startswith("membrane say ")
         outs = self.outputs.get(command)
         if not outs and command == "membrane root list":
-            return json.dumps({"catalog": {}, "proposals": [], "policy": {"principals": {}}})
-        if not outs:
-            return _out(_audit(), f"nothing for {command}")
-        return outs.pop(0) if len(outs) > 1 else outs[0]
+            return json.dumps(self._listing())
+        out = (
+            _out(_audit(), f"nothing for {command}")
+            if not outs
+            else (outs.pop(0) if len(outs) > 1 else outs[0])
+        )
+        if is_say:
+            audit, reply = split_output(out)
+            if "stopped" in audit:
+                n = self.next_turn
+                self.next_turn += 1
+                self.turns[n] = (audit, reply)
+                return _out(
+                    _audit(started=True, turn=n, job=f"rj-{n}"),
+                    json.dumps({"turn": n, "job": f"rj-{n}"}),
+                )
+        return out
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body: dict[str, Any] = json.loads(request.content) if request.content else {}
@@ -238,7 +276,7 @@ async def test_root_retries_a_409_and_records_the_command(tmp_path: Path) -> Non
     audit, reply = await doors.root_say("hi")
     assert audit["principal"] == "root" and reply == "hello\n"
     assert doors.slept == [3.0, 3.0]  # type: ignore[attr-defined]
-    assert [s.name for s in doors.sent] == ["say"] and doors.sent[0].detail == "hi"
+    assert [s.name for s in doors.sent] == ["say", "list"] and doors.sent[0].detail == "hi"
     assert doors.sent[0].door == "api" and doors.sent[0].stdout.startswith("audit ")
     assert (tmp_path / "run" / "commands" / "001-api-say.json").exists()
 
@@ -306,6 +344,47 @@ async def test_public_say_of_a_closed_door_has_a_null_principal(tmp_path: Path) 
     audit, reply = await _doors(api, tmp_path).public_say("Who am I?")
     assert audit["principal"] is None and audit["closed"] is True
     assert reply == "The public door is closed.\n"
+
+
+async def test_root_say_waits_for_the_turn_in_the_window(tmp_path: Path) -> None:
+    api = FakeApi(
+        outputs={f"membrane root say {b64('hi')}": [_out(_audit(stopped="done"), "hello")]}
+    )
+    doors = _doors(api, tmp_path)
+    audit, reply = await doors.root_say("hi")
+    assert audit["stopped"] == "done" and reply == "hello\n"
+    assert [p for m, p, _ in api.requests] == ["/checkpoints/fork", "/checkpoints/fork"], (
+        "the say, then one list"
+    )
+
+
+async def test_a_closed_door_answers_at_once_and_a_queued_say_is_an_error(tmp_path: Path) -> None:
+    closed = _out(
+        {"door": "ingress", "principal": None, "closed": True}, "The public door is closed."
+    )
+    api = FakeApi(outputs={f"membrane say {b64('hi')}": [closed]})
+    doors = _doors(api, tmp_path)
+    audit, reply = await doors.public_say("hi")
+    assert audit["principal"] is None and reply.startswith("The public door is closed.")
+    api.outputs[f"membrane say {b64('again')}"] = [
+        _out({"door": "ingress", "principal": "root", "queued": 1}, '{"queued": 1}')
+    ]
+    with pytest.raises(RuntimeError, match="pending"):
+        await doors.public_say("again")
+
+
+async def test_await_turn_gives_up_after_turn_wait(tmp_path: Path) -> None:
+    api = FakeApi()
+    doors = _doors(api, tmp_path)
+
+    async def empty_listing() -> dict[str, Any]:
+        return {"window": []}
+
+    doors.listing = empty_listing  # type: ignore[method-assign]
+    clock = iter([0.0, TURN_WAIT + 1.0])
+    doors.now = lambda: next(clock)
+    with pytest.raises(RuntimeError, match=f"turn 1 did not close within {TURN_WAIT:.0f} s"):
+        await doors.await_turn(1)
 
 
 async def test_listing_and_wait_builds_poll_until_nothing_builds(tmp_path: Path) -> None:
@@ -392,6 +471,16 @@ async def test_teardown_deletes_the_door_the_key_the_chains_and_the_recipes(
     }
     assert set(deletes[5:]) == {"/recipes/rcp-brain", "/recipes/rcp-page", "/recipes/rcp-count"}
     assert "/checkpoints/ck-other" not in deletes
+
+
+async def test_teardown_drops_the_scripted_server_first(tmp_path: Path) -> None:
+    api = FakeApi()
+    doors = _doors(api, tmp_path)
+    hatched = Hatched("u", "rule-1", "key-1", "rcp-brain", "ck-brain", server_id="srv-1")
+    await doors.teardown(hatched, None)
+    deletes = [p for m, p, _ in api.requests if m == "DELETE"]
+    assert deletes[0] == "/computers/srv-1"
+    assert deletes[1:3] == ["/ingress_rules/rule-1", "/keys/key-1"]
 
 
 async def test_teardown_survives_failing_deletes(tmp_path: Path) -> None:
