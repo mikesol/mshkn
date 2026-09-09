@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from membrane.cli import USAGE, run
 from membrane.commands import list_state, root
+from membrane.config import load_settings
 from membrane.declarations import parse_policy
 from membrane.proposals import propose
 from membrane.state import Brain, State
+from membrane.turn import Context
 
-from tests.support_embryo import FakeMshkn, ListMemory, StubModel, b64, text_completion
+from tests.support_embryo import FakeMshkn, ListMemory, b64, message_of, text_completion
 from tests.unit.test_embryo_declarations import VERB
 from tests.unit.test_embryo_proposals import CLOSED
 from tests.unit.test_embryo_verbs import CHAIN_VERB
@@ -32,30 +33,57 @@ def brain_dir(tmp_path: Path) -> Path:
     return tmp_path
 
 
-async def _run(
-    brain_dir: Path, argv: list[str], api: FakeMshkn, model: StubModel | None = None
-) -> tuple[str, int]:
-    return await run(
-        argv, brain_dir=brain_dir, api=api, model=model or StubModel(), memory=ListMemory()
-    )
+async def _run(brain_dir: Path, argv: list[str], api: FakeMshkn) -> tuple[str, int]:
+    return await run(argv, brain_dir=brain_dir, api=api, memory=ListMemory())
 
 
 async def test_usage(brain_dir: Path) -> None:
     api = FakeMshkn()
-    for argv in ([], ["dance"], ["root"], ["root", "approve"], ["say"]):
+    # `serve` is not run()'s to handle: main() dispatches it before run() is called.
+    for argv in ([], ["dance"], ["root"], ["root", "approve"], ["say"], ["resume"], ["serve", "x"]):
         out, code = await _run(brain_dir, argv, api)
         assert code == 2 and out == USAGE
 
 
 async def test_public_say_and_root_say_differ_by_door(brain_dir: Path) -> None:
-    api = FakeMshkn()
+    api = FakeMshkn(relay_answers=[message_of(text_completion("hello"))])
     out, code = await _run(brain_dir, ["say", b64("hi")], api)
     assert code == 0 and "The public door is closed." in out
-    out, code = await _run(
-        brain_dir, ["root", "say", b64("hi")], api, StubModel([text_completion("hello")])
+    out, code = await _run(brain_dir, ["root", "say", b64("hi")], api)
+    assert code == 0 and json.loads(out.splitlines()[1]) == {"turn": 1, "job": "rj-1"}
+    assert '"principal": "root"' in out.splitlines()[0]
+    assert Brain(brain_dir).state().pending is not None  # state was saved
+    out, code = await _run(brain_dir, ["resume", "rj-1"], api)
+    assert code == 0 and out.endswith("hello\n")
+    assert Brain(brain_dir).state().pending is None and Brain(brain_dir).state().turn == 1
+
+
+async def test_every_root_command_settles_a_pending_turn_to_stderr_first(brain_dir: Path) -> None:
+    api = FakeMshkn(relay_answers=[message_of(text_completion("settled"))])
+    await _run(brain_dir, ["root", "say", b64("hi")], api)
+    notes: list[str] = []
+    out, code = await run(
+        ["root", "list"], brain_dir=brain_dir, api=api, memory=ListMemory(), err=notes.append
     )
-    assert code == 0 and out.endswith("hello\n") and '"principal": "root"' in out.splitlines()[0]
-    assert Brain(brain_dir).state().turn == 1  # state was saved
+    assert code == 0
+    listing = json.loads(out)
+    assert listing["pending"] is None and listing["window"][0]["reply"] == "settled"
+    assert listing["window"][0]["audit"]["stopped"] == "done" and listing["queue"] == []
+    assert len(notes) == 1 and notes[0].startswith("audit ") and notes[0].endswith("settled\n")
+
+
+async def test_settling_notes_go_to_stderr_by_default(
+    brain_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A command's stdout is its own: the turn that settled underneath it is
+    reported on stderr, where mshkn's exec log keeps it beside the reply."""
+    api = FakeMshkn(relay_answers=[message_of(text_completion("settled"))])
+    await _run(brain_dir, ["root", "say", b64("hi")], api)
+    capsys.readouterr()
+    out, code = await _run(brain_dir, ["root", "list"], api)
+    assert code == 0 and json.loads(out)["pending"] is None
+    err = capsys.readouterr().err
+    assert err.startswith("audit ") and err.endswith("settled\n")
 
 
 async def test_list_approve_reject_disable_revert_round_trip(brain_dir: Path) -> None:
@@ -163,17 +191,16 @@ async def test_root_rejects_unknown_command_directly(brain_dir: Path) -> None:
     api = FakeMshkn()
     brain = Brain(brain_dir)
     state = brain.state()
-    out, code = await root(
-        ["bogus"],
+    ctx = Context(
         brain=brain,
         state=state,
         api=api,
-        model=None,
-        memory=None,
+        settings=load_settings(brain_dir),
         deadline=1e9,
+        memory=ListMemory(),
         now=lambda: 0.0,
-        sleep=asyncio.sleep,
     )
+    out, code = await root(["bogus"], ctx)
     assert code == 2 and out == USAGE
 
 
@@ -206,11 +233,9 @@ async def test_approve_policy_persists_state_through_cli_run(brain_dir: Path) ->
 async def test_run_builds_and_closes_the_real_clients(
     brain_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # When run() is not handed an api/model/memory it must build the real
-    # ones (Mshkn.connect, build_model, Mem0Store.open) and close what it
-    # owns in `finally`. The public door is closed, so `say` returns before
-    # any request would reach mshkn; the mock transport guarantees that even
-    # if it did, no real network call would occur.
+    # When run() is not handed an api/memory it must build the real ones
+    # (Mshkn.connect, Mem0Store.open) and close what it owns in `finally`.
+    # The mock transport answers the relay, so no real network call occurs.
     import httpx
     from membrane.memory import Mem0Store
     from membrane.mshkn import Mshkn
@@ -218,10 +243,18 @@ async def test_run_builds_and_closes_the_real_clients(
     closed: list[str] = []
     real_connect = Mshkn.connect
 
+    def answer(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/relay":
+            return httpx.Response(202, json={"job_id": "rj-1", "status": "queued"})
+        if path.startswith("/relay/"):
+            return httpx.Response(200, json={"job_id": "rj-1", "status": "in_progress"})
+        return httpx.Response(200, json={})
+
     def fake_connect(settings: Any) -> Mshkn:
         client = real_connect(settings)
         client.http = httpx.AsyncClient(
-            transport=httpx.MockTransport(lambda _: httpx.Response(200, json={})),
+            transport=httpx.MockTransport(answer),
             base_url=client.http.base_url,
             headers=client.http.headers,
         )
@@ -243,9 +276,13 @@ async def test_run_builds_and_closes_the_real_clients(
     monkeypatch.setattr(Mshkn, "aclose", tracking_aclose)
     monkeypatch.setattr(Mem0Store, "close", tracking_close)
 
+    out, code = await run(["root", "say", b64("hi")], brain_dir=brain_dir)
+    assert code == 0 and json.loads(out.splitlines()[1]) == {"turn": 1, "job": "rj-1"}
+    assert closed == ["memory", "api"]
+    # A closed public door opens no memory: the store is only built on first use.
     out, code = await run(["say", b64("hi")], brain_dir=brain_dir)
     assert code == 0 and "The public door is closed." in out
-    assert closed == ["memory", "api"]
+    assert closed == ["memory", "api", "api"]
 
 
 def test_main_prints_and_exits(

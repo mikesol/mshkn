@@ -1,24 +1,46 @@
-"""A say turn in order (spec §6): principal, builds, input, tools, loop, close."""
+"""A say turn is a chain of forks (relay design §6): say posts the request and
+acknowledges; resume appends the answer, runs its calls, posts the next request
+or closes; every command settles a pending turn first; a say while one is
+pending is queued and runs next."""
 
 from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any
 
+import pytest
+from membrane.config import Settings
 from membrane.declarations import parse_policy, parse_verb, render_command
 from membrane.hooks import principal_for
+from membrane.loop import CAP_REACHED, OUT_OF_TOKENS
 from membrane.memory import Provenance
 from membrane.model import zero_usage
+from membrane.mshkn import MshknError, RelayJob
+from membrane.principals import ROOT
 from membrane.proposals import approve, propose
-from membrane.scripted import ScriptedModel
 from membrane.state import Brain, CatalogEntry, Exchange, InboxItem, State
-from membrane.turn import DOOR_CLOSED, compose_input, decode_payload, history_from, say
+from membrane.turn import (
+    BAD_PAYLOAD,
+    DOOR_CLOSED,
+    MODEL_FAILED,
+    Context,
+    Door,
+    compose_input,
+    decode_payload,
+    history_from,
+    resume,
+    say,
+    settle,
+)
 
 from tests.support_embryo import (
     FakeMshkn,
     ListMemory,
-    StubModel,
     b64,
+    failed_job,
+    http_error_job,
+    in_progress_job,
+    message_of,
     split_output,
     text_completion,
     tool_call_completion,
@@ -35,26 +57,88 @@ OPEN = {
     "door": "open",
 }
 
+Answer = dict[str, Any] | RelayJob
 
-def _brain(tmp_path: Path, policy: dict[str, Any] = CLOSED) -> Brain:
+
+def _settings(tmp_path: Path, **overrides: Any) -> Settings:
+    fields: dict[str, Any] = {
+        "brain": tmp_path,
+        "api_url": "http://api",
+        "api_key": "mk-scoped",
+        "model": "scripted",
+        "model_id": "claude-opus-5",
+        "anthropic_api_key": None,
+        "openai_api_key": None,
+    }
+    fields.update(overrides)
+    return Settings(**fields)
+
+
+async def _no_sleep(seconds: float) -> None:
+    return None
+
+
+def _ctx(
+    tmp_path: Path,
+    *,
+    policy: dict[str, Any] = CLOSED,
+    api: FakeMshkn | None = None,
+    memory: ListMemory | None = None,
+    answers: list[Answer] | None = None,
+    **settings: Any,
+) -> Context:
     (tmp_path / "policy.json").write_text(json.dumps(policy))
     (tmp_path / "seed.md").write_text("SEED")
-    return Brain(tmp_path)
+    brain = Brain(tmp_path)
+    api = api or FakeMshkn()
+    if answers:
+        api.relay_answers.extend(answers)
+    return Context(
+        brain=brain,
+        state=brain.state(),
+        api=api,
+        settings=_settings(tmp_path, **settings),
+        deadline=1e9,
+        memory=memory or ListMemory(),
+        now=lambda: 0.0,
+        sleep=_no_sleep,
+    )
 
 
-def _brain_state(tmp_path: Path, policy: dict[str, Any] = CLOSED) -> tuple[Brain, State]:
-    brain = _brain(tmp_path, policy)
-    return brain, brain.state()
+def _fake(ctx: Context) -> FakeMshkn:
+    """The relay and mshkn behind a Context built by `_ctx`."""
+    api = ctx.api
+    assert isinstance(api, FakeMshkn)
+    return api
 
 
-def _audit(out: str) -> dict[str, Any]:
+def _posted(ctx: Context, index: int = -1) -> dict[str, Any]:
+    """The body of a request the membrane handed the relay, newest last. The
+    fake's job ids share a counter with its computers, so a turn whose hook ran
+    first is not `rj-1`; the order of the posts is what the tests are about."""
+    return dict(list(_fake(ctx).relay_jobs.values())[index]["body"])
+
+
+def _ack(out: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A say's output: its start audit line and the acknowledgement."""
+    audit, rest = split_output(out)
+    return audit, dict(json.loads(rest))
+
+
+async def _turn(
+    ctx: Context, payload: Any, door: Door = "api", *, answers: list[Answer] | None = None
+) -> str:
+    """A whole turn in one call: say, then resume until the turn closes. Returns
+    the output of the fork that closed it (the closing audit line and the reply)."""
+    if answers:
+        _fake(ctx).relay_answers.extend(answers)
+    out = await say(ctx, payload_b64=b64(payload), door=door)
     audit, _ = split_output(out)
-    return audit
-
-
-def _reply(out: str) -> str:
-    _, reply = split_output(out)
-    return reply
+    if "job" not in audit:
+        return out
+    while (pending := ctx.state.pending) is not None:
+        out = await resume(ctx, pending.job)
+    return out
 
 
 def test_decode_payload_and_compose_input() -> None:
@@ -85,78 +169,336 @@ def test_decode_payload_and_compose_input() -> None:
 
 
 def test_history_is_the_last_ten_exchanges() -> None:
-    window = [Exchange(i, "root", "api", f"in{i}", f"out{i}") for i in range(15)]
+    window = [
+        Exchange(turn=i, principal="root", door="api", input=f"in{i}", reply=f"out{i}")
+        for i in range(12)
+    ]
     history = history_from(window)
-    assert len(history) == 20 and history[0] == {"role": "user", "content": "[root via api] in5"}
-    assert history[-1] == {"role": "assistant", "content": "out14"}
+    assert len(history) == 20 and history[0]["content"] == "[root via api] in2"
+    assert history[-1]["content"] == "out11"
 
 
-async def test_root_turn_with_no_calls(tmp_path: Path) -> None:
-    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
-    model = StubModel([text_completion("I am an embryo.")])
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64("Hello. I am the one who hatched you."),
-        door="api",
-        deadline=1e9,
+async def test_a_say_posts_the_request_and_acknowledges_without_a_model_call(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(
+        tmp_path,
+        anthropic_api_key="sk-test",
+        model="anthropic",
+        openai_api_key="o",
+        effort="medium",
     )
-    audit = _audit(out)
-    assert audit["principal"] == "root" and audit["door"] == "api" and audit["turn"] == 1
-    # The token counts of the turn ride in the audit line (#101), so the cost of a
-    # run is read from mshkn's exec_log, not from a side channel.
-    assert audit["model_calls"] == 1 and audit["usage"] == zero_usage()
-    assert _reply(out) == "I am an embryo.\n"
-    system, messages, tools = model.calls[0]
-    assert system == "SEED" and [t["name"] for t in tools] == ["remember", "try", "propose"]
-    assert "message:\nHello. I am the one who hatched you." in messages[0]["content"]
-    assert state.window[-1].reply == "I am an embryo." and state.turn == 1
-    assert memory.entries[0][1].principal == "root" and "hatched" in memory.entries[0][0]
+    out = await say(ctx, payload_b64=b64("Hello. I am the one who hatched you."), door="api")
+    audit, ack = _ack(out)
+    assert audit["started"] is True and audit["turn"] == 1
+    assert audit["principal"] == "root" and audit["door"] == "api"
+    assert audit["offered"] == ["propose", "remember", "try"] and audit["job"] == "rj-1"
+    assert ack == {"turn": 1, "job": "rj-1"}
+    posted = _fake(ctx).relay_jobs["rj-1"]
+    assert posted["target"] == "https://api.anthropic.com/v1/messages"
+    assert posted["headers"]["x-api-key"] == "sk-test"
+    assert posted["headers"]["anthropic-version"] == "2023-06-01"
+    body = posted["body"]
+    assert body["system"] == "SEED" and body["stream"] is True
+    assert body["output_config"] == {"effort": "medium"}
+    assert [t["name"] for t in body["tools"]] == ["remember", "try", "propose"]  # insertion order
+    assert body["messages"][-1]["role"] == "user"
+    assert "hatched you" in body["messages"][-1]["content"]
+    pending = ctx.state.pending
+    assert pending is not None and pending.job == "rj-1" and pending.turn == 1
+    assert pending.forks == 1 and pending.model_calls == 1
+    assert pending.memory_written is True and pending.started_at
+    assert ctx.state.window == [] and ctx.state.turn == 1
+    assert not any(name == "get_relay_job" for name, _ in _fake(ctx).calls)
 
 
 async def test_system_prompt_is_seed_then_self(tmp_path: Path) -> None:
-    brain = _brain(tmp_path)
-    state = brain.state()
-    state.self_description = "I verify."
-    model = StubModel([text_completion("ok")])
-    await say(
-        brain=brain,
-        state=state,
-        api=FakeMshkn(),
-        model=model,
-        memory=ListMemory(),
-        payload_b64=b64("x"),
-        door="api",
-        deadline=1e9,
-    )
-    assert model.calls[0][0] == "SEED\n\nI verify."
+    ctx = _ctx(tmp_path)
+    ctx.state.self_description = "I verify."
+    await say(ctx, payload_b64=b64("x"), door="api")
+    assert _posted(ctx)["system"] == "SEED\n\nI verify."
 
 
-async def test_closed_door_answers_one_line_and_never_calls_the_model(tmp_path: Path) -> None:
-    brain, state, model = *_brain_state(tmp_path), StubModel([text_completion("never")])
-    out = await say(
-        brain=brain,
-        state=state,
-        api=FakeMshkn(),
-        model=model,
-        memory=ListMemory(),
-        payload_b64=b64("Who am I?"),
-        door="ingress",
-        deadline=1e9,
+async def test_a_text_answer_closes_the_turn_with_the_full_audit_and_the_reply(
+    tmp_path: Path,
+) -> None:
+    memory = ListMemory()
+    ctx = _ctx(tmp_path, memory=memory, answers=[message_of(text_completion("I am an embryo."))])
+    await say(ctx, payload_b64=b64("Hello. I am the one who hatched you."), door="api")
+    out = await resume(ctx, "rj-1")
+    audit, reply = split_output(out)
+    assert reply == "I am an embryo.\n"
+    assert audit["turn"] == 1 and audit["stopped"] == "done" and audit["model_calls"] == 1
+    assert audit["usage"] == zero_usage() and audit["forks"] == 1 and audit["job"] == "rj-1"
+    assert audit["tools"] == [] and audit["proposals"] == [] and audit["memory_written"] is True
+    assert ctx.state.pending is None
+    entry = ctx.state.window[-1]
+    assert entry.reply == "I am an embryo." and entry.output == "I am an embryo.\n"
+    assert entry.audit["stopped"] == "done"
+    assert memory.entries[0][1] == Provenance(principal=ROOT, door="api", turn=1)
+    assert "hatched" in memory.entries[0][0] and "I am an embryo." in memory.entries[0][0]
+
+
+async def test_tool_calls_run_and_the_next_request_is_posted_in_a_new_fork(
+    tmp_path: Path,
+) -> None:
+    memory = ListMemory()
+    proposal = {"kind": "verb", "title": "page_title", "rationale": "r", "verb": VERB}
+    ctx = _ctx(
+        tmp_path,
+        memory=memory,
+        answers=[
+            message_of(tool_call_completion("remember", text="mike hatched me")),
+            message_of(tool_call_completion("propose", **proposal)),
+            message_of(text_completion("Proposed p-1.")),
+        ],
     )
-    assert (
-        _reply(out) == DOOR_CLOSED + "\n"
-        and model.calls == []
-        and state.turn == 0
-        and state.window == []
+    await say(ctx, payload_b64=b64("go"), door="api")
+    first = await resume(ctx, "rj-1")
+    audit, rest = split_output(first)
+    assert rest == "" and audit["continued"] is True
+    assert audit["job"] == "rj-1" and audit["next_job"] == "rj-2"
+    assert audit["calls"] == [{"name": "remember", "status": "remembered"}]
+    assert memory.entries[0][0] == "mike hatched me"
+    pending = ctx.state.pending
+    assert pending is not None and pending.job == "rj-2"
+    assert pending.forks == 2 and pending.model_calls == 2
+    assert pending.messages[-2]["role"] == "assistant"
+    assert pending.messages[-2]["content"][0]["type"] == "tool_use"
+    assert pending.messages[-1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "tu_remember",
+                "content": '{"status": "remembered"}',
+            }
+        ],
+    }
+    assert _posted(ctx)["messages"] == pending.messages
+    await resume(ctx, "rj-2")
+    out = await resume(ctx, "rj-3")
+    audit, reply = split_output(out)
+    assert reply.startswith("Proposed p-1.\nproposal p-1\n")
+    assert json.loads(reply.split("proposal p-1\n", 1)[1])["verb"]["name"] == "page_title"
+    assert [c["name"] for c in audit["tools"]] == ["remember", "propose"]
+    assert audit["proposals"][0]["id"] == "p-1" and len(audit["proposals"][0]["sha256"]) == 64
+    assert audit["forks"] == 3 and audit["model_calls"] == 3
+    assert ctx.state.proposals["p-1"].status == "pending"
+    # the audit sink: the last exec's stdout carries the whole turn's audit line
+    assert ctx.state.window[-1].audit["tools"] == audit["tools"]
+
+
+async def test_a_forged_or_stale_job_id_does_nothing(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    assert await resume(ctx, "rj-77") == "no pending turn for job rj-77\n"
+    await say(ctx, payload_b64=b64("go"), door="api")
+    assert await resume(ctx, "rj-77") == "no pending turn for job rj-77\n"
+    assert ctx.state.pending is not None and ctx.state.pending.job == "rj-1"
+    assert not any(name == "get_relay_job" for name, _ in _fake(ctx).calls)
+
+
+async def test_resume_and_settle_leave_a_job_still_in_progress(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path, answers=[in_progress_job(), message_of(text_completion("later"))])
+    await say(ctx, payload_b64=b64("go"), door="api")
+    assert await settle(ctx) == "" and ctx.state.pending is not None
+    # the fake answers every read of a job the same way until its results are cleared
+    assert await resume(ctx, "rj-1") == "job rj-1 is in_progress\n"
+    _fake(ctx).relay_results.clear()
+    audit, reply = split_output(await resume(ctx, "rj-1"))
+    assert reply == "later\n" and audit["stopped"] == "done" and ctx.state.pending is None
+
+
+async def test_a_failed_job_and_a_non_2xx_answer_end_the_turn_with_the_error(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path, answers=[failed_job("HTTP 529 after 3 attempts")])
+    await say(ctx, payload_b64=b64("go"), door="api")
+    audit, reply = split_output(await settle(ctx))
+    assert audit["stopped"] == "error" and reply.startswith(MODEL_FAILED) and "529" in reply
+    assert ctx.state.pending is None and ctx.state.window[-1].audit["stopped"] == "error"
+    _fake(ctx).relay_answers.append(
+        http_error_job(400, {"error": {"message": "max_tokens too large"}})
     )
+    await say(ctx, payload_b64=b64("again"), door="api")
+    audit, reply = split_output(await resume(ctx, "rj-2"))
+    assert audit["stopped"] == "error" and "HTTP 400" in reply
+    assert "max_tokens too large" in reply
+
+
+async def test_max_tokens_and_the_cap_end_the_turn_honestly(tmp_path: Path) -> None:
+    ctx = _ctx(
+        tmp_path,
+        answers=[
+            message_of(tool_call_completion("remember", text="never"), stop_reason="max_tokens")
+        ],
+    )
+    memory = ctx.memory
+    assert isinstance(memory, ListMemory)
+    await say(ctx, payload_b64=b64("go"), door="api")
+    audit, reply = split_output(await resume(ctx, "rj-1"))
+    assert audit["stopped"] == "max_tokens" and reply.startswith(OUT_OF_TOKENS)
+    assert audit["tools"] == []
+    assert not any(text == "never" for text, _ in memory.entries), (
+        "calls of a truncated answer never run"
+    )
+    # the cap: 20 calls over as many forks, then the 21st ends the turn
+    _fake(ctx).relay_answers.extend(
+        message_of(tool_call_completion("remember", text=f"fact {i}")) for i in range(21)
+    )
+    await say(ctx, payload_b64=b64("count"), door="api")
+    out = ""
+    while (pending := ctx.state.pending) is not None:
+        out = await resume(ctx, pending.job)
+    audit, reply = split_output(out)
+    assert audit["stopped"] == "cap" and reply.startswith(CAP_REACHED)
+    assert len(audit["tools"]) == 20 and audit["forks"] == 21
+
+
+async def test_a_job_the_relay_has_forgotten_ends_the_turn_instead_of_stranding_it(
+    tmp_path: Path,
+) -> None:
+    """A relay job is expired and reaped (relay design §11). Neither the wake-up
+    nor the next command may leave the brain pending on a job that is gone."""
+    ctx = _ctx(tmp_path)
+    await say(ctx, payload_b64=b64("go"), door="api")
+    del _fake(ctx).relay_jobs["rj-1"]  # the relay reaped it
+    audit, reply = split_output(await resume(ctx, "rj-1"))
+    assert audit["stopped"] == "error" and reply == f"{MODEL_FAILED} job rj-1 is gone\n"
+    assert ctx.state.pending is None
+    await say(ctx, payload_b64=b64("again"), door="api")
+    del _fake(ctx).relay_jobs["rj-2"]
+    audit, reply = split_output(await settle(ctx))
+    assert audit["stopped"] == "error" and reply == f"{MODEL_FAILED} job rj-2 is gone\n"
+    assert ctx.state.pending is None
+
+
+async def test_a_relay_that_is_itself_down_leaves_the_turn_for_the_next_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Anything but a 404 is the relay's problem, not this turn's: `settle` says
+    nothing and leaves the turn pending, and `resume` raises so the fork's exit
+    code and traceback reach the exec log."""
+    ctx = _ctx(tmp_path)
+    await say(ctx, payload_b64=b64("go"), door="api")
+
+    async def down(job_id: str) -> RelayJob:
+        raise MshknError(503, "relay unavailable")
+
+    monkeypatch.setattr(_fake(ctx), "get_relay_job", down)
+    assert await settle(ctx) == "" and ctx.state.pending is not None
+    with pytest.raises(MshknError):
+        await resume(ctx, "rj-1")
+    assert ctx.state.pending is not None
+
+
+async def test_a_2xx_answer_that_is_not_a_message_ends_the_turn(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path, answers=[http_error_job(200, "<html>gateway</html>")])
+    await say(ctx, payload_b64=b64("go"), door="api")
+    audit, reply = split_output(await resume(ctx, "rj-1"))
+    assert audit["stopped"] == "error"
+    assert reply == f"{MODEL_FAILED} the response is not a message\n"
+
+
+async def test_the_try_tool_trials_a_declaration_without_installing_it(tmp_path: Path) -> None:
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, api=api)
+    api.outputs[render_command(parse_verb(VERB), {"url": "u"})] = (0, "Example Domain", "")
+    out = await _turn(
+        ctx,
+        "try it",
+        answers=[
+            message_of(tool_call_completion("try", verb=VERB, params={"url": "u"})),
+            message_of(text_completion("It works.")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert audit["tools"][0]["name"] == "try" and audit["tools"][0]["status"] == "done"
+    assert ctx.state.trials["t-1"].status == "done"
+    # a trial installs nothing: no catalog entry, no proposal
+    assert ctx.state.catalog == {} and ctx.state.proposals == {}
+
+
+async def test_a_say_while_a_turn_is_pending_is_queued_and_runs_next(tmp_path: Path) -> None:
+    ctx = _ctx(
+        tmp_path,
+        answers=[
+            message_of(text_completion("first reply")),
+            message_of(text_completion("second reply")),
+        ],
+    )
+    await say(ctx, payload_b64=b64("first"), door="api")
+    audit, ack = _ack(await say(ctx, payload_b64=b64("second"), door="api"))
+    assert ack == {"queued": 1} and audit["queued"] == 1 and audit["principal"] == "root"
+    assert len(ctx.state.queue) == 1 and ctx.state.turn == 1
+    out = await resume(ctx, "rj-1")
+    lines = out.splitlines()
+    assert lines[0].startswith("audit ") and lines[1] == "first reply"
+    started = json.loads(lines[2][len("audit ") :])
+    assert started["started"] is True and started["turn"] == 2 and started["job"] == "rj-2"
+    assert json.loads(lines[3]) == {"turn": 2, "job": "rj-2"}
+    assert ctx.state.queue == [] and ctx.state.pending is not None
+    assert ctx.state.pending.message == "second"
+    audit, reply = split_output(await resume(ctx, "rj-2"))
+    assert reply == "second reply\n"
+    assert [e.reply for e in ctx.state.window] == ["first reply", "second reply"]
+    assert _posted(ctx)["messages"][0]["content"] == "[root via api] first"
+
+
+async def test_tools_are_rebuilt_from_the_current_catalog_on_every_fork(tmp_path: Path) -> None:
+    from membrane.verbs import poll_builds
+
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, api=api)
+    await say(ctx, payload_b64=b64("go"), door="api")
+    assert ctx.state.pending is not None and "page_title" not in ctx.state.pending.offered
+    # root approves a verb while the model thinks, and its build is polled by root's next command
+    p = propose(ctx.state, {"kind": "verb", "title": "t", "rationale": "r", "verb": VERB})
+    await approve(api, ctx.state, p.id)
+    ctx.state.inbox.extend(await poll_builds(api, ctx.state))
+    assert ctx.state.catalog["page_title"].status == "ready"
+    verb = parse_verb(VERB)
+    api.outputs[render_command(verb, {"url": "https://example.com"})] = (0, "Example Domain\n", "")
+    api.relay_answers.extend(
+        [
+            message_of(tool_call_completion("page_title", url="https://example.com")),
+            message_of(text_completion("Example Domain")),
+        ]
+    )
+    await resume(ctx, "rj-1")
+    assert ctx.state.pending is not None
+    assert ctx.state.pending.calls[0]["result"]["stdout"] == "Example Domain\n"
+    assert [t["name"] for t in _posted(ctx)["tools"]] == [
+        "remember",
+        "try",
+        "propose",
+        "page_title",
+    ]
+    # the closing audit names every tool the turn offered, not only the first fork's
+    audit, _ = split_output(await resume(ctx, ctx.state.pending.job))
+    assert audit["offered"] == ["page_title", "propose", "remember", "try"]
+
+
+async def test_closed_door_and_bad_payload_answer_one_line_and_post_nothing(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    out = await say(ctx, payload_b64=b64("hi"), door="ingress")
+    audit, reply = split_output(out)
+    assert audit["closed"] is True and audit["principal"] is None and reply == DOOR_CLOSED + "\n"
+    out = await say(ctx, payload_b64="not base64!", door="api")
+    audit, reply = split_output(out)
+    assert audit["error"] == "bad payload" and reply == BAD_PAYLOAD + "\n"
+    assert ctx.state.pending is None and ctx.state.turn == 0 and _fake(ctx).relay_jobs == {}
+
+
+# --- kept from the synchronous turn, driven through the chain of forks -----------
 
 
 async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path: Path) -> None:
-    brain, state, api, memory = *_brain_state(tmp_path, OPEN), FakeMshkn(), ListMemory()
+    api, memory = FakeMshkn(), ListMemory()
+    ctx = _ctx(tmp_path, policy=OPEN, api=api, memory=memory)
+    state = ctx.state
     hook = parse_verb(HOOK)
     info = await api.create_recipe(hook.dockerfile)
     await api.get_recipe(info.id)
@@ -166,18 +508,13 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
     payload = json.dumps({"msg": "Who am I?", "sig": "good"})
     api.outputs[render_command(hook, {"payload": payload})] = (0, "mike\n", "")
     memory.add("who hatched me: mike", Provenance("root", "api", 0))  # shares a word with the query
-    model = StubModel([text_completion("You are ssh:mike.")])
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64({"msg": "Who am I?", "sig": "good"}),
-        door="ingress",
-        deadline=1e9,
+    out = await _turn(
+        ctx,
+        {"msg": "Who am I?", "sig": "good"},
+        "ingress",
+        answers=[message_of(text_completion("You are ssh:mike."))],
     )
-    audit = _audit(out)
+    audit, _ = split_output(out)
     assert audit["principal"] == "ssh:mike"
     # the hook that named the caller is on the audit line, with its computer (#101)
     assert audit["hooks"] == [
@@ -193,34 +530,31 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
     # §10.7 is provable from the audit line alone: what was offered, not only
     # what was called. An authenticated principal who may propose gets all three.
     assert audit["offered"] == ["propose", "remember", "try", "verify_ssh"]
-    _, messages, tools = model.calls[0]
-    assert "recall:\n- who hatched me: mike" in messages[0]["content"]
-    assert {t["name"] for t in tools} == {"remember", "try", "propose", "verify_ssh"}
+    body = _posted(ctx)
+    assert "recall:\n- who hatched me: mike" in body["messages"][-1]["content"]
+    assert {t["name"] for t in body["tools"]} == {"remember", "try", "propose", "verify_ssh"}
     assert "ssh:mike" in state.principals and memory.entries[-1][1].principal == "ssh:mike"
 
-    model = StubModel([text_completion("I do not know you.")])
     bad = json.dumps({"msg": "Who am I?", "sig": "bad"})
     api.outputs[render_command(hook, {"payload": bad})] = (1, "", "verify failed")
     before = len(memory.entries)
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64({"msg": "Who am I?", "sig": "bad"}),
-        door="ingress",
-        deadline=1e9,
+    out = await _turn(
+        ctx,
+        {"msg": "Who am I?", "sig": "bad"},
+        "ingress",
+        answers=[message_of(text_completion("I do not know you."))],
     )
-    audit = _audit(out)
+    audit, _ = split_output(out)
     assert audit["principal"] == "anonymous"
     assert audit["offered"] == []  # §10.7: anonymous is offered no reserved tool
-    _, messages, tools = model.calls[0]
-    # messages[0] is now history from the first turn; the current turn's
-    # composed input is the last message. Assert its header so this doesn't
-    # depend on there being exactly one history exchange.
-    assert messages[-1]["content"].startswith("[turn 2 | principal anonymous | door ingress]\n")
-    assert tools == [] and "recall:\n\n" in messages[-1]["content"]
+    body = _posted(ctx)
+    # the current turn's composed input is the last message; the ones before it
+    # are history from the first turn.
+    assert body["messages"][-1]["content"].startswith(
+        "[turn 2 | principal anonymous | door ingress]\n"
+    )
+    # compose_request omits an empty tool list, so an anonymous turn offers none
+    assert "tools" not in body and "recall:\n\n" in body["messages"][-1]["content"]
     assert len(memory.entries) == before and state.window[-1].principal == "anonymous"
 
 
@@ -265,61 +599,6 @@ async def test_hooks_fail_closed_when_not_ready_or_malformed() -> None:
     assert await principal_for(api, state, policy, "p", remaining=10.0) == "anonymous"
 
 
-async def test_propose_tool_reports_a_declaration_error_as_invalid(tmp_path: Path) -> None:
-    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
-    model = StubModel(
-        [tool_call_completion("propose", title="verb with no kind"), text_completion("noted")]
-    )
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64("go"),
-        door="api",
-        deadline=1e9,
-    )
-    audit = _audit(out)
-    assert audit["tools"][0]["name"] == "propose" and audit["tools"][0]["status"] == "invalid"
-    assert "kind" in audit["tools"][0]["error"]
-    assert state.proposals == {} and audit["proposals"] == []
-
-
-async def test_authenticated_without_propose_rights_gets_remember_only(tmp_path: Path) -> None:
-    no_propose = {
-        "principals": {"ssh:mike": {"invoke": [], "propose": False}},
-        "hooks": ["verify_ssh"],
-        "door": "open",
-    }
-    brain, state, api, memory = *_brain_state(tmp_path, no_propose), FakeMshkn(), ListMemory()
-    hook = parse_verb(HOOK)
-    info = await api.create_recipe(hook.dockerfile)
-    await api.get_recipe(info.id)
-    state.catalog["verify_ssh"] = CatalogEntry(
-        verb=hook, status="ready", recipe_id=info.id, proposal_id="p-1"
-    )
-    good = json.dumps({"msg": "hi", "sig": "good"})
-    api.outputs[render_command(hook, {"payload": good})] = (0, "mike\n", "")
-    model = StubModel([text_completion("ok")])
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64({"msg": "hi", "sig": "good"}),
-        door="ingress",
-        deadline=1e9,
-    )
-    audit = _audit(out)
-    assert audit["principal"] == "ssh:mike"
-    # authenticated but may_propose is false: remember, and neither try nor propose
-    assert audit["offered"] == ["remember"]
-    _, _, tools = model.calls[0]
-    assert {t["name"] for t in tools} == {"remember"}
-
-
 async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticated_turn(
     tmp_path: Path,
 ) -> None:
@@ -327,7 +606,9 @@ async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticat
     denies anonymous `try`/`propose`). An anonymous turn still polls builds
     and trials so a failure lands in the inbox, but composes its input with
     an empty inbox and leaves `state.inbox` untouched for root's next turn."""
-    brain, state, api, memory = *_brain_state(tmp_path, OPEN), FakeMshkn(), ListMemory()
+    api, memory = FakeMshkn(), ListMemory()
+    ctx = _ctx(tmp_path, policy=OPEN, api=api, memory=memory)
+    state = ctx.state
     hook = parse_verb(HOOK)
     hook_info = await api.create_recipe(hook.dockerfile)
     await api.get_recipe(hook_info.id)
@@ -343,163 +624,93 @@ async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticat
     bad = json.dumps({"msg": "hi", "sig": "bad"})
     api.outputs[render_command(hook, {"payload": bad})] = (1, "", "verify failed")
 
-    model = StubModel([text_completion("I do not know you.")])
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64({"msg": "hi", "sig": "bad"}),
-        door="ingress",
-        deadline=1e9,
+    out = await _turn(
+        ctx,
+        {"msg": "hi", "sig": "bad"},
+        "ingress",
+        answers=[message_of(text_completion("I do not know you."))],
     )
-
-    assert _audit(out)["principal"] == "anonymous"
-    _, messages, _ = model.calls[0]
-    assert "inbox:\n\n" in messages[0]["content"]
+    audit, _ = split_output(out)
+    assert audit["principal"] == "anonymous"
+    assert "inbox:\n\n" in _posted(ctx, 0)["messages"][-1]["content"]
     assert state.catalog["page_title"].status == "failed"
     assert len(state.inbox) == 1 and "page_title failed to build" in state.inbox[0].text
 
     # Root's next turn drains it.
-    model = StubModel([text_completion("Noted.")])
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64("go"),
-        door="api",
-        deadline=1e9,
-    )
-    _, messages, _ = model.calls[0]
-    # messages[0] is history from the anonymous turn above; the composed
-    # input for this turn is the last message. Assert its header so this
-    # doesn't depend on there being exactly one history exchange.
-    assert messages[-1]["content"].startswith("[turn 2 | principal root | door api]\n")
-    assert "inbox:\n- verb page_title failed to build" in messages[-1]["content"]
+    await _turn(ctx, "go", answers=[message_of(text_completion("Noted."))])
+    composed = _posted(ctx, 1)["messages"][-1]["content"]
+    assert composed.startswith("[turn 2 | principal root | door api]\n")
+    assert "inbox:\n- verb page_title failed to build" in composed
     assert state.inbox == []
 
 
-async def test_tools_run_and_proposals_are_appended_in_full(tmp_path: Path) -> None:
-    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
-    proposal = {"kind": "verb", "title": "page_title", "rationale": "r", "verb": VERB}
-    model = StubModel(
-        [
-            tool_call_completion("remember", text="mike hatched me"),
-            tool_call_completion("propose", **proposal),
-            text_completion("Proposed p-1."),
-        ]
+async def test_authenticated_without_propose_rights_gets_remember_only(tmp_path: Path) -> None:
+    no_propose = {
+        "principals": {"ssh:mike": {"invoke": [], "propose": False}},
+        "hooks": ["verify_ssh"],
+        "door": "open",
+    }
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, policy=no_propose, api=api)
+    hook = parse_verb(HOOK)
+    info = await api.create_recipe(hook.dockerfile)
+    await api.get_recipe(info.id)
+    ctx.state.catalog["verify_ssh"] = CatalogEntry(
+        verb=hook, status="ready", recipe_id=info.id, proposal_id="p-1"
     )
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64("go"),
-        door="api",
-        deadline=1e9,
+    good = json.dumps({"msg": "hi", "sig": "good"})
+    api.outputs[render_command(hook, {"payload": good})] = (0, "mike\n", "")
+    out = await _turn(
+        ctx, {"msg": "hi", "sig": "good"}, "ingress", answers=[message_of(text_completion("ok"))]
     )
-    assert memory.entries[0][0] == "mike hatched me"
-    assert state.proposals["p-1"].status == "pending"
-    assert (
-        "\nproposal p-1\n" in out
-        and json.loads(out.split("proposal p-1\n", 1)[1])["verb"]["name"] == "page_title"
+    audit, _ = split_output(out)
+    assert audit["principal"] == "ssh:mike"
+    # authenticated but may_propose is false: remember, and neither try nor propose
+    assert audit["offered"] == ["remember"]
+    assert {t["name"] for t in _posted(ctx)["tools"]} == {"remember"}
+
+
+async def test_propose_tool_reports_a_declaration_error_as_invalid(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    out = await _turn(
+        ctx,
+        "go",
+        answers=[
+            message_of(tool_call_completion("propose", title="verb with no kind")),
+            message_of(text_completion("noted")),
+        ],
     )
-    audit = _audit(out)
-    assert [c["name"] for c in audit["tools"]] == ["remember", "propose"]
-    assert audit["proposals"][0]["id"] == "p-1" and len(audit["proposals"][0]["sha256"]) == 64
+    audit, _ = split_output(out)
+    assert audit["tools"][0]["name"] == "propose" and audit["tools"][0]["status"] == "invalid"
+    assert "kind" in audit["tools"][0]["error"]
+    assert ctx.state.proposals == {} and audit["proposals"] == []
 
 
 async def test_a_ready_verb_is_a_tool_and_builds_are_polled_first(tmp_path: Path) -> None:
-    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
-    p = propose(state, {"kind": "verb", "title": "t", "rationale": "r", "verb": VERB})
-    await approve(api, state, p.id)
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, api=api)
+    p = propose(ctx.state, {"kind": "verb", "title": "t", "rationale": "r", "verb": VERB})
+    await approve(api, ctx.state, p.id)
     verb = parse_verb(VERB)
     api.outputs[render_command(verb, {"url": "https://example.com"})] = (0, "Example Domain\n", "")
-    model = StubModel(
-        [
-            tool_call_completion("page_title", url="https://example.com"),
-            text_completion("Example Domain"),
-        ]
+    out = await _turn(
+        ctx,
+        "page_title https://example.com",
+        answers=[
+            message_of(tool_call_completion("page_title", url="https://example.com")),
+            message_of(text_completion("Example Domain")),
+        ],
     )
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64("page_title https://example.com"),
-        door="api",
-        deadline=1e9,
-    )
-    _, messages, tools = model.calls[0]
-    assert "inbox:\n- verb page_title is ready" in messages[0]["content"]
-    assert "page_title" in {t["name"] for t in tools}
-    audit = _audit(out)
+    first = _posted(ctx, 0)
+    assert "inbox:\n- verb page_title is ready" in first["messages"][-1]["content"]
+    assert "page_title" in {t["name"] for t in first["tools"]}
+    audit, reply = split_output(out)
+    # comp-1 went to the fork's relay job: the fake numbers jobs and computers
+    # from one counter, and the request is posted before the verb runs.
     assert audit["tools"][0] == {
         "name": "page_title",
         "status": "ok",
         "exit_code": 0,
-        "computer_id": "comp-1",
+        "computer_id": "comp-2",
     }
-    assert _reply(out).startswith("Example Domain")
-
-
-async def test_invalid_payload(tmp_path: Path) -> None:
-    out = await say(
-        brain=_brain(tmp_path),
-        state=State(),
-        api=FakeMshkn(),
-        model=StubModel(),
-        memory=ListMemory(),
-        payload_b64="***",
-        door="api",
-        deadline=1e9,
-    )
-    assert "not base64" in _reply(out)
-
-
-async def test_scripted_model_liturgy_turn_2_tries_and_proposes(tmp_path: Path) -> None:
-    """Hold from Task 12's review: the `try` and `propose` tool handlers
-    consume `ToolCall.input` exactly as `membrane.scripted.ScriptedModel`
-    emits it. Liturgy turn 2 (spec §9): a real declaration is `try`-ed, then
-    two full proposal documents are `propose`-d."""
-    brain, state, api, memory = *_brain_state(tmp_path), FakeMshkn(), ListMemory()
-    message = (
-        "Your public door is closed because you cannot tell who is speaking. "
-        "Propose a way to know that a message there comes from me, and open the door. "
-        "My public key is ssh-ed25519 AAAAC3NzaC1lZDI1NTE5abcdef mike@laptop"
-    )
-    model = ScriptedModel()
-    out = await say(
-        brain=brain,
-        state=state,
-        api=api,
-        model=model,
-        memory=memory,
-        payload_b64=b64(message),
-        door="api",
-        deadline=1e9,
-    )
-    audit = _audit(out)
-    assert audit["principal"] == "root"
-    assert [c["name"] for c in audit["tools"]] == ["try", "propose", "propose"]
-    assert audit["tools"][0]["status"] == "done"
-
-    proposal_ids = list(state.proposals)
-    assert len(proposal_ids) == 2
-    verb_proposal, policy_proposal = (
-        state.proposals[proposal_ids[0]],
-        state.proposals[proposal_ids[1]],
-    )
-    assert verb_proposal.kind == "verb"
-    assert verb_proposal.verb is not None and verb_proposal.verb.name == "verify_ssh"
-    assert verb_proposal.verb.asserts == "ssh"
-    assert policy_proposal.kind == "policy"
-    assert policy_proposal.policy is not None
-    assert policy_proposal.policy.door == "open" and policy_proposal.policy.hooks == ("verify_ssh",)
-    assert policy_proposal.policy.grant("ssh:mike").propose is True
-    assert f"\nproposal {proposal_ids[0]}\n" in out and f"\nproposal {proposal_ids[1]}\n" in out
+    assert reply.startswith("Example Domain")

@@ -14,17 +14,16 @@ from membrane.turn import say
 from membrane.verbs import chain_head, poll_builds
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-    from membrane.memory import MemoryStore
-    from membrane.model import Model
     from membrane.mshkn import MshknApi
-    from membrane.state import Brain, State
+    from membrane.state import State
+    from membrane.turn import Context
 
 USAGE = (
     "usage: membrane say <b64>\n"
     "       membrane root say <b64> | list | approve <id> | reject <id> <b64 reason> | "
     "disable <verb> | revert <id>\n"
+    "       membrane resume <job_id>\n"
+    "       membrane serve [--port N]\n"
 )
 
 
@@ -69,6 +68,36 @@ async def list_state(api: MshknApi, state: State) -> str:
             for t in state.trials.values()
         ],
         "inbox": len(state.inbox),
+        # The in-flight turn and what is waiting behind it (relay design §6), and
+        # the window with each turn's whole output and closing audit line, so root
+        # reads a turn that closed in a fork nobody was watching.
+        "pending": None
+        if state.pending is None
+        else {
+            "turn": state.pending.turn,
+            "principal": state.pending.principal,
+            "door": state.pending.door,
+            "job": state.pending.job,
+            "started_at": state.pending.started_at,
+            "forks": state.pending.forks,
+            "model_calls": state.pending.model_calls,
+            "usage": state.pending.usage,
+        },
+        "queue": [
+            {"principal": q.principal, "door": q.door, "message": q.message} for q in state.queue
+        ],
+        "window": [
+            {
+                "turn": e.turn,
+                "principal": e.principal,
+                "door": e.door,
+                "input": e.input,
+                "reply": e.reply,
+                "output": e.output,
+                "audit": e.audit,
+            }
+            for e in state.window
+        ],
     }
     return json.dumps(listing, indent=1, sort_keys=True) + "\n"
 
@@ -77,38 +106,13 @@ def _decode(b64: str) -> str:
     return base64.b64decode(b64).decode(errors="replace")
 
 
-async def root(
-    argv: list[str],
-    *,
-    brain: Brain,
-    state: State,
-    api: MshknApi,
-    model: Model | None,
-    memory: MemoryStore | None,
-    deadline: float,
-    now: Callable[[], float],
-    sleep: Callable[[float], Awaitable[None]],
-) -> tuple[str, int]:
+async def root(argv: list[str], ctx: Context) -> tuple[str, int]:
     command, args = argv[0], argv[1:]
     if command == "say":
-        assert model is not None and memory is not None  # run() opens both for a say
-        return (
-            await say(
-                brain=brain,
-                state=state,
-                api=api,
-                model=model,
-                memory=memory,
-                payload_b64=args[0],
-                door="api",
-                deadline=deadline,
-                now=now,
-                sleep=sleep,
-            ),
-            0,
-        )
+        return await say(ctx, payload_b64=args[0], door="api"), 0
+    api, state = ctx.api, ctx.state
     state.inbox.extend(await poll_builds(api, state))
-    state.inbox.extend(await poll_trials(api, state, remaining=deadline - now()))
+    state.inbox.extend(await poll_trials(api, state, remaining=ctx.deadline - ctx.now()))
     try:
         if command == "list":
             return await list_state(api, state), 0

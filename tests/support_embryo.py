@@ -1,4 +1,4 @@
-"""Fakes shared by the embryo's unit tests: mshkn in memory, a stub model, a
+"""Fakes shared by the embryo's unit tests: mshkn and its relay in memory, and a
 list-backed memory. The flow tier uses the real app instead of FakeMshkn."""
 
 from __future__ import annotations
@@ -237,29 +237,3 @@ class ListMemory:
 
     def close(self) -> None:
         return None
-
-
-@dataclass
-class StubModel:
-    script: list[Completion] = field(default_factory=list)
-    calls: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = field(
-        default_factory=list
-    )
-
-    timeouts: list[float | None] = field(default_factory=list)
-
-    async def complete(
-        self,
-        *,
-        system: str,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        timeout: float | None = None,
-    ) -> Completion:
-        self.calls.append((system, [dict(m) for m in messages], list(tools)))
-        self.timeouts.append(timeout)
-        if not self.script:
-            return Completion(
-                text="(no script)", calls=(), content=[{"type": "text", "text": "(no script)"}]
-            )
-        return self.script.pop(0)
