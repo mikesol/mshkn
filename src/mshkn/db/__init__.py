@@ -6,6 +6,7 @@ to know which table module owns it.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
 import aiosqlite
@@ -73,6 +74,7 @@ from mshkn.db.recipes import (
 from mshkn.db.templates import cache_bare_template, clear_bare_template, get_bare_template
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
 __all__ = [
@@ -126,6 +128,7 @@ __all__ = [
     "rotate_ingress_rule_id",
     "run_migrations",
     "set_exec_log_checkpoint",
+    "transaction",
     "update_computer_status",
     "update_ingress_log",
     "update_ingress_rule",
@@ -139,28 +142,58 @@ __all__ = [
 async def connect(path: Path | str) -> aiosqlite.Connection:
     """Open the database with the pragmas the service relies on.
 
-    A busy timeout so concurrent writers wait instead of failing, set before
-    the WAL switch since that is the one pragma that can need a lock; WAL for
-    concurrent readers and Litestream; NORMAL sync is durable enough under
-    WAL and much faster. Foreign keys stay OFF on purpose: the schema has
-    REFERENCES without ON DELETE actions and destroyed rows are retained, so
-    enforcement would break checkpoint deletion and pruning.
+    Autocommit, so every statement is its own transaction and a failed one
+    leaves nothing open: with the default transaction control a write that
+    loses the lock leaves the connection inside its implicit BEGIN, the next
+    read pins a WAL snapshot, and once any other process commits (litestream
+    does, every second) every later write on the connection is refused with
+    "database is locked" until the process restarts (#105). Writes need no
+    `commit()` (in this mode it is a no-op); a multi-statement unit uses
+    `transaction`. A busy timeout so concurrent writers wait instead of
+    failing, set before the WAL switch since that is the one pragma that can
+    need a lock; WAL for concurrent readers and Litestream; NORMAL sync is
+    durable enough under WAL and much faster. Foreign keys stay OFF on
+    purpose: the schema has REFERENCES without ON DELETE actions and
+    destroyed rows are retained, so enforcement would break checkpoint
+    deletion and pruning.
     """
-    db = await aiosqlite.connect(path)
+    db = await aiosqlite.connect(path, autocommit=True)
     await db.execute("PRAGMA busy_timeout=5000")
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA synchronous=NORMAL")
     return db
 
 
+@contextlib.asynccontextmanager
+async def transaction(db: aiosqlite.Connection) -> AsyncIterator[None]:
+    """Run the body as one transaction: COMMIT on success, ROLLBACK on any exception.
+
+    Only for code that is the connection's sole user while the body runs
+    (startup). Every service coroutine shares the connection and interleaves
+    at each await, so a statement another coroutine issues meanwhile would
+    join this transaction and be lost with its rollback; request-time writes
+    are single statements for that reason.
+    """
+    await db.execute("BEGIN")
+    try:
+        yield
+    except BaseException:
+        await db.execute("ROLLBACK")
+        raise
+    await db.execute("COMMIT")
+
+
 async def run_migrations(db: aiosqlite.Connection, migrations_dir: Path) -> None:
-    """Apply every *.sql file in name order that is not yet recorded in _migrations."""
+    """Apply every *.sql file in name order that is not yet recorded in _migrations.
+
+    Each file and its ledger row are one transaction, so a script that fails
+    part-way applies nothing and runs again next start.
+    """
     await db.execute(
         "CREATE TABLE IF NOT EXISTS _migrations "
         "(id INTEGER PRIMARY KEY, filename TEXT NOT NULL, "
         "applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
     )
-    await db.commit()
     cursor = await db.execute("SELECT filename FROM _migrations")
     applied = {row[0] for row in await cursor.fetchall()}
     for sql_file in sorted(migrations_dir.glob("*.sql")):
@@ -170,6 +203,6 @@ async def run_migrations(db: aiosqlite.Connection, migrations_dir: Path) -> None
         sql = sql_file.read_text().replace(
             "CREATE TABLE _migrations", "CREATE TABLE IF NOT EXISTS _migrations"
         )
-        await db.executescript(sql)
-        await db.execute("INSERT INTO _migrations (filename) VALUES (?)", (sql_file.name,))
-        await db.commit()
+        async with transaction(db):
+            await db.executescript(sql)
+            await db.execute("INSERT INTO _migrations (filename) VALUES (?)", (sql_file.name,))

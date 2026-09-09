@@ -46,7 +46,6 @@ async def insert_deferred(
         "VALUES (" + ", ".join("?" for _ in COLUMNS) + ")",
         (deferred_id, label, account_id, payload_json, created_at),
     )
-    await db.commit()
 
 
 async def claim_deferred_by_label(db: aiosqlite.Connection, label: str) -> list[DeferredRequest]:
@@ -61,7 +60,6 @@ async def claim_deferred_by_label(db: aiosqlite.Connection, label: str) -> list[
         (label,),
     )
     rows = await cursor.fetchall()
-    await db.commit()
     items = [_row_to_deferred(r) for r in rows]
     items.sort(key=lambda d: (d.created_at, d.id))
     return items

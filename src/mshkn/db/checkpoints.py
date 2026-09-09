@@ -69,7 +69,6 @@ async def insert_checkpoint(db: aiosqlite.Connection, checkpoint: Checkpoint) ->
             checkpoint.recipe_id,
         ),
     )
-    await db.commit()
 
 
 async def get_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> Checkpoint | None:
@@ -114,7 +113,6 @@ async def get_max_checkpoint_volume_id(db: aiosqlite.Connection) -> int | None:
 
 async def delete_checkpoint(db: aiosqlite.Connection, checkpoint_id: str) -> None:
     await db.execute("DELETE FROM checkpoints WHERE id = ?", (checkpoint_id,))
-    await db.commit()
 
 
 async def list_prunable_checkpoints(

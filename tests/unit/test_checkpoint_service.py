@@ -133,7 +133,6 @@ async def test_prune_keeps_the_newest_and_pinned(db: aiosqlite.Connection, tmp_p
             "UPDATE checkpoints SET created_at = ? WHERE id = ?",
             (f"2026-09-06T00:00:0{i}", ckpt.id),
         )
-        await db.commit()
     assert await checkpoints.prune() == 1
     remaining = {c.id for c in await checkpoints.list(ACCOUNT)}
     assert remaining == {ids[0], ids[2], ids[3]}  # pinned oldest survives, unpinned oldest goes

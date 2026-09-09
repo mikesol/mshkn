@@ -59,3 +59,20 @@ async def test_health_reports_a_missing_firecracker_binary(
     subsystems = body["subsystems"]
     assert isinstance(subsystems, dict)
     assert body["status"] == "degraded" and "firecracker" in str(subsystems["firecracker"])
+
+
+async def test_health_reports_the_database_degraded_while_reaper_cycles_fail(
+    db: aiosqlite.Connection, runtime_config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reads worked throughout the #105 incident; the reaper's failing writes are the signal."""
+    monkeypatch.setattr(system_module, "_firecracker_present", lambda _config: "ok")
+    rt = make_runtime(db, config=runtime_config, host=FakeHost())
+    rt.reaper.consecutive_failures = 3
+    rt.reaper.last_failure = "OperationalError: database is locked"
+    app = make_app(rt)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        body = (await client.get("/health")).json()
+    assert body["status"] == "degraded"
+    assert body["subsystems"]["database"] == (
+        "reaper: 3 consecutive cycle failures, last: OperationalError: database is locked"
+    )

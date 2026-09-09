@@ -32,10 +32,8 @@ async def cache_bare_template(
         "VALUES ('bare', ?, ?)",
         (vmstate_path, memory_path),
     )
-    await db.commit()
 
 
 async def clear_bare_template(db: aiosqlite.Connection) -> None:
     """Forget the bare template; the next bare create rebuilds it from the current base."""
     await db.execute("DELETE FROM snapshot_templates WHERE manifest_hash = 'bare'")
-    await db.commit()

@@ -41,7 +41,6 @@ async def insert_account(db: aiosqlite.Connection, account: Account) -> None:
             account.created_at,
         ),
     )
-    await db.commit()
 
 
 async def get_account_by_id(db: aiosqlite.Connection, account_id: str) -> Account | None:

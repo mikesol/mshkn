@@ -84,7 +84,6 @@ async def test_idle_skips_unparseable_timestamps_and_destroys_when_the_checkpoin
     # Naive, as rows written before the timestamps became tz-aware are.
     naive = (datetime.now(UTC) - timedelta(seconds=120)).replace(tzinfo=None).isoformat()
     await db.execute("UPDATE computers SET created_at = ? WHERE id = ?", (naive, stale.id))
-    await db.commit()
     host.hypervisor.fail_next("snapshot")
 
     assert await reaper.reap_idle() == 1
@@ -106,7 +105,6 @@ async def test_idle_isolates_a_reap_that_raises(
     stuck = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
     stale = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     await db.execute("UPDATE computers SET created_at = ? WHERE id = ?", (stale, stuck.id))
-    await db.commit()
 
     async def destroy(computer_id: str) -> None:
         raise RuntimeError("teardown wedged")
@@ -183,7 +181,42 @@ async def test_idle_reap_of_an_orphaned_account_skips_the_drain(
     stale = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
     await db.execute("UPDATE computers SET created_at = ? WHERE id = ?", (stale, computer.id))
     await db.execute("DELETE FROM accounts WHERE id = ?", (orphan_account.id,))
-    await db.commit()
 
     assert await reaper.reap_idle() == 1
     assert not any(n.startswith("deferred:") for n in reaper.lifecycle.tasks.names())
+
+
+async def test_run_loop_counts_consecutive_failures_and_a_good_cycle_resets_them(
+    db: aiosqlite.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reaper, _, _, _ = await _reaper(db, tmp_path)
+    calls = 0
+    seen: list[tuple[int, str | None]] = []
+
+    async def cycle() -> None:
+        nonlocal calls
+        calls += 1
+        seen.append((reaper.consecutive_failures, reaper.last_failure))
+        if calls <= 2:
+            raise RuntimeError(f"boom {calls}")
+
+    monkeypatch.setattr(reaper, "cycle", cycle)
+    task = asyncio.create_task(reaper.run(interval=0.01))
+    await asyncio.sleep(0.08)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert calls >= 4
+    assert seen[:4] == [
+        (0, None),
+        (1, "RuntimeError: boom 1"),
+        (2, "RuntimeError: boom 2"),
+        (0, None),
+    ]
+    messages = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert "Reaper cycle failed (1 in a row)" in messages
+    assert "Reaper cycle failed (2 in a row)" in messages

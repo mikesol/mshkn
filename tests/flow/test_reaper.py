@@ -32,7 +32,6 @@ async def test_idle_reap_checkpoints_with_trigger_idle_and_dead_reap_cleans_up(
         await flow.runtime.db.execute(
             "UPDATE computers SET created_at = ? WHERE id = ?", (stale, cid)
         )
-        await flow.runtime.db.commit()
         before = checkpoints_total.labels(trigger="idle")._value.get()
         await flow.runtime.reaper.cycle()
         assert checkpoints_total.labels(trigger="idle")._value.get() == before + 1
@@ -82,7 +81,6 @@ async def test_prune_honours_retention_and_pin_and_cancels_uploads(
             await flow.runtime.db.execute(
                 "UPDATE checkpoints SET created_at = ? WHERE id = ?", (ts, ckpt_id)
             )
-        await flow.runtime.db.commit()
         assert await flow.runtime.checkpoints.prune() == 1
         ids = {c["id"] for c in (await flow.client.get("/checkpoints")).json()}
         assert ids == {pinned, new}
@@ -108,7 +106,6 @@ async def test_idle_reap_preserves_the_source_label(
         await flow.runtime.db.execute(
             "UPDATE computers SET created_at = ? WHERE id = ?", (stale, fork)
         )
-        await flow.runtime.db.commit()
         await flow.runtime.reaper.cycle()
         chain = (await flow.client.get("/checkpoints", params={"label": "keep"})).json()
         assert len(chain) == 2 and {c["parent_id"] for c in chain} == {None, ckpt}

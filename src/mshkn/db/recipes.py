@@ -62,7 +62,6 @@ async def insert_recipe(db: aiosqlite.Connection, recipe: Recipe) -> None:
             recipe.built_at,
         ),
     )
-    await db.commit()
 
 
 async def get_recipe(db: aiosqlite.Connection, recipe_id: str) -> Recipe | None:
@@ -95,7 +94,6 @@ async def update_recipe_status(
     db: aiosqlite.Connection, recipe_id: str, status: RecipeStatus
 ) -> None:
     await db.execute("UPDATE recipes SET status = ? WHERE id = ?", (status, recipe_id))
-    await db.commit()
 
 
 async def update_recipe_build_result(
@@ -112,7 +110,6 @@ async def update_recipe_build_result(
         "WHERE id = ?",
         (status, build_log, base_volume_id, built_at, recipe_id),
     )
-    await db.commit()
 
 
 async def update_recipe_template(
@@ -125,12 +122,10 @@ async def update_recipe_template(
         "UPDATE recipes SET template_vmstate = ?, template_memory = ? WHERE id = ?",
         (template_vmstate, template_memory, recipe_id),
     )
-    await db.commit()
 
 
 async def delete_recipe(db: aiosqlite.Connection, recipe_id: str) -> None:
     await db.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
-    await db.commit()
 
 
 async def delete_failed_recipes_by_hash(
@@ -141,7 +136,6 @@ async def delete_failed_recipes_by_hash(
         "DELETE FROM recipes WHERE account_id = ? AND content_hash = ? AND status = 'failed'",
         (account_id, content_hash),
     )
-    await db.commit()
 
 
 async def get_max_recipe_volume_id(db: aiosqlite.Connection) -> int | None:
