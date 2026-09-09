@@ -837,7 +837,10 @@ async def run_once(
             raise RuntimeError("the account already has a brain; tear it down before measuring")
         preexisting = await doors.recipes()
         pubkey = new_key(key_dir)
-        log.write(f"hatching with {settings.model_id}\n")
+        # Named before hatching: hatch.sh builds the wheel and uploads the priors from
+        # the working tree at this moment, whatever is committed later in the run.
+        version = membrane_version()
+        log.write(f"hatching with {settings.model_id} (membrane {version['commit']})\n")
         hatched = hatch(settings, hatch_script, log=log)
         doors.rule_id = hatched.rule_id
         log.write(f"hatched: {json.dumps(asdict(hatched))}\n")
@@ -853,6 +856,7 @@ async def run_once(
                         "model": settings.model_id,
                         "started": started.isoformat(timespec="seconds"),
                         "ended": datetime.now(UTC).isoformat(timespec="seconds"),
+                        "membrane": version,
                         "hatched": asdict(hatched),
                         "commands": len(doors.sent),
                         "ok": False,
@@ -892,7 +896,7 @@ async def run_once(
                 "run": out_dir.name,
                 "model": settings.model_id,
                 "effort": settings.effort,
-                "membrane": membrane_version(),
+                "membrane": version,
                 "started": started.isoformat(timespec="seconds"),
                 "ended": datetime.now(UTC).isoformat(timespec="seconds"),
                 "seconds": round(time.monotonic() - clock, 1),

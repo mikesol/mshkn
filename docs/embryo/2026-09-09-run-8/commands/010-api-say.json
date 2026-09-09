@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-09T09:08:29+00:00",
+ "command": "say",
+ "computer_id": "comp-a4787ccf4d05",
+ "detail": "check your build",
+ "door": "api",
+ "n": 10,
+ "seconds": 260.27536925300956,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\nError parsing extraction response: Expecting ',' delimiter: line 1 column 721 (char 720)\n",
+ "stdout": "audit {\"door\": \"api\", \"hooks\": [], \"memory_written\": true, \"model_calls\": 1, \"offered\": [\"propose\", \"remember\", \"try\"], \"principal\": \"root\", \"proposals\": [], \"stopped\": \"deadline\", \"tools\": [], \"turn\": 4, \"usage\": {\"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"input_tokens\": 4171, \"output_tokens\": 2}}\nI ran out of time before finishing this turn. I have your key. Before I spend an immutable proposal on it, I'm going to prove the ear works \u2014 including the ways it should **refuse**.\n"
+}

@@ -1329,6 +1329,7 @@ async def test_an_aborted_run_writes_what_it_had_and_tears_down(
     summary = json.loads((out_dir / "run.json").read_text())
     assert summary["ok"] is False and "boom" in summary["error"] and summary["commands"] == 1
     assert summary["hatched"]["rule_id"] == "rule-1"
+    assert "commit" in summary["membrane"]  # an aborted run names its code too
 
 
 async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
