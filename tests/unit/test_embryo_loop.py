@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from membrane.loop import CAP, CAP_REACHED, OUT_OF_TIME, Tool, run_loop
+from membrane.loop import CAP, CAP_REACHED, OUT_OF_TIME, OUT_OF_TOKENS, Tool, run_loop
 from membrane.model import Completion, ToolCall, zero_usage
 
 from tests.support_embryo import StubModel, text_completion, tool_call_completion
@@ -160,3 +160,24 @@ async def test_a_scripted_completion_costs_nothing() -> None:
     model = StubModel([text_completion("hi")])
     out = await run_loop(model, system="s", history=[], user="go", tools={}, deadline=1e9)
     assert out.model_calls == 1 and out.usage == zero_usage()
+
+
+async def test_an_exhausted_output_budget_ends_the_turn_honestly() -> None:
+    # Live run 2026-09-09-run-1, turn 2: 8192 output tokens of thinking, no text, no
+    # call, and the turn was reported as done with an empty reply.
+    spent = Completion(text="", calls=(), content=[], stop_reason="max_tokens")
+    out = await run_loop(
+        StubModel([spent]), system="s", history=[], user="go", tools={"echo": ECHO}, deadline=1e9
+    )
+    assert out.stopped == "max_tokens" and out.text == OUT_OF_TOKENS and out.model_calls == 1
+    partial = Completion(
+        text="I will",
+        calls=(ToolCall("tu_1", "echo", {"x": 1}),),
+        content=[{"type": "text", "text": "I will"}],
+        stop_reason="max_tokens",
+    )
+    out = await run_loop(
+        StubModel([partial]), system="s", history=[], user="go", tools={"echo": ECHO}, deadline=1e9
+    )
+    # a call that arrived with a truncated response is not run
+    assert out.stopped == "max_tokens" and out.calls == [] and out.text == f"{OUT_OF_TOKENS} I will"

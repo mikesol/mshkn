@@ -62,8 +62,11 @@ async def list_state(api: MshknApi, state: State) -> str:
         "principals": sorted(state.principals),
         "catalog": catalog,
         "proposals": [p.to_doc() for p in state.proposals.values()],
+        # A trial's recipe is on the account too (§5); naming it here is what lets
+        # the measure tell a trial's recipe from an undeclared one (#101).
         "trials": [
-            {"id": t.id, "verb": t.verb.name, "status": t.status} for t in state.trials.values()
+            {"id": t.id, "verb": t.verb.name, "status": t.status, "recipe_id": t.recipe_id}
+            for t in state.trials.values()
         ],
         "inbox": len(state.inbox),
     }

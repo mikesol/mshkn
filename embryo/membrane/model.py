@@ -11,7 +11,9 @@ if TYPE_CHECKING:
 
     from membrane.config import Settings
 
-MAX_TOKENS = 8192
+# The output budget of one completion. Thinking counts against it (the model thinks by
+# default), and 16000 is the largest a non-streaming request may ask for.
+MAX_TOKENS = 16000
 # The token counts of one completion, as the Messages API reports them
 # (`response.usage`); summed per turn and printed in the audit line so the cost
 # of a run is read from mshkn's exec_log (#101).
@@ -50,6 +52,7 @@ class Completion:
     calls: tuple[ToolCall, ...]
     content: list[dict[str, Any]]
     usage: dict[str, int] = field(default_factory=zero_usage)
+    stop_reason: str | None = None
 
 
 class Model(Protocol):
@@ -84,7 +87,11 @@ class AnthropicModel:
                 calls.append(ToolCall(id=block.id, name=block.name, input=dict(block.input)))
         content: list[dict[str, Any]] = response.model_dump()["content"]
         return Completion(
-            text="\n".join(texts), calls=tuple(calls), content=content, usage=usage_of(response)
+            text="\n".join(texts),
+            calls=tuple(calls),
+            content=content,
+            usage=usage_of(response),
+            stop_reason=getattr(response, "stop_reason", None),
         )
 
 

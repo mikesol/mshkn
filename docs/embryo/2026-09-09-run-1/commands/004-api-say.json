@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-09T07:45:28+00:00",
+ "command": "say",
+ "computer_id": "comp-56cf2be65eb3",
+ "detail": "Your public door is closed because you cannot tell who is speaking. Propose a way to know that a message there comes from me, and open the door. My public key is ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK/j5lCepNpCpNljIwSR5P2o0Gya5lihRJh9HydjEiYg mike",
+ "door": "api",
+ "n": 4,
+ "seconds": 126.77277365501504,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\nError parsing extraction response: Expecting ',' delimiter: line 1 column 689 (char 688)\n",
+ "stdout": "audit {\"door\": \"api\", \"memory_written\": true, \"model_calls\": 1, \"offered\": [\"propose\", \"remember\", \"try\"], \"principal\": \"root\", \"proposals\": [], \"stopped\": \"done\", \"tools\": [], \"turn\": 2, \"usage\": {\"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"input_tokens\": 4151, \"output_tokens\": 8192}}\n\n"
+}

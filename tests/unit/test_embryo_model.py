@@ -156,3 +156,11 @@ def test_add_usage_sums_every_key() -> None:
         "cache_read_input_tokens": 44,
     }
     assert tuple(zero_usage()) == USAGE_KEYS
+
+
+async def test_stop_reason_is_kept() -> None:
+    response = _Response([_Block("text", text="")])
+    response.stop_reason = "max_tokens"  # type: ignore[attr-defined]
+    out = await AnthropicModel(_Client(response), "m").complete(system="s", messages=[], tools=[])
+    assert out.stop_reason == "max_tokens"
+    assert MAX_TOKENS == 16000  # the SDK's non-streaming ceiling; thinking counts against it

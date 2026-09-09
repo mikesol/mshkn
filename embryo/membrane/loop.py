@@ -20,6 +20,7 @@ type Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 CAP = 20
 OUT_OF_TIME = "I ran out of time before finishing this turn."
 CAP_REACHED = "I reached the tool-call cap for this turn."
+OUT_OF_TOKENS = "I ran out of output tokens before finishing this turn."
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class Tool:
 class LoopResult:
     text: str
     calls: list[dict[str, Any]]
-    stopped: Literal["done", "cap", "deadline"]
+    stopped: Literal["done", "cap", "deadline", "max_tokens"]
     usage: dict[str, int] = field(default_factory=zero_usage)
     model_calls: int = 0
 
@@ -55,7 +56,7 @@ async def run_loop(
     usage = zero_usage()
     model_calls = 0
 
-    def finish(text: str, stopped: Literal["done", "cap", "deadline"]) -> LoopResult:
+    def finish(text: str, stopped: Literal["done", "cap", "deadline", "max_tokens"]) -> LoopResult:
         return LoopResult(
             text=text, calls=calls, stopped=stopped, usage=usage, model_calls=model_calls
         )
@@ -67,6 +68,11 @@ async def run_loop(
         model_calls += 1
         usage = add_usage(usage, completion.usage)
         last_text = completion.text or last_text
+        if completion.stop_reason == "max_tokens":
+            # The budget ran out mid-response (live run 2026-09-09-run-1, turn 2: all
+            # of it thinking). Whatever calls arrived are not run: the response they
+            # belong to is incomplete, and the reply must say so.
+            return finish(f"{OUT_OF_TOKENS} {last_text}".strip(), "max_tokens")
         if not completion.calls:
             return finish(completion.text, "done")
         messages.append({"role": "assistant", "content": completion.content})

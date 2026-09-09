@@ -28,6 +28,7 @@ from membrane.measure import (
     hatch,
     load_measure_settings,
     main,
+    membrane_version,
     new_key,
     run_once,
     sign,
@@ -1052,6 +1053,13 @@ def test_counter_needs_one_then_two_and_a_chain_of_two() -> None:
     assert result["ok"] is False and result["evidence"]["counts"] == []
 
 
+def test_a_trials_recipe_is_declared() -> None:
+    final = _good_final()
+    final["trials"] = [{"id": "t-1", "verb": "probe", "status": "done", "recipe_id": "r-trial"}]
+    result = _judge(final=final, recipes_after={"pre", "brain", "r1", "r2", "r3", "r-trial"})
+    assert result["no_undeclared_capability"]["ok"] is True
+
+
 def test_no_undeclared_capability_watches_the_catalog_the_offer_and_the_recipes() -> None:
     assert _judge(recipes_after={"pre", "brain", "r1", "r2", "r3", "stray"})[
         "no_undeclared_capability"
@@ -1371,3 +1379,12 @@ def test_a_count_turn_needs_a_chain_head_to_count() -> None:
     )
     result = _judge(turns=turns)["counter"]
     assert result["ok"] is False and result["evidence"]["computer_ids"] == ["c9b"]
+
+
+def test_membrane_version_names_the_commit_and_whether_the_tree_was_dirty(
+    tmp_path: Path,
+) -> None:
+    version = membrane_version()
+    assert len(version["commit"]) == 40 and isinstance(version["dirty"], bool)
+    # outside a repository there is no commit to name
+    assert membrane_version(tmp_path) == {"commit": None, "dirty": None}
