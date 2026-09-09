@@ -280,6 +280,10 @@ async def say(
         proposals=proposals_made,
         memory_written=write_memory,
         stopped=result.stopped,
+        # The cost of the turn, from the model's own usage reports (#101). mem0's
+        # extraction and embedding calls are not counted here.
+        model_calls=result.model_calls,
+        usage=result.usage,
     )
     out = [audit, result.text]
     for pid in made:

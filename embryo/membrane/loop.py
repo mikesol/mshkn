@@ -7,8 +7,10 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
+
+from membrane.model import add_usage, zero_usage
 
 if TYPE_CHECKING:
     from membrane.model import Model
@@ -31,6 +33,8 @@ class LoopResult:
     text: str
     calls: list[dict[str, Any]]
     stopped: Literal["done", "cap", "deadline"]
+    usage: dict[str, int] = field(default_factory=zero_usage)
+    model_calls: int = 0
 
 
 async def run_loop(
@@ -48,26 +52,30 @@ async def run_loop(
     definitions = [t.definition for t in tools.values()]
     calls: list[dict[str, Any]] = []
     last_text = ""
+    usage = zero_usage()
+    model_calls = 0
+
+    def finish(text: str, stopped: Literal["done", "cap", "deadline"]) -> LoopResult:
+        return LoopResult(
+            text=text, calls=calls, stopped=stopped, usage=usage, model_calls=model_calls
+        )
+
     while True:
         if now() >= deadline:
-            return LoopResult(
-                text=f"{OUT_OF_TIME} {last_text}".strip(), calls=calls, stopped="deadline"
-            )
+            return finish(f"{OUT_OF_TIME} {last_text}".strip(), "deadline")
         completion = await model.complete(system=system, messages=messages, tools=definitions)
+        model_calls += 1
+        usage = add_usage(usage, completion.usage)
         last_text = completion.text or last_text
         if not completion.calls:
-            return LoopResult(text=completion.text, calls=calls, stopped="done")
+            return finish(completion.text, "done")
         messages.append({"role": "assistant", "content": completion.content})
         results: list[dict[str, Any]] = []
         for call in completion.calls:
             if len(calls) >= cap:
-                return LoopResult(
-                    text=f"{CAP_REACHED} {last_text}".strip(), calls=calls, stopped="cap"
-                )
+                return finish(f"{CAP_REACHED} {last_text}".strip(), "cap")
             if now() >= deadline:
-                return LoopResult(
-                    text=f"{OUT_OF_TIME} {last_text}".strip(), calls=calls, stopped="deadline"
-                )
+                return finish(f"{OUT_OF_TIME} {last_text}".strip(), "deadline")
             tool = tools.get(call.name)
             if tool is None:
                 result: dict[str, Any] = {"status": "error", "error": f"no such tool {call.name}"}

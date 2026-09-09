@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from membrane.declarations import parse_policy, parse_verb, render_command
 from membrane.hooks import principal_for
 from membrane.memory import Provenance
+from membrane.model import zero_usage
 from membrane.proposals import approve, propose
 from membrane.scripted import ScriptedModel
 from membrane.state import Brain, CatalogEntry, Exchange, InboxItem, State
@@ -105,6 +106,9 @@ async def test_root_turn_with_no_calls(tmp_path: Path) -> None:
     )
     audit = _audit(out)
     assert audit["principal"] == "root" and audit["door"] == "api" and audit["turn"] == 1
+    # The token counts of the turn ride in the audit line (#101), so the cost of a
+    # run is read from mshkn's exec_log, not from a side channel.
+    assert audit["model_calls"] == 1 and audit["usage"] == zero_usage()
     assert _reply(out) == "I am an embryo.\n"
     system, messages, tools = model.calls[0]
     assert system == "SEED" and [t["name"] for t in tools] == ["remember", "try", "propose"]

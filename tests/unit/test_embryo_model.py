@@ -6,7 +6,15 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from membrane.config import Settings
-from membrane.model import MAX_TOKENS, AnthropicModel, ToolCall, build_model
+from membrane.model import (
+    MAX_TOKENS,
+    USAGE_KEYS,
+    AnthropicModel,
+    ToolCall,
+    add_usage,
+    build_model,
+    zero_usage,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -110,3 +118,41 @@ def test_build_model_picks_the_kind(tmp_path: Path) -> None:
         )
     )
     assert isinstance(real, AnthropicModel) and real.model_id == "claude-opus-5"
+
+
+@dataclass
+class _Usage:
+    input_tokens: int
+    output_tokens: int
+    cache_read_input_tokens: int | None = None
+
+
+async def test_usage_is_read_off_the_response_with_missing_fields_as_zero() -> None:
+    response = _Response([_Block("text", text="a")])
+    response.usage = _Usage(input_tokens=120, output_tokens=7, cache_read_input_tokens=None)  # type: ignore[attr-defined]
+    out = await AnthropicModel(_Client(response), "m").complete(system="s", messages=[], tools=[])
+    assert out.usage == {
+        "input_tokens": 120,
+        "output_tokens": 7,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+
+
+async def test_a_response_without_usage_counts_nothing() -> None:
+    out = await AnthropicModel(_Client(_Response([_Block("text", text="a")])), "m").complete(
+        system="s", messages=[], tools=[]
+    )
+    assert out.usage == zero_usage()
+
+
+def test_add_usage_sums_every_key() -> None:
+    a = dict(zip(USAGE_KEYS, (1, 2, 0, 4), strict=True))
+    b = dict(zip(USAGE_KEYS, (10, 20, 30, 40), strict=True))
+    assert add_usage(a, b) == {
+        "input_tokens": 11,
+        "output_tokens": 22,
+        "cache_creation_input_tokens": 30,
+        "cache_read_input_tokens": 44,
+    }
+    assert tuple(zero_usage()) == USAGE_KEYS

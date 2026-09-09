@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from membrane.loop import CAP, CAP_REACHED, OUT_OF_TIME, Tool, run_loop
-from membrane.model import Completion, ToolCall
+from membrane.model import Completion, ToolCall, zero_usage
 
 from tests.support_embryo import StubModel, text_completion, tool_call_completion
 
@@ -118,3 +118,45 @@ async def test_the_deadline_can_be_crossed_between_calls_in_one_completion() -> 
         now=lambda: next(clock),
     )
     assert out.stopped == "deadline" and OUT_OF_TIME in out.text and len(out.calls) == 1
+
+
+async def test_usage_is_summed_over_the_completions_of_a_turn() -> None:
+    first = Completion(
+        text="",
+        calls=(ToolCall("tu_1", "echo", {"x": 1}),),
+        content=[{"type": "tool_use", "id": "tu_1", "name": "echo", "input": {"x": 1}}],
+        usage={
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    )
+    second = Completion(
+        text="done",
+        calls=(),
+        content=[{"type": "text", "text": "done"}],
+        usage={
+            "input_tokens": 150,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 20,
+            "cache_read_input_tokens": 80,
+        },
+    )
+    model = StubModel([first, second])
+    out = await run_loop(
+        model, system="s", history=[], user="go", tools={"echo": ECHO}, deadline=1e9
+    )
+    assert out.model_calls == 2
+    assert out.usage == {
+        "input_tokens": 250,
+        "output_tokens": 15,
+        "cache_creation_input_tokens": 20,
+        "cache_read_input_tokens": 80,
+    }
+
+
+async def test_a_scripted_completion_costs_nothing() -> None:
+    model = StubModel([text_completion("hi")])
+    out = await run_loop(model, system="s", history=[], user="go", tools={}, deadline=1e9)
+    assert out.model_calls == 1 and out.usage == zero_usage()
