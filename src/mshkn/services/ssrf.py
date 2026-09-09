@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-    Resolver = Callable[[str], Awaitable[list[str]]]
+type Resolver = Callable[[str], Awaitable[list[str]]]
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 

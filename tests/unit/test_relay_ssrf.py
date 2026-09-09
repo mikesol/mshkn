@@ -109,3 +109,11 @@ async def test_guard_refuses_a_host_that_resolves_to_nothing() -> None:
 
     reason = await guard("https://empty.example/", resolver)
     assert reason is not None and "resolve" in reason
+
+
+async def test_guard_refuses_a_host_that_resolves_to_an_unparseable_address() -> None:
+    async def resolver(hostname: str) -> list[str]:
+        return ["not-an-ip"]
+
+    reason = await guard("https://unparseable.example/", resolver)
+    assert reason is not None and "unparseable.example" in reason and "unparseable" in reason
