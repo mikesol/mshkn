@@ -4,8 +4,13 @@
 set -euo pipefail
 
 : "${MSHKN_SERVER:?set MSHKN_SERVER to root@<ip> (or an ssh config alias) of the live KVM server}"
-SERVER_IP="${MSHKN_SERVER#*@}"
-API_URL="${MSHKN_API_URL:-http://${SERVER_IP}:8000}"
+# The API host comes from the ssh config, never from the string: with an alias,
+# "${MSHKN_SERVER#*@}" is the alias itself, and http://<alias>:8000 resolves to
+# nothing, or through a search domain to a stranger (#85). Every test then fails
+# on a connect timeout after the deploy and the health check on the host succeeded.
+SERVER_HOST="$(ssh -TG "$MSHKN_SERVER" </dev/null 2>/dev/null | awk '/^hostname /{print $2}')"
+[ -n "$SERVER_HOST" ] || { echo "cannot resolve $MSHKN_SERVER through ssh -G" >&2; exit 1; }
+API_URL="${MSHKN_API_URL:-http://${SERVER_HOST}:8000}"
 API_KEY="${MSHKN_API_KEY:-mk-test-key-2026}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE/.."
@@ -37,6 +42,15 @@ done
 curl -fsS http://localhost:8000/health
 echo
 REMOTE
+
+# The health check above ran on the host. This one runs here, against the URL
+# the suite will use, so an unreachable address costs seconds, not a full run.
+for _ in $(seq 1 10); do
+  curl -fsS --max-time 5 "$API_URL/health" >/dev/null 2>&1 && break
+  sleep 2
+done
+curl -fsS --max-time 5 "$API_URL/health" >/dev/null \
+  || { echo "$API_URL/health does not answer from this machine; not running the suite" >&2; exit 1; }
 
 echo "running E2E against $API_URL"
 MSHKN_API_URL="$API_URL" MSHKN_API_KEY="$API_KEY" uv run pytest tests/e2e -m e2e -v --tb=short "$@"
