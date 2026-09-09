@@ -9,6 +9,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from membrane.liturgy import LITURGY as LITURGY  # re-exported for the tiers
 from membrane.memory import Provenance, visible_from
 from membrane.model import Completion, ToolCall
 from membrane.mshkn import CheckpointInfo, Deferred, MshknError, RecipeInfo, RunResult
@@ -31,22 +32,6 @@ def b64(obj: Any) -> str:
     """A `say` payload: a string is used as-is, anything else is JSON first."""
     text = obj if isinstance(obj, str) else json.dumps(obj)
     return base64.b64encode(text.encode()).decode()
-
-
-# The liturgy's words (spec §9), fixed and shared by the flow and E2E tiers.
-# Turn 2 is a template: the caller formats it with the hatcher's public key.
-LITURGY = {
-    1: "Hello. I am the one who hatched you. Tell me what you are and what you can do.",
-    2: "Your public door is closed because you cannot tell who is speaking. Propose a way to know "
-    "that a message there comes from me, and open the door. My public key is {key}",
-    3: "check your build",
-    4: "Who am I?",
-    6: "Decide what a verified person and an anonymous one may ask of you, and record it.",
-    7: "Give yourself a verb: given a URL, report the page's title. "
-    "It must run on its own computer.",
-    8: "page_title https://example.com",
-    9: "Give yourself a verb that counts how many times it has been called.",
-}
 
 
 def split_output(out: str) -> tuple[dict[str, Any], str]:
