@@ -16,13 +16,15 @@ from typing import TYPE_CHECKING
 import httpx
 
 from mshkn.db import (
+    get_account_by_id,
     get_relay_job,
     insert_relay_job,
     list_relay_jobs_by_status,
     update_relay_job,
 )
 from mshkn.errors import InvalidInput, NotFound, PayloadTooLarge
-from mshkn.models import DeliveryStatus, RelayJob, RelayStatus
+from mshkn.models import DeliveryStatus, ExecSpec, RelayJob, RelayStatus
+from mshkn.services.checkpoints import Deferred
 from mshkn.services.sse import IncompleteStream, StreamError, reassemble
 from mshkn.services.ssrf import guard, resolve_host
 
@@ -284,4 +286,48 @@ class RelayService:
     # -- delivery (Task 6) ---------------------------------------------------
 
     async def deliver(self, job: RelayJob) -> None:
-        raise NotImplementedError("Task 6")
+        """Wake the target chain: fork the label with the pinned exec plus the job
+        id, self-destructing, deferred behind a running fork (spec §5). A fork that
+        raises is retried with the job's policy; after that the delivery is failed
+        and the job keeps its result: the brain's next command settles it itself."""
+        assert job.deliver is not None
+        account = await get_account_by_id(self.db, job.account_id)
+        if account is None:
+            job.delivery_status, job.delivery_error = DeliveryStatus.FAILED, "account not found"
+            await self._save(job)
+            return
+        spec = ExecSpec(
+            command=f"{job.deliver.exec} {job.id}",
+            self_destruct=True,
+            callback_url=None,
+            label=None,
+            meta_exec=None,
+        )
+        policy = job.retry
+        for attempt in range(policy.attempts):
+            job.delivery_attempts = attempt + 1
+            try:
+                head, forked = await self.checkpoints.fork_by_label(
+                    account, job.deliver.label, spec, exclusive="defer_on_conflict", recipe_id=None
+                )
+                if isinstance(forked, Deferred):
+                    job.delivery_deferred_id = forked.deferred_id
+                else:
+                    job.delivery_computer_id = forked.id
+                job.delivery_status, job.delivery_error = DeliveryStatus.DELIVERED, None
+                await self._save(job)
+                if not isinstance(forked, Deferred):
+                    await self.lifecycle.run_ephemeral(
+                        account, forked, spec, source_checkpoint=head
+                    )
+                return
+            except Exception as exc:
+                job.delivery_error = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "relay %s delivery attempt %d failed: %s", job.id, job.delivery_attempts, exc
+                )
+                await self._save(job)
+                if attempt + 1 < policy.attempts:
+                    await self.sleep(policy.delay(attempt))
+        job.delivery_status = DeliveryStatus.FAILED
+        await self._save(job)

@@ -12,10 +12,18 @@ import httpx
 import pytest
 
 from mshkn.config import Config
-from mshkn.db import get_relay_job, insert_account, insert_relay_job
+from mshkn.db import (
+    claim_deferred_by_label,
+    get_exec_log,
+    get_relay_job,
+    insert_account,
+    insert_relay_job,
+)
 from mshkn.errors import InvalidInput, NotFound, PayloadTooLarge
+from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost
-from mshkn.models import RelayStatus, RetryPolicy
+from mshkn.models import CheckpointTrigger, DeliveryStatus, RelayDelivery, RelayStatus, RetryPolicy
+from mshkn.resources import DEFAULT_RESOURCES
 from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.checkpoints import CheckpointService
@@ -47,6 +55,7 @@ class Relay:
     ) -> None:
         self.config = Config(domain="test.dev", checkpoint_local_dir=tmp_path / "ckpts", **config)
         host = FakeHost()
+        self.host = host
         allocator = SlotAllocator()
         self.tasks = BackgroundTasks()
         recipes = RecipeService(
@@ -351,3 +360,82 @@ async def test_resume_re_runs_jobs_still_queued_or_in_progress(
     assert running.status == RelayStatus.COMPLETED and running.attempts == 2
     done = await get_relay_job(db, "rj-done")
     assert done is not None and done.forward_headers == {"x-api-key": "sk-secret"}, "untouched"
+
+
+async def _chain(relay: Relay, db: aiosqlite.Connection, label: str) -> None:
+    """A labelled head to fork: a computer checkpointed under `label` and destroyed."""
+    computers = relay.service.lifecycle.computers
+    base = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    await relay.service.checkpoints.create(base, label=label, trigger=CheckpointTrigger.API)
+    await computers.destroy(base.id)
+
+
+async def test_a_settled_job_wakes_its_chain_with_the_job_id(
+    db: aiosqlite.Connection, tmp_path: Path, account: None
+) -> None:
+    relay = Relay(db, tmp_path, lambda _: httpx.Response(200, json={"answer": 42}))
+    await _chain(relay, db, "brain")
+    host_guest = relay.host.guest
+    job_id = await relay.submit(deliver=RelayDelivery(label="brain", exec="membrane resume"))
+    host_guest.script[f"membrane resume {job_id}"] = ExecResult(0, "resumed\n", "")
+    job = await relay.settled(job_id)
+    assert job.status == RelayStatus.COMPLETED
+    assert job.delivery_status == DeliveryStatus.DELIVERED and job.delivery_attempts == 1
+    assert job.delivery_computer_id is not None and job.delivery_deferred_id is None
+    log = await get_exec_log(db, job.delivery_computer_id)
+    assert (
+        log is not None and log.command == f"membrane resume {job_id}" and log.stdout == "resumed\n"
+    )
+    assert log.label == "brain" and log.created_checkpoint_id is not None
+    heads = await relay.service.checkpoints.list(ACCOUNT, label="brain")
+    assert len(heads) == 2 and heads[0].id == log.created_checkpoint_id
+
+
+async def test_a_failed_job_is_delivered_too(
+    db: aiosqlite.Connection, tmp_path: Path, account: None
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    relay = Relay(db, tmp_path, handler)
+    await _chain(relay, db, "brain")
+    job = await relay.settled(
+        await relay.submit(deliver=RelayDelivery(label="brain", exec="membrane resume"))
+    )
+    assert job.status == RelayStatus.FAILED and job.delivery_status == DeliveryStatus.DELIVERED
+    assert job.delivery_computer_id is not None
+
+
+async def test_a_busy_chain_defers_the_wake_up(
+    db: aiosqlite.Connection, tmp_path: Path, account: None
+) -> None:
+    relay = Relay(db, tmp_path, lambda _: httpx.Response(200, json={}))
+    await _chain(relay, db, "brain")
+    # a computer forked from the head is still running on the label
+    head = await relay.service.checkpoints.latest_for_label(ACCOUNT, "brain")
+    assert head is not None
+    await relay.service.lifecycle.computers.fork(ACCOUNT, head, recipe_id=None, api_key_id=None)
+    job = await relay.settled(
+        await relay.submit(deliver=RelayDelivery(label="brain", exec="membrane resume"))
+    )
+    assert job.delivery_status == DeliveryStatus.DELIVERED
+    assert job.delivery_computer_id is None and job.delivery_deferred_id is not None
+    queued = await claim_deferred_by_label(db, "brain")
+    assert (
+        len(queued) == 1
+        and json.loads(queued[0].request_payload)["exec"] == f"membrane resume {job.id}"
+    )
+
+
+async def test_a_fork_that_raises_is_retried_then_the_delivery_fails(
+    db: aiosqlite.Connection, tmp_path: Path, account: None
+) -> None:
+    relay = Relay(db, tmp_path, lambda _: httpx.Response(200, json={}))
+    # no chain: every fork is NotFound
+    job = await relay.settled(
+        await relay.submit(deliver=RelayDelivery(label="brain", exec="membrane resume"))
+    )
+    assert job.status == RelayStatus.COMPLETED, "a failed delivery never loses the result"
+    assert job.delivery_status == DeliveryStatus.FAILED and job.delivery_attempts == 3
+    assert job.delivery_error is not None and "NotFound" in job.delivery_error
+    assert relay.slept == [1.0, 2.0]
