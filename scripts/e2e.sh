@@ -58,4 +58,4 @@ curl -fsS --max-time 5 "$API_URL/health" >/dev/null \
   || { echo "$API_URL/health does not answer from this machine; not running the suite" >&2; exit 1; }
 
 echo "running E2E against $API_URL"
-MSHKN_API_URL="$API_URL" MSHKN_API_KEY="$API_KEY" uv run pytest tests/e2e -m e2e -v --tb=short "$@"
+MSHKN_API_URL="$API_URL" MSHKN_API_KEY="$API_KEY" uv run pytest tests/e2e -m e2e -v --tb=short --durations=25 "$@"
