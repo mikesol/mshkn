@@ -259,7 +259,7 @@ class DeliveryStatus(StrEnum):
     FAILED = "failed"
 ```
 
-At the end of the file:
+Immediately **above** `class Scopes` (Task 2 extends `Scopes` and needs the type in scope there):
 
 ```python
 @dataclass(frozen=True)
@@ -268,6 +268,11 @@ class RelayDelivery:
 
     label: str
     exec: str
+```
+
+At the end of the file:
+
+```python
 
 
 @dataclass(frozen=True)
@@ -593,7 +598,7 @@ class Scopes:
         return any(target.startswith(prefix) for prefix in self.relay_targets)
 ```
 
-`RelayDelivery` must be defined above `Scopes` (move the dataclass from the end of the file to just before `Scopes`). In `to_document`, before `return doc`:
+`RelayDelivery` is already defined above `Scopes` (Task 1). In `to_document`, before `return doc`:
 
 ```python
         if self.has_relay:
@@ -2039,7 +2044,8 @@ async def test_the_account_key_submits_polls_and_gets_the_whole_record(client: A
     assert got.status_code == 200, got.text
     body = got.json()
     assert body["job_id"] == job_id and body["status"] == "completed" and body["attempts"] == 1
-    assert body["response"] == {"status": 200, "headers": {"content-type": "application/json"}, "body": {"echo": "/v1/messages"}}
+    assert body["response"]["status"] == 200 and body["response"]["body"] == {"echo": "/v1/messages"}
+    assert body["response"]["headers"]["content-type"] == "application/json"  # httpx adds content-length too
     assert body["delivery"] is None and body["error"] is None
     assert "forward_headers" not in got.text and "x-api-key" not in got.text
     assert (await client.get("/relay/rj-nope")).status_code == 404
@@ -2764,7 +2770,7 @@ and to `Mshkn`:
 
 - [ ] **Step 5: The fakes**
 
-In `tests/support_embryo.py`: delete `StubModel`; import `RelayJob` from `membrane.mshkn` and `zero_usage` from `membrane.model`; add
+In `tests/support_embryo.py`: keep `StubModel` for now (Task 11 deletes it, once the tests that import it are rewritten); import `RelayJob` from `membrane.mshkn` and `zero_usage` from `membrane.model`; add
 
 ```python
 def message_of(
@@ -2842,8 +2848,8 @@ and to `FakeMshkn` the fields and methods:
 
 - [ ] **Step 6: Run the tests**
 
-Run: `uv run pytest tests/unit/test_embryo_state.py tests/unit/test_embryo_config.py tests/unit/test_embryo_mshkn.py -q`
-Expected: pass. Other membrane tests fail now on the missing `StubModel`; Tasks 10 and 11 replace them.
+Run: `uv run pytest tests/unit/test_embryo_state.py tests/unit/test_embryo_config.py tests/unit/test_embryo_mshkn.py -q && uv run mypy`
+Expected: pass. **Tasks 9, 10 and 11 are one coupled unit for the gate** (controller ruling R1): Task 10 deletes `build_model`, which `cli.py` imports until Task 11 rewrites it, so `tests/unit/test_embryo_turn.py` and `tests/unit/test_embryo_commands.py` are red between Task 10's commit and Task 11's. Run only the test files each task names; the full `uv run pytest --cov` gate is required at the end of Task 11 and must be green there.
 
 - [ ] **Step 7: Commit**
 
@@ -3108,7 +3114,7 @@ def parse_message(doc: Mapping[str, Any]) -> Completion:
 - [ ] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/unit/test_embryo_model.py tests/unit/test_embryo_scripted.py -q`
-Expected: pass (the scripted model imports `Completion` and `ToolCall`, unchanged).
+Expected: pass (the scripted model imports `Completion` and `ToolCall`, unchanged). `test_embryo_turn.py` and `test_embryo_commands.py` are red until Task 11 (controller ruling R1): `cli.py` still imports the deleted `build_model`. Do not run the full suite here.
 
 - [ ] **Step 5: Commit**
 
@@ -4056,6 +4062,8 @@ def main() -> None:
     sys.exit(code)
 ```
 
+`tests/support_embryo.py`: delete `StubModel` now — nothing imports it after this task (controller ruling R1).
+
 `tests/unit/test_embryo_commands.py`: `_run` drops the `model` parameter (`run(argv, brain_dir=brain_dir, api=api, memory=ListMemory())`), `test_usage` adds `["resume"]` and `["serve", "x"]` to the invalid list (`serve` is not `run`'s to handle), and `test_public_say_and_root_say_differ_by_door` becomes:
 
 ```python
@@ -4089,7 +4097,7 @@ In `test_run_builds_and_closes_the_real_clients`, the mock transport answers `PO
 - [ ] **Step 7: Run the membrane's unit tests**
 
 Run: `uv run pytest tests/unit/test_embryo_*.py -q && uv run mypy`
-Expected: pass. `tests/unit/test_embryo_measure.py` fails until Task 14 rewrites the doors; that is expected here and fixed there.
+Expected: every membrane test passes except `tests/unit/test_embryo_measure.py`, which Task 14 rewrites. R1's coupled unit ends here: `uv run ruff check . && uv run ruff format --check . && uv run mypy` must be clean, and `uv run pytest -q --deselect tests/unit/test_embryo_measure.py` must be green.
 
 - [ ] **Step 8: Commit**
 
@@ -4161,7 +4169,7 @@ def test_answer_is_a_message_with_end_turn_for_text_and_tool_use_for_calls() -> 
 
 
 def test_the_server_answers_post_v1_messages_and_nothing_else() -> None:
-    server = build_server(ScriptedModel(), 0)
+    server = build_server(ScriptedModel(), 0, host="127.0.0.1")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -4258,16 +4266,15 @@ DEFAULT_PORT = 8000
 _counter = 0
 
 
-def answer(model: Model, body: dict[str, Any]) -> dict[str, Any]:
-    """The message the scripted model gives for a request body."""
+async def answer_async(model: Model, body: dict[str, Any]) -> dict[str, Any]:
+    """The message the scripted model gives for a request body. The async half, so
+    an ASGI caller inside a running loop can await it (the flow tier does)."""
     global _counter
     _counter += 1
-    completion = asyncio.run(
-        model.complete(
-            system=str(body.get("system", "")),
-            messages=list(body.get("messages") or []),
-            tools=list(body.get("tools") or []),
-        )
+    completion = await model.complete(
+        system=str(body.get("system", "")),
+        messages=list(body.get("messages") or []),
+        tools=list(body.get("tools") or []),
     )
     return {
         "id": f"msg_scripted_{_counter}",
@@ -4279,6 +4286,11 @@ def answer(model: Model, body: dict[str, Any]) -> dict[str, Any]:
         "stop_sequence": None,
         "usage": zero_usage(),
     }
+
+
+def answer(model: Model, body: dict[str, Any]) -> dict[str, Any]:
+    """`answer_async` for the blocking server, which has no loop of its own."""
+    return asyncio.run(answer_async(model, body))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -4309,8 +4321,8 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("serve: " + format % args + "\n")
 
 
-def build_server(model: Model, port: int) -> HTTPServer:
-    server = HTTPServer(("0.0.0.0", port), Handler)
+def build_server(model: Model, port: int, host: str = "0.0.0.0") -> HTTPServer:  # noqa: S104 — the VM's own network
+    server = HTTPServer((host, port), Handler)
     server.model = model  # type: ignore[attr-defined]
     return server
 
@@ -4336,7 +4348,7 @@ Append to `tests/support_embryo.py`:
 ```python
 def scripted_asgi(model: Model) -> Callable[..., Awaitable[None]]:
     """`membrane serve` as an ASGI app, for the flow tier's in-process relay target."""
-    from membrane.serve import answer
+    from membrane.serve import answer_async
 
     async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
         assert scope["type"] == "http"
@@ -4349,7 +4361,7 @@ def scripted_asgi(model: Model) -> Callable[..., Awaitable[None]]:
         if scope["method"] != "POST" or scope["path"] != "/v1/messages":
             status, doc = 404, {"type": "error", "error": {"type": "not_found_error", "message": scope["path"]}}
         else:
-            status, doc = 200, answer(model, json.loads(body or b"{}"))
+            status, doc = 200, await answer_async(model, json.loads(body or b"{}"))
         data = json.dumps(doc).encode()
         await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(data)).encode())]})
         await send({"type": "http.response.body", "body": data})
@@ -4357,7 +4369,7 @@ def scripted_asgi(model: Model) -> Callable[..., Awaitable[None]]:
     return app
 ```
 
-with `from collections.abc import Awaitable, Callable` and `from membrane.model import Model` imported. `answer` calls `asyncio.run`, which cannot run inside a running loop: in the ASGI wrapper call the model directly instead: replace `answer(model, ...)` there by `await answer_async(model, body)`, and split `answer` in `serve.py` into `async def answer_async(model, body) -> dict` (the body above without `asyncio.run`) and `def answer(model, body): return asyncio.run(answer_async(model, body))`. Export both.
+with `from collections.abc import Awaitable, Callable` and `from membrane.model import Model` imported. The wrapper imports and awaits `answer_async` (not `answer`, whose `asyncio.run` cannot run inside a running loop).
 
 - [ ] **Step 4: Run the tests**
 
