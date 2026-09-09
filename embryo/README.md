@@ -31,3 +31,14 @@ curl -fsS -X POST "$INGRESS_URL" -H 'Content-Type: application/json' \
 ```
 
 A 409 from either door means a turn is in progress: retry.
+
+## The brain disk
+
+Everything under `/brain` survives the checkpoint as files, and everything the membrane changes is one of them:
+
+| File | What |
+|---|---|
+| `/brain/state.json` | The one mutable document: the policy, the self-description, the catalog, the proposals, the trials, the inbox, the turn window, the turn counter, the principals seen and the previously applied policy and prompt. A command loads it once, saves it once at the end, and the save writes a temp file and renames it over the old one, so a command that crashes leaves the previous state byte for byte (#100). |
+| `/brain/seed.md`, `/brain/policy.json` | The priors, uploaded by `embryo/hatch.sh` and never written again. `policy.json` is read once, to seed the first `state.json`; after that the live policy is in the state. |
+| `/brain/.env` | The scoped key, the model keys and the API URL. |
+| `/brain/memory/` | mem0's store. |

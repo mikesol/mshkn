@@ -151,7 +151,7 @@ async def say(
             audit_line(door=door, principal=None, error="bad payload") + "\n" + BAD_PAYLOAD + "\n"
         )
     message, payload_text = decoded
-    policy = brain.policy()
+    policy = state.policy
 
     # 1. principal
     if door == "api":
@@ -238,7 +238,7 @@ async def say(
 
     # 5. loop
     system = brain.seed()
-    described = brain.self_description()
+    described = state.self_description
     if described:
         system = f"{system}\n\n{described}"
     result = await run_loop(

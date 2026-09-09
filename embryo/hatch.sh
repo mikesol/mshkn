@@ -89,7 +89,7 @@ upload "$CID" /brain/policy.json "$HERE/policy.json"
   true
 } > "$TMP/env"
 upload "$CID" /brain/.env "$TMP/env"
-run "$CID" "/brain/venv/bin/pip install --no-deps -q /tmp/$WHEEL_NAME && ln -sf /brain/venv/bin/membrane /usr/local/bin/membrane && chmod 600 /brain/.env && : > /brain/self.md && membrane root list > /dev/null"
+run "$CID" "/brain/venv/bin/pip install --no-deps -q /tmp/$WHEEL_NAME && ln -sf /brain/venv/bin/membrane /usr/local/bin/membrane && chmod 600 /brain/.env && membrane root list > /dev/null"
 
 echo "checkpointing as brain" >&2
 CKPT_ID="$(api POST "/computers/$CID/checkpoint" '{"label": "brain"}' | jq -r .checkpoint_id)"

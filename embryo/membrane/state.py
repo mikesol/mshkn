@@ -1,8 +1,15 @@
-"""The brain disk (spec §3, §8): state.json, policy.json, self.md, seed.md, memory/."""
+"""The brain disk (spec §3, §8): state.json, seed.md, policy.json, memory/.
+
+Everything the membrane changes — the policy, the self-description, the
+catalog, the proposals, the trials, the inbox, the turn window — is one
+document, `state.json`, replaced atomically on save (#100). `seed.md` and
+`policy.json` are the priors: fixed after hatching, the latter read once to
+seed the first state."""
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -97,7 +104,9 @@ class State:
     inbox: list[InboxItem] = field(default_factory=list)
     window: list[Exchange] = field(default_factory=list)
     principals: set[str] = field(default_factory=set)
-    previous_policy: dict[str, Any] | None = None
+    policy: Policy = field(default_factory=lambda: Policy(principals={}, hooks=(), door="closed"))
+    self_description: str = ""
+    previous_policy: Policy | None = None
     previous_prompt: str | None = None
     applied_policy: str | None = None
     applied_prompt: str | None = None
@@ -135,7 +144,11 @@ class State:
                 for e in self.window
             ],
             "principals": sorted(self.principals),
-            "previous_policy": self.previous_policy,
+            "policy": self.policy.to_doc(),
+            "self_description": self.self_description,
+            "previous_policy": None
+            if self.previous_policy is None
+            else self.previous_policy.to_doc(),
             "previous_prompt": self.previous_prompt,
             "applied_policy": self.applied_policy,
             "applied_prompt": self.applied_prompt,
@@ -153,7 +166,11 @@ class State:
             inbox=[InboxItem(**i) for i in doc["inbox"]],
             window=[Exchange(**e) for e in doc["window"]],
             principals=set(doc["principals"]),
-            previous_policy=doc.get("previous_policy"),
+            policy=parse_policy(doc["policy"]),
+            self_description=doc["self_description"],
+            previous_policy=(
+                None if doc.get("previous_policy") is None else parse_policy(doc["previous_policy"])
+            ),
             previous_prompt=doc.get("previous_prompt"),
             applied_policy=doc.get("applied_policy"),
             applied_prompt=doc.get("applied_prompt"),
@@ -179,26 +196,31 @@ class Brain:
         return path
 
     def state(self) -> State:
+        """The saved state, or before the first save the state the priors
+        describe (spec §8): the hatched `policy.json`, an empty
+        self-description, nothing else."""
         path = self.root / "state.json"
         if not path.exists():
-            return State()
+            return State(policy=parse_policy(json.loads((self.root / "policy.json").read_text())))
         return State.from_doc(json.loads(path.read_text()))
 
     def save(self, state: State) -> None:
-        (self.root / "state.json").write_text(json.dumps(state.to_doc(), indent=1, sort_keys=True))
-
-    def policy(self) -> Policy:
-        return parse_policy(json.loads((self.root / "policy.json").read_text()))
-
-    def write_policy(self, policy: Policy) -> None:
-        (self.root / "policy.json").write_text(json.dumps(policy.to_doc(), indent=1))
+        """Replace `state.json` atomically: the whole document is written and
+        fsynced beside it, then renamed over it. The fork that runs a command
+        is checkpointed however the process ends (#100), so the disk holds
+        either the previous state or the new one, never a torn file and
+        never a document that disagrees with its own bookkeeping."""
+        path = self.root / "state.json"
+        tmp = path.with_name("state.json.tmp")
+        try:
+            with tmp.open("w") as f:
+                f.write(json.dumps(state.to_doc(), indent=1, sort_keys=True))
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.replace(path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def seed(self) -> str:
         return (self.root / "seed.md").read_text()
-
-    def self_description(self) -> str:
-        path = self.root / "self.md"
-        return path.read_text() if path.exists() else ""
-
-    def write_self(self, text: str) -> None:
-        (self.root / "self.md").write_text(text)
