@@ -8,8 +8,13 @@ set -euo pipefail
 # "${MSHKN_SERVER#*@}" is the alias itself, and http://<alias>:8000 resolves to
 # nothing, or through a search domain to a stranger (#85). Every test then fails
 # on a connect timeout after the deploy and the health check on the host succeeded.
-SERVER_HOST="$(ssh -TG "$MSHKN_SERVER" </dev/null 2>/dev/null | awk '/^hostname /{print $2}')"
-[ -n "$SERVER_HOST" ] || { echo "cannot resolve $MSHKN_SERVER through ssh -G" >&2; exit 1; }
+# `|| true` keeps a failing ssh from ending the script inside the assignment
+# (set -e, pipefail) before the diagnostic below; ssh's own stderr stays visible.
+SERVER_HOST="$(ssh -TG "$MSHKN_SERVER" </dev/null | awk '/^hostname /{print $2}' || true)"
+[ -n "$SERVER_HOST" ] || {
+  echo "cannot resolve the host for MSHKN_SERVER=$MSHKN_SERVER through ssh -G; check the ssh config" >&2
+  exit 1
+}
 API_URL="${MSHKN_API_URL:-http://${SERVER_HOST}:8000}"
 API_KEY="${MSHKN_API_KEY:-mk-test-key-2026}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
