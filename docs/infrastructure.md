@@ -26,6 +26,7 @@ The previous host was a Hetzner AX41-NVMe (Ryzen 5 3600, 64 GB, 2×512 GB NVMe).
 | Cloudflare API token with DNS:Edit on `mshkn.dev` | Caddy's DNS-01 challenge for the wildcard certificate | Previously named `mshkn-caddy-dns`; needs the value, or a new token |
 | R2 bucket `mshkn-checkpoints` with access key and secret | Checkpoint upload and Litestream replication | Present in the local `.env`; nothing to do unless rotated |
 | Operator SSH public key in `/root/.ssh/authorized_keys` | Deploy and E2E scripts | `~/.ssh/id_ed25519.pub` on the dev machine |
+| `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` | Real-model runs of the embryo (`embryo/hatch.sh` with `MEMBRANE_MODEL=anthropic`), billed per token. The E2E suite does not need them: Phase 14 runs the scripted model with a local embedder. | Provided by the operator to the machine that hatches, in its environment; stored nowhere in this repository |
 
 ## What the operator provides, in order
 

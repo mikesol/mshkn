@@ -31,6 +31,7 @@ DOCS: tuple[str, ...] = (
     "docs/infrastructure.md",
     "docs/ARCHITECTURE.md",
     "docs/plans/README.md",
+    "embryo/README.md",
 )
 
 # Words a document must not contain because the thing they name is gone.
@@ -46,7 +47,7 @@ SCRIPT_VARS = frozenset({"MSHKN_SERVER", "MSHKN_API_URL", "MSHKN_API_KEY"})
 # Routes FastAPI adds on its own; the architecture doc does not list them.
 FRAMEWORK_ROUTES = frozenset({"/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"})
 
-PATH_RE = re.compile(r"`((?:src|tests|scripts|docs|migrations|systemd)/[A-Za-z0-9_./{}-]+)`")
+PATH_RE = re.compile(r"`((?:src|tests|scripts|docs|migrations|systemd|embryo)/[A-Za-z0-9_./{}-]+)`")
 MODULE_RE = re.compile(r"`(mshkn(?!\.dev`)(?:\.[A-Za-z_][A-Za-z0-9_]*)+)`")  # not the domain
 ROUTE_RE = re.compile(r"`(GET|POST|PUT|PATCH|DELETE) (/[A-Za-z0-9_{}/]*)`")
 METRIC_RE = re.compile(r"`(mshkn_[a-z_]+)(?:\{[^}]*\})?`")
