@@ -36,7 +36,8 @@ class _Response:
     content: list[_Block]
 
     def model_dump(self) -> dict[str, Any]:
-        return {"content": [vars(b) for b in self.content]}
+        # a streamed ParsedMessage dumps its blocks with the SDK's parsed_output
+        return {"content": [{**vars(b), "parsed_output": None} for b in self.content]}
 
 
 class _Stream:
@@ -96,6 +97,8 @@ async def test_complete_maps_blocks_to_text_and_calls() -> None:
     assert out.text == "Let me look."
     assert out.calls == (ToolCall("tu_1", "page_title", {"url": "https://example.com"}),)
     assert out.content[1]["name"] == "page_title"
+    # what goes back to the API as the assistant turn carries nothing of the SDK's own
+    assert all("parsed_output" not in block for block in out.content)
     sent = client.messages.calls[0]
     assert sent["model"] == "claude-opus-5" and sent["max_tokens"] == MAX_TOKENS
     assert sent["system"] == "seed" and sent["tools"] == tools

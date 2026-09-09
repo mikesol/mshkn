@@ -108,7 +108,12 @@ class AnthropicModel:
                 texts.append(block.text)
             elif block.type == "tool_use" and not timed_out:
                 calls.append(ToolCall(id=block.id, name=block.name, input=dict(block.input)))
-        content: list[dict[str, Any]] = response.model_dump()["content"]
+        # The streamed message's blocks carry the SDK's own `parsed_output`; echoed back
+        # as the assistant turn, the API refuses it (live run 2026-09-09-run-7).
+        content: list[dict[str, Any]] = [
+            {k: v for k, v in block.items() if k != "parsed_output"}
+            for block in response.model_dump()["content"]
+        ]
         return Completion(
             text="\n".join(texts),
             calls=tuple(calls),
