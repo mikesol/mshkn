@@ -142,6 +142,8 @@ class Sent:
     stdout: str
     status: int
     seconds: float
+    computer_id: str | None = None
+    stderr: str = ""
 
 
 class Record:
@@ -156,7 +158,16 @@ class Record:
         self.n = 0
 
     def command(
-        self, door: str, name: str, detail: Any, stdout: str, status: int, seconds: float
+        self,
+        door: str,
+        name: str,
+        detail: Any,
+        stdout: str,
+        status: int,
+        seconds: float,
+        *,
+        computer_id: str | None = None,
+        stderr: str = "",
     ) -> int:
         self.n += 1
         doc = {
@@ -167,7 +178,9 @@ class Record:
             "status": status,
             "seconds": seconds,
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "computer_id": computer_id,
             "stdout": stdout,
+            "stderr": stderr,
         }
         path = self.commands_dir / f"{self.n:03d}-{door}-{name}.json"
         path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
@@ -267,10 +280,21 @@ class Doors:
         self.sent: list[Sent] = []
 
     def _record(
-        self, door: str, name: str, detail: Any, stdout: str, status: int, seconds: float
+        self,
+        door: str,
+        name: str,
+        detail: Any,
+        stdout: str,
+        status: int,
+        seconds: float,
+        *,
+        computer_id: str | None = None,
+        stderr: str = "",
     ) -> int:
-        n = self.record.command(door, name, detail, stdout, status, seconds)
-        self.sent.append(Sent(n, door, name, detail, stdout, status, seconds))
+        n = self.record.command(
+            door, name, detail, stdout, status, seconds, computer_id=computer_id, stderr=stderr
+        )
+        self.sent.append(Sent(n, door, name, detail, stdout, status, seconds, computer_id, stderr))
         return n
 
     async def _turn(
@@ -291,10 +315,21 @@ class Doors:
             raise RuntimeError(f"{door} {name}: HTTP {response.status_code} {response.text[:500]}")
         body = response.json()
         stdout = str(body.get("exec_stdout") or "")
-        self._record(door, name, detail, stdout, response.status_code, seconds)
+        stderr = str(body.get("exec_stderr") or "")
+        self._record(
+            door,
+            name,
+            detail,
+            stdout,
+            response.status_code,
+            seconds,
+            computer_id=body.get("computer_id"),
+            stderr=stderr,
+        )
         if body.get("exec_exit_code") != 0:
             raise RuntimeError(
-                f"{door} {name}: exit {body.get('exec_exit_code')}: {stdout[-2000:]}"
+                f"{door} {name} on {body.get('computer_id')}: exit {body.get('exec_exit_code')}\n"
+                f"stdout: {stdout[-1000:]}\nstderr: {stderr[-3000:]}"
             )
         return stdout
 
@@ -749,7 +784,23 @@ async def run_once(
         log.write(f"hatched: {json.dumps(asdict(hatched))}\n")
         final: dict[str, Any] | None = None
         try:
-            turns = await speak_liturgy(doors, key_dir, pubkey, approver, log=log)
+            try:
+                turns = await speak_liturgy(doors, key_dir, pubkey, approver, log=log)
+            except Exception as exc:
+                # An aborted run is evidence too: what was hatched, how far it got, why.
+                record.summary(
+                    {
+                        "run": out_dir.name,
+                        "model": settings.model_id,
+                        "started": started.isoformat(timespec="seconds"),
+                        "ended": datetime.now(UTC).isoformat(timespec="seconds"),
+                        "hatched": asdict(hatched),
+                        "commands": len(doors.sent),
+                        "ok": False,
+                        "error": str(exc),
+                    }
+                )
+                raise
             log.write("Turn 10 (root): list\n")
             final = await doors.listing()
             record.final_list(final)

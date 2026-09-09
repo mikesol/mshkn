@@ -255,7 +255,13 @@ async def test_root_gives_up_on_409_after_the_turn_timeout(tmp_path: Path) -> No
 async def test_a_failed_exec_is_an_error_with_the_output(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            200, json={"computer_id": "c", "exec_exit_code": 1, "exec_stdout": "Traceback"}
+            200,
+            json={
+                "computer_id": "c",
+                "exec_exit_code": 1,
+                "exec_stdout": "Traceback",
+                "exec_stderr": "openai.RateLimitError: insufficient_quota",
+            },
         )
 
     transport = httpx.MockTransport(handler)
@@ -265,9 +271,12 @@ async def test_a_failed_exec_is_an_error_with_the_output(tmp_path: Path) -> None
         "rule-1",
         Record(tmp_path / "run"),
     )
-    with pytest.raises(RuntimeError, match=r"exit 1.*Traceback"):
+    with pytest.raises(RuntimeError, match=r"on c: exit 1\nstdout: Traceback\nstderr: openai"):
         await doors.root("list")
     assert doors.sent[0].status == 200 and doors.sent[0].stdout == "Traceback"
+    assert doors.sent[0].computer_id == "c" and "insufficient_quota" in doors.sent[0].stderr
+    doc = json.loads((tmp_path / "run" / "commands" / "001-api-list.json").read_text())
+    assert doc["computer_id"] == "c" and doc["stderr"].startswith("openai.")
 
 
 async def test_public_say_carries_no_credential_and_records_the_principal(
@@ -1191,6 +1200,42 @@ async def test_run_once_refuses_an_account_that_already_has_a_brain(
             keep=False,
             log=io.StringIO(),
         )
+
+
+async def test_an_aborted_run_writes_what_it_had_and_tears_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    failing = 'audit {"principal": "root"}\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/checkpoints/fork":
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": "c1",
+                    "exec_exit_code": 1,
+                    "exec_stdout": failing,
+                    "exec_stderr": "boom",
+                },
+            )
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr("membrane.measure.transport_for", lambda _url: httpx.MockTransport(handler))
+    out_dir = tmp_path / "run"
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_once(
+            _settings(),
+            out_dir,
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+        )
+    summary = json.loads((out_dir / "run.json").read_text())
+    assert summary["ok"] is False and "boom" in summary["error"] and summary["commands"] == 1
+    assert summary["hatched"]["rule_id"] == "rule-1"
 
 
 async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
