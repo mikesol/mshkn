@@ -63,13 +63,17 @@ def reassemble(text: str) -> dict[str, Any]:
         content: list[Any] = message["content"]
         if kind == "content_block_start":
             index = int(event["index"])
-            while len(content) <= index:
-                content.append(None)
-            content[index] = dict(event["content_block"])
+            if index != len(content):
+                raise IncompleteStream(
+                    f"content_block_start at index {index}, expected {len(content)}"
+                )
+            content.append(dict(event["content_block"]))
             if content[index].get("type") == "tool_use":
                 partial[index] = []
         elif kind == "content_block_delta":
             index = int(event["index"])
+            if index >= len(content):
+                raise IncompleteStream(f"content_block_delta for index {index}, never started")
             block = content[index]
             delta = event.get("delta") or {}
             delta_type = delta.get("type")
@@ -83,6 +87,8 @@ def reassemble(text: str) -> dict[str, Any]:
                 partial.setdefault(index, []).append(delta["partial_json"])
         elif kind == "content_block_stop":
             index = int(event["index"])
+            if index >= len(content):
+                raise IncompleteStream(f"content_block_stop for index {index}, never started")
             if index in partial:
                 raw = "".join(partial.pop(index))
                 content[index]["input"] = json.loads(raw) if raw.strip() else {}

@@ -157,6 +157,12 @@ def test_an_error_event_raises_and_says_whether_it_is_retryable() -> None:
         and exc.value.type == "overloaded_error"
         and "Overloaded" in str(exc.value)
     )
+    api_error = _sse(
+        START, {"type": "error", "error": {"type": "api_error", "message": "API error"}}
+    )
+    with pytest.raises(StreamError) as exc:
+        reassemble(api_error)
+    assert exc.value.retryable and exc.value.type == "api_error"
     invalid = _sse(
         START, {"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}
     )
@@ -181,6 +187,60 @@ def test_a_stream_cut_before_message_stop_is_incomplete() -> None:
         reassemble("")
     with pytest.raises(IncompleteStream):
         reassemble(_sse({"type": "message_stop"}))  # no message_start
+
+
+def test_content_block_start_must_be_contiguous() -> None:
+    """A stream whose first block starts at index 1 is incomplete."""
+    text = _sse(
+        START,
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {"type": "message_stop"},
+    )
+    with pytest.raises(IncompleteStream) as exc:
+        reassemble(text)
+    assert "expected 0" in str(exc.value)
+
+
+def test_content_block_delta_for_never_started_index_is_incomplete() -> None:
+    """A content_block_delta for an index that was never started is incomplete."""
+    text = _sse(
+        START,
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": "oops"},
+        },
+        {"type": "message_stop"},
+    )
+    with pytest.raises(IncompleteStream) as exc:
+        reassemble(text)
+    assert "never started" in str(exc.value)
+
+
+def test_content_block_stop_for_never_started_index_is_incomplete() -> None:
+    """A content_block_stop for an index that was never started is incomplete."""
+    text = _sse(
+        START,
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "message_stop"},
+    )
+    with pytest.raises(IncompleteStream) as exc:
+        reassemble(text)
+    assert "never started" in str(exc.value)
 
 
 def test_parse_events_joins_data_lines_and_skips_junk() -> None:
