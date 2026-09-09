@@ -210,9 +210,14 @@ class ScriptedModel:
         return None
 
     async def complete(
-        self, *, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        timeout: float | None = None,
     ) -> Completion:
-        del system
+        del system, timeout
         last = messages[-1]["content"] if messages else ""
         if isinstance(last, list):
             return self._text(self._summarise(last))

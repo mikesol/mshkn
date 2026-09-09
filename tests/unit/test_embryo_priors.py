@@ -42,6 +42,11 @@ def test_seed_says_what_the_spec_requires() -> None:
         "no verbs",
         "public door is closed",
         "root",
+        # what a hook receives (live run 2026-09-09-run-3: the model guessed the
+        # payload shape, said so, and its correct hook named nobody)
+        "`msg`",
+        '"sig"',
+        "ssh-keygen -Y sign -n mshkn",
     ):
         assert phrase in seed, phrase
 

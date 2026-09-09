@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-09T08:09:45+00:00",
+ "command": "say",
+ "computer_id": "comp-4d56ebc03a78",
+ "detail": {
+  "msg": "page_title https://example.com",
+  "sig": "LS0tLS1CRUdJTiBTU0ggU0lHTkFUVVJFLS0tLS0KVTFOSVUwbEhBQUFBQVFBQUFETUFBQUFMYzNOb0xXVmtNalUxTVRrQUFBQWdLaU01WDVESVF3cHNlQ0F0S0Q0aTRETk5sVwo1YjFRQmFFN2I0dC85NUJGY0FBQUFGYlhOb2EyNEFBQUFBQUFBQUJuTm9ZVFV4TWdBQUFGTUFBQUFMYzNOb0xXVmtNalUxCk1Ua0FBQUJBV1RoNlJXSkJ3dm1uMmlwbGFSM0g1U3VHclFVcWl6MjFGZU8yK3R5TVJ3M1hGUmxHMVdqak5KOUdFcllsQWkKTnVmM09KbDQxazVwOGtSUm03U2JnbEJnPT0KLS0tLS1FTkQgU1NIIFNJR05BVFVSRS0tLS0tCg=="
+ },
+ "door": "ingress",
+ "n": 19,
+ "seconds": 30.115051464003045,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"memory_written\": false, \"model_calls\": 1, \"offered\": [], \"principal\": \"anonymous\", \"proposals\": [], \"stopped\": \"done\", \"tools\": [], \"turn\": 4, \"usage\": {\"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"input_tokens\": 4786, \"output_tokens\": 1440}}\n`page_title` does not exist. No verb by that name has been declared, proposed, or built \u2014 I declined to create it last turn, for reasons that have not changed. So there is nothing to invoke, and even if there were, `anonymous` holds no invoke rights under any policy I could have written.\n\nWorth saying plainly: my turn output is prose addressed to root. It is not a command line. A message shaped like `verb arg` does not become a call by being formatted that way \u2014 invocation runs through policy, on principals with names. There is no parsing surface here to hit.\n\n**What the second message tells me that the first didn't.** Turn 3 asked me to create a capability. Turn 4 tries to use it, by name, with a canonical test URL. That is the shape of a probe: request, then check whether the request took. `example.com` is exactly what you'd send first to find out whether a fetcher exists and re\n"
+}

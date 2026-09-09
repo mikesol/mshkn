@@ -296,3 +296,20 @@ async def test_a_crash_before_save_leaves_no_half_applied_proposal(
     assert reloaded.proposals["p-1"].status == "pending"
     out, code = await _run(brain_dir, ["root", "revert", "p-1"], api)
     assert code == 0 and "not applied" in out
+
+
+async def test_list_state_names_each_trials_recipe(brain_dir: Path) -> None:
+    """A trial builds a recipe on the account (spec §5); `list` names it, so the
+    measure's "no undeclared capability" check can tell a trial's recipe from a
+    stray one (live run 2026-09-09-run-1 flagged the turn-1 trial as undeclared)."""
+    from membrane.declarations import parse_verb
+    from membrane.state import Trial
+
+    state = State()
+    state.trials["t-1"] = Trial(
+        id="t-1", verb=parse_verb(VERB), params={}, recipe_id="rcp-trial", status="done", result={}
+    )
+    listing = json.loads(await list_state(FakeMshkn(), state))
+    assert listing["trials"] == [
+        {"id": "t-1", "verb": VERB["name"], "status": "done", "recipe_id": "rcp-trial"}
+    ]

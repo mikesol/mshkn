@@ -19,10 +19,15 @@ if TYPE_CHECKING:
     from membrane.state import State
 
 TRIAL_MARGIN = 30.0
+# A trial's computer needs at least this long to boot and run; with less left in
+# the turn the trial stays `building` for the next turn to run (#109).
+RUN_MARGIN = 20.0
 
 
 async def run_trial(api: MshknApi, trial: Trial, *, remaining: float) -> dict[str, Any]:
     assert trial.recipe_id is not None
+    if remaining < RUN_MARGIN:
+        return {"status": "error", "error": "out of time"}
     try:
         command = render_command(trial.verb, trial.params)
         run = await api.create_computer(
@@ -79,9 +84,10 @@ async def try_verb(
         trial.status = "failed"
         trial.result = {"build_log": log_tail(info.build_log)}
         return {"status": "failed", "trial": trial.id, "build_log": log_tail(info.build_log)}
-    if info.status != "ready":
+    if info.status != "ready" or until - now() < RUN_MARGIN:
+        # Built but no time left to run it: the next turn's poll runs it (§5).
         return {"status": "building", "trial": trial.id}
-    result = await run_trial(api, trial, remaining=max(until - now(), 1.0))
+    result = await run_trial(api, trial, remaining=until - now())
     trial.status = "done"
     trial.result = result
     return {"trial": trial.id, "build_log": log_tail(info.build_log), **result}

@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-09T08:32:51+00:00",
+ "command": "say",
+ "computer_id": "comp-8953cff35f01",
+ "detail": "check your build",
+ "door": "api",
+ "n": 4,
+ "seconds": 249.44950335397152,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\n",
+ "stdout": "audit {\"door\": \"api\", \"hooks\": [], \"memory_written\": true, \"model_calls\": 4, \"offered\": [\"propose\", \"remember\", \"try\"], \"principal\": \"root\", \"proposals\": [], \"stopped\": \"deadline\", \"tools\": [{\"computer_id\": \"comp-cd585b559e3c\", \"exit_code\": 0, \"name\": \"try\", \"status\": \"done\", \"trial\": \"t-6\"}, {\"computer_id\": \"comp-0c1f6f2a6b23\", \"exit_code\": 0, \"name\": \"try\", \"status\": \"done\", \"trial\": \"t-7\"}, {\"name\": \"try\", \"status\": \"building\", \"trial\": \"t-8\"}, {\"name\": \"remember\", \"status\": \"remembered\"}], \"turn\": 2, \"usage\": {\"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"input_tokens\": 63127, \"output_tokens\": 18331}}\nI ran out of time before finishing this turn. `/run` is a tmpfs at invocation time, so anything I bake into `/run/secrets` at build time is gone by the time the verb runs. `/secrets` and `/etc/mshkn` survive. Against a surviving path the crypto is exactly right: `good -> [root@mshkn]`, tampered and plaintext empty. Final trial of the ship script with the production candidate-path loader.\n"
+}

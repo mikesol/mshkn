@@ -6,7 +6,9 @@
 #   MSHKN_API_URL=https://api.mshkn.dev MSHKN_API_KEY=<account key> embryo/hatch.sh
 #
 # Optional: BRAIN_API_URL (what the brain dials; default MSHKN_API_URL),
-# MEMBRANE_MODEL (anthropic|scripted; default anthropic), ANTHROPIC_API_KEY and
+# MEMBRANE_MODEL (anthropic|scripted; default anthropic), MEMBRANE_MODEL_ID (the
+# model the brain runs; the membrane defaults to claude-opus-5), MEMBRANE_EFFORT
+# (low|medium|high|xhigh|max; default the API's), ANTHROPIC_API_KEY and
 # OPENAI_API_KEY (required for anthropic). Needs uv, curl and jq.
 set -euo pipefail
 
@@ -84,6 +86,8 @@ upload "$CID" /brain/policy.json "$HERE/policy.json"
   echo "MSHKN_API_URL=$BRAIN_API_URL"
   echo "MSHKN_API_KEY=$BRAIN_KEY"
   echo "MEMBRANE_MODEL=$MEMBRANE_MODEL"
+  [ -n "${MEMBRANE_MODEL_ID:-}" ] && echo "MEMBRANE_MODEL_ID=$MEMBRANE_MODEL_ID"
+  [ -n "${MEMBRANE_EFFORT:-}" ] && echo "MEMBRANE_EFFORT=$MEMBRANE_EFFORT"
   [ -n "${ANTHROPIC_API_KEY:-}" ] && echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
   [ -n "${OPENAI_API_KEY:-}" ] && echo "OPENAI_API_KEY=$OPENAI_API_KEY"
   true

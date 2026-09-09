@@ -32,6 +32,7 @@ DOCS: tuple[str, ...] = (
     "docs/ARCHITECTURE.md",
     "docs/plans/README.md",
     "embryo/README.md",
+    "docs/embryo/README.md",
 )
 
 # Words a document must not contain because the thing they name is gone.

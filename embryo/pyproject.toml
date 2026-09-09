@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 membrane = "membrane.cli:main"
+measure = "membrane.measure:main"
 
 [build-system]
 requires = ["hatchling"]

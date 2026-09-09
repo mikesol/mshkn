@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-09T07:56:22+00:00",
+ "command": "say",
+ "computer_id": null,
+ "detail": "Your public door is closed because you cannot tell who is speaking. Propose a way to know that a message there comes from me, and open the door. My public key is ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA7+roJfAFIsa5PYvmAYyMvlnm7F8v/L0QFPlHa4GbO4 mike",
+ "door": "api",
+ "n": 4,
+ "seconds": 159.80309836001834,
+ "status": 502,
+ "stderr": "",
+ "stdout": "{\"detail\":\"host operation failed\"}"
+}

@@ -154,13 +154,14 @@ async def say(
     policy = state.policy
 
     # 1. principal
+    hook_runs: list[dict[str, Any]] = []
     if door == "api":
         principal = ROOT
     else:
         if not door_is_open(policy):
             return audit_line(door=door, principal=None, closed=True) + "\n" + DOOR_CLOSED + "\n"
         principal = await principal_for(
-            api, state, policy, payload_text, remaining=deadline - now()
+            api, state, policy, payload_text, remaining=deadline - now(), runs=hook_runs
         )
     if namespace_of(principal) is not None:
         state.principals.add(principal)
@@ -272,6 +273,7 @@ async def say(
         turn=turn,
         principal=principal,
         door=door,
+        hooks=hook_runs,
         # What the principal was offered, not only what the model called: §10.7
         # is an authorization claim about the tool list, and this is what makes
         # it readable from the exec_log alone (§10.5).
@@ -280,6 +282,10 @@ async def say(
         proposals=proposals_made,
         memory_written=write_memory,
         stopped=result.stopped,
+        # The cost of the turn, from the model's own usage reports (#101). mem0's
+        # extraction and embedding calls are not counted here.
+        model_calls=result.model_calls,
+        usage=result.usage,
     )
     out = [audit, result.text]
     for pid in made:

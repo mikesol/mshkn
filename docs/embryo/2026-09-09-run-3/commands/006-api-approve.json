@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-09T08:07:39+00:00",
+ "command": "approve",
+ "computer_id": "comp-a19febf026d6",
+ "detail": [
+  "p-1"
+ ],
+ "door": "api",
+ "n": 6,
+ "seconds": 2.2540304609574378,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-1 refused: hook ssh_identity is not a verb in the catalog\n"
+}

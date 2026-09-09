@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from membrane.declarations import parse_verb, render_command
 from membrane.state import State, Trial
-from membrane.trials import poll_trials, run_trial, try_verb
+from membrane.trials import RUN_MARGIN, poll_trials, run_trial, try_verb
 
 from tests.support_embryo import FakeMshkn
 from tests.unit.test_embryo_declarations import VERB
@@ -124,7 +124,7 @@ async def test_run_trial_reports_a_computer_creation_error_as_data() -> None:
         status="building",
         result=None,
     )
-    result = await run_trial(api, trial, remaining=10.0)
+    result = await run_trial(api, trial, remaining=60.0)
     assert result["status"] == "error" and "not ready" in result["error"]
 
 
@@ -144,3 +144,25 @@ async def test_poll_trials_leaves_a_still_building_trial_untouched() -> None:
     items = await poll_trials(api, state, remaining=50.0)
     assert items == []
     assert state.trials["t-1"].status == "building"
+
+
+async def test_a_trial_with_no_time_left_makes_no_request() -> None:
+    """#109: near the deadline run_trial was given one second and timed out."""
+    api, state = FakeMshkn(), State()
+    clock = [0.0]
+    out = await try_verb(
+        api,
+        state,
+        VERB,
+        {},
+        until=RUN_MARGIN - 1.0,
+        now=lambda: clock[0],
+        sleep=_no_sleep,
+    )
+    # the recipe is submitted and ready, but the run waits for the next turn
+    assert out["status"] == "building" and state.trials["t-1"].status == "building"
+    assert [c[0] for c in api.calls] == ["create_recipe", "get_recipe"]
+    assert (await run_trial(api, state.trials["t-1"], remaining=5.0)) == {
+        "status": "error",
+        "error": "out of time",
+    }

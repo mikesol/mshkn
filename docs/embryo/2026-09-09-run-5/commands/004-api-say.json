@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-09T08:21:34+00:00",
+ "command": "say",
+ "computer_id": "comp-e8768946e90c",
+ "detail": "Your public door is closed because you cannot tell who is speaking. Propose a way to know that a message there comes from me, and open the door. My public key is ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDbFyvNfJuGU5Dir2KlqfUcSydeZ0A1pbvmWlv3gfGsR mike",
+ "door": "api",
+ "n": 4,
+ "seconds": 253.8213931589853,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\n",
+ "stdout": "audit {\"door\": \"api\", \"hooks\": [], \"memory_written\": true, \"model_calls\": 4, \"offered\": [\"propose\", \"remember\", \"try\"], \"principal\": \"root\", \"proposals\": [], \"stopped\": \"deadline\", \"tools\": [{\"name\": \"try\", \"status\": \"failed\", \"trial\": \"t-2\"}, {\"computer_id\": \"comp-aeb36ffa4369\", \"exit_code\": 0, \"name\": \"try\", \"status\": \"done\", \"trial\": \"t-3\"}, {\"name\": \"try\", \"status\": \"building\", \"trial\": \"t-4\"}, {\"name\": \"remember\", \"status\": \"remembered\"}], \"turn\": 2, \"usage\": {\"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"input_tokens\": 49365, \"output_tokens\": 19399}}\nI ran out of time before finishing this turn. `ssh-keygen` is present, and the roundtrip enforces both namespace and message integrity. `python3` and `jq` are missing; `perl` is there. Now the hook itself, with an adversarial test harness around it:\n"
+}

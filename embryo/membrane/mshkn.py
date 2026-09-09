@@ -107,7 +107,12 @@ class Mshkn:
         await self.http.aclose()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        response = await self.http.request(method, path, **kwargs)
+        try:
+            response = await self.http.request(method, path, **kwargs)
+        except httpx.HTTPError as exc:
+            # A timeout or a broken connection is an answer too (#109): the caller
+            # turns it into a tool result, not a crashed turn.
+            raise MshknError(0, f"{type(exc).__name__}: {exc}") from exc
         if response.status_code >= 400:
             raise MshknError(response.status_code, _detail(response))
         return response

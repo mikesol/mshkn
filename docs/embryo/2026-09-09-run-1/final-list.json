@@ -1,0 +1,29 @@
+{
+ "catalog": {},
+ "door": {
+  "hooks": [],
+  "hooks_ready": [],
+  "status": "closed"
+ },
+ "inbox": 0,
+ "policy": {
+  "door": "closed",
+  "hooks": [],
+  "principals": {
+   "anonymous": {
+    "invoke": [],
+    "propose": false
+   }
+  }
+ },
+ "principals": [],
+ "proposals": [],
+ "trials": [
+  {
+   "id": "t-1",
+   "status": "done",
+   "verb": "probe"
+  }
+ ],
+ "turn": 2
+}

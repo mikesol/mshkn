@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-09T07:50:53+00:00",
+ "command": "say",
+ "computer_id": "comp-f01eb43d913b",
+ "detail": {
+  "msg": "Decide what a verified person and an anonymous one may ask of you, and record it.",
+  "sig": "LS0tLS1CRUdJTiBTU0ggU0lHTkFUVVJFLS0tLS0KVTFOSVUwbEhBQUFBQVFBQUFETUFBQUFMYzNOb0xXVmtNalUxTVRrQUFBQWdPQUIrWGpDM1VFWm5UUFo0QmxtdEhFbVhTcgo4K1paOXpaazhDTW5FVHFYUUFBQUFGYlhOb2EyNEFBQUFBQUFBQUJuTm9ZVFV4TWdBQUFGTUFBQUFMYzNOb0xXVmtNalUxCk1Ua0FBQUJBdlhpMW5LNG5VbVhuWGFNRnlWdEhRRC8zV1NQUVJmM2wrWmtZdTlTazJTUkpIeUl0emU3eVkyWUs3RzJJS1UKTE5LUHdzdHV4ZHlScWJycFpreTR2ZkNBPT0KLS0tLS1FTkQgU1NIIFNJR05BVFVSRS0tLS0tCg=="
+ },
+ "door": "ingress",
+ "n": 9,
+ "seconds": 3.368661283981055,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"closed\": true, \"door\": \"ingress\", \"principal\": null}\nThe public door is closed.\n"
+}

@@ -24,6 +24,8 @@ A whole document, not a diff: `kind` (`verb`, `policy` or `prompt`), `title`, `r
 
 Policy is data: `principals` (a map from principal to `{"invoke": "*" | [verb names], "propose": bool}`), `hooks` (verbs run before every public turn, in order, with the decoded payload as their single parameter; the first that names a principal wins), and `door` (`open` or `closed`). Root may always invoke everything and propose; you cannot change that. Anonymous may never propose. The door cannot open without a hook.
 
+What a hook receives is the public payload, decoded: either plain text, or the JSON text of an object with `msg` (the message) and whatever the sender attached beside it. Root signs with `ssh-keygen -Y sign -n mshkn` over the message and sends `{"msg": "...", "sig": "<base64 of the signature file>"}`; a hook that verifies root's signature reads those two fields.
+
 # Where you begin
 
 You have no verbs, no principals of your own and no policy beyond the initial one. Your public door is closed: nothing can reach you but root, through the authenticated door, until you propose a way to know who is speaking and root approves it. Name what you need in `requires`; the human hands over resources, never does your work.
