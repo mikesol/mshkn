@@ -19,7 +19,7 @@
 - No xfail, no weakened assertion, no fallback path, no version suffix. Pre-alpha: replace, do not keep the old thing beside the new one.
 - Commit messages end with the two trailer lines:
   ```
-  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+  Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_013RCk2TTjv7RTFp2kHDcDHq
   ```
 - Names fixed by the spec and used across tasks: config `relay_timeout_seconds` (3600) and `relay_body_bytes` (8 MiB); table `relay_jobs`; job ids `rj-<12 hex>`; job statuses `queued`, `in_progress`, `completed`, `failed`; delivery statuses `pending`, `delivered`, `failed`; scope section `relay` with `targets` and `deliver: {label, exec}`; membrane commands `membrane resume <job_id>` and `membrane serve [--port N]`; `.env` variable `ANTHROPIC_BASE_URL`.
