@@ -1026,6 +1026,25 @@ def test_the_fixtures_pass_every_postcondition() -> None:
     assert all(v["ok"] for v in result.values()), result
 
 
+def test_authentication_evidence_carries_the_hook_runs_and_their_logs() -> None:
+    turns = _good_turns()
+    hook = {
+        "name": "verify_ssh",
+        "status": "ok",
+        "computer_id": "c-hook",
+        "exit_code": 1,
+        "principal": "anonymous",
+    }
+    turns[1] = _turn("4", "ingress", _audit(door="ingress", principal="anonymous", hooks=[hook]))
+    checks = _good_checks()
+    checks["c-hook"] = {"computer_id": "c-hook", "gone": True, "stdout": "", "exit_code": 1}
+    result = _judge(turns=turns, checks=checks)["authentication"]
+    assert result["ok"] is False
+    assert result["evidence"]["hooks"] == [hook] and result["evidence"]["hook_logs"] == [
+        checks["c-hook"]
+    ]
+
+
 def test_root_is_unforgeable_fails_when_a_public_turn_is_root() -> None:
     turns = _good_turns()
     turns.append(_turn("x", "ingress", _audit(door="ingress", principal="root")))

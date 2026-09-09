@@ -666,9 +666,16 @@ def verdict(
     unsigned = _by_label(turns, "5")
     signed_p = signed.audit.get("principal") if signed else None
     unsigned_p = unsigned.audit.get("principal") if unsigned else None
+    hook_runs = signed.audit.get("hooks", []) if signed else []
+    hook_logs = [checks[r["computer_id"]] for r in hook_runs if r.get("computer_id") in checks]
     result["authentication"] = {
         "ok": signed_p == VERIFIED and unsigned_p == ANONYMOUS,
-        "evidence": {"signed": signed_p, "unsigned": unsigned_p},
+        "evidence": {
+            "signed": signed_p,
+            "unsigned": unsigned_p,
+            "hooks": hook_runs,
+            "hook_logs": hook_logs,
+        },
     }
 
     public = [
@@ -843,6 +850,14 @@ async def run_once(
                 c["computer_id"]
                 for label in ("8", "9-count-1", "9-count-2")
                 if (c := _tool_computer(_by_label(turns, label))) is not None
+            ]
+            # the hook computers of the signed knock: their logs say why a caller
+            # was or was not named
+            signed = _by_label(turns, "4")
+            computer_ids += [
+                r["computer_id"]
+                for r in (signed.audit.get("hooks", []) if signed else [])
+                if r.get("computer_id")
             ]
             checks = {cid: await doors.check_computer(cid) for cid in computer_ids}
             judged = verdict(

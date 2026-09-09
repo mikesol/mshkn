@@ -179,6 +179,17 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
     )
     audit = _audit(out)
     assert audit["principal"] == "ssh:mike"
+    # the hook that named the caller is on the audit line, with its computer (#101)
+    assert audit["hooks"] == [
+        {
+            "name": "verify_ssh",
+            "status": "ok",
+            "computer_id": audit["hooks"][0]["computer_id"],
+            "exit_code": 0,
+            "principal": "ssh:mike",
+        }
+    ]
+    assert audit["hooks"][0]["computer_id"].startswith("comp-")
     # §10.7 is provable from the audit line alone: what was offered, not only
     # what was called. An authenticated principal who may propose gets all three.
     assert audit["offered"] == ["propose", "remember", "try", "verify_ssh"]
@@ -242,8 +253,9 @@ async def test_hooks_fail_closed_when_not_ready_or_malformed() -> None:
         verb=no_assert, status="ready", recipe_id="r", proposal_id="p-1"
     )
     assert api.calls == []
-    assert await principal_for(api, state, policy, "p", remaining=10.0) == "anonymous"
-    assert api.calls == []
+    runs: list[dict[str, Any]] = []
+    assert await principal_for(api, state, policy, "p", remaining=10.0, runs=runs) == "anonymous"
+    assert api.calls == [] and runs == []  # never invoked, so nothing to record
     # A ready hook whose invocation itself errors (here: its recipe_id names
     # no recipe FakeMshkn knows) also yields anonymous: invoke()'s non-"ok"
     # status is skipped, not treated as a principal.
