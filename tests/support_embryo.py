@@ -7,12 +7,15 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from membrane.liturgy import LITURGY as LITURGY  # re-exported for the tiers
 from membrane.memory import Provenance, visible_from
-from membrane.model import Completion, ToolCall, zero_usage
+from membrane.model import Completion, Model, ToolCall, zero_usage
 from membrane.mshkn import CheckpointInfo, Deferred, MshknError, RecipeInfo, RelayJob, RunResult
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 
 def text_completion(text: str) -> Completion:
@@ -237,3 +240,38 @@ class ListMemory:
 
     def close(self) -> None:
         return None
+
+
+def scripted_asgi(model: Model) -> Callable[..., Awaitable[None]]:
+    """`membrane serve` as an ASGI app, for the flow tier's in-process relay target."""
+    from membrane.serve import answer_async
+
+    async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        assert scope["type"] == "http"
+        body = b""
+        while True:
+            event = await receive()
+            body += event.get("body", b"")
+            if not event.get("more_body"):
+                break
+        if scope["method"] != "POST" or scope["path"] != "/v1/messages":
+            status, doc = (
+                404,
+                {"type": "error", "error": {"type": "not_found_error", "message": scope["path"]}},
+            )
+        else:
+            status, doc = 200, await answer_async(model, json.loads(body or b"{}"))
+        data = json.dumps(doc).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(data)).encode()),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": data})
+
+    return app

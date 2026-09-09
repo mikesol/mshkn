@@ -350,3 +350,14 @@ async def test_list_state_names_each_trials_recipe(brain_dir: Path) -> None:
     assert listing["trials"] == [
         {"id": "t-1", "verb": VERB["name"], "status": "done", "recipe_id": "rcp-trial"}
     ]
+
+
+def test_main_hands_serve_to_the_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    import membrane.cli as cli
+    import membrane.serve as serve_module
+
+    served: list[list[str]] = []
+    monkeypatch.setattr(serve_module, "main", served.append)
+    monkeypatch.setattr("sys.argv", ["membrane", "serve", "--port", "8001"])
+    cli.main()
+    assert served == [["--port", "8001"]]
