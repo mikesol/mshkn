@@ -53,6 +53,8 @@ Spec: `docs/superpowers/specs/2026-09-07-generative-agent-workload-proof-design.
 
 Spec: `docs/superpowers/specs/2026-09-08-embryo-design.md`. Plan: `docs/superpowers/plans/2026-09-08-embryo.md`. The first real agent built on mshkn: a membrane in a `brain` checkpoint chain with a scoped key, an authenticated door and a public one, and a catalog of verbs that grows only by proposal and approval. PR #98. Status: **implemented**. Evidence: the `membrane` package and the priors in `embryo/`, the liturgy end to end over the fake host in `tests/flow/test_embryo_liturgy.py`, and Phase 14 of the test plan on the live host in `tests/e2e/test_phase14_embryo.py`.
 
+The measure (spec §11, #101): `docs/superpowers/plans/2026-09-09-measure.md`. `uv run measure` (`embryo/membrane/measure.py`) speaks the liturgy to a real model and judges the seven postconditions; the runs and their tally are in `docs/embryo/`. Status: **implemented**.
+
 ## Roadmap breakdown (`docs/plans/2026-03-08-roadmap.md`)
 
 | Item | Status |

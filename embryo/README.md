@@ -5,8 +5,7 @@ The embryo is the first real agent: a membrane running inside a disposable "brai
 ## Hatching
 
 ```bash
-MSHKN_API_URL=https://api.mshkn.dev MSHKN_API_KEY=<account key> \
-ANTHROPIC_API_KEY=<key> OPENAI_API_KEY=<key> \
+set -a; . .env; set +a            # MSHKN_API_URL, MSHKN_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY
 embryo/hatch.sh
 ```
 
@@ -31,6 +30,17 @@ curl -fsS -X POST "$INGRESS_URL" -H 'Content-Type: application/json' \
 ```
 
 A 409 from either door means a turn is in progress: retry.
+
+## Measuring
+
+The measure (spec §11) is the liturgy spoken to a real model, N times, with the seven postconditions checked afterwards:
+
+```bash
+uv run measure --runs 3           # keys and the API from .env; approvals automatic
+uv run measure --approve ask      # the pilot reads each proposal and answers approve | reject <reason>
+```
+
+`measure` (`embryo/membrane/measure.py`) reads `.env` (the four keys; `BRAIN_API_URL` if the brain dials another address), hatches with `MEMBRANE_MODEL=anthropic`, speaks each turn of `liturgy.md` through its door, approves what is pending, waits for builds, answers a failed build with turn 3 (three times at most), and writes the transcript, every command, the final `list`, the token counts and the verdict to `docs/embryo/<date>-run-<n>/`. It refuses to start if the account already has a `brain`, and tears the brain down at the end unless `--keep`. `--model` picks the model id (`claude-opus-5` by default). The signing key it speaks with is generated per run, named `mike`, and kept in a temp directory. `docs/embryo/README.md` is the tally.
 
 ## The brain disk
 
