@@ -100,6 +100,10 @@ class ComputerService:
         self.host = host
         self.allocator = allocator
         self.recipes = recipes
+        # Computers with an exec or a stream in flight. The reaper's idle check
+        # leaves them alone: a turn of the embryo runs one command for minutes,
+        # and only the command's start used to touch last_exec_at (#108).
+        self.busy: set[str] = set()
 
     # -- lookups -------------------------------------------------------------
 
@@ -478,15 +482,26 @@ class ComputerService:
 
     async def exec(self, computer: Computer, command: str, *, timeout: float = 300.0) -> ExecResult:
         await self._touch(computer)
-        async with timed("exec"):
-            return await self.host.guest.exec(computer.vm_ip, command, timeout=timeout)
+        self.busy.add(computer.id)
+        try:
+            async with timed("exec"):
+                return await self.host.guest.exec(computer.vm_ip, command, timeout=timeout)
+        finally:
+            self.busy.discard(computer.id)
+            # The idle clock starts when the command ends, not when it began.
+            await self._touch(computer)
 
     async def stream(
         self, computer: Computer, command: str, *, timeout: float = 60.0
     ) -> AsyncIterator[OutputLine]:
         await self._touch(computer)
-        async for item in self.host.guest.stream(computer.vm_ip, command, timeout=timeout):
-            yield item
+        self.busy.add(computer.id)
+        try:
+            async for item in self.host.guest.stream(computer.vm_ip, command, timeout=timeout):
+                yield item
+        finally:
+            self.busy.discard(computer.id)
+            await self._touch(computer)
 
     async def exec_bg(self, computer: Computer, command: str) -> int:
         await self._touch(computer)

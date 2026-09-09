@@ -176,3 +176,21 @@ async def test_reap_dead_counts_only_the_computers_it_actually_reaped(
 
     assert await reaper.reap_dead() == 0
     assert host.hypervisor.torn_down == [computer.slot]
+
+
+async def test_a_computer_with_an_exec_in_flight_is_not_idle(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """#108: the live reaper destroyed the brain's computer 160 s into a turn
+    because only the *start* of an exec touched last_exec_at."""
+    reaper, computers, _, _ = await _reaper(db, tmp_path, idle_timeout=60)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    stale = (datetime.now(UTC) - timedelta(seconds=600)).isoformat()
+    await db.execute("UPDATE computers SET created_at = ? WHERE id = ?", (stale, computer.id))
+    await db.commit()
+    computers.busy.add(computer.id)
+    assert await reaper.reap_idle() == 0
+    stored = await get_computer(db, computer.id)
+    assert stored is not None and stored.status is ComputerStatus.RUNNING
+    computers.busy.discard(computer.id)
+    assert await reaper.reap_idle() == 1

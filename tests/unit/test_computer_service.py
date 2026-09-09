@@ -308,3 +308,35 @@ async def test_streaming_background_and_transfer_operations(
     assert await service.metrics(computer) == host.guest.default_metrics
     host.guest.fail_next("metrics")
     assert await service.metrics(computer) is None
+
+
+async def test_exec_marks_the_computer_busy_and_touches_it_when_the_command_ends(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    service, host = await _service(db, tmp_path)
+    computer = await service.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    seen: list[tuple[frozenset[str], str | None]] = []
+    guest_exec = host.guest.exec
+
+    async def slow_exec(vm_ip: str, command: str, *, timeout: float = 60.0) -> ExecResult:
+        stored = await get_computer(db, computer.id)
+        assert stored is not None
+        seen.append((frozenset(service.busy), stored.last_exec_at))
+        return await guest_exec(vm_ip, command, timeout=timeout)
+
+    host.guest.exec = slow_exec  # type: ignore[method-assign]
+    host.guest.script["sleep 200"] = ExecResult(0, "", "")
+    await service.exec(computer, "sleep 200")
+    # busy for the duration, touched before ...
+    assert seen == [(frozenset({computer.id}), seen[0][1])] and seen[0][1] is not None
+    # ... and touched again after, so the idle clock starts when the command ends
+    after = await get_computer(db, computer.id)
+    assert after is not None and after.last_exec_at is not None
+    assert after.last_exec_at > seen[0][1] and service.busy == set()
+    host.guest.script["false"] = ExecResult(1, "", "boom")
+    await service.exec(computer, "false")
+    assert service.busy == set()
+    host.guest.stream_script["ls"] = [("stdout", "a")]
+    async for _ in service.stream(computer, "ls"):
+        assert service.busy == {computer.id}
+    assert service.busy == set()

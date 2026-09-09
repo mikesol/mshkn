@@ -122,6 +122,8 @@ class Reaper:
         now = datetime.now(UTC)
         idle: list[Computer] = []
         for computer in await self._running():
+            if computer.id in self.computers.busy:
+                continue  # a command is running on it (#108)
             ref = computer.last_exec_at or computer.created_at
             try:
                 ref_time = datetime.fromisoformat(ref)
