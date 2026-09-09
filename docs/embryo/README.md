@@ -45,6 +45,8 @@ Each defect is its own issue, as #101 said it would be; the ones marked fixed we
 
 A turn of the embryo is one fork exec, mshkn gives a fork's exec 300 seconds, and the membrane stops at 240 to save its state. At the default effort, `claude-opus-5` spends minutes thinking on the hard turns (turn 2: design a verb that verifies an SSH signature, plus a policy). Runs 5, 6 and 8 show single streamed responses that fill the whole 240 seconds and end with nothing proposed; the follow-ups do the same. No budget, ceiling or margin changes that: the turn's clock and the model's deliberation are not the same size. The levers left are less thinking per call (`--effort medium`, built, not measured), a longer exec budget (600 seconds is the API's ceiling), or a turn that does not keep a computer alive while the model thinks: the brain hands the request to a relay that calls the model and wakes the brain when the answer arrives. The last is the design change, #110; the measure resumes on it, #111.
 
+#110 landed on 2026-09-09 on the `async-turn-relay` branch: a turn is a chain of forks through the host's relay; the measure resumes as #111.
+
 ## What a run directory holds
 
 | File | What |

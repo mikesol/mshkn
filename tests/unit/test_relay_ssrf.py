@@ -4,9 +4,12 @@ host refused (lampas failed open; mshkn has no second guard behind it)."""
 
 from __future__ import annotations
 
+import asyncio
+import socket
+
 import pytest
 
-from mshkn.services.ssrf import blocked_reason, check_url, guard, parse_address
+from mshkn.services.ssrf import blocked_reason, check_url, guard, parse_address, resolve_host
 
 
 @pytest.mark.parametrize(
@@ -117,3 +120,31 @@ async def test_guard_refuses_a_host_that_resolves_to_an_unparseable_address() ->
 
     reason = await guard("https://unparseable.example/", resolver)
     assert reason is not None and "unparseable.example" in reason and "unparseable" in reason
+
+
+async def test_resolve_host_dedupes_the_event_loops_getaddrinfo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`resolve_host` is the production resolver `guard` is given outside a test: it
+    asks the running loop, not a real DNS server, so this fakes the loop's own
+    `getaddrinfo` rather than making a network call."""
+    calls: list[str] = []
+
+    async def fake_getaddrinfo(host: str, port: object) -> list[tuple[object, ...]]:
+        calls.append(host)
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 17, "", ("93.184.216.34", 0)),  # duplicate
+            (
+                socket.AF_INET6,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("2606:2800:220:1:248:1893:25c8:1946", 0, 0, 0),
+            ),
+        ]
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", fake_getaddrinfo)
+    addresses = await resolve_host("example.com")
+    assert addresses == ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]
+    assert calls == ["example.com"]

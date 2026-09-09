@@ -1,6 +1,6 @@
 # mshkn
 
-Disposable cloud computers for AI agents: Firecracker microVMs you create, exec on, checkpoint, fork, merge and destroy. `README.md` says what exists, `docs/ARCHITECTURE.md` says how it works, `docs/plans/README.md` indexes every plan with its status, and `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` is the definition of done (176 E2E tests).
+Disposable cloud computers for AI agents: Firecracker microVMs you create, exec on, checkpoint, fork, merge and destroy. `README.md` says what exists, `docs/ARCHITECTURE.md` says how it works, `docs/plans/README.md` indexes every plan with its status, and `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` is the definition of done (180 E2E tests).
 
 ## The gate
 
@@ -21,7 +21,7 @@ export MSHKN_SERVER=root@<ip>       # or an ssh config alias
 scripts/e2e.sh                       # pushes, deploys, cleans orphaned VM resources, ensures the test account, runs tests/e2e
 ```
 
-Run it detached (`setsid nohup … > log 2>&1 < /dev/null &`) and read the log; a full run takes about 23 minutes. The expected result is **166 passed, 6 skipped, 4 failed**, and the four must be exactly the `Not implemented` tests in #65. Any other failure is a regression: fix it or stop and discuss. Never mark a test xfail, never weaken an assertion, never skip to get green. Failing tests are honest reminders of what is left; a test with no assertion is worse than a failing one.
+Run it detached (`setsid nohup … > log 2>&1 < /dev/null &`) and read the log; a full run takes about 23 minutes. The expected result is **170 passed, 6 skipped, 4 failed**, and the four must be exactly the `Not implemented` tests in #65. Any other failure is a regression: fix it or stop and discuss. Never mark a test xfail, never weaken an assertion, never skip to get green. Failing tests are honest reminders of what is left; a test with no assertion is worse than a failing one.
 
 After a run, check the service journal for tracebacks:
 

@@ -850,6 +850,7 @@ The first agent built on the product, specified in `docs/superpowers/specs/2026-
 - The catalog holds exactly the three approved verbs, all `ready`, with the counter's chain two long; the only principal is `ssh:mike`, never `root`; the door is open.
 - No undeclared capability: every recipe the run added to the account belongs to the brain or to an approved proposal.
 - The audit sink is outside the brain: `GET /ingress_rules/{rule_id}/logs` lists every public turn with its `computer_id`, and that computer's `exec_log` begins with the turn's audit line.
+- The turn was a chain of relay-delivered wake-ups: the exec log's second line is the acknowledgement naming a relay job id, and `GET /relay/{job_id}` shows that job delivered to label `brain`.
 
 ---
 
@@ -875,7 +876,7 @@ The relay (`docs/superpowers/specs/2026-09-09-async-turn-relay-design.md`): a jo
 ### T15.4 — A Delivery Waits Behind a Running Fork
 
 - With a fork running on the chain, the job's delivery is `delivered` with a deferred id and no computer.
-- When the fork self-destructs, the drain runs the wake-up: the chain is two checkpoints longer, in order, and the newest one's exec log holds the job id.
+- When the fork self-destructs, the drain runs the wake-up: the chain gains two checkpoints (the sleeper's, then the drained wake-up's), and the newest one's exec log holds the job id.
 
 ---
 
