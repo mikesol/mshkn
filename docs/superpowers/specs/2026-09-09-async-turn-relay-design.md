@@ -142,7 +142,7 @@ The wake-up, and the only membrane command the relay may run. If `pending` is nu
 - `failed`, or `completed` with a status outside 2xx: the turn ends with the error as the reply and `stopped: error`.
 - `completed` with a message: parsed as `AnthropicModel.complete` parses one today (text blocks, `tool_use` blocks, `parsed_output` stripped from the echoed content). `max_tokens` ends the turn with `stopped: max_tokens`, its calls not run. No calls ends it with the text, `stopped: done`. Calls run through the handlers, each bounded by this fork's clock (`TURN_DEADLINE`, 240 s from the fork's start, as tool runs are today); a call past the cap (20 per turn) ends the turn with `stopped: cap`. Their results are appended to `messages`, the next request is posted, `pending.job` becomes the new id, a short audit line records the fork (`turn`, `job`, `calls`, `next_job`), and the fork exits 0.
 
-Ending the turn is today's step 6: memory written for an authenticated principal, the exchange appended to the window with its reply, the full audit line (today's fields plus `forks` and `started_at`), then the reply and the proposals made, on stdout. The window entry carries the reply and `stopped`, so `list` shows it.
+Ending the turn is today's step 6: memory written for an authenticated principal, the exchange appended to the window with its reply, the full audit line (today's fields plus `forks`, `started_at` and `job`), then the reply and the proposals made, on stdout. The window entry carries the reply, the printed output (the reply with the proposals) and the closing audit fields, so `list` shows a turn that closed in a fork nobody watched, and the measure reads the audit from there.
 
 If `queue` is non-empty when a turn ends, the same fork starts the next turn from its head: the queued principal and door stand (the hooks ran when it was queued), steps 2 to 4 run for it, its request is posted, and its start audit line and acknowledgement are printed after the ended turn's output.
 
@@ -152,7 +152,7 @@ Every root command and every `say` first settles a pending turn, before anything
 
 ### `list`
 
-Adds `pending` (turn, principal, door, job, started_at, forks, model_calls, usage), `queue` (principal, door, message each), and `window` (the exchanges with their replies and `stopped`).
+Adds `pending` (turn, principal, door, job, started_at, forks, model_calls, usage), `queue` (principal, door, message each), and `window` (the exchanges with their replies, outputs and closing audits).
 
 ### What the brain cannot do, by construction
 
