@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
-    from mshkn.models import Computer, EphemeralResult
+    from mshkn.models import Computer, EphemeralResult, RelayJob
 
 # --- computers ---------------------------------------------------------------
 
@@ -282,6 +282,105 @@ class AlertResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     subsystems: dict[str, str] = Field(default_factory=dict)
+
+
+# --- relay -------------------------------------------------------------------
+
+
+class RelayRetryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Bounded on purpose: there is no rate limit on `POST /relay`, so an
+    # unbounded attempt count with no floor under the delay is a tight outbound
+    # loop originating from this host's address.
+    attempts: int = Field(default=3, ge=1, le=10)
+    backoff: Literal["exponential"] = "exponential"
+    initial_delay_ms: int = Field(default=1000, ge=100)
+    max_delay_ms: int = Field(default=30000, ge=1)
+
+
+class RelayDeliverBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    exec: str = Field(min_length=1)
+
+
+class RelayRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: str = Field(min_length=1)
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] = "POST"
+    forward_headers: dict[str, str] = Field(default_factory=dict)
+    body: Any = None
+    retry: RelayRetryBody = Field(default_factory=RelayRetryBody)
+    timeout_seconds: int | None = Field(default=None, ge=1)
+    deliver: RelayDeliverBody | None = None
+
+
+class RelayAcceptedResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class RelayResponseBody(BaseModel):
+    status: int
+    headers: dict[str, str]
+    body: Any
+
+
+class RelayDeliveryResponse(BaseModel):
+    label: str
+    exec: str
+    status: str
+    attempts: int
+    computer_id: str | None = None
+    deferred_id: str | None = None
+    error: str | None = None
+
+
+class RelayJobResponse(BaseModel):
+    job_id: str
+    status: str
+    target: str
+    method: str
+    created_at: str
+    updated_at: str
+    attempts: int
+    error: str | None = None
+    response: RelayResponseBody | None = None
+    delivery: RelayDeliveryResponse | None = None
+
+
+def relay_job_response(job: RelayJob) -> RelayJobResponse:
+    response = None
+    if job.response_status is not None:
+        response = RelayResponseBody(
+            status=job.response_status, headers=job.response_headers or {}, body=job.response_body
+        )
+    delivery = None
+    if job.deliver is not None:
+        delivery = RelayDeliveryResponse(
+            label=job.deliver.label,
+            exec=job.deliver.exec,
+            status=str(job.delivery_status),
+            attempts=job.delivery_attempts,
+            computer_id=job.delivery_computer_id,
+            deferred_id=job.delivery_deferred_id,
+            error=job.delivery_error,
+        )
+    return RelayJobResponse(
+        job_id=job.id,
+        status=str(job.status),
+        target=job.target,
+        method=job.method,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        attempts=job.attempts,
+        error=job.error,
+        response=response,
+        delivery=delivery,
+    )
 
 
 # --- shared constructors -----------------------------------------------------

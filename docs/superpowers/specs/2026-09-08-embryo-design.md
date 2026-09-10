@@ -54,7 +54,7 @@ A verb is one JSON document, carried inside a proposal (§5) or a trial:
 | `chain` | For `chain`: the label the state lives under, default `verb/<name>`. Several verbs may name the same chain. |
 | `asserts` | For a verb used as a pre-turn hook: the identity namespace it may assert, e.g. `ssh`. Its stdout `mike` becomes the principal `ssh:mike`. A hook may not assert `root` or `system`. |
 | `needs` | Resources, as mshkn's `needs`. Default 256 MB, 1 core. |
-| `timeout_seconds` | Bounded by the fork exec's 300 s budget minus the membrane's own deadline. |
+| `timeout_seconds` | Bounded by a fork's 300 s exec budget minus the membrane's clock; since #110 that bounds a tool run, not the turn. |
 | `allow` | Namespaced principals who may invoke it. Policy may widen or narrow this. |
 | `requires` | What the verb needs that the brain cannot provide: `[{"kind": "secret", "name": ..., "scope": ...}]`. Non-empty `requires` blocks approval until #91 exists and root has stored the named secret. |
 
@@ -148,17 +148,13 @@ Every interaction is a fork of the head of `brain` whose exec is a membrane comm
 | `membrane reject <id> <b64 reason>` | no | §5. |
 | `membrane disable <verb>` | no | §5. |
 | `membrane revert <id>` | no | §5. |
+| `membrane resume <job_id>` | no | The relay's wake-up; §6 of the relay design. |
 
-### A `say` turn, in order
+### A `say` turn
 
-1. **Principal.** From the API door, `root`. From the ingress: closed door, reply and stop; otherwise run the pre-turn hooks, verbs the membrane invokes before the model with the decoded payload as their single parameter. A hook's stdout first line, prefixed by the namespace it `asserts`, is the principal. A hook that fails, is not `ready`, prints nothing, or prints a reserved name yields `anonymous`. Hooks fail closed.
-2. **Builds.** Poll every `building` verb and trial once; write transitions to the inbox.
-3. **Input.** Drain the inbox. Recall from mem0 against `msg`, filtered to memories whose provenance the current principal may see (anonymous sees none). Both are part of the input, marked as what they are.
-4. **Tools.** For an authenticated principal: `remember`, `try` and `propose` if policy allows the principal to propose, and one tool named after every `ready` verb the principal may invoke, each with its declared schema. For `anonymous`: only the verbs policy allows anonymous to invoke, which at birth is none. Nothing else.
-5. **Loop.** System: the seed, then the mutable self-description. Messages: the last K turns (K = 10), then the input. Each verb call is an invocation per §4 with the brain's scoped key; the tool result is stdout, exit code, and for chains the new head. The loop ends at the model's final text, at a tool-call cap (20), at a deadline (240 s of the 300 s exec budget), or when a completion exhausts its output budget (16000 tokens, which thinking counts against; #106); in the last three cases the reply says so and the audit line's `stopped` names which.
-6. **Close.** Print the audit lines (§10), then the reply with any proposals made this turn appended in full. For an authenticated principal, append the exchange to the turn window and to mem0 with its provenance; an anonymous turn is appended to the window tagged anonymous and never to memory. Exit 0. mshkn records the exec log, checkpoints, destroys the VM, and returns `exec_stdout`.
+Rewritten by `docs/superpowers/specs/2026-09-09-async-turn-relay-design.md` §6 (#110): a turn is a chain of forks. `say` runs the principal, the builds, the input and the tools, posts the model request to the host's relay with its own wake-up as the delivery, records the pending turn in `state.json`, and answers with an acknowledgement. `membrane resume <job_id>` continues it. Every command settles a pending turn first; a `say` while one is pending is queued and runs next. The reply and the closing audit line are read from `list`.
 
-What the brain cannot do in a turn, by construction: read or write a file, run a command, reach the network, see a key, change its tools, or act with any authority beyond its scoped key. A proposal is the only thing that outlives a turn other than memory and a trial's result.
+What the brain cannot do in a turn, by construction: read or write a file, run a command, reach the network, see a key, change its tools, act with any authority beyond its scoped key, make the host call anything but the prefixes its key names, or make the host run anything on `brain` but its own `resume`.
 
 ## 7. Memory and the model service
 
@@ -252,6 +248,7 @@ The liturgy is spoken N times (across models where useful), and the result is ho
 - **#91, account secrets injected at exec.** The piece of work immediately after the embryo lands. Not optional.
 - **#92, rewire the embryo onto #91.** The piece after that: `/brain/.env` goes, no brain checkpoint holds any credential, `provide` exists, the liturgy gains a `requires` turn.
 - The `event` state kind: an ingress-rule scope for scoped keys, then verb-to-brain push (needs #91).
+- The reply callback: a URL root names in policy, delivered through the relay at the end of a turn (relay design §11).
 - The invocation-time confirmation protocol for `communicate`, `transact` and `administer` effects, designed when the first such verb is proposed.
 - Amending a proposal before approval.
 - Proposals as GitHub pull requests.
@@ -275,7 +272,7 @@ Recorded so the next reviewer does not raise them again.
 
 Checked on 2026-09-08 against the code, the live host and a scratch venv (`mem0ai` 2.0.20, `anthropic` 1.4.0, `openai` 3.8.0). The plan may rely on these without re-deriving them.
 
-- **A fork's exec runs with `ComputerService.exec`'s 300 s default** and ingress cannot set it. The membrane's deadline is 240 s.
+- **A fork's exec runs with `ComputerService.exec`'s 300 s default and the membrane's clock is 240 s; since #110 these bound the tool runs of one fork, not the model.** Ingress cannot set the exec's timeout.
 - **Sandboxed Starlark has `repr` and no `base64` or `json`**; the payload is base64 by the sender.
 - **Sync ingress and the fork endpoint return `exec_stdout` in full.** `EphemeralResult` carries the raw stdout; only the `exec_log` copy is truncated, to 8 KiB head and tail (`EXEC_LOG_OUTPUT_BYTES` in `src/mshkn/services/lifecycle.py`). So a proposal in a reply always reaches curl whole; the audit copy may lose the middle. Audit lines print first, and the plan decides whether to raise the constant or record proposals by hash in the audit lines.
 - **`exclusive` on a fork takes `error_on_conflict` or `defer_on_conflict`**; the brain uses the first, verb chains the second. Today the check (`get_active_computer_for_label`) and the fork are separate awaits with no lock, and the ingress fork-by-label resolves the head in a separate step too; #89 puts both under one per-label lock.

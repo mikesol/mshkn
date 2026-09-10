@@ -15,10 +15,11 @@ This is a single-host research system with no users. The API changes without not
 - **Merge.** `POST /checkpoints/{parent_id}/merge` does a three-way filesystem merge of two forks against their parent into a new checkpoint and reports conflicts.
 - **Recipes.** `POST /recipes` takes a Dockerfile whose final stage is `FROM mshkn-base` (anything else is a 422 before any build); the image is built, exported and written into a thin volume, and a booted template snapshot is cached so computers from the recipe restore instead of cold-booting; the built image is kept so a recipe that appends a layer rebuilds only that layer, and goes when the recipe is deleted.
 - **Ingress.** Unauthenticated webhook URLs (`/ingress/{rule_id}`) whose Starlark transform decides whether to create or fork a computer, synchronously or not, with per-rule body-size and rate limits.
+- **Relay.** `POST /relay` makes an HTTP call on a caller's behalf in the background (`forward_headers` sent upstream and deleted when the call settles, lampas's retry policy, a streamed Messages API response reassembled whole) and wakes a labelled chain by forking it with the job id; `GET /relay/{job_id}` is the record. A scoped key's `relay` scope pins the URL prefixes it may call and the one wake-up it may cause (`docs/ARCHITECTURE.md` §9a).
 - **Reaper.** Dead VMs are cleaned up, idle VMs are checkpointed and destroyed after `MSHKN_IDLE_TIMEOUT` seconds without a command (a running exec keeps a computer alive), old checkpoints are pruned (pinned ones and the newest checkpoint of every label are kept), and thin-pool and host RAM pressure raise alerts at `GET /alerts`.
 - **Observability.** JSON logs with request ids, Prometheus metrics at `GET /metrics`, subsystem health at `GET /health`.
 - **Tenancy.** API keys with a per-account VM limit and an exec rate limit. Accounts are created with `python -m mshkn accounts create`. An account can mint scoped keys (`POST /keys`) that may only create computers from named recipes, and only see, checkpoint and fork under given label prefixes; a scoped key can reach only the computers it created and never the account's ingress rules, merges, recipe deletions or keys (`docs/ARCHITECTURE.md` §1a).
-- **The embryo.** `embryo/` is the first agent built on mshkn: a membrane that lives in a `brain` checkpoint chain, holds a scoped key, speaks through an authenticated door and a public one, and grows verbs only by proposing them and having root approve them. `embryo/hatch.sh` brings one into existence; `docs/superpowers/specs/2026-09-08-embryo-design.md` is the design; `docs/embryo/` is the measure: the liturgy spoken to a real model, with the transcripts, the token counts and the verdict of every run.
+- **The embryo.** `embryo/` is the first agent built on mshkn: a membrane that lives in a `brain` checkpoint chain, holds a scoped key, speaks through an authenticated door and a public one, and grows verbs only by proposing them and having root approve them. Since #110, a turn is a chain of forks through the relay: the brain never keeps a computer alive while the model thinks. `embryo/hatch.sh` brings one into existence; `docs/superpowers/specs/2026-09-08-embryo-design.md` is the design; `docs/embryo/` is the measure: the liturgy spoken to a real model, with the transcripts, the token counts and the verdict of every run.
 
 `docs/ARCHITECTURE.md` explains how these fit together.
 
@@ -26,8 +27,7 @@ This is a single-host research system with no users. The API changes without not
 
 - More than one host. Slots, taps, thin volumes and the checkpoint directory are local to the machine; a checkpoint cannot be restored on another host.
 - Billing, quotas beyond the VM limit, or any notion of a user beyond an API key.
-- An HTTP forwarding endpoint (#59).
-- Four of the 176 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
+- Four of the 180 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
 
 ## Layout
 
@@ -68,7 +68,7 @@ uv run pytest tests/flow      # the real app and services over the fake host
 MSHKN_SERVER=root@<ip> scripts/e2e.sh   # pushes, deploys, runs tests/e2e on the live server
 ```
 
-The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 166 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.
+The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 170 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.
 
 The full local gate, which is what CI runs (`.github/workflows/ci.yml`) after `uv sync --frozen`:
 

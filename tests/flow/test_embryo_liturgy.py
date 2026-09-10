@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from membrane.cli import run
@@ -18,10 +19,11 @@ from membrane.config import load_settings
 from membrane.declarations import parse_verb, render_command
 from membrane.memory import USER_ID, Mem0Store
 from membrane.mshkn import Mshkn
-from membrane.scripted import COUNTER, PAGE_TITLE, VERIFY_SSH
+from membrane.scripted import COUNTER, PAGE_TITLE, VERIFY_SSH, ScriptedModel
+from membrane.state import Brain
 
 from mshkn.host import ExecResult
-from tests.support_embryo import LITURGY, b64, split_output
+from tests.support_embryo import LITURGY, b64, scripted_asgi, split_output
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -34,6 +36,10 @@ BRAIN_SCOPES = {
     "recipes": {"create": True, "read": True},
     "computers": {"create_from": "*"},
     "labels": ["verb/"],
+    "relay": {
+        "targets": ["http://model/"],
+        "deliver": {"label": "brain", "exec": "membrane resume"},
+    },
 }
 
 
@@ -42,29 +48,50 @@ async def _fast_sleep(seconds: float) -> None:
 
 
 class Embryo:
-    """The two doors, in process: root's commands and the public say."""
+    """The two doors, in process. A say acknowledges; the relay's wake-up forks
+    `brain` on the fake host, which runs nothing, so the helper plays the
+    wake-up itself: it drains the relay's task and settles through `list`."""
 
     def __init__(self, flow: Flow, brain: Path, api: Mshkn) -> None:
         self.flow, self.brain, self.api = flow, brain, api
+        self.notes: list[str] = []
 
     async def _run(self, argv: list[str]) -> str:
-        out, code = await run(argv, brain_dir=self.brain, api=self.api, sleep=_fast_sleep)
+        out, code = await run(
+            argv, brain_dir=self.brain, api=self.api, sleep=_fast_sleep, err=self.notes.append
+        )
         assert code == 0, out
         await self.flow.runtime.tasks.drain(timeout=5.0)
         return out
 
+    async def listing(self) -> dict[str, Any]:
+        return dict(json.loads(await self._run(["root", "list"])))
+
+    async def _await_turn(self, turn: int) -> tuple[dict[str, Any], str]:
+        """`list` until the turn is in the window: each `list` settles a job that
+        has answered, which may post the next; the relay's task runs in between."""
+        for _ in range(60):
+            listing = await self.listing()
+            for entry in listing["window"]:
+                if entry["turn"] == turn:
+                    return dict(entry["audit"]), str(entry["output"])
+            assert listing["pending"] is not None, f"turn {turn} neither pending nor in the window"
+        raise AssertionError(f"turn {turn} never closed")
+
+    async def _door(self, argv: list[str]) -> tuple[dict[str, Any], str]:
+        audit, rest = split_output(await self._run(argv))
+        if "job" not in audit:
+            return audit, rest  # a closed door or a bad payload answers at once
+        return await self._await_turn(int(audit["turn"]))
+
     async def root_say(self, text: str) -> tuple[dict[str, Any], str]:
-        out = await self._run(["root", "say", b64(text)])
-        return split_output(out)
+        return await self._door(["root", "say", b64(text)])
 
     async def public_say(self, payload: Any) -> tuple[dict[str, Any], str]:
-        return split_output(await self._run(["say", b64(payload)]))
+        return await self._door(["say", b64(payload)])
 
     async def root(self, *argv: str) -> str:
         return await self._run(["root", *argv])
-
-    async def listing(self) -> dict[str, Any]:
-        return dict(json.loads(await self.root("list")))
 
     def script_output(
         self, decl: dict[str, Any], params: dict[str, Any], stdout: str, code: int = 0
@@ -116,7 +143,14 @@ async def embryo(
     (brain / "policy.json").write_text((EMBRYO / "policy.json").read_text())
     (brain / ".env").write_text(
         "MSHKN_API_URL=http://flow\nMSHKN_API_KEY=x\nMEMBRANE_MODEL=scripted\n"
+        "ANTHROPIC_BASE_URL=http://model\n"
     )
+    flow.targets["model"] = ASGITransport(app=scripted_asgi(ScriptedModel()))
+    # the wake-up needs a `brain` head: on the fake host a bare computer, checkpointed and gone
+    flow.host.guest.script["sync"] = ExecResult(0, "", "")
+    base = (await flow.client.post("/computers", json={})).json()["computer_id"]
+    await flow.client.post(f"/computers/{base}/checkpoint", json={"label": "brain"})
+    await flow.client.delete(f"/computers/{base}")
     http = AsyncClient(
         transport=ASGITransport(app=flow.app),
         base_url="http://flow",
@@ -234,6 +268,14 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert (await flow.client.get(f"/computers/{cid}/status")).status_code == 404
     log = await flow.client.get(f"/computers/{cid}/exec_log")
     assert log.status_code == 200 and "Example Domain" in log.json()["stdout"]
+    # the turn was a chain of forks: the relay woke `brain` once per model call, and
+    # every wake-up ran `membrane resume <job>` on the chain's head (relay design §5)
+    assert audit["forks"] >= 1 and audit["job"].startswith("rj-")
+    wake_ups = [cmd for _, cmd in flow.host.guest.commands if cmd.startswith("membrane resume ")]
+    assert f"membrane resume {audit['job']}" in wake_ups
+    job = await flow.client.get(f"/relay/{audit['job']}")
+    assert job.status_code == 200 and job.json()["delivery"]["status"] == "delivered"
+    assert job.json()["response"]["body"]["stop_reason"] == "end_turn"
 
     # turn 9: a chain verb; two invocations; 1 then 2; two checkpoints
     signed9 = {"msg": LITURGY[9], "sig": "c2ln"}
@@ -270,6 +312,57 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert texts and not any(t.startswith("anonymous:") for t in texts)
     assert any(t.startswith("root:") for t in texts)
     assert any(t.startswith("ssh:mike:") for t in texts)
+
+
+class _GatedTransport(httpx.AsyncBaseTransport):
+    """Wraps the scripted model so its answer waits for `gate`: the model is
+    still thinking until the test lets it speak. Draining the relay's task with
+    the gate shut would just time out and misreport as a hang, so the queuing
+    test below drives both `say`s through a raw `run()`, undrained, and only
+    calls `gate.set()` once the queued state has been observed (ruling:
+    team-lead, 2026-09-09 — a race on whether the in-process model call
+    finishes during some other await is not an acceptable way to prove a
+    still-pending turn)."""
+
+    def __init__(self, gate: asyncio.Event, inner: httpx.AsyncBaseTransport) -> None:
+        self.gate, self.inner = gate, inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await self.gate.wait()
+        return await self.inner.handle_async_request(request)
+
+
+async def test_a_say_while_a_turn_is_pending_is_queued_and_runs_next(
+    embryo: Embryo, flow: Flow
+) -> None:
+    gate = asyncio.Event()
+    flow.targets["model"] = _GatedTransport(gate, ASGITransport(app=scripted_asgi(ScriptedModel())))
+
+    async def _raw(argv: list[str]) -> dict[str, Any]:
+        out, code = await run(
+            argv, brain_dir=embryo.brain, api=embryo.api, sleep=_fast_sleep, err=embryo.notes.append
+        )
+        assert code == 0, out
+        return split_output(out)[0]
+
+    first = await _raw(["root", "say", b64(LITURGY[1])])
+    assert first["started"] is True and first["turn"] == 1
+    # the model is still gated: the relay job cannot have completed, so this
+    # second say settles nothing and queues behind the first
+    queued = await _raw(["root", "say", b64("And what is your public door?")])
+    assert queued["queued"] == 1
+    state = Brain(embryo.brain).state()
+    assert len(state.queue) == 1
+    assert state.queue[0].principal == "root" and state.queue[0].door == "api"
+
+    gate.set()
+    audit1, reply1 = await embryo._await_turn(1)
+    audit2, _reply2 = await embryo._await_turn(2)
+    assert "embryo" in reply1 and audit1["stopped"] == "done"
+    assert audit2["stopped"] == "done" and audit2["principal"] == "root"
+    window = (await embryo.listing())["window"]
+    assert [e["turn"] for e in window] == [1, 2] and (await embryo.listing())["queue"] == []
+    assert not embryo.notes or all(n.startswith("audit ") for n in embryo.notes)
 
 
 async def test_the_transform_dry_runs_to_the_public_say(flow: Flow) -> None:

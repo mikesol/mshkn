@@ -29,6 +29,7 @@ from mshkn.services.keys import KeyService
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.reaper import Reaper
 from mshkn.services.recipes import RecipeService
+from mshkn.services.relay import RelayService
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -138,6 +139,7 @@ class Runtime:
     lifecycle: Lifecycle
     ingress: IngressService
     keys: KeyService
+    relay: RelayService
     reaper: Reaper
     alerts: deque[Alert]
     http: httpx.AsyncClient
@@ -154,13 +156,16 @@ class Runtime:
         """Wire the services once. Tests call this with a FakeHost."""
         tasks = BackgroundTasks()
         allocator = SlotAllocator()
-        client = http if http is not None else httpx.AsyncClient()
+        # Never follow a redirect: the SSRF guard checked the target it was given,
+        # and a 302 to a private address is a call it never saw.
+        client = http if http is not None else httpx.AsyncClient(follow_redirects=False)
         alerts: deque[Alert] = deque(maxlen=_ALERT_HISTORY_SIZE)
         recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)
         computers = ComputerService(config, db, host, allocator, recipes)
         checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
         lifecycle = Lifecycle(db, computers, checkpoints, tasks, client)
         ingress = IngressService(db, computers, checkpoints, lifecycle, tasks)
+        relay = RelayService(config, db, checkpoints, lifecycle, tasks, client)
         reaper = Reaper(config, db, host, computers, checkpoints, lifecycle, alerts)
         return cls(
             config=config,
@@ -175,6 +180,7 @@ class Runtime:
             lifecycle=lifecycle,
             ingress=ingress,
             keys=KeyService(db),
+            relay=relay,
             reaper=reaper,
             alerts=alerts,
             http=client,
@@ -197,6 +203,9 @@ class Runtime:
         reaped = await self.reaper.reap_dead()
         if reaped:
             logger.info("Startup: reaped %d dead VM(s)", reaped)
+        resumed_jobs = await self.relay.resume()
+        if resumed_jobs:
+            logger.info("Startup: re-running %d unsettled relay job(s)", resumed_jobs)
         await self.computers.refresh_active_gauge()
         self.tasks.spawn(self.reaper.run(), name="reaper", key="reaper")
 

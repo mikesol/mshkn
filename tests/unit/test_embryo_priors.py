@@ -14,6 +14,7 @@ from membrane.declarations import parse_policy
 from membrane.invariants import door_is_open
 from sse_starlette.event import ensure_bytes
 
+from mshkn.models import RelayDelivery, parse_scopes
 from mshkn.services.recipes import BASE_IMAGE, dockerfile_base_image, image_name
 from mshkn.services.starlark import execute_transform, validate_starlark
 from tests.support_embryo import LITURGY
@@ -91,13 +92,21 @@ def test_hatch_script_makes_the_calls_the_spec_lists() -> None:
     )
     for call in calls:
         assert call in script, call
-    scopes = re.search(r"SCOPES='(\{.*\})'", script)
-    assert scopes is not None
-    assert json.loads(scopes.group(1)) == {
-        "recipes": {"create": True, "read": True},
-        "computers": {"create_from": "*"},
-        "labels": ["verb/"],
-    }
+    match = re.search(r'jq -cn --arg t "\$ANTHROPIC_BASE_URL/" \'(.+)\'', script)
+    assert match is not None, "hatch.sh must build SCOPES from ANTHROPIC_BASE_URL with jq"
+    result = subprocess.run(
+        ["jq", "-cn", "--arg", "t", "https://example.com/", match.group(1)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"the SCOPES filter is not valid jq: {result.stderr}"
+    scopes = parse_scopes(json.loads(result.stdout))
+    assert scopes.recipes_create is True and scopes.recipes_read is True
+    assert scopes.create_from == "*"
+    assert scopes.labels == ("verb/",)
+    assert scopes.has_relay is True
+    assert scopes.relay_targets == ("https://example.com/",)
+    assert scopes.relay_deliver == RelayDelivery(label="brain", exec="membrane resume")
     assert "set -euo pipefail" in script
     assert (EMBRYO / "liturgy.md").read_text().count("| ") > 20
 

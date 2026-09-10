@@ -9,7 +9,17 @@ from typing import TYPE_CHECKING
 
 import pytest
 from membrane.declarations import Policy, parse_policy, parse_proposal, parse_verb
-from membrane.state import Brain, CatalogEntry, CatalogStatus, Exchange, InboxItem, State, Trial
+from membrane.state import (
+    Brain,
+    CatalogEntry,
+    CatalogStatus,
+    Exchange,
+    InboxItem,
+    Pending,
+    Queued,
+    State,
+    Trial,
+)
 
 from tests.unit.test_embryo_declarations import VERB
 
@@ -125,3 +135,66 @@ def test_ready_verbs_excludes_every_other_status(tmp_path: Path) -> None:
             verb=verb, status=status, recipe_id=None, proposal_id="p-1"
         )
     assert state.ready_verbs() == {}
+
+
+def test_pending_queue_and_the_windows_audit_round_trip(tmp_path: Path) -> None:
+    brain = Brain(tmp_path)
+    state = State()
+    state.pending = Pending(
+        turn=3,
+        principal="ssh:mike",
+        door="ingress",
+        message="Who am I?",
+        payload='{"msg": "Who am I?", "sig": "s"}',
+        messages=[{"role": "user", "content": "[turn 3 | principal ssh:mike | door ingress]\n..."}],
+        offered=["remember"],
+        job="rj-1",
+        hooks=[{"name": "verify_ssh", "principal": "ssh:mike"}],
+        calls=[{"name": "remember", "input": {"text": "x"}, "result": {"status": "remembered"}}],
+        made=["p-1"],
+        model_calls=2,
+        usage={
+            "input_tokens": 5,
+            "output_tokens": 6,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+        forks=2,
+        started_at="2026-09-09T10:00:00+00:00",
+        memory_written=True,
+    )
+    state.queue.append(
+        Queued(
+            principal="ssh:mike",
+            door="ingress",
+            message="next",
+            payload='{"msg": "next", "sig": "s"}',
+            hooks=[{"name": "verify_ssh", "status": "ok", "principal": "ssh:mike"}],
+        )
+    )
+    state.window.append(
+        Exchange(
+            turn=2,
+            principal="root",
+            door="api",
+            input="hi",
+            reply="hello",
+            output="hello\n",
+            audit={"stopped": "done"},
+        )
+    )
+    brain.save(state)
+    loaded = Brain(tmp_path).state()
+    assert loaded == state
+    assert loaded.pending is not None and loaded.pending.job == "rj-1"
+    # the hooks that named the queued message's principal survive the save: the
+    # fork that starts that turn is not the one that ran them.
+    assert loaded.queue[0].hooks == [
+        {"name": "verify_ssh", "status": "ok", "principal": "ssh:mike"}
+    ]
+
+
+def test_a_fresh_state_has_no_pending_turn_and_an_empty_queue() -> None:
+    state = State()
+    assert state.pending is None and state.queue == []
+    assert State.from_doc(state.to_doc()) == state

@@ -226,3 +226,77 @@ async def test_a_transport_error_is_an_mshkn_error() -> None:
         await api.get_recipe("rcp-1")
     assert info.value.status == 0 and "ReadTimeout" in info.value.detail
     await api.aclose()
+
+
+async def test_create_relay_job_posts_the_target_headers_and_body() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(202, json={"job_id": "rj-1", "status": "queued"})
+
+    job_id = await _client(handler).create_relay_job(
+        target="https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": "sk", "anthropic-version": "2023-06-01"},
+        body={"model": "m", "messages": []},
+    )
+    assert job_id == "rj-1"
+    assert seen[0].method == "POST" and seen[0].url.path == "/relay"
+    assert json.loads(seen[0].content) == {
+        "target": "https://api.anthropic.com/v1/messages",
+        "method": "POST",
+        "forward_headers": {"x-api-key": "sk", "anthropic-version": "2023-06-01"},
+        "body": {"model": "m", "messages": []},
+    }
+
+
+async def test_get_relay_job_reads_the_status_the_response_and_the_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.startswith("/relay/")
+        if request.url.path.endswith("rj-done"):
+            return httpx.Response(
+                200,
+                json={
+                    "job_id": "rj-done",
+                    "status": "completed",
+                    "error": None,
+                    "response": {"status": 200, "headers": {}, "body": {"content": []}},
+                    "delivery": None,
+                },
+            )
+        if request.url.path.endswith("rj-wait"):
+            return httpx.Response(
+                200,
+                json={
+                    "job_id": "rj-wait",
+                    "status": "in_progress",
+                    "error": None,
+                    "response": None,
+                    "delivery": None,
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "job_id": "rj-bad",
+                "status": "failed",
+                "error": "HTTP 529",
+                "response": {"status": 529, "headers": {}, "body": "Overloaded"},
+                "delivery": None,
+            },
+        )
+
+    api = _client(handler)
+    done = await api.get_relay_job("rj-done")
+    assert (done.status, done.response_status, done.response_body, done.error) == (
+        "completed",
+        200,
+        {"content": []},
+        None,
+    )
+    wait = await api.get_relay_job("rj-wait")
+    assert (
+        wait.status == "in_progress" and wait.response_status is None and wait.response_body is None
+    )
+    bad = await api.get_relay_job("rj-bad")
+    assert bad.status == "failed" and bad.error == "HTTP 529" and bad.response_status == 529

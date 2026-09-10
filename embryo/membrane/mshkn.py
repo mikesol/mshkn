@@ -1,4 +1,4 @@
-"""mshkn as the membrane sees it: five calls, made with the scoped key (spec §3, §4)."""
+"""mshkn as the membrane sees it: seven calls, made with the scoped key (spec §3, §4)."""
 
 from __future__ import annotations
 
@@ -40,6 +40,15 @@ class CheckpointInfo:
     parent_id: str | None
 
 
+@dataclass(frozen=True)
+class RelayJob:
+    id: str
+    status: str
+    error: str | None
+    response_status: int | None
+    response_body: Any
+
+
 class MshknError(Exception):
     def __init__(self, status: int, detail: str) -> None:
         super().__init__(f"mshkn {status}: {detail}")
@@ -67,6 +76,12 @@ class MshknApi(Protocol):
     ) -> RunResult | Deferred: ...
 
     async def list_checkpoints(self, label: str) -> list[CheckpointInfo]: ...
+
+    async def create_relay_job(
+        self, *, target: str, headers: dict[str, str], body: dict[str, Any]
+    ) -> str: ...
+
+    async def get_relay_job(self, job_id: str) -> RelayJob: ...
 
 
 def _detail(response: httpx.Response) -> str:
@@ -175,3 +190,24 @@ class Mshkn:
             for c in body
         ]
         return sorted(rows, key=lambda c: c.created_at, reverse=True)
+
+    async def create_relay_job(
+        self, *, target: str, headers: dict[str, str], body: dict[str, Any]
+    ) -> str:
+        response = await self._request(
+            "POST",
+            "/relay",
+            json={"target": target, "method": "POST", "forward_headers": headers, "body": body},
+        )
+        return str(response.json()["job_id"])
+
+    async def get_relay_job(self, job_id: str) -> RelayJob:
+        doc = (await self._request("GET", f"/relay/{job_id}")).json()
+        response = doc.get("response") or {}
+        return RelayJob(
+            id=str(doc["job_id"]),
+            status=str(doc["status"]),
+            error=doc.get("error"),
+            response_status=response.get("status"),
+            response_body=response.get("body"),
+        )

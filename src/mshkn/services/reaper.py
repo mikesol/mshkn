@@ -6,11 +6,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from mshkn.db import get_account_by_id, list_all_computers
+from mshkn.db import delete_relay_jobs_before, get_account_by_id, list_all_computers
 from mshkn.models import Alert, CheckpointTrigger, ComputerStatus
 from mshkn.observability.metrics import host_ram_used_ratio, thin_pool_used_ratio
 
@@ -93,16 +93,18 @@ class Reaper:
         idle = await self.reap_idle()
         pruned = await self.checkpoints.prune()
         expired = await self.lifecycle.expire_exec_logs()
+        expired_jobs = await self.expire_relay_jobs()
         alerts = await self.check_host()
         await self.computers.refresh_active_gauge()
-        if dead or idle or pruned or expired or alerts:
+        if dead or idle or pruned or expired or expired_jobs or alerts:
             logger.info(
                 "Reaper cycle: %d dead, %d idle VM(s), %d checkpoint(s) pruned, "
-                "%d exec log(s) expired, %d alert(s)",
+                "%d exec log(s) expired, %d relay job(s) expired, %d alert(s)",
                 dead,
                 idle,
                 pruned,
                 expired,
+                expired_jobs,
                 len(alerts),
             )
 
@@ -171,6 +173,14 @@ class Reaper:
         account = await get_account_by_id(self.db, computer.account_id)
         if account is not None:
             self.lifecycle.spawn_drain(account, effective_label)
+
+    async def expire_relay_jobs(self) -> int:
+        """Relay jobs, responses included, go with the exec-log retention (#110)."""
+        retention = self.config.exec_log_retention_seconds
+        if retention <= 0:
+            return 0
+        cutoff = (datetime.now(UTC) - timedelta(seconds=retention)).isoformat()
+        return await delete_relay_jobs_before(self.db, cutoff)
 
     async def check_host(self) -> list[Alert]:
         now = datetime.now(UTC).isoformat()

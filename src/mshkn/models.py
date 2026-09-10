@@ -3,8 +3,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
+from urllib.parse import urlsplit
 
 from mshkn.errors import InvalidInput
+
+# The relay speaks these two schemes only, with their default ports.
+_RELAY_SCHEMES = {"http": 80, "https": 443}
+
+
+def _target_parts(url: str) -> tuple[tuple[str, str, int], str] | None:
+    """A relay target as ((scheme, host, effective port), path), or None when it is
+    not an absolute http or https URL. Origins are compared as this triple and never
+    as text: `https://api.anthropic.com.evil.example` starts with
+    `https://api.anthropic.com` and must not match it (#110)."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme not in _RELAY_SCHEMES or not parts.hostname:
+        return None
+    return (parts.scheme, parts.hostname, port or _RELAY_SCHEMES[parts.scheme]), parts.path
 
 
 class ComputerStatus(StrEnum):
@@ -32,6 +51,19 @@ class CheckpointTrigger(StrEnum):
 class IngressLogStatus(StrEnum):
     ACCEPTED = "accepted"
     COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class RelayStatus(StrEnum):
+    QUEUED = "queued"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class DeliveryStatus(StrEnum):
+    PENDING = "pending"
+    DELIVERED = "delivered"
     FAILED = "failed"
 
 
@@ -68,11 +100,23 @@ BARE = "bare"
 
 
 @dataclass(frozen=True)
+class RelayDelivery:
+    """The wake-up a relay job causes: fork `label` with `exec <job_id>`."""
+
+    label: str
+    exec: str
+
+
+@dataclass(frozen=True)
 class Scopes:
     recipes_create: bool = False
     recipes_read: bool = False
     create_from: Literal["*"] | tuple[str, ...] = ()
     labels: tuple[str, ...] = ()
+    # The relay (#110): URL prefixes the key may have called, and the one wake-up
+    # it may cause. Both or neither; a key without them may relay nowhere.
+    relay_targets: tuple[str, ...] = ()
+    relay_deliver: RelayDelivery | None = None
 
     def may_create_from(self, recipe_id: str | None) -> bool:
         if self.create_from == "*":
@@ -84,6 +128,24 @@ class Scopes:
         if not label:
             return False
         return any(label.startswith(prefix) for prefix in self.labels)
+
+    @property
+    def has_relay(self) -> bool:
+        return bool(self.relay_targets) and self.relay_deliver is not None
+
+    def may_relay_to(self, target: str) -> bool:
+        """True when the target shares a prefix's scheme, host and effective port and
+        its path lies under the prefix's path. `parse_scopes` has already checked that
+        every prefix is an absolute http or https URL."""
+        parts = _target_parts(target)
+        if parts is None:
+            return False
+        origin, path = parts
+        for prefix in self.relay_targets:
+            allowed = _target_parts(prefix)
+            if allowed is not None and allowed[0] == origin and path.startswith(allowed[1]):
+                return True
+        return False
 
     def to_document(self) -> dict[str, object]:
         doc: dict[str, object] = {}
@@ -100,6 +162,12 @@ class Scopes:
             doc["computers"] = {"create_from": list(self.create_from)}
         if self.labels:
             doc["labels"] = list(self.labels)
+        if self.has_relay:
+            assert self.relay_deliver is not None
+            doc["relay"] = {
+                "targets": list(self.relay_targets),
+                "deliver": {"label": self.relay_deliver.label, "exec": self.relay_deliver.exec},
+            }
         return doc
 
 
@@ -162,7 +230,7 @@ def parse_scopes(document: object) -> Scopes:
     """The scope document as a Scopes, or InvalidInput naming what is wrong."""
     if not isinstance(document, dict):
         raise _reject("must be an object")
-    unknown = sorted(set(document) - {"recipes", "computers", "labels"})
+    unknown = sorted(set(document) - {"recipes", "computers", "labels", "relay"})
     if unknown:
         raise _reject(f"unknown fields {unknown}")
     recipes = _section(document, "recipes", {"create", "read"})
@@ -174,11 +242,29 @@ def parse_scopes(document: object) -> Scopes:
     labels = tuple(_strings(document.get("labels", []), "labels"))
     if any(not label for label in labels):
         raise _reject("labels must not contain an empty prefix")
+    relay_targets: tuple[str, ...] = ()
+    relay_deliver: RelayDelivery | None = None
+    if "relay" in document:
+        relay = _section(document, "relay", {"targets", "deliver"})
+        relay_targets = tuple(_strings(relay.get("targets"), "relay.targets"))
+        if not relay_targets or any(not t for t in relay_targets):
+            raise _reject("relay.targets must be a non-empty list of non-empty prefixes")
+        if any(_target_parts(t) is None for t in relay_targets):
+            raise _reject("relay.targets must be absolute http or https URLs with a host")
+        deliver = relay.get("deliver")
+        if not isinstance(deliver, dict) or set(deliver) != {"label", "exec"}:
+            raise _reject("relay.deliver must be an object with label and exec")
+        label, command = deliver["label"], deliver["exec"]
+        if not isinstance(label, str) or not label or not isinstance(command, str) or not command:
+            raise _reject("relay.deliver.label and relay.deliver.exec must be non-empty strings")
+        relay_deliver = RelayDelivery(label=label, exec=command)
     return Scopes(
         recipes_create=_flag(recipes, "create", "recipes"),
         recipes_read=_flag(recipes, "read", "recipes"),
         create_from=create_from,
         labels=labels,
+        relay_targets=relay_targets,
+        relay_deliver=relay_deliver,
     )
 
 
@@ -327,3 +413,54 @@ class IngressLog:
     error_message: str | None
     created_at: str
     computer_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Lampas's policy: exponential backoff, min(initial * 2^attempt, max)."""
+
+    attempts: int = 3
+    initial_delay_ms: int = 1000
+    max_delay_ms: int = 30000
+
+    def delay(self, attempt: int) -> float:
+        """Seconds to wait after the zero-based `attempt` failed."""
+        exponent: int = 2**attempt
+        delay_ms: int = min(self.initial_delay_ms * exponent, self.max_delay_ms)
+        return delay_ms / 1000
+
+    def to_document(self) -> dict[str, int]:
+        return {
+            "attempts": self.attempts,
+            "initial_delay_ms": self.initial_delay_ms,
+            "max_delay_ms": self.max_delay_ms,
+        }
+
+
+@dataclass
+class RelayJob:
+    """One upstream HTTP call plus at most one delivery (#110)."""
+
+    id: str
+    account_id: str
+    api_key_id: str | None
+    status: RelayStatus
+    target: str
+    method: str
+    forward_headers: dict[str, str] | None
+    body: object
+    retry: RetryPolicy
+    timeout_seconds: int
+    deliver: RelayDelivery | None
+    attempts: int
+    error: str | None
+    response_status: int | None
+    response_headers: dict[str, str] | None
+    response_body: object
+    delivery_status: DeliveryStatus | None
+    delivery_attempts: int
+    delivery_computer_id: str | None
+    delivery_deferred_id: str | None
+    delivery_error: str | None
+    created_at: str
+    updated_at: str

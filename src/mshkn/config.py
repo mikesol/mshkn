@@ -54,6 +54,10 @@ class Config:
     checkpoint_retention_count: int = 20  # per account, keep last N
     exec_log_retention_seconds: int = 86400  # ephemeral exec output; 0 keeps it forever
 
+    # Relay (#110)
+    relay_timeout_seconds: int = 3600  # default and cap of a job's upstream timeout
+    relay_body_bytes: int = 8 * 1024 * 1024  # a job's request body and an upstream response
+
     # Networking
     domain: str = "mshkn.dev"
     caddy_admin_url: str = "http://localhost:2019"

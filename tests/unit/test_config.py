@@ -103,3 +103,10 @@ def test_empty_path_is_rejected_and_unknown_types_are_config_errors() -> None:
         _parse("MSHKN_DB_PATH", "", Path)
     with pytest.raises(ConfigError, match="unsupported field type"):
         _parse("MSHKN_X", "1,2", list)
+
+
+def test_relay_fields_have_the_spec_defaults_and_read_their_variables() -> None:
+    config = Config()
+    assert config.relay_timeout_seconds == 3600 and config.relay_body_bytes == 8 * 1024 * 1024
+    read = Config.from_env({"MSHKN_RELAY_TIMEOUT_SECONDS": "60", "MSHKN_RELAY_BODY_BYTES": "1024"})
+    assert read.relay_timeout_seconds == 60 and read.relay_body_bytes == 1024

@@ -323,3 +323,34 @@ async def test_fork_by_label_needs_a_covered_label(client: AsyncClient, runtime:
     row = await get_computer(runtime.db, forked.json()["computer_id"])
     assert row is not None and row.api_key_id == key_id
     assert (await client.post("/checkpoints/fork", json={"label": "brain"})).status_code == 200
+
+
+# --- relay ---------------------------------------------------------------
+
+
+async def test_relay_needs_its_own_scope_and_hides_other_keys_jobs(client: AsyncClient) -> None:
+    """#110: a key with no `relay` section never reaches the service, and a
+    job it did not create is 404, not 403 -- it must not even learn one exists."""
+    _, scoped = await _key(client, BRAIN)
+    refused = await client.post("/relay", json={"target": "https://model.example/"}, headers=scoped)
+    assert refused.status_code == 403 and "relay" in refused.json()["detail"]
+    assert (await client.get("/relay/rj-000000000001", headers=scoped)).status_code == 404
+    _, relay_scoped = await _key(
+        client,
+        {
+            "relay": {
+                "targets": ["https://model.example/"],
+                "deliver": {"label": "brain", "exec": "membrane resume"},
+            }
+        },
+    )
+    outside = await client.post(
+        "/relay", json={"target": "https://other.example/"}, headers=relay_scoped
+    )
+    assert outside.status_code == 403 and "relay.targets" in outside.json()["detail"]
+    with_deliver = await client.post(
+        "/relay",
+        json={"target": "https://model.example/x", "deliver": {"label": "verb/x", "exec": "true"}},
+        headers=relay_scoped,
+    )
+    assert with_deliver.status_code == 422

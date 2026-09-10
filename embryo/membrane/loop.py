@@ -1,26 +1,26 @@
-"""The loop of a say turn (spec §6 step 5): system = seed + self, messages =
-the window + the input; each tool call runs through its handler; the loop
-ends at final text, the cap, or the deadline."""
+"""One completion's tool calls, run against the handlers (relay design §6). The
+loop of a turn is a chain of forks: the relay posts the answer, `resume` runs
+its calls here, posts the next request and exits. Every call gets a result (a
+call past the fork's clock gets "out of time", so the model can retry); the cap
+counts every call of the turn, across forks, and ends it."""
 
 from __future__ import annotations
 
 import json
-import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from membrane.model import DEADLINE, add_usage, zero_usage
-
 if TYPE_CHECKING:
-    from membrane.model import Model
+    from membrane.model import Completion
+    from membrane.state import Pending
 
 type Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 CAP = 20
-OUT_OF_TIME = "I ran out of time before finishing this turn."
 CAP_REACHED = "I reached the tool-call cap for this turn."
 OUT_OF_TOKENS = "I ran out of output tokens before finishing this turn."
+OUT_OF_TIME = "out of time"
 
 
 @dataclass(frozen=True)
@@ -29,72 +29,31 @@ class Tool:
     handler: Handler
 
 
-@dataclass(frozen=True)
-class LoopResult:
-    text: str
-    calls: list[dict[str, Any]]
-    stopped: Literal["done", "cap", "deadline", "max_tokens"]
-    usage: dict[str, int] = field(default_factory=zero_usage)
-    model_calls: int = 0
-
-
-async def run_loop(
-    model: Model,
-    *,
-    system: str,
-    history: list[dict[str, Any]],
-    user: str,
+async def run_calls(
+    completion: Completion,
     tools: dict[str, Tool],
+    pending: Pending,
+    *,
     deadline: float,
-    now: Callable[[], float] = time.monotonic,
+    now: Callable[[], float],
     cap: int = CAP,
-) -> LoopResult:
-    messages: list[dict[str, Any]] = [*history, {"role": "user", "content": user}]
-    definitions = [t.definition for t in tools.values()]
-    calls: list[dict[str, Any]] = []
-    last_text = ""
-    usage = zero_usage()
-    model_calls = 0
-
-    def finish(text: str, stopped: Literal["done", "cap", "deadline", "max_tokens"]) -> LoopResult:
-        return LoopResult(
-            text=text, calls=calls, stopped=stopped, usage=usage, model_calls=model_calls
+) -> tuple[list[dict[str, Any]], Literal["ok", "cap"]]:
+    """The tool_result blocks for the completion's calls, appended to
+    `pending.calls` as they run. "cap" when a call would exceed the turn's cap:
+    the caller ends the turn, so the results so far are not sent."""
+    results: list[dict[str, Any]] = []
+    for call in completion.calls:
+        if len(pending.calls) >= cap:
+            return results, "cap"
+        tool = tools.get(call.name)
+        if tool is None:
+            result: dict[str, Any] = {"status": "error", "error": f"no such tool {call.name}"}
+        elif now() >= deadline:
+            result = {"status": "error", "error": OUT_OF_TIME}
+        else:
+            result = await tool.handler(call.input)
+        pending.calls.append({"name": call.name, "input": call.input, "result": result})
+        results.append(
+            {"type": "tool_result", "tool_use_id": call.id, "content": json.dumps(result)}
         )
-
-    while True:
-        left = deadline - now()
-        if left <= 0:
-            return finish(f"{OUT_OF_TIME} {last_text}".strip(), "deadline")
-        completion = await model.complete(
-            system=system, messages=messages, tools=definitions, timeout=left
-        )
-        model_calls += 1
-        usage = add_usage(usage, completion.usage)
-        last_text = completion.text or last_text
-        if completion.stop_reason == DEADLINE:
-            # the clock ran out mid-response: keep the words, end the turn
-            return finish(f"{OUT_OF_TIME} {last_text}".strip(), "deadline")
-        if completion.stop_reason == "max_tokens":
-            # The budget ran out mid-response (live run 2026-09-09-run-1, turn 2: all
-            # of it thinking). Whatever calls arrived are not run: the response they
-            # belong to is incomplete, and the reply must say so.
-            return finish(f"{OUT_OF_TOKENS} {last_text}".strip(), "max_tokens")
-        if not completion.calls:
-            return finish(completion.text, "done")
-        messages.append({"role": "assistant", "content": completion.content})
-        results: list[dict[str, Any]] = []
-        for call in completion.calls:
-            if len(calls) >= cap:
-                return finish(f"{CAP_REACHED} {last_text}".strip(), "cap")
-            if now() >= deadline:
-                return finish(f"{OUT_OF_TIME} {last_text}".strip(), "deadline")
-            tool = tools.get(call.name)
-            if tool is None:
-                result: dict[str, Any] = {"status": "error", "error": f"no such tool {call.name}"}
-            else:
-                result = await tool.handler(call.input)
-            calls.append({"name": call.name, "input": call.input, "result": result})
-            results.append(
-                {"type": "tool_result", "tool_use_id": call.id, "content": json.dumps(result)}
-            )
-        messages.append({"role": "user", "content": results})
+    return results, "ok"
