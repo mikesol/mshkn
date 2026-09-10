@@ -676,13 +676,20 @@ def _by_label(turns: list[Turn], label: str) -> Turn | None:
     return next((t for t in turns if t.label == label), None)
 
 
-def _tool_computer(turn: Turn | None, chain: bool = False) -> dict[str, Any] | None:
+def _tool_computers(turn: Turn | None, chain: bool = False) -> list[dict[str, Any]]:
+    """Every tool call of the turn that ran on a computer, in order."""
     if turn is None:
-        return None
-    for call in turn.audit.get("tools", []):
-        if "computer_id" in call and (not chain or "chain_head" in call):
-            return dict(call)
-    return None
+        return []
+    return [
+        dict(call)
+        for call in turn.audit.get("tools", [])
+        if "computer_id" in call and (not chain or "chain_head" in call)
+    ]
+
+
+def _tool_computer(turn: Turn | None, chain: bool = False) -> dict[str, Any] | None:
+    calls = _tool_computers(turn, chain)
+    return calls[0] if calls else None
 
 
 def _first_int(text: str | None) -> int | None:
@@ -761,18 +768,22 @@ def verdict(
         },
     }
 
+    # Every invocation across the counted turns, not one per turn (#117): a model
+    # that calls its own counter twice to prove the state crossed the chain is doing
+    # more than the minimum, and the postcondition is that the counter is monotonic
+    # and the chain grows once per invocation.
     counts: list[int | None] = []
     computer_ids: list[str] = []
     chain_lengths: list[int] = []
     for label in ("9-count-1", "9-count-2"):
-        call = _tool_computer(_by_label(turns, label), chain=True)
-        if call is None:
-            continue
-        computer_ids.append(call["computer_id"])
-        counts.append(_first_int(checks.get(call["computer_id"], {}).get("stdout")))
-        chain_lengths.append(int(catalog.get(call["name"], {}).get("chain_length") or 0))
+        for call in _tool_computers(_by_label(turns, label), chain=True):
+            computer_ids.append(call["computer_id"])
+            counts.append(_first_int(checks.get(call["computer_id"], {}).get("stdout")))
+            chain_lengths.append(int(catalog.get(call["name"], {}).get("chain_length") or 0))
     result["counter"] = {
-        "ok": counts == [1, 2] and chain_lengths == [2, 2],
+        "ok": bool(counts)
+        and counts == list(range(1, len(counts) + 1))
+        and chain_lengths[-1:] == [len(counts)],
         "evidence": {
             "counts": counts,
             "computer_ids": computer_ids,

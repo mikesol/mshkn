@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-10T10:00:55+00:00",
+ "command": "approve",
+ "computer_id": "comp-35adf3fac063",
+ "detail": [
+  "p-4"
+ ],
+ "door": "api",
+ "n": 82,
+ "seconds": 2.549630076973699,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-4 ready: verb page_title recipe rcp-9d61e23d9383\n"
+}

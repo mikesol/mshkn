@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-10T10:16:49+00:00",
+ "command": "list",
+ "computer_id": "comp-618a9e182b68",
+ "detail": [],
+ "door": "api",
+ "n": 4,
+ "seconds": 8.923190130037256,
+ "status": 200,
+ "stderr": "",
+ "stdout": "{\n \"catalog\": {},\n \"door\": {\n  \"hooks\": [],\n  \"hooks_ready\": [],\n  \"status\": \"closed\"\n },\n \"inbox\": 0,\n \"pending\": {\n  \"door\": \"api\",\n  \"forks\": 4,\n  \"job\": \"rj-73e8f4ac879a\",\n  \"model_calls\": 4,\n  \"principal\": \"root\",\n  \"started_at\": \"2026-09-10T10:16:05+00:00\",\n  \"turn\": 1,\n  \"usage\": {\n   \"cache_creation_input_tokens\": 0,\n   \"cache_read_input_tokens\": 0,\n   \"input_tokens\": 9597,\n   \"output_tokens\": 923\n  }\n },\n \"policy\": {\n  \"door\": \"closed\",\n  \"hooks\": [],\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   }\n  }\n },\n \"principals\": [],\n \"proposals\": [],\n \"queue\": [],\n \"trials\": [\n  {\n   \"id\": \"t-1\",\n   \"recipe_id\": \"rcp-9dbc85f6e853\",\n   \"status\": \"failed\",\n   \"verb\": \"hello\"\n  },\n  {\n   \"id\": \"t-2\",\n   \"recipe_id\": \"rcp-ccc469269dc5\",\n   \"status\": \"done\",\n   \"verb\": \"hello\"\n  }\n ],\n \"turn\": 1,\n \"window\": []\n}\n"
+}

@@ -94,7 +94,11 @@ KEY_ID="$(jq -r .id <<<"$KEY_JSON")"
 BRAIN_KEY="$(jq -r .secret <<<"$KEY_JSON")"
 
 echo "creating the brain" >&2
-CID="$(api POST /computers "$(jq -cn --arg r "$RECIPE_ID" '{recipe_id: $r, needs: {ram: "512MB", cores: 2}}')" | jq -r .computer_id)"
+# 1GB, not 512MB: measured on a real end-of-liturgy brain (#116), the membrane with
+# the mem0 stack open is 134 MB resident, the guest reports ~303 MB in use at rest, and
+# 512MB left ~44 MB of headroom for the conversation, the relay's stored response and
+# mem0's extraction. A wake-up fork died there mid-turn with no output.
+CID="$(api POST /computers "$(jq -cn --arg r "$RECIPE_ID" '{recipe_id: $r, needs: {ram: "1GB", cores: 2}}')" | jq -r .computer_id)"
 # pip reads the version and the tags off the filename (PEP 427), so the wheel keeps its name.
 upload "$CID" "/tmp/$WHEEL_NAME" "$WHEEL"
 upload "$CID" /brain/seed.md "$HERE/seed.md"

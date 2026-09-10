@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-10T10:37:19+00:00",
+ "command": "approve",
+ "computer_id": "comp-6a9984b174f8",
+ "detail": [
+  "p-3"
+ ],
+ "door": "api",
+ "n": 102,
+ "seconds": 3.380527634988539,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-3 building: verb page_title recipe rcp-eac1032b4cd6\n"
+}
