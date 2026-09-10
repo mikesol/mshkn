@@ -1,4 +1,4 @@
-"""The scope document of a scoped API key (#88): three optional fields, an
+"""The scope document of a scoped API key (#88): four optional fields, an
 absent field means none, unknown fields are rejected."""
 
 from __future__ import annotations
@@ -127,3 +127,47 @@ def test_without_the_section_a_key_may_relay_nowhere() -> None:
 def test_rejects_a_malformed_relay_section(section: dict[str, object]) -> None:
     with pytest.raises(InvalidInput):
         parse_scopes({"relay": section})
+
+
+DELIVER = {"label": "brain", "exec": "membrane resume"}
+
+
+def _relay(*targets: str) -> Scopes:
+    return parse_scopes({"relay": {"targets": list(targets), "deliver": DELIVER}})
+
+
+def test_a_target_matches_a_prefix_by_origin_and_path_not_by_text() -> None:
+    """A prefix without a trailing slash is the dangerous shape: textually,
+    `https://api.anthropic.com.evil.example` starts with `https://api.anthropic.com`
+    and would be called with the forwarded credentials."""
+    scopes = _relay("https://api.anthropic.com")
+    assert scopes.may_relay_to("https://api.anthropic.com/v1/messages")
+    # The default port is the same origin written out.
+    assert scopes.may_relay_to("https://api.anthropic.com:443/v1/messages")
+    assert not scopes.may_relay_to("https://api.anthropic.com.evil.example/v1/messages")
+    assert not scopes.may_relay_to("https://evil.example/?u=https://api.anthropic.com/v1")
+
+
+def test_a_scheme_downgrade_a_port_change_and_a_path_outside_the_prefix_are_refused() -> None:
+    scopes = _relay("https://api.anthropic.com/v1/")
+    assert scopes.may_relay_to("https://api.anthropic.com/v1/messages")
+    assert not scopes.may_relay_to("http://api.anthropic.com/v1/messages")
+    assert not scopes.may_relay_to("https://api.anthropic.com:8443/v1/messages")
+    assert not scopes.may_relay_to("https://api.anthropic.com/v2/messages")
+    assert not scopes.may_relay_to("/v1/messages")
+    assert not scopes.may_relay_to("https://api.anthropic.com:notaport/v1/messages")
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "api.anthropic.com/v1/",
+        "/v1/messages",
+        "ftp://api.anthropic.com/",
+        "https:///v1/",
+        "https://",
+    ],
+)
+def test_rejects_a_relay_target_that_is_not_an_absolute_http_url(target: str) -> None:
+    with pytest.raises(InvalidInput):
+        _relay(target)

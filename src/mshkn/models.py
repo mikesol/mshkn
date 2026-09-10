@@ -3,8 +3,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
+from urllib.parse import urlsplit
 
 from mshkn.errors import InvalidInput
+
+# The relay speaks these two schemes only, with their default ports.
+_RELAY_SCHEMES = {"http": 80, "https": 443}
+
+
+def _target_parts(url: str) -> tuple[tuple[str, str, int], str] | None:
+    """A relay target as ((scheme, host, effective port), path), or None when it is
+    not an absolute http or https URL. Origins are compared as this triple and never
+    as text: `https://api.anthropic.com.evil.example` starts with
+    `https://api.anthropic.com` and must not match it (#110)."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme not in _RELAY_SCHEMES or not parts.hostname:
+        return None
+    return (parts.scheme, parts.hostname, port or _RELAY_SCHEMES[parts.scheme]), parts.path
 
 
 class ComputerStatus(StrEnum):
@@ -115,7 +134,18 @@ class Scopes:
         return bool(self.relay_targets) and self.relay_deliver is not None
 
     def may_relay_to(self, target: str) -> bool:
-        return any(target.startswith(prefix) for prefix in self.relay_targets)
+        """True when the target shares a prefix's scheme, host and effective port and
+        its path lies under the prefix's path. `parse_scopes` has already checked that
+        every prefix is an absolute http or https URL."""
+        parts = _target_parts(target)
+        if parts is None:
+            return False
+        origin, path = parts
+        for prefix in self.relay_targets:
+            allowed = _target_parts(prefix)
+            if allowed is not None and allowed[0] == origin and path.startswith(allowed[1]):
+                return True
+        return False
 
     def to_document(self) -> dict[str, object]:
         doc: dict[str, object] = {}
@@ -219,6 +249,8 @@ def parse_scopes(document: object) -> Scopes:
         relay_targets = tuple(_strings(relay.get("targets"), "relay.targets"))
         if not relay_targets or any(not t for t in relay_targets):
             raise _reject("relay.targets must be a non-empty list of non-empty prefixes")
+        if any(_target_parts(t) is None for t in relay_targets):
+            raise _reject("relay.targets must be absolute http or https URLs with a host")
         deliver = relay.get("deliver")
         if not isinstance(deliver, dict) or set(deliver) != {"label", "exec"}:
             raise _reject("relay.deliver must be an object with label and exec")
