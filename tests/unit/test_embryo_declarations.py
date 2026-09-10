@@ -60,11 +60,29 @@ def test_parse_verb_fills_defaults() -> None:
         ({"allow": ["root"]}, "allow"),
         ({"allow": ["anonymous"]}, "allow"),
         ({"allow": ["mike"]}, "allow"),
+        # A refusal names what would have been valid (#123): the reserved set,
+        # the legal state kinds, the reserved namespaces, the params that exist.
+        ({"name": "try"}, "remember"),
+        ({"state": "event"}, "ephemeral"),
+        ({"asserts": "system"}, "root"),
+        ({"entrypoint": "run {{nope}}"}, "url"),
+        ({"requires": [{"kind": "secret"}]}, "name"),
     ],
 )
 def test_parse_verb_refuses(patch: dict[str, Any], reason: str) -> None:
     with pytest.raises(DeclarationError, match=reason):
         parse_verb({**VERB, **patch})
+
+
+def test_a_verb_missing_fields_is_told_the_whole_shape_at_once() -> None:
+    """One field per refusal is a serial walk that costs a round trip each
+    (#123). The refusal names every required field, and what is missing."""
+    with pytest.raises(DeclarationError) as exc:
+        parse_verb({"name": "x"})
+    message = str(exc.value)
+    for field_name in ("description", "params", "dockerfile", "entrypoint", "effect", "state"):
+        assert field_name in message, field_name
+    assert "name" in message
 
 
 def test_render_command_quotes_every_value_and_bounds_the_run() -> None:
@@ -137,6 +155,32 @@ def test_parse_policy_and_grants() -> None:
 def test_parse_policy_refuses(doc: object, reason: str) -> None:
     with pytest.raises(DeclarationError, match=reason):
         parse_policy(doc)
+
+
+def test_an_unknown_policy_field_is_told_the_fields_that_exist() -> None:
+    """The seed no longer carries the policy schema (#123), so the refusal is
+    the only thing that can teach it."""
+    with pytest.raises(DeclarationError) as exc:
+        parse_policy({"grants": {}})
+    message = str(exc.value)
+    assert "grants" in message
+    for field_name in ("principals", "hooks", "door"):
+        assert field_name in message, field_name
+
+
+def test_a_bad_principal_is_told_the_form_a_principal_takes() -> None:
+    with pytest.raises(DeclarationError) as exc:
+        parse_policy({"principals": {"Mike": {"invoke": [], "propose": False}}})
+    message = str(exc.value)
+    assert "anonymous" in message and "<namespace>:<name>" in message
+
+
+def test_a_policy_naming_root_is_refused() -> None:
+    """Nothing refused this before, and may_invoke/may_propose short-circuit on
+    root anyway (invariants.py), so an embryo that wrote a policy restricting
+    root was silently wrong. The seed used to assert it; now the refusal does."""
+    with pytest.raises(DeclarationError, match="root"):
+        parse_policy({"principals": {"root": {"invoke": [], "propose": False}}})
 
 
 def test_parse_proposal_validates_its_kind() -> None:

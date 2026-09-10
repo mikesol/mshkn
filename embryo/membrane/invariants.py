@@ -53,7 +53,10 @@ def refuse_approval(proposal: Proposal, state: State) -> str | None:
                 f"effect {verb.effect} is not approved by the embryo (only local and read, §10.8)"
             )
         if verb.asserts in RESERVED_NAMESPACES:
-            return f"a hook may not assert {verb.asserts} (§10.1)"
+            return (
+                f"a hook may not assert {verb.asserts}; "
+                f"the reserved namespaces are {sorted(RESERVED_NAMESPACES)} (§10.1)"
+            )
         existing = state.catalog.get(verb.name)
         if (
             existing is not None
@@ -73,7 +76,10 @@ def refuse_approval(proposal: Proposal, state: State) -> str | None:
         for hook in new.hooks:
             entry = state.catalog.get(hook)
             if entry is None:
-                return f"hook {hook} is not a verb in the catalog"
+                return (
+                    f"hook {hook} is not a verb in the catalog; "
+                    f"the catalog has {sorted(state.catalog)}"
+                )
             if entry.verb.asserts is None:
                 return f"hook {hook} declares no asserts namespace"
         if new.grant(ANONYMOUS).propose:

@@ -294,7 +294,10 @@ def test_refuse_approval_also_catches_a_verb_built_outside_parse_verb() -> None:
         asserts="root",
     )
     proposal = Proposal(id="p-1", kind="verb", title="whoami", rationale="r", verb=verb)
-    assert "root" in (refuse_approval(proposal, State()) or "")
+    reason = refuse_approval(proposal, State()) or ""
+    # #123: a refusal names what would have been valid — the whole reserved
+    # set, not just the namespace that was refused.
+    assert "root" in reason and "system" in reason
 
 
 async def test_a_hook_naming_a_verb_with_no_asserts_is_refused(tmp_path: Path) -> None:
@@ -311,6 +314,25 @@ async def test_a_hook_naming_a_verb_with_no_asserts_is_refused(tmp_path: Path) -
         },
     )
     assert "asserts namespace" in (refuse_approval(opening, state) or "")
+
+
+async def test_an_unknown_hook_names_the_catalog(tmp_path: Path) -> None:
+    """The seed no longer says the door needs a hook in the catalog (#123)."""
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    hook = propose(state, _verb_proposal(HOOK))
+    await approve(api, state, hook.id)
+    state.catalog["verify_ssh"].status = "ready"
+    opening = propose(
+        state,
+        {
+            "kind": "policy",
+            "title": "open",
+            "rationale": "because",
+            "policy": {"principals": {}, "hooks": ["absent_hook"], "door": "open"},
+        },
+    )
+    reason = refuse_approval(opening, state) or ""
+    assert "absent_hook" in reason and "verify_ssh" in reason
 
 
 async def test_approve_marks_a_superseded_policy(tmp_path: Path) -> None:
