@@ -121,7 +121,7 @@ class Pending:
     usage: dict[str, int] = field(default_factory=zero_usage)
     forks: int = 1
     started_at: str = ""
-    memory_written: bool = False
+    write_memory: bool = False
 
     def to_doc(self) -> dict[str, Any]:
         return asdict(self)

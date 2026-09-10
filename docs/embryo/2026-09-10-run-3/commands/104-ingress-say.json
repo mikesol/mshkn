@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-10T10:37:32+00:00",
+ "command": "say",
+ "computer_id": "comp-8f64693c17cd",
+ "detail": {
+  "msg": "page_title https://example.com",
+  "sig": "LS0tLS1CRUdJTiBTU0ggU0lHTkFUVVJFLS0tLS0KVTFOSVUwbEhBQUFBQVFBQUFETUFBQUFMYzNOb0xXVmtNalUxTVRrQUFBQWc0RnNiZ05rWjhld3lnRGdHQ0xBWERmekhKYgo5QVRoYjFQL0tORGRuUHdOZ0FBQUFGYlhOb2EyNEFBQUFBQUFBQUJuTm9ZVFV4TWdBQUFGTUFBQUFMYzNOb0xXVmtNalUxCk1Ua0FBQUJBU1Z0M0p6NkdudUttcEM3cGNUSFI2OGZrSDJ1RlZYVDdycGhPaXUrU2RVVmN1d2hpZ0VHN0g1NWNCWHNLZW8KcE1ucVRkVWx6K3BseC9iRmJObjNySUJBPT0KLS0tLS1FTkQgU1NIIFNJR05BVFVSRS0tLS0tCg=="
+ },
+ "door": "ingress",
+ "n": 104,
+ "seconds": 8.678955894021783,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\n",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-dbf1b836a163\", \"exit_code\": 0, \"name\": \"hook_ssh\", \"principal\": \"ssh:mike\", \"status\": \"ok\"}], \"job\": \"rj-1c56f32987c8\", \"offered\": [\"hook_ssh\", \"page_title\", \"propose\", \"remember\", \"try\"], \"principal\": \"ssh:mike\", \"started\": true, \"turn\": 7}\n{\"turn\": 7, \"job\": \"rj-1c56f32987c8\"}\n"
+}

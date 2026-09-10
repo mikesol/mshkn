@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-10T10:55:34+00:00",
+ "command": "list",
+ "computer_id": "comp-dbcc5555089c",
+ "detail": [],
+ "door": "api",
+ "n": 3,
+ "seconds": 17.43919718399411,
+ "status": 200,
+ "stderr": "audit {\"calls\": [{\"computer_id\": \"comp-7661190dcdd5\", \"exit_code\": 0, \"name\": \"try\", \"status\": \"done\", \"trial\": \"t-2\"}], \"continued\": true, \"job\": \"rj-6ccf3bf3c89c\", \"next_job\": \"rj-4c4a59ced050\", \"turn\": 1}\n",
+ "stdout": "{\n \"catalog\": {},\n \"door\": {\n  \"hooks\": [],\n  \"hooks_ready\": [],\n  \"status\": \"closed\"\n },\n \"inbox\": 0,\n \"pending\": {\n  \"door\": \"api\",\n  \"forks\": 3,\n  \"job\": \"rj-4c4a59ced050\",\n  \"model_calls\": 3,\n  \"principal\": \"root\",\n  \"started_at\": \"2026-09-10T10:55:06+00:00\",\n  \"turn\": 1,\n  \"usage\": {\n   \"cache_creation_input_tokens\": 0,\n   \"cache_read_input_tokens\": 0,\n   \"input_tokens\": 5594,\n   \"output_tokens\": 834\n  }\n },\n \"policy\": {\n  \"door\": \"closed\",\n  \"hooks\": [],\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   }\n  }\n },\n \"principals\": [],\n \"proposals\": [],\n \"queue\": [],\n \"trials\": [\n  {\n   \"id\": \"t-1\",\n   \"recipe_id\": \"rcp-d1eefd90d68c\",\n   \"status\": \"failed\",\n   \"verb\": \"echo_probe\"\n  },\n  {\n   \"id\": \"t-2\",\n   \"recipe_id\": \"rcp-565a2881be32\",\n   \"status\": \"done\",\n   \"verb\": \"echo_probe\"\n  }\n ],\n \"turn\": 1,\n \"window\": []\n}\n"
+}

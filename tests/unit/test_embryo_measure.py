@@ -1563,3 +1563,60 @@ def test_membrane_version_names_the_commit_and_whether_the_tree_was_dirty(
     assert len(version["commit"]) == 40 and isinstance(version["dirty"], bool)
     # outside a repository there is no commit to name
     assert membrane_version(tmp_path) == {"commit": None, "dirty": None}
+
+
+def _counted(label: str, tools: list[dict[str, Any]], reply: str) -> Turn:
+    return _turn(label, "ingress", _audit(door="ingress", principal="ssh:mike", tools=tools), reply)
+
+
+def test_the_counter_passes_when_the_model_verifies_its_verb_within_one_turn() -> None:
+    """#117, from live run 2026-09-10-run-4: the model called its counter twice in
+    `9-count-1` to prove that state crossed the chain, so the invocations returned
+    1, 2, 3 and the chain grew to three. What the postcondition tests is that the
+    counter is monotonic and the chain grows once per invocation, not the numerals."""
+    turns = _good_turns()
+    turns[4] = _counted(
+        "9-count-1",
+        [
+            {"name": "counter", "computer_id": "c9a", "chain_head": "k1"},
+            {"name": "counter", "computer_id": "c9a2", "chain_head": "k2"},
+        ],
+        "1, then 2 on a different computer",
+    )
+    turns[5] = _counted(
+        "9-count-2", [{"name": "counter", "computer_id": "c9b", "chain_head": "k3"}], "3"
+    )
+    checks = _good_checks()
+    checks["c9a2"] = {"computer_id": "c9a2", "gone": True, "stdout": "2\n", "exit_code": 0}
+    checks["c9b"]["stdout"] = "called 3 times\n"
+    final = _good_final()
+    final["catalog"]["counter"]["chain_length"] = 3
+
+    result = _judge(turns=turns, checks=checks, final=final)["counter"]
+
+    assert result["ok"] is True
+    assert result["evidence"]["counts"] == [1, 2, 3]
+
+
+def test_the_counter_fails_when_an_invocation_is_lost() -> None:
+    """The stricter half of #117: counting every invocation catches a chain that
+    skipped one, which the old `counts == [1, 2]` would have passed on two calls."""
+    turns = _good_turns()
+    turns[4] = _counted(
+        "9-count-1",
+        [
+            {"name": "counter", "computer_id": "c9a", "chain_head": "k1"},
+            {"name": "counter", "computer_id": "c9a2", "chain_head": "k2"},
+        ],
+        "1, then 3",
+    )
+    checks = _good_checks()
+    checks["c9a2"] = {"computer_id": "c9a2", "gone": True, "stdout": "3\n", "exit_code": 0}
+    checks["c9b"]["stdout"] = "called 4 times\n"
+    final = _good_final()
+    final["catalog"]["counter"]["chain_length"] = 3
+
+    result = _judge(turns=turns, checks=checks, final=final)["counter"]
+
+    assert result["ok"] is False
+    assert result["evidence"]["counts"] == [1, 3, 4]

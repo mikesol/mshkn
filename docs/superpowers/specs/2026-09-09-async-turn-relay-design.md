@@ -126,7 +126,7 @@ This section replaces §6 of the embryo spec from "A `say` turn, in order" on; t
 | `offered` | The tool names offered at the turn's start (§6 step 4). Recorded for the audit line; the handlers are rebuilt on every fork from the current policy and catalog, so a verb approved while the model thought is usable on the next request, and a verb disabled meanwhile answers an error. |
 | `job` | The relay job id of the request in flight. |
 | `calls`, `model_calls`, `usage`, `hooks`, `made`, `forks`, `started_at` | The turn's bookkeeping: tool calls run, model calls made, summed usage, the hooks' runs, proposals made, forks taken, when it began. |
-| `memory_written` | Whether the principal is authenticated, decided at the start. |
+| `write_memory` | Whether this turn is to write a memory at all: whether the principal is authenticated, decided at the start. The audit line's `memory_written` is a different claim — what the store actually did when the turn closed (#107). |
 
 `queue`, the messages that arrived while a turn was pending: each `{principal, door, message, payload}` with the hooks already run.
 

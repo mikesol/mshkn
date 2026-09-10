@@ -2,6 +2,8 @@
 
 Spec §11 of `docs/superpowers/specs/2026-09-08-embryo-design.md` defines the measure: the liturgy (`embryo/liturgy.md`) spoken N times to a real model, and how often, and at what cost in turns and tokens, the embryo reaches every postcondition. This directory is the evidence. Each run is one directory, written by `uv run measure` (`embryo/membrane/measure.py`; the decisions are in `docs/superpowers/plans/2026-09-09-measure.md`). Approvals in every run below were automatic (`--approve auto`): the membrane's invariants were the guard, and every proposal is in the transcript for a reader to judge after the fact.
 
+Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
+
 ## The result, 2026-09-09
 
 Eight runs against `claude-opus-5` at the API's default effort. **No run reached every postcondition; the best reached 3 of 7.** The runs were not one embryo measured eight times: each run found a defect, the defect was fixed, and the next run hatched from the fixed code, so the table names the membrane commit each run hatched from. The exercise was paused after run 8 on the finding that the turn's clock, not any defect, is the limit (below).
@@ -46,6 +48,99 @@ Each defect is its own issue, as #101 said it would be; the ones marked fixed we
 A turn of the embryo is one fork exec, mshkn gives a fork's exec 300 seconds, and the membrane stops at 240 to save its state. At the default effort, `claude-opus-5` spends minutes thinking on the hard turns (turn 2: design a verb that verifies an SSH signature, plus a policy). Runs 5, 6 and 8 show single streamed responses that fill the whole 240 seconds and end with nothing proposed; the follow-ups do the same. No budget, ceiling or margin changes that: the turn's clock and the model's deliberation are not the same size. The levers left are less thinking per call (`--effort medium`, built, not measured), a longer exec budget (600 seconds is the API's ceiling), or a turn that does not keep a computer alive while the model thinks: the brain hands the request to a relay that calls the model and wakes the brain when the answer arrives. The last is the design change, #110; the measure resumes on it, #111.
 
 #110 landed as PR #114: a turn is a chain of forks through the host's relay, so the model's deliberation is bounded by the relay's patience rather than by a fork's 300 s exec budget. The measure resumes on that turn as #111.
+
+## The result, 2026-09-10
+
+The measure resumed on the asynchronous turn (#110, PR #114), as #111 said it would. Six runs against `claude-opus-5`, four of which spoke to the model: three at `--effort medium` and one at the API's default. **The best reached every postcondition, for $3.39 and 23 minutes.** Approvals were automatic again (`--approve auto`).
+
+| Run | Started (UTC) | Membrane | Effort | Outcome | Calls | Tokens in / out | USD | Minutes |
+|---|---|---|---|---|---|---|---|---|
+| `2026-09-10-run-1` | 09:36 | `c6c4f10` | medium | Aborted on turn 1: mem0 sends `temperature` for any `haiku`-family model and `anthropic` 1.4.0's `messages.create` has no such parameter, so every extraction raised. Fixed in `6c99519`. | 0 | — | 0.02 | — |
+| `2026-09-10-run-2` | 09:43 | `6c99519` | medium | **7/7. The first run to reach every postcondition.** | 33 | 405707 / 54496 | 3.39 | 23.0 |
+| `2026-09-10-run-3` | 10:15 | `6c99519` | medium | Aborted at turn 10, nine turns closed: a wake-up fork was killed mid-exec with no output, so the turn could never close (#116). | 34 | 514306 / 62741 | 4.14 | 31.9 |
+| `2026-09-10-run-4` | 10:54 | `6c99519` | medium | 6/7 as judged. The only miss was `counter`, and the judge was wrong rather than the embryo: the model invoked its own counter twice to prove state crossed the chain, so the invocations returned 1, 2, 3 where the postcondition demanded 1 then 2 (#117). Under the corrected judge its recorded evidence passes. | 35 | 404073 / 44859 | 3.14 | 18.0 |
+| `2026-09-10-run-5` | 11:23 | `a462b01` | default | Never hatched: run 4's brain was still on the account because it was kept for a post-mortem. Operator error, no model calls. | 0 | — | 0.00 | — |
+| `2026-09-10-run-6` | 11:27 | `a462b01` | **default** | 4/7, and the most instructive run of the set (below). | 35 | 786785 / 168374 | 8.14 | 46.2 |
+
+Costs are the model's own usage at $5 per million input tokens and $25 per million output, with no caching; the Anthropic console is the authority. Runs 1 and 5 were aborts, so the round bought four real runs for **$19.33**, including about $0.50 spent reproducing #107 outside any run.
+
+| Postcondition | medium (of the 2 runs that reached turn 10) | default (1 run) |
+|---|---|---|
+| authentication | 2 | 0 |
+| root unforgeable | 2 | 1 |
+| authorization | 2 | 0 |
+| `page_title` from a self-destructed computer | 2 | 1 |
+| the counter: a chain that counts | 1, and 2 under the judge as corrected by #117 | 0 |
+| no undeclared capability | 2 | 1 |
+| nothing written by a human after hatching | 2 | 1 |
+
+### The turn is no longer the limit
+
+This is what #110 was for, and the runs settle it as a number rather than an argument. A turn used to be one fork exec: mshkn gave it 300 seconds and the membrane stopped at 240 to save its state. Turn 2 — design a verb that verifies an SSH signature, and a policy to go with it — took **432 s, 732 s, 264 s and 432 s** in runs 2, 3, 4 and 6.
+
+Every one of those exceeds the old deadline. Not one of these four runs could have completed under the old turn shape, and the three 2026-09-09 runs that spent whole turns thinking and proposed nothing were not unlucky; they were structurally unable to finish.
+
+### Medium effort beat the API's default, on every axis
+
+| | medium (run 2) | default (run 6) |
+|---|---|---|
+| Postconditions | **7/7** | 4/7 |
+| Cost | **$3.39** | $8.14 |
+| Wall clock | **23.0 min** | 46.2 min |
+| Output tokens | **54 496** | 168 374 |
+
+Twice the time, 2.4 times the money, three fewer postconditions. The reason is worth stating carefully, because "more deliberation is worse" is not quite what happened.
+
+Of run 6's three misses, **one is a real failure, and it is not the one it first appears to be**. Asked for a verb that counts its invocations, it built one that refuses to guess where chain state lives: it reads the mount table, excludes volatile filesystems and every "system path" — `/` among them — and considers only candidate directories that already exist. On `mshkn-base` the root filesystem is the only writable persistent one, and the verb never creates its candidates, so it wrote nothing, read nothing, and returned `count: 1` three times with `verdict: UNCONFIRMED`. Run 4's model wrote `mkdir -p /state` and its counter went 1, 2, 3 across three computers, carrying a timestamp written on a computer that no longer existed.
+
+But run 6 did not mistake its instrument for the world. By the last counted turn it had diagnosed the bug itself — "v1 only uses a candidate directory *if it already exists*. All nine are absent, so it wrote nothing, so it read nothing. A third UNCONFIRMED from an instrument that never takes a reading is not a third data point... If I reported this as 'confirmed again,' I'd be laundering my own bug into evidence" — and had inferred the answer from the platform's own behaviour: its chain verb's result carried a `chain_head` where the `ephemeral` `page_title` had none, "consistent with the disk simply being the root ext4 filesystem". It designed the corrected verb, trialled it, and told root what it needed: "What I need from you is one approval, not another invocation."
+
+**It then never proposed it.** Turn `9-count-1` records `proposals: []`: five `remember` calls and a `try`, no `propose`. Both remaining turns discuss `p-9` as a pending proposal, and `final-list.json` ends at `p-8`. The reasoning was right, the artifact was never produced, and the model's account of the world diverged from the membrane's record — which the membrane could have caught, since it owns the list of proposals that exist.
+
+Two things follow. The first is that "default effort over-engineers" is the wrong lesson from this run; the design instinct was over-cautious, but the diagnosis was better than run 4's, which never had to diagnose anything because it guessed right. The second is that the liturgy could not have rescued it either way: `9-count-1` and `9-count-2` are the only turns the measure drives without an approval pass (`embryo/membrane/measure.py`, the two `public_turn(... COUNT ...)` calls carry no `settle`), so a proposal made there is never approved even when it is made.
+
+**The other two misses are one choice, and it is defensible.** Run 6 named the verified principal `ssh:owner` rather than `ssh:mike`, declining to take identity from an SSH key's comment field — which is, after all, unauthenticated text that anyone can write. Authentication worked: signed messages resolved to a stable principal and unsigned ones to `anonymous`. But spec §11 names `ssh:mike`, and the policy it wrote has no entry for that principal, so both postconditions record a miss. The postcondition was not loosened to accommodate this. The spec is explicit, the liturgy hands over a key whose comment is `mike`, and both medium runs read it that way; relaxing a postcondition each time a run misses it is how a measure stops meaning anything.
+
+So the honest summary is narrower than "default effort is worse at the task": on this liturgy, at N=1, default effort produced one design that could not work and one conformance failure that a stricter reading would call good security instinct. What run 6 could not do was *test* the property that mattered. Its own proposal said so before it ran: "`try` runs with no chain, so persistence itself cannot be proven in a sandbox." It reasoned for 168 000 output tokens about where state lives, and the one experiment that would have answered the question was unavailable to it. More deliberation did not substitute for a missing feedback loop, and arguably could not.
+
+### Where the time goes
+
+Nothing summarised timing before, though every command has always recorded its `seconds` and `at`. Derived from the evidence of run 2 (123 commands, 23.0 min):
+
+| Where | Measured |
+|---|---|
+| Waiting on the model | **11.9 min (52%)** — 33 relay jobs, mean 21.6 s, median 14.9 s, two over 60 s |
+| Everything else | ~11 min of forks and driver polling, overlapping the above |
+
+Model calls are not the fat: 20 of 33 finished under 20 seconds. The forks are. One run of the liturgy costs **180 forks of the brain chain**, and 108 of them — 60% — are the driver asking `list` whether a turn has closed yet. Each such poll restores a Firecracker VM and boots the membrane for about 8 seconds, so the poll loop occupies the chain for 14.3 minutes against the model's 11.9. `GET /relay/{job_id}` is a host-side row read that could gate those polls; the driver forks a whole VM instead. It costs no tokens, which is why it went unnoticed.
+
+| Fork kind, run 2 | Count |
+|---|---|
+| `root list` — the driver's poll | 108 |
+| `membrane resume` — a model answer waking the turn | 33 |
+| trials, verb invocations, hooks | 24 |
+| `say` | 10 |
+| `root approve` | 5 |
+
+The 8-second cost of a bare fork is itself worth attention: a turn of six model calls pays it seven times, about a quarter of a run. How much of it is Firecracker restoring and how much is the membrane's Python boot has not been measured.
+
+### What these runs found
+
+- **#107** (fixed, `c6c4f10`): mem0 spends one token budget on the model's deliberation and on the JSON it asks for. At `claude-opus-5` and mem0's default 2000, a long deliberation truncated the document, mem0 caught the parse failure and stored nothing, and the audit line still said `memory_written: true`. Extraction now runs on `claude-haiku-4-5` with its own 4000-token budget, and `memory_written` reports what the store did rather than what the turn intended. Proven live: run 2 wrote memory on nine turns, the one `false` being the anonymous turn, with zero extraction failures — against six of the eight runs of 2026-09-09 failing.
+- **The `temperature` defect** (fixed, `6c99519`): moving extraction off Opus uncovered that mem0 sends sampling parameters for any `haiku`-family model, which `anthropic` 1.4.0's `messages.create` does not accept. The test now drives mem0's own code path against the installed SDK's signature, so the next model or SDK change fails locally instead of on a paid run.
+- **#116** (open): a wake-up fork was killed mid-exec with no output and the turn could never close, costing run 3. The cause is undetermined and the guest's evidence was destroyed with the brain. Measured on a kept brain afterwards: 482 MB total, ~303 MB used at rest, the membrane with the mem0 stack open at 134 MB resident — about 44 MB of headroom. The brain is hatched with 1 GB now, which raised available memory from 178 MB to 307 MB and is a mitigation, not a fix. Recorded on the issue: used-at-rest scales with total RAM (63%, then 69%), and roughly 450 MB of a 1 GB brain is unaccounted for by processes, cache and slab.
+- **#117** (open, `spec-change`): the counter postcondition assumed one invocation per counted turn, so run 4 scored 6/7 for verifying its own verb. The judge now reads every chain invocation across both counted turns and requires 1..N in order with one checkpoint per invocation — stricter than what it replaced, which would have passed two calls returning 1 and 2 even if a third had been lost.
+- **A proposal that existed only in prose.** Run 6 wrote two turns' worth of reasoning about `p-9`, including asking root to approve it, without ever calling `propose`. The membrane knows which proposal ids exist and could say so; nothing checks a reply's claims against the state the membrane owns.
+- **A proposal made during the counted turns can never be approved.** The measure drives `9-count-1` and `9-count-2` without the `settle` pass every other liturgy turn gets, so an embryo that self-corrects at that point has no way to land the correction.
+- **The counter evidence is extracted badly.** Run 6 recorded `counts: [7375, null, 7375]` because the judge takes the first integer in the verb's stdout and that verb led with a `run_id`. The verdict was right — the counter never counted — but the numbers in the record are noise, and the judge should read the verb's own `count:` line.
+
+### What this round does not establish
+
+- **N is small.** Three medium runs, of which one was lost to #116, and a single default-effort run. "Medium reaches 7/7" rests on two runs; "default over-engineers" rests on one.
+- **One liturgy, one model.** Every conclusion here is about `claude-opus-5` speaking `embryo/liturgy.md`. Where medium effort's directness stops being an asset and starts being a liability is exactly what this liturgy cannot show: its tasks are small, well specified, and checkable within the turn.
+- **Approvals were automatic.** This measures the embryo under a root that approves whatever the membrane's invariants permit, not a discerning one.
+- **The two rounds are not fully comparable, and the seed is why.** After `2026-09-09-run-3` guessed the public payload's shape, `embryo/seed.md` was amended to state it: root signs with `ssh-keygen -Y sign -n mshkn` and sends `{"msg", "sig"}`, and a hook's stdout `mike` becomes the principal `ssh:mike`. Turn 2 of the liturgy asks the agent to invent a way to know who is speaking, so that amendment hands over part of the answer to a question the measure scores — and the `authentication` and `authorization` postconditions both turn on it. The 2026-09-10 runs therefore attempted an easier task than the 2026-09-09 runs did. The seed also carries operational scar tissue of the same kind (that the builder has no heredoc syntax, so scripts are written with `printf`). Both are recorded here rather than quietly enjoyed, and the standing rule in `CLAUDE.md` ("Keep the seed a seed") exists to stop the drift: only irreducible bootstrap and invisible mechanism belong there, and everything else must be reached by the liturgy or by a refusal that teaches.
+- **Two runs were kept and then inspected** (`--keep`), and the kept brains were forked afterwards to measure memory. That happened after each run's verdict was judged, so no postcondition is affected, but those forks are not in the runs' command records.
 
 ## What a run directory holds
 

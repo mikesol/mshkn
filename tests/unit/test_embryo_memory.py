@@ -4,10 +4,19 @@ its provenance and anonymous sees none (§6, §7)."""
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from membrane.config import Settings
-from membrane.memory import HashEmbedder, Mem0Store, Provenance, visible_from
+from membrane.memory import (
+    EXTRACTION_MAX_TOKENS,
+    EXTRACTION_MODEL_ID,
+    HashEmbedder,
+    Mem0Store,
+    Provenance,
+    extraction_llm,
+    visible_from,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -91,3 +100,72 @@ def test_anthropic_mode_uses_openai_embeddings_and_inference(
     assert config.llm.provider == "anthropic" and config.llm.config["api_key"] == "a"
     assert config.vector_store.config.embedding_model_dims == 1536
     assert store.infer is True
+
+
+def test_extraction_runs_on_a_budget_that_fits_the_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#107: mem0's default 2000-token budget is shared between thinking and the
+    JSON, so a long deliberation truncates the document and no fact is stored."""
+    seen: dict[str, Any] = {}
+
+    class FakeMemory:
+        def __init__(self, config: Any) -> None:
+            seen["config"] = config
+
+    monkeypatch.setattr("membrane.memory.Memory", FakeMemory)
+    settings = Settings(
+        brain=tmp_path,
+        api_url="u",
+        api_key="k",
+        model="anthropic",
+        model_id="claude-opus-5",
+        anthropic_api_key="a",
+        openai_api_key="o",
+    )
+    Mem0Store.open(settings, tmp_path / "m")
+    llm = seen["config"].llm.config
+    assert llm["model"] == EXTRACTION_MODEL_ID
+    assert llm["max_tokens"] == EXTRACTION_MAX_TOKENS
+
+
+def test_add_reports_whether_mem0_stored_a_fact(tmp_path: Path) -> None:
+    class FakeMemory:
+        def __init__(self, results: list[dict[str, Any]]) -> None:
+            self.results = results
+
+        def add(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return {"results": self.results}
+
+    stored = Mem0Store(
+        FakeMemory([{"id": "1", "memory": "mike hatched me", "event": "ADD"}]), infer=True
+    )
+    assert stored.add("mike hatched me", Provenance("root", "api", 1)) is True
+    empty = Mem0Store(FakeMemory([]), infer=True)
+    assert empty.add("mike hatched me", Provenance("root", "api", 1)) is False
+
+
+def test_extraction_sends_no_parameter_the_installed_sdk_rejects() -> None:
+    """The live run's defect (#107 follow-on): mem0 sends `temperature` for every
+    model whose family is `haiku`, and anthropic 1.4.0's `messages.create` has no
+    such parameter, so every extraction raised. Opus never hit it: mem0 suppresses
+    sampling parameters for Opus >= 4.7."""
+    import inspect
+
+    import anthropic
+    from mem0.configs.llms.anthropic import AnthropicConfig
+    from mem0.llms.anthropic import AnthropicLLM
+
+    llm = AnthropicLLM(AnthropicConfig(**extraction_llm("k")["config"]))
+    sent: dict[str, Any] = {}
+
+    def create(**kwargs: Any) -> Any:
+        sent.update(kwargs)
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text="{}")])
+
+    llm.client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    llm.generate_response([{"role": "user", "content": "hello"}])
+
+    accepted = set(inspect.signature(anthropic.Anthropic(api_key="k").messages.create).parameters)
+    assert set(sent) - accepted == set()
+    assert sent["max_tokens"] == EXTRACTION_MAX_TOKENS and sent["model"] == EXTRACTION_MODEL_ID

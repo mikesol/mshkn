@@ -230,6 +230,9 @@ class FakeMshkn:
 @dataclass
 class ListMemory:
     entries: list[tuple[str, Provenance]] = field(default_factory=list)
+    # What mem0 answers: whether the add stored a fact. False is the #107 shape,
+    # where extraction returned nothing and the turn wrote no memory at all.
+    stores: bool = True
 
     def recall(self, query: str, *, principal: str) -> list[str]:
         visible = visible_from(principal)
@@ -240,8 +243,10 @@ class ListMemory:
             if (visible is None or prov.principal in visible) and words & set(text.lower().split())
         ]
 
-    def add(self, text: str, provenance: Provenance) -> None:
-        self.entries.append((text, provenance))
+    def add(self, text: str, provenance: Provenance) -> bool:
+        if self.stores:
+            self.entries.append((text, provenance))
+        return self.stores
 
     def close(self) -> None:
         return None

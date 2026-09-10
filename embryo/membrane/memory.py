@@ -26,6 +26,11 @@ TOP_K = 8
 HASH_DIMS = 64
 OPENAI_EMBEDDER = "text-embedding-3-small"
 OPENAI_DIMS = 1536
+# Fact extraction is a JSON-shaped chore, not the brain's thinking (#107). mem0
+# spends one budget on both the model's deliberation and the document it emits,
+# so a long deliberation truncates the JSON and mem0 silently stores nothing.
+EXTRACTION_MODEL_ID = "claude-haiku-4-5-20251001"
+EXTRACTION_MAX_TOKENS = 4000
 
 
 @dataclass(frozen=True)
@@ -38,7 +43,7 @@ class Provenance:
 class MemoryStore(Protocol):
     def recall(self, query: str, *, principal: str) -> list[str]: ...
 
-    def add(self, text: str, provenance: Provenance) -> None: ...
+    def add(self, text: str, provenance: Provenance) -> bool: ...
 
     def close(self) -> None: ...
 
@@ -75,6 +80,23 @@ class HashEmbedder(EmbeddingBase):  # type: ignore[misc]
 EmbedderFactory.provider_to_class["hash"] = "membrane.memory.HashEmbedder"
 
 
+def extraction_llm(api_key: str | None) -> dict[str, Any]:
+    """mem0's LLM config for fact extraction. `enable_sampling_parameters` is not
+    a preference: mem0 sends `temperature` for every model whose family is `haiku`,
+    and the Anthropic SDK's `messages.create` has no such parameter, so extraction
+    raises without it. Opus never showed this, because mem0 already suppresses
+    sampling parameters for Opus >= 4.7."""
+    return {
+        "provider": "anthropic",
+        "config": {
+            "model": EXTRACTION_MODEL_ID,
+            "api_key": api_key,
+            "max_tokens": EXTRACTION_MAX_TOKENS,
+            "enable_sampling_parameters": False,
+        },
+    }
+
+
 class Mem0Store:
     def __init__(self, memory: Memory, *, infer: bool) -> None:
         self.memory = memory
@@ -99,10 +121,7 @@ class Mem0Store:
                 config={"model": OPENAI_EMBEDDER, "api_key": settings.openai_api_key},
             )
             dims = OPENAI_DIMS
-            llm = {
-                "provider": "anthropic",
-                "config": {"model": settings.model_id, "api_key": settings.anthropic_api_key},
-            }
+            llm = extraction_llm(settings.anthropic_api_key)
             infer = True
         config = MemoryConfig(
             vector_store={
@@ -130,8 +149,10 @@ class Mem0Store:
         found = self.memory.search(query, filters=filters, top_k=TOP_K)
         return [str(r["memory"]) for r in found.get("results", [])]
 
-    def add(self, text: str, provenance: Provenance) -> None:
-        self.memory.add(
+    def add(self, text: str, provenance: Provenance) -> bool:
+        """Whether mem0 stored anything. It catches its own extraction failures and
+        returns no results, so this is the only honest answer to "was it written" (#107)."""
+        result = self.memory.add(
             text,
             user_id=USER_ID,
             infer=self.infer,
@@ -141,6 +162,7 @@ class Mem0Store:
                 "turn": provenance.turn,
             },
         )
+        return bool(result.get("results"))
 
     def close(self) -> None:
         self.memory.vector_store.client.close()

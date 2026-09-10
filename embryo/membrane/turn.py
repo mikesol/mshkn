@@ -311,7 +311,7 @@ async def start_turn(
         job="",
         hooks=hook_runs,
         started_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        memory_written=is_authenticated(principal),
+        write_memory=is_authenticated(principal),
     )
     tools = build_tools(ctx, pending)
     # What the principal was offered, not only what the model called: §10.7 is an
@@ -488,11 +488,13 @@ async def close_turn(ctx: Context, *, text: str, stopped: str) -> str:
         }
         for pid in pending.made
     ]
-    if pending.memory_written:
-        ctx.mem().add(
-            f"{pending.principal}: {pending.message}\nembryo: {text}",
-            Provenance(principal=pending.principal, door=pending.door, turn=pending.turn),
-        )
+    # What the store did, not what the turn intended (#107): mem0 catches its own
+    # extraction failures and stores nothing, and the audit line used to say
+    # `memory_written: true` regardless.
+    memory_written = pending.write_memory and ctx.mem().add(
+        f"{pending.principal}: {pending.message}\nembryo: {text}",
+        Provenance(principal=pending.principal, door=pending.door, turn=pending.turn),
+    )
     audit: dict[str, Any] = {
         "turn": pending.turn,
         "principal": pending.principal,
@@ -501,7 +503,7 @@ async def close_turn(ctx: Context, *, text: str, stopped: str) -> str:
         "offered": pending.offered,
         "tools": [_tool_summary(c) for c in pending.calls],
         "proposals": proposals_made,
-        "memory_written": pending.memory_written,
+        "memory_written": memory_written,
         "stopped": stopped,
         # The cost of the turn, from the model's own usage reports (#101). mem0's
         # extraction and embedding calls are not counted here.

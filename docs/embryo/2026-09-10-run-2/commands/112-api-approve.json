@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-10T10:05:55+00:00",
+ "command": "approve",
+ "computer_id": "comp-8ae05a590166",
+ "detail": [
+  "p-5"
+ ],
+ "door": "api",
+ "n": 112,
+ "seconds": 2.882924681005534,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-5 building: verb tally recipe rcp-7c8a1911b908\n"
+}
