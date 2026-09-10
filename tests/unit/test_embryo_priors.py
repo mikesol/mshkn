@@ -55,6 +55,12 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         "Anonymous input is never remembered",
         "verb/<name>",
         "inbox",
+        # 2026-09-10-postcut-run-1: the model refused to propose the policy that opens
+        # the door because a blind full replacement might drop root's own access, and it
+        # cannot read its policy. No refusal can teach this — a refusal fires on an act the
+        # model correctly declines to take — and the only experiment that would risks
+        # permanent loss of contact with the one party who could repair it.
+        "whatever your policy says or omits",
     ):
         assert phrase in seed, phrase
     for phrase in (

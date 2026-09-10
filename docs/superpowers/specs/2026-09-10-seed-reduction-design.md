@@ -43,7 +43,7 @@ Two facts fall out of reading this that the issue did not have:
 
 **Stays, as bootstrap:** what a turn is; that the disk is the memory; that effects happen outside; the three rules; `remember`, `try` and `propose` and that root approves; the verb document's *field names*, because you cannot propose a verb without knowing it has a `dockerfile`; that a hook's stdout becomes the principal's name; what `requires` is for — the verb's unprovidable need — because `Where you begin` tells the embryo to name what it needs there.
 
-**Stays, as invisible mechanism:** every entrypoint value is shell-quoted; anonymous input is never remembered; a build's log arrives in the inbox on the next turn; a `chain` verb's disk persists on `verb/<name>`; `try` runs with no secrets, no chain and no policy; what a hook receives is the decoded payload, plain text or JSON with `msg` and whatever the sender attached.
+**Stays, as invisible mechanism:** every entrypoint value is shell-quoted; anonymous input is never remembered; a build's log arrives in the inbox on the next turn; a `chain` verb's disk persists on `verb/<name>`; `try` runs with no secrets, no chain and no policy; that root may always invoke and propose whatever the policy says **or omits**, which is the one fact that makes a blind full replacement safe to write; what a hook receives is the decoded payload, plain text or JSON with `msg` and whatever the sender attached.
 
 **Goes, because a refusal teaches it:** the five `effect` values; the `local`/`read` restriction; `timeout_seconds` at most 200; the `name` charset and the reserved names; `asserts` never `root` or `system`; the policy schema; that the door cannot open without a hook; that anonymous may never propose; that a hook takes exactly one parameter.
 
@@ -138,6 +138,20 @@ The flow tier (`tests/flow/test_embryo_liturgy.py`) and the E2E tier both speak 
 - `docs/superpowers/specs/2026-09-08-embryo-design.md`: the `/brain/seed.md` row of §8 states the contract of §3 rather than an inventory of today's contents; §9's turn 2 row matches `liturgy.md`.
 - `docs/embryo/README.md`: a third "these rounds are not comparable, and here is why" boundary, beside the one already recorded for 2026-09-09/2026-09-10.
 - `docs/plans/README.md`: an entry for this spec and its plan.
+
+## 9a. What the first post-cut run found, and the one clause it put back
+
+`docs/embryo/2026-09-10-postcut-run-1` reached 3 of 7. The door never opened: turn 2 proposed the hook verb, which built and became `ready`, and no policy. Not through confusion — the model said why, and it was right to refuse:
+
+> I did not propose the policy that opens the door. This verb is the lock; the door is opened by policy, and I have never seen my policy document. A blind full replacement could quietly drop your own `api` access — the single mistake here I could not undo from the inside.
+
+**This was an unpaid removal, and §6.2's audit could not have caught it.** That audit asked which refusals said no without saying what would have been valid. It did not ask which removed facts *no refusal can reach*. The removed clause was "Root may always invoke everything and propose; you cannot change that", and the refusal that replaced it (`policy.principals: root is fixed and is not policy's to grant or refuse`) teaches that you may not **name** root. The model's fear was the opposite: that **omitting** root would drop root. Those are different facts, and a refusal can only ever teach the first, because it fires on an action the model correctly declines to take.
+
+It is invisible mechanism under the strictest reading of §1. Root's grants are not in the policy at all — `may_invoke` and `may_propose` short-circuit on `principal == ROOT` before consulting it (`invariants.py:32,40`). The only experiment that reveals this is publishing a policy that omits root and seeing whether root still works; if the agent's model of the world were wrong, the result is permanent, unrecoverable loss of contact with the only party who could repair it. The experiment is not impossible. It is unaffordable, and an unaffordable experiment is one no agent will run, which is exactly what the seed exists to cover.
+
+The clause is restored with `or omits` made explicit, since that is the half the model needed and the old wording left implicit.
+
+**The structural fact underneath is not this issue's to fix.** The embryo cannot read its own policy: its tools are `remember`, `try`, `propose` and approved verbs, and `list` is a root command. Every policy proposal is written blind, and before the cut the seed's schema paragraph stood in for reading it. An agent asked to replace a document should be able to read it; that is a design change adjacent to #119 and #124, and it would retire this clause properly rather than restating it.
 
 ## 10. What this costs, and what the measure will say
 

@@ -18,7 +18,7 @@ One JSON document: `name`, `description`, `params` (a JSON schema object; it bec
 
 # Proposals, and what a hook receives
 
-Root sees a proposal the moment you make it; you cannot change it afterwards. If a build fails, or an approval is refused, the log or the reason arrives in your inbox on your next turn.
+Root sees a proposal the moment you make it; you cannot change it afterwards. Root may always invoke everything and propose, whatever your policy says or omits; you cannot change that. If a build fails, or an approval is refused, the log or the reason arrives in your inbox on your next turn.
 
 What a hook receives is the public payload, decoded: either plain text, or the JSON text of an object with `msg` (the message) and whatever the sender attached beside it.
 
