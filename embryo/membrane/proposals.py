@@ -70,13 +70,23 @@ def _get(state: State, proposal_id: str) -> Proposal:
     return state.proposals[proposal_id]
 
 
+def _tell_the_model(state: State, proposal: Proposal, kind: str, text: str) -> str:
+    """Root reads an approval's outcome on stdout; the embryo must read it too,
+    or a refusal teaches nothing (#123). A build log already arrives this way,
+    so a refusal, a block and a rejected Dockerfile arrive the same way."""
+    state.inbox.append(
+        InboxItem(kind=kind, text=f"proposal {proposal.id} ({proposal.title}) {text}")
+    )
+    return f"{proposal.id} {text}"
+
+
 async def approve(api: MshknApi, state: State, proposal_id: str) -> str:
     proposal = _get(state, proposal_id)
     if proposal.status != "pending":
         return f"{proposal.id} is {proposal.status}, not pending"
     reason = refuse_approval(proposal, state)
     if reason is not None:
-        return f"{proposal.id} refused: {reason}"
+        return _tell_the_model(state, proposal, "refusal", f"refused: {reason}")
     # Everything below writes exactly one of MUTABLE and nothing else (§10.3).
     assert WRITES[proposal.kind] in MUTABLE
     if proposal.kind == "verb":
@@ -87,7 +97,12 @@ async def approve(api: MshknApi, state: State, proposal_id: str) -> str:
                 f"{r.kind} {r.name}" + (f" ({r.scope})" if r.scope else "") for r in verb.requires
             )
             proposal.status = "blocked"
-            return f"{proposal.id} blocked: requires {missing}; the embryo has no vault (#91)"
+            return _tell_the_model(
+                state,
+                proposal,
+                "refusal",
+                f"blocked: requires {missing}; the embryo has no vault (#91)",
+            )
         try:
             info = await submit_recipe(api, verb.dockerfile)
         except MshknError as exc:
@@ -102,7 +117,7 @@ async def approve(api: MshknApi, state: State, proposal_id: str) -> str:
                 state.catalog[verb.name] = CatalogEntry(
                     verb=verb, status="failed", recipe_id=None, proposal_id=proposal.id
                 )
-            return f"{proposal.id} failed: {exc.detail}"
+            return _tell_the_model(state, proposal, "build", f"failed: {exc.detail}")
         proposal.recipe_id = info.id
         status: CatalogStatus = "ready" if info.status == "ready" else "building"
         proposal.status = status

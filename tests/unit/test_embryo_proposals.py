@@ -167,12 +167,18 @@ async def test_approve_a_verb_builds_it_and_the_catalog_follows(tmp_path: Path) 
     assert "not pending" in await approve(api, state, p.id)
 
 
-async def test_approve_refuses_by_reason_and_changes_nothing(tmp_path: Path) -> None:
+async def test_approve_refuses_by_reason_and_tells_the_model(tmp_path: Path) -> None:
+    """A refusal root reads and the embryo does not teaches nothing (#123).
+    The catalog and the host are untouched; the inbox carries the reason."""
     api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(state, _verb_proposal({**VERB, "effect": "transact"}))
     line = await approve(api, state, p.id)
     assert line.startswith("p-1 refused") and "transact" in line
     assert p.status == "pending" and state.catalog == {} and api.calls == []
+    assert [(i.kind, i.text) for i in state.inbox] == [
+        ("refusal", f"proposal p-1 (page_title) {line.removeprefix('p-1 ')}")
+    ]
+    assert "transact" in state.inbox[0].text
 
 
 async def test_a_wrong_base_fails_immediately_with_the_detail_as_log(tmp_path: Path) -> None:
@@ -182,6 +188,8 @@ async def test_a_wrong_base_fails_immediately_with_the_detail_as_log(tmp_path: P
     line = await approve(api, state, p.id)
     assert line.startswith("p-1 failed") and p.status == "failed" and "mshkn-base" in (p.log or "")
     assert state.catalog["page_title"].status == "failed"
+    assert [i.kind for i in state.inbox] == ["build"]
+    assert "mshkn-base" in state.inbox[0].text
 
 
 async def test_requires_blocks_until_the_vault_exists(tmp_path: Path) -> None:
@@ -193,6 +201,25 @@ async def test_requires_blocks_until_the_vault_exists(tmp_path: Path) -> None:
     line = await approve(api, state, p.id)
     assert line.startswith("p-1 blocked") and "gh" in line and p.status == "blocked"
     assert api.calls == [] and state.catalog == {}
+    assert [i.kind for i in state.inbox] == ["refusal"]
+    assert "gh" in state.inbox[0].text
+
+
+async def test_a_refusal_reaches_the_next_turn_the_way_a_build_log_does(
+    tmp_path: Path,
+) -> None:
+    """§6 step 2 drains the inbox into the turn's input for an authenticated
+    principal. A refusal must ride that same path or the model never sees it."""
+    from membrane.turn import compose_input
+
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    p = propose(state, _verb_proposal({**VERB, "effect": "administer"}))
+    await approve(api, state, p.id)
+    inbox, state.inbox = state.inbox, []
+    text = compose_input(
+        turn=2, principal="root", door="api", inbox=inbox, recalled=[], message="hi"
+    )
+    assert "administer" in text and "p-1" in text
 
 
 async def test_policy_and_prompt_apply_and_revert(tmp_path: Path) -> None:
