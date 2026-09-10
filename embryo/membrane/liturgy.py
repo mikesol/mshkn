@@ -20,5 +20,10 @@ LITURGY = {
     9: "Give yourself a verb that counts how many times it has been called.",
 }
 
+# Turn 3's repair loop covers a refused approval as well as a failed build (#123): the
+# reason reaches the model's inbox, but only a turn lets it read one. `liturgy.md`
+# publishes both phrases in its turn 3 row.
+REFUSED = "check your inbox"
+
 # Turn 9 says "invoke twice" and fixes no words for the invocation; every tier says this.
 COUNT = "count"

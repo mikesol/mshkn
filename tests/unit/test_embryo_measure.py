@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from membrane.liturgy import COUNT, LITURGY
+from membrane.liturgy import COUNT, LITURGY, REFUSED
 from membrane.measure import (
     POSTCONDITIONS,
     TURN_WAIT,
@@ -718,10 +718,14 @@ class FakeDoors:
             proposal["status"] = "rejected"
             return f"{pid} rejected\n"
         if pid in self.refuse:
+            # The membrane records a refusal on the proposal and puts it in the
+            # inbox (#123), which is how the driver knows a repair turn is owed.
+            proposal["log"] = "refused: an effect the embryo does not approve"
             return f"{pid} refused: an effect the embryo does not approve\n"
         if proposal["kind"] == "policy":
             missing = [h for h in proposal["policy"]["hooks"] if h not in self.catalog]
             if missing:  # the membrane's invariant (§10.6): a door needs its hook
+                proposal["log"] = f"refused: hook {missing[0]} is not a verb in the catalog"
                 return f"{pid} refused: hook {missing[0]} is not a verb in the catalog\n"
             proposal["status"] = "applied"
             self.policy = proposal["policy"]
@@ -909,6 +913,23 @@ async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) 
     assert turns[1].audit["stopped"] == "deadline" and turns[1].approvals == []
     assert [a["id"] for a in turns[2].approvals] == ["p-1", "p-2"]
     assert turns[3].audit["principal"] == "ssh:mike"
+
+
+async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
+    tmp_path: Path,
+) -> None:
+    """2026-09-10-postcut-run-2: the membrane refused a hook that declared no
+    parameters and put the reason in the inbox, but the repair loop watched only
+    the catalog for a failed build, so no turn ever existed in which to read it.
+    Turns 4 onward all arrive through the public door, so turn 3 is the only
+    window there is."""
+    doors = FakeDoors(refuse={"p-1"})
+    key_dir, pubkey = _keys(tmp_path)
+    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    labels = [t.label for t in turns]
+    assert "3-repair-1" in labels, labels
+    repair = turns[labels.index("3-repair-1")]
+    assert repair.words == REFUSED == "check your inbox"
 
 
 async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:

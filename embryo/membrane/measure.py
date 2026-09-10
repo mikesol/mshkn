@@ -31,7 +31,7 @@ import httpx
 
 from membrane.config import DEFAULT_MODEL_ID, EFFORTS, parse_env
 from membrane.declarations import RESERVED_NAMESPACES
-from membrane.liturgy import COUNT, LITURGY
+from membrane.liturgy import COUNT, LITURGY, REFUSED
 from membrane.model import add_usage, zero_usage
 from membrane.principals import ANONYMOUS, ROOT, namespace_of
 
@@ -621,18 +621,34 @@ async def speak_liturgy(
 
     async def settle(turn: Turn) -> None:
         """Approvals, builds, and at most MAX_REPAIRS rounds of turn 3 for a failed
-        build or a turn that ran out before proposing."""
+        build, a refused approval, or a turn that ran out before proposing.
+
+        A refusal leaves its proposal `pending` with the reason on its `log`, and
+        the catalog untouched, so a build-only trigger walks straight past it
+        (2026-09-10-postcut-run-2). Turns 4 onward all arrive through the public
+        door, so turn 3 is the only window in which the model can read what the
+        membrane told it and supersede."""
         listing = await approve_pending(turn)
         current = turn
         repairs = 0
         while repairs < MAX_REPAIRS:
             failed = sorted(n for n, e in listing["catalog"].items() if e["status"] == "failed")
-            if not failed and not unfinished(current):
+            refused = sorted(
+                p["id"]
+                for p in listing["proposals"]
+                if p["status"] in ("pending", "blocked") and p.get("log")
+            )
+            if not failed and not refused and not unfinished(current):
                 return
             repairs += 1
-            why = f"build failed for {', '.join(failed)}" if failed else "the turn ran out"
+            if failed:
+                why, words = f"build failed for {', '.join(failed)}", LITURGY[3]
+            elif refused:
+                why, words = f"approval refused for {', '.join(refused)}", REFUSED
+            else:
+                why, words = "the turn ran out", LITURGY[3]
             log.write(f"  {why}; turn 3, repair {repairs}\n")
-            current = await root_turn(f"3-repair-{repairs}", LITURGY[3])
+            current = await root_turn(f"3-repair-{repairs}", words)
             listing = await approve_pending(current)
 
     async def root_turn(label: str, words: str) -> Turn:
