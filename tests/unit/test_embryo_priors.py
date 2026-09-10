@@ -29,27 +29,52 @@ def test_initial_policy_is_closed_and_grants_anonymous_nothing() -> None:
     assert "root" not in policy.principals  # root is fixed, not policy
 
 
-def test_seed_says_what_the_spec_requires() -> None:
+def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> None:
+    """The contract of docs/superpowers/specs/2026-09-10-seed-reduction-design.md
+    §3, and the standing rule in CLAUDE.md. Present: what cannot be learned
+    because learning it requires it, and what no experiment reveals because the
+    failure is silent. Absent: everything a constructive refusal, a tool
+    description or the liturgy teaches instead (#123)."""
     seed = (EMBRYO / "seed.md").read_text()
     for phrase in (
+        # bootstrap
         "remember",
         "try",
         "propose",
         "verb",
         "proposal",
-        "local",
-        "read",
+        "dockerfile",
+        "entrypoint",
         "requires",
         "no verbs",
         "public door is closed",
         "root",
-        # what a hook receives (live run 2026-09-09-run-3: the model guessed the
-        # payload shape, said so, and its correct hook named nobody)
-        "`msg`",
-        '"sig"',
-        "ssh-keygen -Y sign -n mshkn",
+        # invisible mechanism: no experiment reveals these, because the
+        # failure is silent
+        "shell-quoted",
+        "Anonymous input is never remembered",
+        "verb/<name>",
+        "inbox",
     ):
         assert phrase in seed, phrase
+    for phrase in (
+        # the liturgy asks instead (turn 2)
+        "ssh-keygen",
+        '"sig"',
+        "ssh:mike",
+        # a constructive refusal teaches these
+        "communicate",
+        "transact",
+        "administer",
+        "200",
+        "[a-z0-9_]",
+        "`principals`",
+        "`hooks`",
+        "`door`",
+        # PROPOSE_TOOL's description carries this
+        "not a diff",
+    ):
+        assert phrase not in seed, phrase
 
 
 def test_brain_dockerfile_is_from_the_base_and_pins_the_sdks() -> None:
