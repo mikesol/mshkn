@@ -111,6 +111,20 @@ def test_hatch_script_makes_the_calls_the_spec_lists() -> None:
     assert (EMBRYO / "liturgy.md").read_text().count("| ") > 20
 
 
+def test_turn_two_states_the_facts_only_the_sender_can_state() -> None:
+    """The seed no longer carries the signing protocol (#123). ssh-keygen -Y
+    verify needs the signer's exact namespace, and root builds the envelope,
+    so both are root's to state; the identity is stated because the measure
+    scores the literal ssh:mike and inventing a name flexes no muscle. What
+    to build, which namespace to assert and what the policy says stay the
+    embryo's."""
+    turn2 = LITURGY[2]
+    for phrase in ("ssh-keygen -Y sign -n mshkn", "mike", "beside my message", "{key}"):
+        assert phrase in turn2, phrase
+    for phrase in ("allowed_signers", "asserts", "hook", "policy"):
+        assert phrase not in turn2, phrase
+
+
 def test_the_liturgy_the_tiers_send_is_the_liturgy_the_repository_publishes() -> None:
     """`LITURGY` is the script the flow and E2E tiers speak; `embryo/liturgy.md`
     is the table a reader sees (spec §9). Nothing else in the suite would notice
