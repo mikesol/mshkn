@@ -4,6 +4,7 @@ its response stored whole, and re-run after a restart."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
@@ -30,7 +31,7 @@ from mshkn.services.checkpoints import CheckpointService
 from mshkn.services.computers import ComputerService
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.recipes import RecipeService
-from mshkn.services.relay import RelayRequest, RelayService
+from mshkn.services.relay import RelayRequest, RelayService, task_key
 from tests.support import account_row
 from tests.unit.test_relay_db import job_row
 
@@ -470,3 +471,58 @@ async def test_run_ephemeral_failing_after_a_good_fork_never_forks_again(
     assert job.delivery_error is not None and "dm-thin pool full" in job.delivery_error
     assert job.delivery_deferred_id is None and job.delivery_computer_id is not None
     assert fork_calls == 1
+
+
+async def test_an_unforeseen_error_fails_the_job_and_still_wakes_its_chain(
+    db: aiosqlite.Connection, tmp_path: Path, account: None
+) -> None:
+    """`reassemble` raises for a malformed event stream in ways `_attempt` does not
+    convert. The task must not die with the job `in_progress`: the wake-up is the
+    only thing that closes the turn, so an unforeseen failure still delivers."""
+    broken = b'event: message_start\ndata: {"type": "message_start"}\n\n'
+    relay = Relay(
+        db,
+        tmp_path,
+        lambda _: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=broken
+        ),
+    )
+    await _chain(relay, db, "brain")
+    job_id = await relay.submit(deliver=RelayDelivery(label="brain", exec="membrane resume"))
+    relay.host.guest.script[f"membrane resume {job_id}"] = ExecResult(0, "resumed\n", "")
+    job = await relay.settled(job_id)
+    assert job.status == RelayStatus.FAILED
+    assert job.error is not None and "KeyError" in job.error
+    assert job.delivery_status == DeliveryStatus.DELIVERED
+    log = await get_exec_log(db, job.delivery_computer_id or "")
+    assert log is not None and log.command == f"membrane resume {job_id}"
+
+
+async def test_a_cancelled_call_keeps_its_headers_so_a_restart_can_re_run_it(
+    db: aiosqlite.Connection, tmp_path: Path, account: None
+) -> None:
+    """`Runtime.close` cancels what its drain did not finish. A cancelled task is
+    not a settled one: the row stays `in_progress` with its credentials, which is
+    what `resume` needs to re-run the call."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("x-api-key", ""))
+        started.set()
+        await release.wait()
+        return httpx.Response(200, json={"ok": True})
+
+    relay = Relay(db, tmp_path, handler)
+    job_id = await relay.submit()
+    await started.wait()
+    await relay.tasks.cancel(task_key(job_id))
+    interrupted = await get_relay_job(db, job_id)
+    assert interrupted is not None and interrupted.status == RelayStatus.IN_PROGRESS
+    assert interrupted.forward_headers == {"x-api-key": "sk-secret"}
+    release.set()
+    assert await relay.service.resume() == 1
+    job = await relay.settled(job_id)
+    assert job.status == RelayStatus.COMPLETED and job.response_body == {"ok": True}
+    assert seen == ["sk-secret", "sk-secret"], "the re-run carries the credentials"

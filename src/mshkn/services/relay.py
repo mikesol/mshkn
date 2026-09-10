@@ -180,12 +180,20 @@ class RelayService:
     # -- the upstream call ---------------------------------------------------
 
     async def run(self, job: RelayJob) -> None:
+        """One call and at most one delivery. Every way the call can end settles the
+        job — an unforeseen exception included, because the wake-up is the only thing
+        that closes the turn and a job left `in_progress` is one the brain never
+        finishes. Cancellation is the exception that is not a settlement: a shutdown
+        leaves the row `in_progress` with its headers, which is what `resume` re-runs."""
         try:
             await self._call(job)
-        finally:
-            # Deleted whatever happened, even a cancellation on shutdown.
-            job.forward_headers = None
-            await self._save(job)
+        except Exception as exc:
+            logger.exception("relay %s failed unexpectedly", job.id)
+            job.status = RelayStatus.FAILED
+            job.error = f"{type(exc).__name__}: {exc}"
+        # Settled, whichever way: the forwarded credentials are gone.
+        job.forward_headers = None
+        await self._save(job)
         if job.deliver is not None:
             await self.deliver(job)
 
