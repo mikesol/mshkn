@@ -50,7 +50,7 @@ A job is one upstream HTTP call plus at most one delivery.
 | `method` | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` or `HEAD`; default `POST`. |
 | `forward_headers` | Sent on the upstream request and nowhere else. Stored in their own column, never returned by any route, deleted when the call settles whatever its outcome. Default none. |
 | `body` | Any JSON value. A string is sent as it is; anything else is JSON-encoded with `content-type: application/json` unless `forward_headers` sets one. Bounded by `relay_body_bytes`. `GET` and `HEAD` send none. |
-| `retry` | Lampas's policy and defaults: attempts (at least 1), exponential backoff, `min(initial_delay_ms * 2^attempt, max_delay_ms)`. |
+| `retry` | Lampas's policy and defaults: attempts (1 to 10), exponential backoff, `min(initial_delay_ms * 2^attempt, max_delay_ms)` with `initial_delay_ms` at least 100. The bounds are the router's, refused with 422: nothing rate-limits `POST /relay`, and one job must not become a tight outbound loop from this host's address. |
 | `timeout_seconds` | The whole upstream call, connect to last byte, per attempt. Default and cap `relay_timeout_seconds`. |
 | `deliver` | The wake-up: the label to fork and the exec to run, with the job id appended as its last argument. Account key: optional; absent means the job is polled and nothing is forked. Scoped key: forbidden in the body (422), the scope pins it (§4). |
 
@@ -58,7 +58,7 @@ Statuses: `queued` (accepted), `in_progress` (an attempt is running), `completed
 
 ### The upstream call
 
-Runs in a `BackgroundTasks` task named `relay:<job_id>`. Retryable failures, with the job's policy: a transport error, a `408`, `409`, `429` or any `5xx` status (`529` included), or in a streamed body an `error` event of type `overloaded_error` or `api_error`. Final at once: a timeout (retrying would multiply the wait), a response body over `relay_body_bytes`, any other `error` event, any other status (stored as `completed` with that status; the caller reads the error body). When the attempts are spent the job is `failed` with the last error.
+Runs in a `BackgroundTasks` task named `relay:<job_id>`. Retryable failures, with the job's policy: a transport error, a `408`, `409`, `429` or any `5xx` status (`529` included), or in a streamed body an `error` event of type `overloaded_error` or `api_error`. Final at once: a timeout (retrying would multiply the wait), a response body over `relay_body_bytes`, any other `error` event, any other status (stored as `completed` with that status; the caller reads the error body). When the attempts are spent the job is `failed` with the last error, and so is a job whose call raises anything unforeseen: every way the call can end settles the job and then delivers, because the wake-up is the only thing that closes the turn. Cancellation alone is not a settlement — a shutdown leaves the job `in_progress` with its headers for `resume` to re-run.
 
 The response is stored whole: `status`, `headers` (verbatim), `body`. When the upstream `content-type` is `text/event-stream`, the body is read to the end and reassembled into the final message, and the reassembled JSON is what is stored: `message_start` gives the message with empty `content`; each `content_block_start` inserts its block at its `index`; `text_delta` appends to `text`, `thinking_delta` to `thinking`, `signature_delta` sets `signature`, `input_json_delta` accumulates a partial JSON string parsed into `input` at `content_block_stop` (an empty accumulation is `{}`); `message_delta` merges its `delta` (`stop_reason`, `stop_sequence`) into the message and its `usage` fields over the message's (they are cumulative); `ping` and unknown event or delta types are ignored; `message_stop` ends the message. A stream that ends before `message_stop` without an `error` event is a transport error. Any other body is stored verbatim, parsed as JSON when the content type says so.
 
@@ -76,7 +76,7 @@ A restart re-runs every job still `queued` or `in_progress` (`Runtime.start` cal
 
 | Route | Account key | Scoped key |
 |---|---|---|
-| `POST /relay` | always; `deliver` optional | `relay` scope required; `target` must start with one of `relay.targets`; `deliver` must be absent from the body and is taken from the scope. The job records the key. |
+| `POST /relay` | always; `deliver` optional | `relay` scope required; `target` must lie under one of `relay.targets`: the same scheme, host and effective port, and a path beginning with the prefix's (a textual `startswith` would let `https://api.anthropic.com.evil.example` pass a `https://api.anthropic.com` prefix). Every prefix must itself be an absolute `http` or `https` URL with a host, or the scope document is refused. `deliver` must be absent from the body and is taken from the scope. The job records the key. |
 | `GET /relay/{job_id}` | any job on the account | only a job this key created; 404 otherwise, as computers |
 
 `POST /relay` answers 202 `{"job_id": "rj-<12 hex>", "status": "queued"}`.
@@ -148,7 +148,11 @@ If `queue` is non-empty when a turn ends, the same fork starts the next turn fro
 
 ### Settling
 
-Every root command and every `say` first settles a pending turn, before anything else: it asks `GET /relay/{job}`; `completed` or `failed` runs the resume inline, exactly as the wake-up would; `in_progress` leaves it. So a wake-up whose fork failed, or a job the relay timed out, ends on the next command instead of never; the relay's `timeout_seconds` is the turn's outer bound.
+Every root command and every `say` first settles a pending turn, before anything else: it asks `GET /relay/{job}`; `completed` or `failed` runs the resume inline, exactly as the wake-up would; `in_progress` leaves it. So a wake-up whose fork failed, or a job the relay timed out, ends on the next command instead of never.
+
+Two things close a turn, and no others: a wake-up fork that runs `resume`, or the next command on the brain, which settles first. `timeout_seconds` bounds the upstream call, not the turn: it is what makes the job settle, and a settled job is what the next command can finish. Nothing on the host closes a turn on its own. If the delivery fork fails after its retries, or the woken fork crashes before it finishes, the pending turn stays on disk until root or a caller speaks again.
+
+Wake-ups are at-least-once. A fork that ran its tool calls and then crashed before saving `state.json` leaves `pending` as it was, with its job still the settled one, and the next wake-up or command runs those calls again. A verb must tolerate a repeat.
 
 ### `list`
 

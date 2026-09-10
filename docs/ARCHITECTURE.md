@@ -83,7 +83,7 @@ The scope document (`mshkn.models.Scopes`, parsed by `mshkn.models.parse_scopes`
 | `GET /checkpoints` | everything | only checkpoints whose label starts with one of `labels`; an unlabelled checkpoint is never visible |
 | `POST /checkpoints/{checkpoint_id}/fork`, `DELETE /checkpoints/{checkpoint_id}` | always | the checkpoint's label must start with one of `labels`; a fork records the key on the new computer |
 | `POST /checkpoints/fork` | always | the body's `label` must start with one of `labels`, checked before the head is resolved; the fork records the key |
-| `POST /relay` | always; `deliver` optional | the `relay` scope: `target` must start with one of `relay.targets`, and `deliver` must be absent (the scope pins it). The job records the key |
+| `POST /relay` | always; `deliver` optional | the `relay` scope: `target` must lie under one of `relay.targets` (same scheme, host and port, path under the prefix's), and `deliver` must be absent (the scope pins it). The job records the key |
 | `GET /relay/{job_id}` | any job on the account | only a job this key created |
 | `POST /checkpoints/{parent_id}/merge`, `/ingress_rules*`, `/keys*` | always | never |
 
