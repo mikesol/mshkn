@@ -223,6 +223,17 @@ def parse_verb(doc: object) -> Verb:
             )
         if not NAMESPACE_RE.match(asserts):
             raise DeclarationError("verb.asserts must be a lower-case identifier")
+        # `asserts` has no meaning except to a pre-turn hook, and hooks.py invokes a
+        # hook with the decoded payload as the value of its single parameter. Two of
+        # the first three post-cut runs wrote a hook that read stdin and declared no
+        # parameters (#123); refusing at propose time puts the correction in the same
+        # turn as the mistake, instead of at approval, in an inbox, a turn later.
+        if len(properties) != 1:
+            raise DeclarationError(
+                f"verb.asserts makes {name!r} a pre-turn hook, and a hook takes exactly one "
+                f"parameter, which receives the decoded payload; it declares "
+                f"{sorted(properties)}"
+            )
     needs = d.get("needs", dict(DEFAULT_NEEDS))
     if not isinstance(needs, dict):
         raise DeclarationError("verb.needs must be an object")

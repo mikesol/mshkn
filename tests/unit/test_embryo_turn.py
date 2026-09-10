@@ -6,6 +6,7 @@ pending is queued and runs next."""
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -638,14 +639,14 @@ async def test_hooks_fail_closed_when_not_ready_or_malformed() -> None:
         verb=hook, status="building", recipe_id="r", proposal_id="p-1"
     )
     assert await principal_for(api, state, policy, "p", remaining=10.0) == "anonymous"
-    two = parse_verb(
-        {
-            **HOOK,
-            "params": {
-                "type": "object",
-                "properties": {"payload": {"type": "string"}, "extra": {}},
-            },
-        }
+    # parse_verb refuses this shape at propose time now (#123), so it is built
+    # directly: hooks.py must still fail closed on a Verb that reaches it anyway.
+    two = replace(
+        hook,
+        params={
+            "type": "object",
+            "properties": {"payload": {"type": "string"}, "extra": {}},
+        },
     )
     state.catalog["verify_ssh"] = CatalogEntry(
         verb=two, status="ready", recipe_id="r", proposal_id="p-1"
@@ -785,6 +786,30 @@ async def test_a_ready_verb_is_a_tool_and_builds_are_polled_first(tmp_path: Path
         "computer_id": "comp-2",
     }
     assert reply.startswith("Example Domain")
+
+
+async def test_a_failed_turn_gives_its_inbox_back(tmp_path: Path) -> None:
+    """start_turn drains the inbox unconditionally, and a turn that ends in
+    error never showed the model what it drained. Before #123 that lost a build
+    log; after it, a refusal too, and the dedupe means nothing regenerates it.
+    2026-09-10-postcut-run-3: a relay DNS failure swallowed the very refusal
+    that turn 3 existed to deliver, and the next turn reported an empty inbox."""
+    api = FakeMshkn(relay_refusal=MshknError(503, "No address associated with host"))
+    ctx = _ctx(tmp_path, api=api)
+    ctx.state.inbox.append(InboxItem(kind="refusal", text="proposal p-1 refused: because"))
+    out = await say(ctx, payload_b64=b64("hello"), door="api")
+    audit, _ = split_output(out)
+    assert audit["stopped"] == "error" and ctx.state.pending is None
+    assert [(i.kind, i.text) for i in ctx.state.inbox] == [
+        ("refusal", "proposal p-1 refused: because")
+    ]
+
+    # A turn that succeeds consumes it, as before: restoring is the error path only.
+    ctx2 = _ctx(tmp_path, answers=[message_of(text_completion("hi"))])
+    ctx2.state.inbox.append(InboxItem(kind="build", text="verb x is ready"))
+    await say(ctx2, payload_b64=b64("hello"), door="api")
+    await settle(ctx2)
+    assert ctx2.state.inbox == []
 
 
 async def test_a_refused_relay_post_ends_the_turn_instead_of_crashing(tmp_path: Path) -> None:

@@ -932,6 +932,19 @@ async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
     assert repair.words == REFUSED == "check your inbox"
 
 
+async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Path) -> None:
+    """A proposal the model never repairs keeps its reason forever, and settle()
+    runs after turns 6, 7 and 9 as well as turn 2. Without a memo each of those
+    would buy three more turns of the model's time on a refusal it has already
+    been shown and declined to fix (2026-09-10-postcut-run-3, killed by hand
+    while it did exactly that)."""
+    doors = FakeDoors(refuse={"p-1"})
+    key_dir, pubkey = _keys(tmp_path)
+    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    repairs = [t.label for t in turns if t.label.startswith("3-repair-")]
+    assert repairs == ["3-repair-1"], repairs
+
+
 async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
     doors = FakeDoors(fail_first={"verify_ssh"})
     key_dir, pubkey = _keys(tmp_path)

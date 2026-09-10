@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-10T19:52:01+00:00",
+ "command": "list",
+ "computer_id": "comp-3075094b279c",
+ "detail": [],
+ "door": "api",
+ "n": 2,
+ "seconds": 6.961580982024316,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\naudit {\"calls\": [{\"name\": \"remember\", \"status\": \"remembered\"}], \"continued\": true, \"job\": \"rj-d23d35f87822\", \"next_job\": \"rj-141e58cf0180\", \"turn\": 1}\n",
+ "stdout": "{\n \"catalog\": {},\n \"door\": {\n  \"hooks\": [],\n  \"hooks_ready\": [],\n  \"status\": \"closed\"\n },\n \"inbox\": 0,\n \"pending\": {\n  \"door\": \"api\",\n  \"forks\": 2,\n  \"job\": \"rj-141e58cf0180\",\n  \"model_calls\": 2,\n  \"principal\": \"root\",\n  \"started_at\": \"2026-09-10T19:51:49+00:00\",\n  \"turn\": 1,\n  \"usage\": {\n   \"cache_creation_input_tokens\": 0,\n   \"cache_read_input_tokens\": 0,\n   \"input_tokens\": 1797,\n   \"output_tokens\": 145\n  }\n },\n \"policy\": {\n  \"door\": \"closed\",\n  \"hooks\": [],\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   }\n  }\n },\n \"principals\": [],\n \"proposals\": [],\n \"queue\": [],\n \"trials\": [],\n \"turn\": 1,\n \"window\": []\n}\n"
+}

@@ -175,6 +175,27 @@ def test_policy_narrows_a_verb_that_allows_the_principal_by_name() -> None:
     assert may_invoke("ssh:mike", verb, silent)
 
 
+def _two_param_hook(name: str) -> Verb:
+    """A hook `parse_verb` now refuses outright (#123), built directly so the
+    approval-time guard can still be exercised. `refuse_approval` is the second
+    line: a Verb can reach it without passing through parse_verb, and the verb
+    branch also catches a supersede that drops `asserts`, which parse cannot see."""
+    return Verb(
+        name=name,
+        description="d",
+        params={
+            "type": "object",
+            "properties": {"msg": {"type": "string"}, "sig": {"type": "string"}},
+        },
+        dockerfile="FROM mshkn-base\nRUN true",
+        entrypoint="/verb/x.sh {{msg}} {{sig}}",
+        effect="local",
+        state="ephemeral",
+        chain=f"verb/{name}",
+        asserts="ssh",
+    )
+
+
 async def test_approve_a_verb_builds_it_and_the_catalog_follows(tmp_path: Path) -> None:
     api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(state, _verb_proposal(VERB))
@@ -362,9 +383,12 @@ async def test_a_hook_taking_more_than_one_parameter_is_refused(tmp_path: Path) 
     `msg` plus whatever the sender attached, so a naturally-written two-field
     hook (`{msg, sig}`) walks straight into that silent dead end unless
     refuse_approval catches it at proposal time (#123)."""
-    api, state = FakeMshkn(), _brain(tmp_path).state()
-    two_param = propose(state, _verb_proposal(TWO_PARAM_HOOK))
-    await approve(api, state, two_param.id)
+    state = _brain(tmp_path).state()
+    # parse_verb refuses this shape now, so the entry is planted directly: this
+    # test is about the second line of defence, not the first.
+    state.catalog["verify_sig"] = CatalogEntry(
+        verb=_two_param_hook("verify_sig"), status="ready", recipe_id="rcp-x", proposal_id="p-0"
+    )
     opening = propose(
         state,
         {
@@ -399,7 +423,14 @@ async def test_superseding_a_live_hook_with_two_parameters_is_refused(tmp_path: 
         },
     )
     await approve(api, state, opening.id)
-    rebuild = propose(state, _verb_proposal(TWO_PARAM_VERIFY_SSH, supersedes=hook.id))
+    rebuild = Proposal(
+        id="p-9",
+        kind="verb",
+        title="rebuild",
+        rationale="r",
+        supersedes=hook.id,
+        verb=_two_param_hook("verify_ssh"),
+    )
     reason = refuse_approval(rebuild, state) or ""
     assert "exactly one parameter" in reason
     assert "msg" in reason and "sig" in reason

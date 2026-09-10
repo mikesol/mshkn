@@ -619,6 +619,8 @@ async def speak_liturgy(
         stopped = turn.audit.get("stopped")
         return stopped in ("deadline", "cap", "max_tokens") and not turn.audit.get("proposals")
 
+    repaired: set[str] = set()
+
     async def settle(turn: Turn) -> None:
         """Approvals, builds, and at most MAX_REPAIRS rounds of turn 3 for a failed
         build, a refused approval, or a turn that ran out before proposing.
@@ -633,10 +635,16 @@ async def speak_liturgy(
         repairs = 0
         while repairs < MAX_REPAIRS:
             failed = sorted(n for n, e in listing["catalog"].items() if e["status"] == "failed")
+            # Once per refusal, not once per settle: a proposal the model never
+            # repairs stays pending with its reason forever, and every later
+            # settle would otherwise buy it three more turns of the model's time
+            # (2026-09-10-postcut-run-3).
             refused = sorted(
                 p["id"]
                 for p in listing["proposals"]
-                if p["status"] in ("pending", "blocked") and p.get("log")
+                if p["status"] in ("pending", "blocked")
+                and p.get("log")
+                and p["id"] not in repaired
             )
             if not failed and not refused and not unfinished(current):
                 return
@@ -644,6 +652,7 @@ async def speak_liturgy(
             if failed:
                 why, words = f"build failed for {', '.join(failed)}", LITURGY[3]
             elif refused:
+                repaired.update(refused)
                 why, words = f"approval refused for {', '.join(refused)}", REFUSED
             else:
                 why, words = "the turn ran out", LITURGY[3]

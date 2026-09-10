@@ -122,6 +122,11 @@ class Pending:
     forks: int = 1
     started_at: str = ""
     write_memory: bool = False
+    # What this turn drained from the inbox, as plain documents. A turn that
+    # ends in error gives them back (#123): the drain at start_turn is
+    # unconditional, so a build log, a trial result or a refusal consumed by a
+    # turn the model service never answered would otherwise be lost for good.
+    drained: list[dict[str, Any]] = field(default_factory=list)
 
     def to_doc(self) -> dict[str, Any]:
         return asdict(self)

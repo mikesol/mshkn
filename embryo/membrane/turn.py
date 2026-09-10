@@ -25,7 +25,7 @@ from membrane.model import add_usage, compose_request, parse_message, request_he
 from membrane.mshkn import MshknError
 from membrane.principals import ROOT, is_authenticated, namespace_of
 from membrane.proposals import propose
-from membrane.state import WINDOW, Exchange, Pending, Queued
+from membrane.state import WINDOW, Exchange, InboxItem, Pending, Queued
 from membrane.trials import poll_trials, try_verb
 from membrane.verbs import invoke, poll_builds
 
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from membrane.config import Settings
     from membrane.memory import MemoryStore
     from membrane.mshkn import MshknApi, RelayJob
-    from membrane.state import Brain, CatalogEntry, InboxItem, State
+    from membrane.state import Brain, CatalogEntry, State
 
 Door = Literal["api", "ingress"]
 # One fork's clock: bounds the tool runs of that fork, not the model (#110).
@@ -312,6 +312,7 @@ async def start_turn(
         hooks=hook_runs,
         started_at=datetime.now(UTC).isoformat(timespec="seconds"),
         write_memory=is_authenticated(principal),
+        drained=[{"kind": item.kind, "text": item.text} for item in inbox],
     )
     tools = build_tools(ctx, pending)
     # What the principal was offered, not only what the model called: §10.7 is an
@@ -479,6 +480,11 @@ async def close_turn(ctx: Context, *, text: str, stopped: str) -> str:
     state = ctx.state
     pending = state.pending
     assert pending is not None
+    if stopped == "error" and pending.drained:
+        # The model never answered, so nothing in this turn's inbox was read.
+        # Give it back ahead of anything polled since (#123, 2026-09-10-postcut-run-3,
+        # where a relay DNS failure swallowed the refusal that turn 3 existed to deliver).
+        state.inbox[:0] = [InboxItem(**doc) for doc in pending.drained]
     proposals_made = [
         {
             "id": pid,
