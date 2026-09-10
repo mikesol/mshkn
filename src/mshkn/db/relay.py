@@ -159,7 +159,17 @@ async def list_relay_jobs_by_status(
     return [_row_to_job(r) for r in await cursor.fetchall()]
 
 
+_SETTLED = (str(RelayStatus.COMPLETED), str(RelayStatus.FAILED))
+
+
 async def delete_relay_jobs_before(db: aiosqlite.Connection, cutoff: str) -> int:
-    """Delete every job created before the ISO-8601 cutoff; return how many went."""
-    cursor = await db.execute("DELETE FROM relay_jobs WHERE created_at < ?", (cutoff,))
+    """Delete settled jobs (completed or failed) created before the ISO-8601 cutoff.
+
+    A job still queued or in progress survives regardless of age: retention reclaims
+    finished records, it does not destroy work in progress (#114 review).
+    """
+    cursor = await db.execute(
+        "DELETE FROM relay_jobs WHERE created_at < ? AND status IN (?, ?)",
+        (cutoff, *_SETTLED),
+    )
     return cursor.rowcount

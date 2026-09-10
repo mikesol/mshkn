@@ -97,3 +97,24 @@ async def test_list_by_status_and_expiry(db: aiosqlite.Connection) -> None:
     assert await delete_relay_jobs_before(db, "2026-09-05T00:00:00+00:00") == 1
     assert await get_relay_job(db, "rj-3") is None
     assert await get_relay_job(db, "rj-1") is not None
+
+
+async def test_expiry_spares_unsettled_jobs_regardless_of_age(db: aiosqlite.Connection) -> None:
+    """A job still queued or in progress must survive expiry even if it is old (#114 review)."""
+    old = "2026-01-01T00:00:00+00:00"
+    await insert_relay_job(db, job_row("rj-queued", status=RelayStatus.QUEUED, created_at=old))
+    await insert_relay_job(
+        db, job_row("rj-in-progress", status=RelayStatus.IN_PROGRESS, created_at=old)
+    )
+    await insert_relay_job(
+        db, job_row("rj-completed", status=RelayStatus.COMPLETED, created_at=old)
+    )
+    await insert_relay_job(db, job_row("rj-failed", status=RelayStatus.FAILED, created_at=old))
+
+    cutoff = "2026-09-05T00:00:00+00:00"
+    assert await delete_relay_jobs_before(db, cutoff) == 2
+
+    assert await get_relay_job(db, "rj-queued") is not None
+    assert await get_relay_job(db, "rj-in-progress") is not None
+    assert await get_relay_job(db, "rj-completed") is None
+    assert await get_relay_job(db, "rj-failed") is None
