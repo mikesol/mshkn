@@ -4,6 +4,7 @@ its provenance and anonymous sees none (§6, §7)."""
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from membrane.config import Settings
@@ -13,6 +14,7 @@ from membrane.memory import (
     HashEmbedder,
     Mem0Store,
     Provenance,
+    extraction_llm,
     visible_from,
 )
 
@@ -141,3 +143,29 @@ def test_add_reports_whether_mem0_stored_a_fact(tmp_path: Path) -> None:
     assert stored.add("mike hatched me", Provenance("root", "api", 1)) is True
     empty = Mem0Store(FakeMemory([]), infer=True)
     assert empty.add("mike hatched me", Provenance("root", "api", 1)) is False
+
+
+def test_extraction_sends_no_parameter_the_installed_sdk_rejects() -> None:
+    """The live run's defect (#107 follow-on): mem0 sends `temperature` for every
+    model whose family is `haiku`, and anthropic 1.4.0's `messages.create` has no
+    such parameter, so every extraction raised. Opus never hit it: mem0 suppresses
+    sampling parameters for Opus >= 4.7."""
+    import inspect
+
+    import anthropic
+    from mem0.configs.llms.anthropic import AnthropicConfig
+    from mem0.llms.anthropic import AnthropicLLM
+
+    llm = AnthropicLLM(AnthropicConfig(**extraction_llm("k")["config"]))
+    sent: dict[str, Any] = {}
+
+    def create(**kwargs: Any) -> Any:
+        sent.update(kwargs)
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text="{}")])
+
+    llm.client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    llm.generate_response([{"role": "user", "content": "hello"}])
+
+    accepted = set(inspect.signature(anthropic.Anthropic(api_key="k").messages.create).parameters)
+    assert set(sent) - accepted == set()
+    assert sent["max_tokens"] == EXTRACTION_MAX_TOKENS and sent["model"] == EXTRACTION_MODEL_ID

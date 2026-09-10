@@ -80,6 +80,23 @@ class HashEmbedder(EmbeddingBase):  # type: ignore[misc]
 EmbedderFactory.provider_to_class["hash"] = "membrane.memory.HashEmbedder"
 
 
+def extraction_llm(api_key: str | None) -> dict[str, Any]:
+    """mem0's LLM config for fact extraction. `enable_sampling_parameters` is not
+    a preference: mem0 sends `temperature` for every model whose family is `haiku`,
+    and the Anthropic SDK's `messages.create` has no such parameter, so extraction
+    raises without it. Opus never showed this, because mem0 already suppresses
+    sampling parameters for Opus >= 4.7."""
+    return {
+        "provider": "anthropic",
+        "config": {
+            "model": EXTRACTION_MODEL_ID,
+            "api_key": api_key,
+            "max_tokens": EXTRACTION_MAX_TOKENS,
+            "enable_sampling_parameters": False,
+        },
+    }
+
+
 class Mem0Store:
     def __init__(self, memory: Memory, *, infer: bool) -> None:
         self.memory = memory
@@ -104,14 +121,7 @@ class Mem0Store:
                 config={"model": OPENAI_EMBEDDER, "api_key": settings.openai_api_key},
             )
             dims = OPENAI_DIMS
-            llm = {
-                "provider": "anthropic",
-                "config": {
-                    "model": EXTRACTION_MODEL_ID,
-                    "api_key": settings.anthropic_api_key,
-                    "max_tokens": EXTRACTION_MAX_TOKENS,
-                },
-            }
+            llm = extraction_llm(settings.anthropic_api_key)
             infer = True
         config = MemoryConfig(
             vector_store={
