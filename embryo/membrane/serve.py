@@ -17,6 +17,8 @@ from membrane.model import Model, zero_usage
 from membrane.scripted import ScriptedModel
 
 DEFAULT_PORT = 8000
+# The message id counter. Safe only because this server is single-threaded
+# (`HTTPServer`, one request at a time): a threading server would need a lock.
 _counter = 0
 
 

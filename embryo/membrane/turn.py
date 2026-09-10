@@ -257,6 +257,20 @@ async def post_request(ctx: Context, pending: Pending, tools: dict[str, Tool]) -
     pending.model_calls += 1
 
 
+async def post_or_close(ctx: Context, pending: Pending, tools: dict[str, Tool]) -> str | None:
+    """`post_request`, and the closed turn when the host refuses it. A scope that
+    does not cover the target, a body over the relay's limit or a relay that cannot
+    be reached ends the turn the way a failed model call does: an audit line and a
+    message, never a traceback. None means the request is in flight."""
+    try:
+        await post_request(ctx, pending, tools)
+    except MshknError as exc:
+        return await close_turn(
+            ctx, text=f"{MODEL_FAILED} the relay refused: {exc}", stopped="error"
+        )
+    return None
+
+
 async def start_turn(
     ctx: Context,
     *,
@@ -305,7 +319,9 @@ async def start_turn(
     # from the exec_log alone (§10.5).
     pending.offered = sorted(tools)
     state.pending = pending
-    await post_request(ctx, pending, tools)
+    refused = await post_or_close(ctx, pending, tools)
+    if refused is not None:
+        return refused
     ack = json.dumps({"turn": turn, "job": pending.job})
     started = audit_line(
         turn=turn,
@@ -443,7 +459,9 @@ async def continue_turn(ctx: Context, message: dict[str, Any]) -> str:
     # every request's: a verb approved while the model thought is offered by the
     # request below, and a fork that ends on the cap posts none, so offers none.
     pending.offered = sorted(set(pending.offered) | set(tools))
-    await post_request(ctx, pending, tools)
+    refused = await post_or_close(ctx, pending, tools)
+    if refused is not None:
+        return refused
     summaries = [_tool_summary(c) for c in pending.calls[before:]]
     continued = audit_line(
         turn=pending.turn,

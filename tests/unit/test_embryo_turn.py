@@ -772,3 +772,32 @@ async def test_a_ready_verb_is_a_tool_and_builds_are_polled_first(tmp_path: Path
         "computer_id": "comp-2",
     }
     assert reply.startswith("Example Domain")
+
+
+async def test_a_refused_relay_post_ends_the_turn_instead_of_crashing(tmp_path: Path) -> None:
+    """A `POST /relay` the host refuses (a target outside the key's scope, the relay
+    down) is a failure like any other: the audit line is written, the reply names it,
+    and the pending turn is closed rather than left behind a traceback."""
+    api = FakeMshkn(relay_refusal=MshknError(403, "Scope relay.targets does not allow it"))
+    ctx = _ctx(tmp_path, api=api)
+    out = await say(ctx, payload_b64=b64("Hello."), door="api")
+    audit, reply = split_output(out)
+    assert audit["stopped"] == "error" and audit["turn"] == 1 and audit["job"] == ""
+    assert MODEL_FAILED in reply and "403" in reply
+    assert ctx.state.pending is None
+    assert ctx.state.window[-1].reply.startswith(MODEL_FAILED)
+
+
+async def test_a_refusal_on_the_next_request_ends_the_turn_after_the_calls_ran(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path, answers=[message_of(tool_call_completion("remember", text="a fact"))])
+    await say(ctx, payload_b64=b64("Remember a fact."), door="api")
+    pending = ctx.state.pending
+    assert pending is not None
+    _fake(ctx).relay_refusal = MshknError(0, "ConnectError: the relay is unreachable")
+    out = await resume(ctx, pending.job)
+    audit, reply = split_output(out)
+    assert audit["stopped"] == "error" and [t["name"] for t in audit["tools"]] == ["remember"]
+    assert MODEL_FAILED in reply and "ConnectError" in reply
+    assert ctx.state.pending is None

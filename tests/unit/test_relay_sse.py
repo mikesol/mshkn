@@ -249,3 +249,29 @@ def test_parse_events_joins_data_lines_and_skips_junk() -> None:
         ": comment\n\ndata: not json\n\n"
     )
     assert parse_events(text) == [{"type": "message_stop"}]
+
+
+def test_message_delta_sets_only_the_stop_fields() -> None:
+    """The spec names two fields; anything else in a delta must not overwrite
+    something structural in the message the brain then parses."""
+    text = _sse(
+        START,
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "end_turn",
+                "stop_sequence": "STOP",
+                "content": [],
+                "role": "user",
+                "id": "msg_forged",
+            },
+        },
+        {"type": "message_stop"},
+    )
+    message = reassemble(text)
+    assert message["stop_reason"] == "end_turn" and message["stop_sequence"] == "STOP"
+    assert message["content"] == [{"type": "text", "text": "hi"}]
+    assert message["role"] == "assistant" and message["id"] == "msg_1"

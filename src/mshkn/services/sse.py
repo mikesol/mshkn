@@ -93,7 +93,12 @@ def reassemble(text: str) -> dict[str, Any]:
                 raw = "".join(partial.pop(index))
                 content[index]["input"] = json.loads(raw) if raw.strip() else {}
         elif kind == "message_delta":
-            message.update(event.get("delta") or {})
+            # Only the two fields the API's delta carries: merging the whole delta
+            # would let an unexpected key overwrite the message's own structure.
+            stop = event.get("delta") or {}
+            for field in ("stop_reason", "stop_sequence"):
+                if field in stop:
+                    message[field] = stop[field]
             usage = event.get("usage")
             if usage:
                 message["usage"] = {**(message.get("usage") or {}), **usage}

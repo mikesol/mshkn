@@ -6,10 +6,18 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from typing import TYPE_CHECKING
 
 import pytest
 
+from mshkn.host.fake import FakeHost
+from mshkn.runtime import Runtime
 from mshkn.services.ssrf import blocked_reason, check_url, guard, parse_address, resolve_host
+
+if TYPE_CHECKING:
+    import aiosqlite
+
+    from mshkn.config import Config
 
 
 @pytest.mark.parametrize(
@@ -148,3 +156,18 @@ async def test_resolve_host_dedupes_the_event_loops_getaddrinfo(
     addresses = await resolve_host("example.com")
     assert addresses == ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]
     assert calls == ["example.com"]
+
+
+async def test_the_shared_client_never_follows_a_redirect(
+    db: aiosqlite.Connection, runtime_config: Config
+) -> None:
+    """The guard checks the target it is given. A 302 to `http://169.254.169.254/`
+    would be a call the guard never saw, so the client must not follow one; the
+    setting is pinned rather than inherited from the library's default."""
+    host = FakeHost()
+    runtime = Runtime.build(runtime_config, db, host)
+    try:
+        assert runtime.http.follow_redirects is False
+    finally:
+        await runtime.http.aclose()
+        host.close()

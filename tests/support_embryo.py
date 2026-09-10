@@ -92,6 +92,9 @@ class FakeMshkn:
     relay_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     relay_answers: list[dict[str, Any] | RelayJob] = field(default_factory=list)
     relay_results: dict[str, RelayJob] = field(default_factory=dict)
+    # When set, `create_relay_job` refuses with it: a scope that does not cover the
+    # target, a body over the relay's limit, or the API unreachable.
+    relay_refusal: MshknError | None = None
     _n: int = 0
 
     def _next(self, prefix: str) -> str:
@@ -189,6 +192,8 @@ class FakeMshkn:
         self.calls.append(
             ("create_relay_job", {"target": target, "headers": headers, "body": body})
         )
+        if self.relay_refusal is not None:
+            raise self.relay_refusal
         job_id = self._next("rj")
         self.relay_jobs[job_id] = {"target": target, "headers": headers, "body": body}
         return job_id

@@ -156,7 +156,9 @@ class Runtime:
         """Wire the services once. Tests call this with a FakeHost."""
         tasks = BackgroundTasks()
         allocator = SlotAllocator()
-        client = http if http is not None else httpx.AsyncClient()
+        # Never follow a redirect: the SSRF guard checked the target it was given,
+        # and a 302 to a private address is a call it never saw.
+        client = http if http is not None else httpx.AsyncClient(follow_redirects=False)
         alerts: deque[Alert] = deque(maxlen=_ALERT_HISTORY_SIZE)
         recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)
         computers = ComputerService(config, db, host, allocator, recipes)
