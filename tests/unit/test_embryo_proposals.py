@@ -40,6 +40,17 @@ HOOK: dict[str, Any] = {
     "entrypoint": "/verb/verify.sh {{payload}}",
     "params": {"type": "object", "properties": {"payload": {"type": "string"}}},
 }
+TWO_PARAM_HOOK: dict[str, Any] = {
+    **VERB,
+    "name": "verify_sig",
+    "asserts": "ssh",
+    "effect": "local",
+    "entrypoint": "/verb/verify.sh {{msg}} {{sig}}",
+    "params": {
+        "type": "object",
+        "properties": {"msg": {"type": "string"}, "sig": {"type": "string"}},
+    },
+}
 
 
 def _brain(tmp_path: Path) -> Brain:
@@ -314,6 +325,30 @@ async def test_a_hook_naming_a_verb_with_no_asserts_is_refused(tmp_path: Path) -
         },
     )
     assert "asserts namespace" in (refuse_approval(opening, state) or "")
+
+
+async def test_a_hook_taking_more_than_one_parameter_is_refused(tmp_path: Path) -> None:
+    """hooks.py:38 skips a hook whose declared params are anything but exactly
+    one property -- silently: never invoked, never appended to `runs`, no
+    signal anywhere. The seed describes a hook's payload as an object with
+    `msg` plus whatever the sender attached, so a naturally-written two-field
+    hook (`{msg, sig}`) walks straight into that silent dead end unless
+    refuse_approval catches it at proposal time (#123)."""
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    two_param = propose(state, _verb_proposal(TWO_PARAM_HOOK))
+    await approve(api, state, two_param.id)
+    opening = propose(
+        state,
+        {
+            "kind": "policy",
+            "title": "open",
+            "rationale": "r",
+            "policy": {**CLOSED, "door": "open", "hooks": ["verify_sig"]},
+        },
+    )
+    reason = refuse_approval(opening, state) or ""
+    assert "exactly one parameter" in reason
+    assert "msg" in reason and "sig" in reason
 
 
 async def test_an_unknown_hook_names_the_catalog(tmp_path: Path) -> None:

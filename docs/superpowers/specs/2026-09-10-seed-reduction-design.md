@@ -41,11 +41,11 @@ Two facts fall out of reading this that the issue did not have:
 
 `embryo/seed.md` contains only irreducible bootstrap and invisible mechanism. Nothing else. A line that is neither is a liturgy change, a better refusal, or nothing.
 
-**Stays, as bootstrap:** what a turn is; that the disk is the memory; that effects happen outside; the three rules; `remember`, `try` and `propose` and that root approves; the verb document's *field names*, because you cannot propose a verb without knowing it has a `dockerfile`; that a hook's stdout becomes the principal's name.
+**Stays, as bootstrap:** what a turn is; that the disk is the memory; that effects happen outside; the three rules; `remember`, `try` and `propose` and that root approves; the verb document's *field names*, because you cannot propose a verb without knowing it has a `dockerfile`; that a hook's stdout becomes the principal's name; what `requires` is for — the verb's unprovidable need — because `Where you begin` tells the embryo to name what it needs there.
 
-**Stays, as invisible mechanism:** every entrypoint value is shell-quoted; anonymous input is never remembered; a build's log arrives in the inbox on the next turn; a `chain` verb's disk persists on `verb/<name>`; a non-empty `requires` blocks approval; `try` runs with no secrets, no chain and no policy; what a hook receives is the decoded payload, plain text or JSON with `msg` and whatever the sender attached.
+**Stays, as invisible mechanism:** every entrypoint value is shell-quoted; anonymous input is never remembered; a build's log arrives in the inbox on the next turn; a `chain` verb's disk persists on `verb/<name>`; `try` runs with no secrets, no chain and no policy; what a hook receives is the decoded payload, plain text or JSON with `msg` and whatever the sender attached.
 
-**Goes, because a refusal teaches it:** the five `effect` values; the `local`/`read` restriction; `timeout_seconds` at most 200; the `name` charset and the reserved names; `asserts` never `root` or `system`; the policy schema; that the door cannot open without a hook; that anonymous may never propose.
+**Goes, because a refusal teaches it:** the five `effect` values; the `local`/`read` restriction; `timeout_seconds` at most 200; the `name` charset and the reserved names; `asserts` never `root` or `system`; the policy schema; that the door cannot open without a hook; that anonymous may never propose; that a hook takes exactly one parameter.
 
 **Goes, because a tool description already carries it:** "a whole document, not a diff" and the proposal's field list, both in `PROPOSE_TOOL` (`turn.py:68`).
 
@@ -55,7 +55,7 @@ Two facts fall out of reading this that the issue did not have:
 
 ## 4. The reduced seed
 
-Four sections instead of five. The changed text:
+Still five sections: "What a proposal is" and the hook-payload paragraph merge into one, "Proposals, and what a hook receives". The changed text:
 
 - **`try`** loses "and returns the build log and output as data" (the tool description says it) and keeps "no secrets, no chain and no policy" — the absent chain is invisible, and is the subject of #118.
 - **What a verb is** keeps the field list and loses every constraint on it: `name` loses its charset and reserved set, `effect` loses its enum, `timeout_seconds` loses its ceiling, `asserts` loses the `ssh`/`mike` example and the reserved namespaces. `asserts` keeps "the identity namespace a pre-turn hook may assert; the hook's stdout becomes the rest of the principal's name", which no experiment reveals. The paragraph asserting that the embryo may be granted only `local` and `read` goes entirely.

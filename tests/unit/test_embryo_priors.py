@@ -71,6 +71,9 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         "`principals`",
         "`hooks`",
         "`door`",
+        "`local`",
+        "`read`",
+        "supersedes",
         # PROPOSE_TOOL's description carries this
         "not a diff",
     ):

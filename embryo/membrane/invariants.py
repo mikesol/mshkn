@@ -82,6 +82,12 @@ def refuse_approval(proposal: Proposal, state: State) -> str | None:
                 )
             if entry.verb.asserts is None:
                 return f"hook {hook} declares no asserts namespace"
+            properties = entry.verb.params.get("properties", {})
+            if len(properties) != 1:
+                return (
+                    f"hook {hook} declares {sorted(properties)} as parameters; "
+                    "a hook takes exactly one parameter, which receives the decoded payload"
+                )
         if new.grant(ANONYMOUS).propose:
             return "anonymous may never propose (§10.7)"
         return None
