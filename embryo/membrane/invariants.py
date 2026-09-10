@@ -67,6 +67,15 @@ def refuse_approval(proposal: Proposal, state: State) -> str | None:
                 f"verb {verb.name} already exists as {existing.proposal_id}; "
                 "propose with supersedes"
             )
+        if verb.name in state.policy.hooks:
+            properties = verb.params.get("properties", {})
+            if len(properties) != 1 or verb.asserts is None:
+                return (
+                    f"verb {verb.name} is the policy's live hook; a hook must keep exactly "
+                    "one parameter, which receives the decoded payload, and a non-null "
+                    f"asserts, but this declaration has {sorted(properties)} as parameters "
+                    f"and asserts {verb.asserts!r}"
+                )
         return None
     if proposal.kind == "policy":
         new = proposal.policy

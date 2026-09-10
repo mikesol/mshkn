@@ -67,6 +67,9 @@ def test_parse_verb_fills_defaults() -> None:
         ({"asserts": "system"}, "root"),
         ({"entrypoint": "run {{nope}}"}, "url"),
         ({"requires": [{"kind": "secret"}]}, "name"),
+        # requires that is not a list at all reaches the reworded message
+        # (#123 final review) rather than the per-entry shape check above.
+        ({"requires": "secret"}, "optional scope"),
     ],
 )
 def test_parse_verb_refuses(patch: dict[str, Any], reason: str) -> None:
@@ -222,3 +225,15 @@ def test_parse_proposal_validates_its_kind() -> None:
 def test_parse_proposal_refuses(doc: dict[str, Any], reason: str) -> None:
     with pytest.raises(DeclarationError, match=reason):
         parse_proposal(doc, id="p-9")
+
+
+def test_a_proposal_missing_fields_is_told_the_whole_shape_at_once() -> None:
+    """The proposal mirror of test_a_verb_missing_fields_is_told_the_whole_shape_at_once
+    above: one field per refusal is a serial walk that costs a round trip
+    each (#123). The refusal names every required field, not just the first
+    one missing."""
+    with pytest.raises(DeclarationError) as exc:
+        parse_proposal({}, id="p-9")
+    message = str(exc.value)
+    for field_name in ("kind", "title", "rationale"):
+        assert field_name in message, field_name

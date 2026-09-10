@@ -73,10 +73,25 @@ def _get(state: State, proposal_id: str) -> Proposal:
 def _tell_the_model(state: State, proposal: Proposal, kind: str, text: str) -> str:
     """Root reads an approval's outcome on stdout; the embryo must read it too,
     or a refusal teaches nothing (#123). A build log already arrives this way,
-    so a refusal, a block and a rejected Dockerfile arrive the same way."""
-    state.inbox.append(
-        InboxItem(kind=kind, text=f"proposal {proposal.id} ({proposal.title}) {text}")
-    )
+    so a refusal, a block and a rejected Dockerfile arrive the same way.
+
+    The measure harness re-approves anything still `pending` on every later
+    turn (`measure.py`'s auto-approver), so a refused proposal the model
+    abandons rather than supersedes would otherwise repeat an identical
+    refusal into the inbox every turn for the rest of a run -- token noise
+    the model has already acted on. `proposal.log` is reused to remember the
+    last outcome reported for this proposal: it holds a build tail or a
+    submit-time detail only for a proposal that has already left `pending`
+    (`poll_builds` and the Dockerfile-rejection branch below both set the
+    proposal's status away from pending in the same breath), and this
+    function is the only writer while a proposal stays pending, so there is
+    no collision. Root still reads the same string back every time; the
+    model is notified only when the outcome is new."""
+    if proposal.log != text:
+        state.inbox.append(
+            InboxItem(kind=kind, text=f"proposal {proposal.id} ({proposal.title}) {text}")
+        )
+        proposal.log = text
     return f"{proposal.id} {text}"
 
 

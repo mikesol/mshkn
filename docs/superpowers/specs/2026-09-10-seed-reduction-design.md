@@ -119,6 +119,8 @@ The `(§10.8)`-style citations stay. They are noise to the model, which cannot r
 
 **`parse_policy({})` succeeds — not fixed.** An empty policy document is legal and yields no principals, no hooks and a closed door, so an embryo probing the policy shape can blank its own policy and have it auto-approved. Root is the guard, and this is the organism's lesson to learn, not the genome's to prevent.
 
+**A hook whose catalog entry is not `ready` is silently skipped — kept, flagged.** `hooks.py:29-37` continues past a hook name in `policy.hooks` whose catalog entry is not `ready` (still `building`, or `failed`), the same silent skip §6.1 fixed for a too-many-parameters hook, but `refuse_approval` does not check `entry.status`. This is pre-existing, not something #123 removed, so it is not fixed by this pass; it is recorded here as the next pass's candidate, the way `FROM mshkn-base` is above.
+
 ## 8. Proof
 
 Unit and flow tiers only; the gate must stay green and the E2E tier is the live proof.
