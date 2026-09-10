@@ -161,7 +161,7 @@ def test_pending_queue_and_the_windows_audit_round_trip(tmp_path: Path) -> None:
         },
         forks=2,
         started_at="2026-09-09T10:00:00+00:00",
-        memory_written=True,
+        write_memory=True,
     )
     state.queue.append(
         Queued(

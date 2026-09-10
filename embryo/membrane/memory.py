@@ -26,6 +26,11 @@ TOP_K = 8
 HASH_DIMS = 64
 OPENAI_EMBEDDER = "text-embedding-3-small"
 OPENAI_DIMS = 1536
+# Fact extraction is a JSON-shaped chore, not the brain's thinking (#107). mem0
+# spends one budget on both the model's deliberation and the document it emits,
+# so a long deliberation truncates the JSON and mem0 silently stores nothing.
+EXTRACTION_MODEL_ID = "claude-haiku-4-5-20251001"
+EXTRACTION_MAX_TOKENS = 4000
 
 
 @dataclass(frozen=True)
@@ -38,7 +43,7 @@ class Provenance:
 class MemoryStore(Protocol):
     def recall(self, query: str, *, principal: str) -> list[str]: ...
 
-    def add(self, text: str, provenance: Provenance) -> None: ...
+    def add(self, text: str, provenance: Provenance) -> bool: ...
 
     def close(self) -> None: ...
 
@@ -101,7 +106,11 @@ class Mem0Store:
             dims = OPENAI_DIMS
             llm = {
                 "provider": "anthropic",
-                "config": {"model": settings.model_id, "api_key": settings.anthropic_api_key},
+                "config": {
+                    "model": EXTRACTION_MODEL_ID,
+                    "api_key": settings.anthropic_api_key,
+                    "max_tokens": EXTRACTION_MAX_TOKENS,
+                },
             }
             infer = True
         config = MemoryConfig(
@@ -130,8 +139,10 @@ class Mem0Store:
         found = self.memory.search(query, filters=filters, top_k=TOP_K)
         return [str(r["memory"]) for r in found.get("results", [])]
 
-    def add(self, text: str, provenance: Provenance) -> None:
-        self.memory.add(
+    def add(self, text: str, provenance: Provenance) -> bool:
+        """Whether mem0 stored anything. It catches its own extraction failures and
+        returns no results, so this is the only honest answer to "was it written" (#107)."""
+        result = self.memory.add(
             text,
             user_id=USER_ID,
             infer=self.infer,
@@ -141,6 +152,7 @@ class Mem0Store:
                 "turn": provenance.turn,
             },
         )
+        return bool(result.get("results"))
 
     def close(self) -> None:
         self.memory.vector_store.client.close()

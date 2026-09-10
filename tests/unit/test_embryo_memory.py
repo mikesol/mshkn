@@ -7,7 +7,14 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from membrane.config import Settings
-from membrane.memory import HashEmbedder, Mem0Store, Provenance, visible_from
+from membrane.memory import (
+    EXTRACTION_MAX_TOKENS,
+    EXTRACTION_MODEL_ID,
+    HashEmbedder,
+    Mem0Store,
+    Provenance,
+    visible_from,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -91,3 +98,46 @@ def test_anthropic_mode_uses_openai_embeddings_and_inference(
     assert config.llm.provider == "anthropic" and config.llm.config["api_key"] == "a"
     assert config.vector_store.config.embedding_model_dims == 1536
     assert store.infer is True
+
+
+def test_extraction_runs_on_a_budget_that_fits_the_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#107: mem0's default 2000-token budget is shared between thinking and the
+    JSON, so a long deliberation truncates the document and no fact is stored."""
+    seen: dict[str, Any] = {}
+
+    class FakeMemory:
+        def __init__(self, config: Any) -> None:
+            seen["config"] = config
+
+    monkeypatch.setattr("membrane.memory.Memory", FakeMemory)
+    settings = Settings(
+        brain=tmp_path,
+        api_url="u",
+        api_key="k",
+        model="anthropic",
+        model_id="claude-opus-5",
+        anthropic_api_key="a",
+        openai_api_key="o",
+    )
+    Mem0Store.open(settings, tmp_path / "m")
+    llm = seen["config"].llm.config
+    assert llm["model"] == EXTRACTION_MODEL_ID
+    assert llm["max_tokens"] == EXTRACTION_MAX_TOKENS
+
+
+def test_add_reports_whether_mem0_stored_a_fact(tmp_path: Path) -> None:
+    class FakeMemory:
+        def __init__(self, results: list[dict[str, Any]]) -> None:
+            self.results = results
+
+        def add(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return {"results": self.results}
+
+    stored = Mem0Store(
+        FakeMemory([{"id": "1", "memory": "mike hatched me", "event": "ADD"}]), infer=True
+    )
+    assert stored.add("mike hatched me", Provenance("root", "api", 1)) is True
+    empty = Mem0Store(FakeMemory([]), infer=True)
+    assert empty.add("mike hatched me", Provenance("root", "api", 1)) is False

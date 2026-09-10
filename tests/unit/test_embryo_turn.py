@@ -208,7 +208,7 @@ async def test_a_say_posts_the_request_and_acknowledges_without_a_model_call(
     pending = ctx.state.pending
     assert pending is not None and pending.job == "rj-1" and pending.turn == 1
     assert pending.forks == 1 and pending.model_calls == 1
-    assert pending.memory_written is True and pending.started_at
+    assert pending.write_memory is True and pending.started_at
     assert ctx.state.window == [] and ctx.state.turn == 1
     assert not any(name == "get_relay_job" for name, _ in _fake(ctx).calls)
 
@@ -238,6 +238,19 @@ async def test_a_text_answer_closes_the_turn_with_the_full_audit_and_the_reply(
     assert entry.audit["stopped"] == "done"
     assert memory.entries[0][1] == Provenance(principal=ROOT, door="api", turn=1)
     assert "hatched" in memory.entries[0][0] and "I am an embryo." in memory.entries[0][0]
+
+
+async def test_memory_written_reports_what_the_store_did_not_what_was_intended(
+    tmp_path: Path,
+) -> None:
+    """#107: mem0 catches its own extraction failure and stores nothing; the audit
+    line said `memory_written: true` anyway."""
+    memory = ListMemory(stores=False)
+    ctx = _ctx(tmp_path, memory=memory, answers=[message_of(text_completion("I am an embryo."))])
+    await say(ctx, payload_b64=b64("Hello. I am the one who hatched you."), door="api")
+    audit, _ = split_output(await resume(ctx, "rj-1"))
+    assert audit["memory_written"] is False
+    assert memory.entries == []
 
 
 async def test_tool_calls_run_and_the_next_request_is_posted_in_a_new_fork(
