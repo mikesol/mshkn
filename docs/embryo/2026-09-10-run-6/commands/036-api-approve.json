@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-10T11:36:39+00:00",
+ "command": "approve",
+ "computer_id": "comp-bc61cf16c0b9",
+ "detail": [
+  "p-1"
+ ],
+ "door": "api",
+ "n": 36,
+ "seconds": 3.6208565809647553,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-1 blocked: requires secret allowed_signers; the embryo has no vault (#91)\n"
+}

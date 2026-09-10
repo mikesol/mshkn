@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-10T11:35:37+00:00",
+ "command": "list",
+ "computer_id": "comp-2c383232814e",
+ "detail": [],
+ "door": "api",
+ "n": 30,
+ "seconds": 3.476256961992476,
+ "status": 200,
+ "stderr": "",
+ "stdout": "{\n \"catalog\": {},\n \"door\": {\n  \"hooks\": [],\n  \"hooks_ready\": [],\n  \"status\": \"closed\"\n },\n \"inbox\": 0,\n \"pending\": {\n  \"door\": \"api\",\n  \"forks\": 6,\n  \"job\": \"rj-673b735670f6\",\n  \"model_calls\": 6,\n  \"principal\": \"root\",\n  \"started_at\": \"2026-09-10T11:28:30+00:00\",\n  \"turn\": 1,\n  \"usage\": {\n   \"cache_creation_input_tokens\": 0,\n   \"cache_read_input_tokens\": 0,\n   \"input_tokens\": 75538,\n   \"output_tokens\": 21295\n  }\n },\n \"policy\": {\n  \"door\": \"closed\",\n  \"hooks\": [],\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   }\n  }\n },\n \"principals\": [],\n \"proposals\": [],\n \"queue\": [],\n \"trials\": [\n  {\n   \"id\": \"t-1\",\n   \"recipe_id\": \"rcp-06f2aecae86a\",\n   \"status\": \"done\",\n   \"verb\": \"sigcheck_probe\"\n  },\n  {\n   \"id\": \"t-2\",\n   \"recipe_id\": \"rcp-ce3704879443\",\n   \"status\": \"done\",\n   \"verb\": \"ssh_hook_selftest\"\n  },\n  {\n   \"id\": \"t-3\",\n   \"recipe_id\": \"rcp-fc55f72b0ce7\",\n   \"status\": \"done\",\n   \"verb\": \"ssh_hook_negatives\"\n  }\n ],\n \"turn\": 1,\n \"window\": []\n}\n"
+}
