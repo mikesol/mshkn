@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-10T19:08:18+00:00",
+ "command": "approve",
+ "computer_id": "comp-805f3daf244a",
+ "detail": [
+  "p-1"
+ ],
+ "door": "api",
+ "n": 32,
+ "seconds": 3.773858922999352,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-1 building: verb whoami recipe rcp-a2c9b7717bb6\n"
+}
