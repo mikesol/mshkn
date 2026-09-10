@@ -290,9 +290,12 @@ class HealthResponse(BaseModel):
 class RelayRetryBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    attempts: int = Field(default=3, ge=1)
+    # Bounded on purpose: there is no rate limit on `POST /relay`, so an
+    # unbounded attempt count with no floor under the delay is a tight outbound
+    # loop originating from this host's address.
+    attempts: int = Field(default=3, ge=1, le=10)
     backoff: Literal["exponential"] = "exponential"
-    initial_delay_ms: int = Field(default=1000, ge=0)
+    initial_delay_ms: int = Field(default=1000, ge=100)
     max_delay_ms: int = Field(default=30000, ge=1)
 
 

@@ -124,6 +124,21 @@ async def test_bad_requests_are_refused_before_a_job_exists(client: AsyncClient)
     assert method.status_code == 422
 
 
+async def test_the_retry_policy_is_bounded(client: AsyncClient) -> None:
+    """One job must not become an unbounded outbound loop from this host's address."""
+    target = "https://model.example/"
+    too_many = await client.post("/relay", json={"target": target, "retry": {"attempts": 11}})
+    assert too_many.status_code == 422 and "attempts" in too_many.text
+    too_fast = await client.post(
+        "/relay", json={"target": target, "retry": {"initial_delay_ms": 0}}
+    )
+    assert too_fast.status_code == 422 and "initial_delay_ms" in too_fast.text
+    ok = await client.post(
+        "/relay", json={"target": target, "retry": {"attempts": 10, "initial_delay_ms": 100}}
+    )
+    assert ok.status_code == 202, ok.text
+
+
 async def test_a_scoped_key_is_held_to_its_targets_and_its_pinned_wake_up(
     client: AsyncClient, runtime: Runtime
 ) -> None:
