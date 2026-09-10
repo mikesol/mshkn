@@ -484,7 +484,12 @@ def sign(key_dir: Path, message: str) -> dict[str, str]:
         check=True,
         capture_output=True,
     )
-    return {"msg": message, "sig": base64.b64encode(sig.read_bytes()).decode()}
+    # `ssh-keygen -Y sign` emits ASCII armor, which is already JSON-safe. Sending
+    # it verbatim keeps the envelope self-evident: `sig` is what the signer printed.
+    # Base64 over the armor was a second encoding the seed had to disclose, and
+    # 2026-09-10-postcut-run-4 lost authentication to it: the hook fed the value
+    # straight to ssh-keygen, as anyone would, and got exit 1 with nothing to read.
+    return {"msg": message, "sig": sig.read_text()}
 
 
 def membrane_version(where: Path | None = None) -> dict[str, Any]:

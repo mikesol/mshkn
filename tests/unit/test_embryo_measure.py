@@ -8,6 +8,7 @@ import base64
 import io
 import json
 import stat
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -504,8 +505,26 @@ def test_new_key_names_its_owner_and_sign_verifies(tmp_path: Path) -> None:
     assert kind == "ssh-ed25519" and comment == "mike" and len(key) > 40
     payload = sign(tmp_path, "Who am I?")
     assert payload["msg"] == "Who am I?"
-    sig = base64.b64decode(payload["sig"])
-    assert sig.startswith(b"-----BEGIN SSH SIGNATURE-----")
+    # The envelope carries the armor `ssh-keygen -Y sign` printed, with no second
+    # encoding over it (#123): a hook that writes `sig` to a file and verifies it,
+    # which is the obvious thing to write, must succeed. 2026-09-10-postcut-run-4
+    # lost authentication to a base64 layer nothing disclosed and nothing reported.
+    assert payload["sig"].startswith("-----BEGIN SSH SIGNATURE-----")
+    (tmp_path / "allowed_signers").write_text(f"mike {pubkey}\n")
+    (tmp_path / "sig.txt").write_text(payload["sig"])
+    (tmp_path / "msg.txt").write_text(payload["msg"])
+    verified = subprocess.run(
+        [
+            *("ssh-keygen", "-Y", "verify"),
+            *("-f", str(tmp_path / "allowed_signers")),
+            *("-I", "mike"),
+            *("-n", "mshkn"),
+            *("-s", str(tmp_path / "sig.txt")),
+        ],
+        stdin=(tmp_path / "msg.txt").open("rb"),
+        capture_output=True,
+    )
+    assert verified.returncode == 0, verified.stderr.decode()
 
 
 # ---------------------------------------------------------------- the liturgy over a fake door

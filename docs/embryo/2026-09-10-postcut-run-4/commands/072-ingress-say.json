@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-10T20:36:29+00:00",
+ "command": "say",
+ "computer_id": "comp-558dbaa40dab",
+ "detail": {
+  "msg": "Give yourself a verb: given a URL, report the page's title. It must run on its own computer.",
+  "sig": "LS0tLS1CRUdJTiBTU0ggU0lHTkFUVVJFLS0tLS0KVTFOSVUwbEhBQUFBQVFBQUFETUFBQUFMYzNOb0xXVmtNalUxTVRrQUFBQWd6OG1LOEMxa1VGNXpnRVhjUVJLTktRZTB2RQpPcmh1THk1S0J3Wk5wNkdOY0FBQUFGYlhOb2EyNEFBQUFBQUFBQUJuTm9ZVFV4TWdBQUFGTUFBQUFMYzNOb0xXVmtNalUxCk1Ua0FBQUJBcHVwWVZma01lUExXZWZXQ1E2VXE2K1NXOXpIazA4RmxsQXRFOUtPeXEySDVvT0wzWGpIZDBQOU42RUpER3EKOXJjU05kbEdDTTBOWmh5TFJyZm5zUURBPT0KLS0tLS1FTkQgU1NIIFNJR05BVFVSRS0tLS0tCg=="
+ },
+ "door": "ingress",
+ "n": 72,
+ "seconds": 7.125032866024412,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-8254bbdc3623\", \"exit_code\": 1, \"name\": \"ssh_identity\", \"principal\": \"anonymous\", \"status\": \"ok\"}], \"job\": \"rj-a5fd21fa3fc1\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 6}\n{\"turn\": 6, \"job\": \"rj-a5fd21fa3fc1\"}\n"
+}

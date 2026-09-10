@@ -8,7 +8,6 @@ Tests run in order and share one hatched embryo; an earlier failure fails the re
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
 import re
@@ -94,7 +93,7 @@ def _sign(key_dir: Path, message: str) -> dict[str, str]:
         check=True,
         capture_output=True,
     )
-    return {"msg": message, "sig": base64.b64encode(sig.read_bytes()).decode()}
+    return {"msg": message, "sig": sig.read_text()}  # ASCII armor, sent verbatim (#123)
 
 
 class Doors:

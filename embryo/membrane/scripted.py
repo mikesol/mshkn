@@ -53,7 +53,7 @@ def VERIFY_SSH(pubkey: str) -> dict[str, Any]:  # noqa: N802 — a declaration c
                 "#!/bin/bash",
                 "set -euo pipefail",
                 'printf "%s" "$1" | jq -j .msg > /tmp/msg',
-                'printf "%s" "$1" | jq -r .sig | base64 -d > /tmp/sig',
+                'printf "%s" "$1" | jq -j .sig > /tmp/sig',
                 "ssh-keygen -Y verify -f /verb/allowed_signers -I mike -n mshkn -s /tmp/sig "
                 "< /tmp/msg >/dev/null && echo mike",
             )
