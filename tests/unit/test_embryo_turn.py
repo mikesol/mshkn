@@ -1087,3 +1087,60 @@ def test_the_audit_keeps_a_runs_error_and_omits_absent_keys() -> None:
         }
     )
     assert summary["runs"] == [{"status": "error", "error": "deferred def-1"}]
+
+
+async def test_a_reply_naming_an_id_that_does_not_exist_is_told_so_next_turn(
+    tmp_path: Path,
+) -> None:
+    """#121, 2026-09-10-run-6 turn 9-count-1: the model wrote about proposing
+    `p-9` and never called `propose`; the next turn asked root to approve it.
+    The membrane never edits the reply. It appends a fact to the inbox in the
+    voice of a build result, and the closing audit line names the ids."""
+    ctx = _ctx(tmp_path)
+    propose(ctx.state, {"kind": "verb", "title": "t", "rationale": "r", "verb": VERB})
+    reply = "**p-2 — v2.** p-2 supersedes p-1; t-1 showed the fix."
+    out = await _turn(ctx, "count", answers=[message_of(text_completion(reply))])
+    audit, printed = split_output(out)
+    assert printed == reply + "\n"
+    assert audit["references"] == ["p-2", "t-1"]
+    assert [(i.kind, i.text) for i in ctx.state.inbox] == [
+        (
+            "reference",
+            "your reply on turn 1 named p-2, t-1; no such proposal or trial exists; "
+            "the proposals are p-1; there are no trials",
+        )
+    ]
+    assert ctx.state.window[-1].audit["references"] == ["p-2", "t-1"]
+
+    # The next authenticated turn reads it as input, like a build log.
+    await _turn(ctx, "again", answers=[message_of(text_completion("ok"))])
+    assert "- your reply on turn 1 named p-2, t-1;" in _posted(ctx)["messages"][-1]["content"]
+    assert ctx.state.inbox == []
+
+
+async def test_a_reply_naming_the_proposal_it_made_is_clean(tmp_path: Path) -> None:
+    """The check runs after the turn's own proposals are in state, so a turn that
+    proposes p-1 and says so is not told p-1 does not exist."""
+    ctx = _ctx(tmp_path)
+    proposal = {"kind": "verb", "title": "page_title", "rationale": "r", "verb": VERB}
+    out = await _turn(
+        ctx,
+        "go",
+        answers=[
+            message_of(tool_call_completion("propose", **proposal)),
+            message_of(text_completion("Proposed p-1.")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert audit["proposals"][0]["id"] == "p-1" and audit["references"] == []
+    assert ctx.state.inbox == []
+
+
+async def test_a_turn_the_model_never_answered_is_not_checked(tmp_path: Path) -> None:
+    """An error turn's text is the membrane's own words with the relay's error
+    in it; an id in there is not a claim the model made."""
+    ctx = _ctx(tmp_path, answers=[http_error_job(400, "p-7 is not a model")])
+    out = await _turn(ctx, "hello")
+    audit, reply = split_output(out)
+    assert audit["stopped"] == "error" and "p-7" in reply
+    assert audit["references"] == [] and ctx.state.inbox == []
