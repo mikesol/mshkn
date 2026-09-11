@@ -98,6 +98,8 @@ async def test_post_process_disables_pam_and_login_time_work(tmp_path: Path) -> 
     motd.mkdir(parents=True)
     (motd / "00-header").write_text("#!/bin/sh\n")
     (motd / "50-motd-news").write_text("#!/bin/sh\n")
+    (motd / "vendor").mkdir()  # a recipe's Dockerfile may leave a directory here
+    (motd / "vendor" / "99-x").write_text("#!/bin/sh\n")
     await inject_tar(
         FakeShell(), host.blocks, config, volume_name="mshkn-base", tar_path=tmp_path / "r.tar"
     )

@@ -311,9 +311,33 @@ class ComputerService:
             # hypervisor failure counts once per op, which is what §10 asks for.
             if files is not None:
                 async with timed("restore"):
-                    vm = await self.host.hypervisor.restore(
-                        slot=slot, disk_volume_id=volume_id, disk_name=volume_name, snapshot=files
-                    )
+                    try:
+                        vm = await self.host.hypervisor.restore(
+                            slot=slot,
+                            disk_volume_id=volume_id,
+                            disk_name=volume_name,
+                            snapshot=files,
+                        )
+                    except HostError:
+                        # The files were resolved before the staging lock was
+                        # taken. A fork that chose a checkpoint's tmpfs copy and
+                        # then waited past its linger finds that copy gone; the
+                        # durable copy exists by then, so resolve once more.
+                        again = await files_for()
+                        if again is None or again == files:
+                            raise
+                        logger.warning(
+                            "Restore of %s from %s failed; retrying from %s",
+                            computer_id,
+                            files.memory.parent,
+                            again.memory.parent,
+                        )
+                        vm = await self.host.hypervisor.restore(
+                            slot=slot,
+                            disk_volume_id=volume_id,
+                            disk_name=volume_name,
+                            snapshot=again,
+                        )
             else:
                 async with timed("boot"):
                     vm = await self.host.hypervisor.boot(

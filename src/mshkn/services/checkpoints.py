@@ -57,6 +57,19 @@ _SYNC_TIMEOUT_SECONDS = 15.0
 # its files before it loads them, so a copy must not vanish under a fork that
 # chose it a moment before the durable copy appeared.
 _STAGING_LINGER_SECONDS = 30.0
+# Room the staging filesystem must have before a snapshot is written there:
+# the memory file is the guest's RAM (256 MiB by default, more with custom
+# resources) plus vmstate, and a snapshot that runs out of room costs a
+# failed attempt and a second pause.
+_STAGING_MIN_FREE_BYTES = 2 * 1024**3
+
+
+def _staging_free_bytes(path: Path) -> int:
+    """Free bytes on the filesystem holding path (its nearest existing parent)."""
+    probe = path
+    while not probe.exists():
+        probe = probe.parent
+    return shutil.disk_usage(probe).free
 
 
 @dataclass(frozen=True)
@@ -161,7 +174,15 @@ class CheckpointService:
         # durable disk that alone was 300 ms and more per checkpoint (#144).
         staging_dir = self.config.checkpoint_staging_dir / checkpoint_id
         durable_dir = self.config.checkpoint_local_dir / checkpoint_id
-        staged = True
+        staged = _staging_free_bytes(self.config.checkpoint_staging_dir) >= _STAGING_MIN_FREE_BYTES
+        if not staged:
+            logger.warning(
+                "Staging filesystem under %s has less than %d MiB free; writing %s to %s",
+                self.config.checkpoint_staging_dir,
+                _STAGING_MIN_FREE_BYTES // 1024**2,
+                checkpoint_id,
+                durable_dir,
+            )
         async with timed("checkpoint"):
             # Flush the guest's page cache to the block device: dm-thin snapshots
             # see only what reached the disk.
@@ -178,19 +199,25 @@ class CheckpointService:
             # of #147). The pooled SSH session is kept across the pause: a pause
             # of a few hundred milliseconds does not break a TCP connection, and
             # the unconditional evict cost the next exec a full handshake (#150).
-            try:
-                await self.host.hypervisor.snapshot(computer.socket_path, staging_dir)
-            except HostError:
-                # A full tmpfs must not cost the checkpoint: write it to disk instead.
-                logger.warning(
-                    "Snapshot of %s onto %s failed; writing it to %s instead",
-                    computer.id,
-                    staging_dir,
-                    durable_dir,
-                    exc_info=True,
-                )
-                shutil.rmtree(staging_dir, ignore_errors=True)
-                staged = False
+            if staged:
+                try:
+                    await self.host.hypervisor.snapshot(computer.socket_path, staging_dir)
+                except HostError:
+                    # The room check above is the identified case; this is the
+                    # one retry for what it did not foresee (tmpfs filling in the
+                    # meantime, say). `snapshot` resumes the guest whatever
+                    # happened, so a second attempt is safe, and the first
+                    # failure is logged with its traceback, not hidden.
+                    logger.warning(
+                        "Snapshot of %s onto %s failed; writing it to %s instead",
+                        computer.id,
+                        staging_dir,
+                        durable_dir,
+                        exc_info=True,
+                    )
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    staged = False
+            if not staged:
                 await self.host.hypervisor.snapshot(computer.socket_path, durable_dir)
             volume_name = checkpoint_volume_name(checkpoint_id)
             volume_id = await self._snap_disk(computer.thin_volume_id, volume_name)
@@ -283,8 +310,8 @@ class CheckpointService:
 
     async def recover_staging(self) -> int:
         """Finish what a previous process's persist tasks left in the staging
-        directory: persist every complete copy that has no durable twin, then
-        empty the directory. Called once at start-up. Returns how many were
+        directory: persist every complete copy that has a checkpoint row and no
+        durable twin, then empty the directory. Called once at start-up. Returns how many were
         persisted; an incomplete copy (a snapshot the process died inside)
         has nothing worth keeping and is removed with the rest.
         """
@@ -295,7 +322,11 @@ class CheckpointService:
         for entry in sorted(staging_root.iterdir()):
             durable_dir = self.config.checkpoint_local_dir / entry.name
             complete = (entry / "vmstate").exists() and (entry / "memory").exists()
-            if complete and not durable_dir.exists():
+            # Only a checkpoint with a row is worth persisting: a snapshot the
+            # process died between writing and inserting the row for belongs
+            # to nothing, and nothing could ever delete its durable copy.
+            has_row = complete and await get_checkpoint(self.db, entry.name) is not None
+            if has_row and not durable_dir.exists():
                 try:
                     await asyncio.to_thread(_persist_snapshot, entry, durable_dir)
                     persisted += 1

@@ -596,3 +596,20 @@ async def test_create_falls_back_to_the_durable_dir_when_the_staging_write_fails
     await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
     assert sorted(host.objects.prefixes[f"acct-1/{ckpt.id}"]) == ["memory", "vmstate"]
     assert checkpoints.staging_clear_task_key(ckpt.id) not in checkpoints.tasks.names()
+
+
+async def test_create_writes_to_the_durable_dir_when_tmpfs_has_no_room(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The staging filesystem is checked before the snapshot, so a full tmpfs
+    costs no failed attempt and the VM is paused once, not twice."""
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    before = len(host.hypervisor.snapshots)
+    monkeypatch.setattr(
+        "mshkn.services.checkpoints._staging_free_bytes", lambda _path: 100 * 1024 * 1024
+    )
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    assert host.hypervisor.snapshots[before:] == [
+        (computer.socket_path, tmp_path / "ckpts" / ckpt.id)
+    ]

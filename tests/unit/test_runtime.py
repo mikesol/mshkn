@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from mshkn.app import create_app
-from mshkn.db import insert_account, insert_computer
+from mshkn.db import insert_account, insert_checkpoint, insert_computer
 from mshkn.host.fake import FakeHost
 from mshkn.runtime import BackgroundTasks, Runtime
-from tests.support import account_row, computer_row
+from tests.support import account_row, checkpoint_row, computer_row
 from tests.unit.conftest import make_runtime
 
 if TYPE_CHECKING:
@@ -207,7 +207,10 @@ async def test_start_persists_staging_copies_a_previous_process_left_behind(
     persisted, one whose twin exists is released, and tmpfs holds nothing."""
     staging = runtime.config.checkpoint_staging_dir
     durable = runtime.config.checkpoint_local_dir
+    await insert_account(runtime.db, account_row())
     for name in ("ckpt-orphan", "ckpt-done"):
+        await insert_checkpoint(runtime.db, checkpoint_row(name))
+    for name in ("ckpt-orphan", "ckpt-done", "ckpt-norow"):
         (staging / name).mkdir(parents=True)
         (staging / name / "vmstate").write_bytes(b"v")
         (staging / name / "memory").write_bytes(b"m")
@@ -224,5 +227,8 @@ async def test_start_persists_staging_copies_a_previous_process_left_behind(
     assert (durable / "ckpt-orphan" / "memory").read_bytes() == b"m"
     assert (durable / "ckpt-done" / "memory").read_bytes() == b"m"
     assert not (durable / "ckpt-half").exists()
+    # A snapshot the process died between writing and inserting its row for
+    # belongs to no checkpoint; persisting it would leave 256 MiB nobody can delete.
+    assert not (durable / "ckpt-norow").exists()
     assert sorted(p.name for p in staging.iterdir()) == []
     assert "Startup: persisted 1 staged checkpoint(s)" in caplog.text

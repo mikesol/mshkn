@@ -472,7 +472,10 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
     motd_dir = mp / "etc" / "update-motd.d"
     if motd_dir.is_dir():
         for entry in motd_dir.iterdir():
-            entry.unlink()
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
 
     # Mask the periodic timers. They cost boot time, and a restored guest whose
     # clock `date -s` moves forward by days would fire them all at once inside

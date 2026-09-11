@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from typing import TYPE_CHECKING
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from mshkn.config import Config
 from mshkn.db import get_checkpoint, get_computer, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, HostError, LimitExceeded, NotFound
-from mshkn.host import ExecResult
+from mshkn.host import ExecResult, RunningVM, SnapshotFiles
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import Checkpoint, ComputerStatus
 from mshkn.observability.metrics import computers_active, operation_errors_total
@@ -419,3 +420,41 @@ async def test_fork_restores_from_the_staging_copy_until_the_durable_one_lands(
     (durable / "memory").write_bytes(b"m")
     await service.fork(ACCOUNT, ckpt, recipe_id=None)
     assert host.hypervisor.restored[-1][1].memory == durable / "memory"
+
+
+async def test_fork_retries_from_the_durable_copy_when_the_staging_copy_vanished(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fork that resolved the tmpfs copy, then waited on the staging lock past
+    the linger, finds the durable copy on a second try instead of failing."""
+    service, host = await _service(db, tmp_path)
+    await insert_checkpoint(db, checkpoint_row("ckpt-s", thin_volume_id=0))
+    staging = tmp_path / "staging" / "ckpt-s"
+    durable = tmp_path / "ckpts" / "ckpt-s"
+    staging.mkdir(parents=True)
+    (staging / "vmstate").write_bytes(b"v")
+    (staging / "memory").write_bytes(b"m")
+    real_restore = host.hypervisor.restore
+    attempts: list[Path] = []
+
+    async def restore(
+        *, slot: int, disk_volume_id: int, disk_name: str, snapshot: SnapshotFiles
+    ) -> RunningVM:
+        attempts.append(snapshot.memory)
+        if len(attempts) == 1:
+            # The linger ran out while this fork waited for the staging lock.
+            durable.mkdir(parents=True)
+            (durable / "vmstate").write_bytes(b"v")
+            (durable / "memory").write_bytes(b"m")
+            shutil.rmtree(staging)
+            raise HostError("restore: FileNotFoundError: memory")
+        return await real_restore(
+            slot=slot, disk_volume_id=disk_volume_id, disk_name=disk_name, snapshot=snapshot
+        )
+
+    monkeypatch.setattr(host.hypervisor, "restore", restore)
+    ckpt = await get_checkpoint(db, "ckpt-s")
+    assert ckpt is not None
+    computer = await service.fork(ACCOUNT, ckpt, recipe_id=None)
+    assert attempts == [staging / "memory", durable / "memory"]
+    assert computer.status is ComputerStatus.RUNNING
