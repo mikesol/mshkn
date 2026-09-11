@@ -235,7 +235,7 @@ git commit -m "feat(embryo): parse a trial's list of invocations (#118)"
 
 `Trial` lives in `embryo/membrane/state.py` and is serialised into `state.json`, the brain's one atomic document. The old fields (`params: dict`, `result: dict | None`) are replaced, not kept beside the new ones — the project runs no migrations for `state.json`, which lives on one brain's disk.
 
-This task changes the dataclass and the two callers that construct it, leaving `trials.py`'s behaviour otherwise untouched; the tests it breaks are fixed in Task 4. **Expect a red suite between Task 3 and Task 4 and do not paper over it.**
+This task changes the dataclass only. `tests/unit/test_embryo_trials.py` and `tests/unit/test_embryo_turn.py` construct `Trial` with the old field names and **will be red when this task ends**; Task 4 repairs them, and that is this task's stated scope, not an oversight. Run only `tests/unit/test_embryo_state.py` here. Do not repair the other files, do not add a compatibility shim for the old field names, and do not weaken or skip anything to get the suite green.
 
 **Files:**
 - Modify: `embryo/membrane/state.py` (the `Trial` dataclass)
@@ -344,7 +344,7 @@ class Trial:
 uv run pytest tests/unit/test_embryo_state.py -q
 ```
 
-Expected: PASS. `tests/unit/test_embryo_trials.py` and `tests/unit/test_embryo_turn.py` are now red; Task 4 fixes them.
+Expected: PASS. `tests/unit/test_embryo_trials.py` and `tests/unit/test_embryo_turn.py` are now red with `TypeError: Trial.__init__() got an unexpected keyword argument 'params'`; Task 4 fixes them. Leave them red.
 
 - [ ] **Step 5: Commit**
 
@@ -784,12 +784,12 @@ git commit -m "feat(embryo): a trial runs its invocations in order on a scratch 
 The model sees `try` through `TRY_TOOL` in `embryo/membrane/turn.py`. The tool description is where `runs` is taught — deliberately, not in the seed: the schema names the parameter and the result shows what it did, so no seed line is needed (Task 6).
 
 **Files:**
-- Modify: `embryo/membrane/turn.py` (`TRY_TOOL`, `do_try`)
+- Modify: `embryo/membrane/turn.py` (`TRY_TOOL`, `do_try`, `_tool_summary`)
 - Test: `tests/unit/test_embryo_turn.py`
 
 **Interfaces:**
 - Consumes: `try_verb(..., params, runs=..., until=...)` (Task 4).
-- Produces: `TRY_TOOL`'s `input_schema` gains `runs`, an array of objects.
+- Produces: `TRY_TOOL`'s `input_schema` gains `runs`, an array of objects. `_tool_summary` gains a compact `runs` projection that Tasks 7 and 8 read out of the audit line.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -802,9 +802,63 @@ def test_the_try_tool_offers_a_list_of_invocations() -> None:
     assert TRY_TOOL["input_schema"]["required"] == ["verb"]
     # the seed says nothing about runs; this description is where the model learns it
     assert "runs" in TRY_TOOL["description"] and "scratch chain" in TRY_TOOL["description"]
+
+
+def test_the_audit_summarises_every_run_without_its_output() -> None:
+    """A chain trial's exit_code and chain_head moved from the top level into runs,
+    so without this an audited trial reads as {name, status, trial} and loses every
+    reading. stdout stays out of the audit line, as it always has been."""
+    summary = _tool_summary(
+        {
+            "name": "try",
+            "result": {
+                "trial": "t-1",
+                "status": "done",
+                "build_log": "ok",
+                "runs": [
+                    {
+                        "status": "ok",
+                        "exit_code": 0,
+                        "computer_id": "comp-1",
+                        "stdout": "1\n",
+                        "stderr": "",
+                        "chain_head": "ckpt-a",
+                    },
+                    {
+                        "status": "ok",
+                        "exit_code": 0,
+                        "computer_id": "comp-2",
+                        "stdout": "2\n",
+                        "stderr": "",
+                        "chain_head": "ckpt-b",
+                    },
+                ],
+            },
+        }
+    )
+    assert summary["name"] == "try" and summary["status"] == "done"
+    assert summary["trial"] == "t-1"
+    assert summary["runs"] == [
+        {"status": "ok", "exit_code": 0, "chain_head": "ckpt-a"},
+        {"status": "ok", "exit_code": 0, "chain_head": "ckpt-b"},
+    ]
+
+
+def test_the_audit_keeps_a_runs_error_and_omits_absent_keys() -> None:
+    summary = _tool_summary(
+        {
+            "name": "try",
+            "result": {
+                "trial": "t-2",
+                "status": "out of time",
+                "runs": [{"status": "error", "error": "deferred def-1"}],
+            },
+        }
+    )
+    assert summary["runs"] == [{"status": "error", "error": "deferred def-1"}]
 ```
 
-Add `TRY_TOOL` to the existing `from membrane.turn import (...)` block at line 23 of that file.
+Add `TRY_TOOL` and `_tool_summary` to the existing `from membrane.turn import (...)` block at line 23 of that file.
 
 `do_try`'s pass-through of `runs` is exercised end to end by Task 7's flow test, which is where a `try` call actually reaches `try_verb` through a turn.
 
@@ -841,7 +895,7 @@ TRY_TOOL = {
 }
 ```
 
-and replace `do_try` with:
+replace `do_try` with:
 
 ```python
     async def do_try(inp: dict[str, Any]) -> dict[str, Any]:
@@ -855,6 +909,32 @@ and replace `do_try` with:
             now=ctx.now,
             sleep=ctx.sleep,
         )
+```
+
+and extend `_tool_summary` so a trial's sequence survives into the audit line. A chain
+trial's `exit_code` and `chain_head` now live inside `runs`, so without this an audited
+trial reads as `{name, status, trial}` and carries no reading at all. `stdout` and
+`stderr` stay out, as they always have been — T14.5 proves `page_title`'s output through
+the reply, never the audit.
+
+```python
+RUN_AUDIT_KEYS = ("exit_code", "chain_head", "error")
+
+
+def _tool_summary(call: dict[str, Any]) -> dict[str, Any]:
+    result = call["result"]
+    summary: dict[str, Any] = {"name": call["name"], "status": result.get("status")}
+    for key in ("exit_code", "computer_id", "chain_head", "id", "trial", "error"):
+        if key in result:
+            summary[key] = result[key]
+    if isinstance(result.get("runs"), list):
+        # A trial's invocations, each as small as the top level used to be: what it
+        # did and where it left the chain, never what it printed (#118).
+        summary["runs"] = [
+            {"status": run.get("status"), **{k: run[k] for k in RUN_AUDIT_KEYS if k in run}}
+            for run in result["runs"]
+        ]
+    return summary
 ```
 
 - [ ] **Step 4: Run the whole unit tier to verify it passes**
@@ -936,7 +1016,7 @@ A fourth tool, `try`, builds a verb declaration and runs it on computers with no
 
 - [ ] **Step 4: Correct the spec**
 
-In `docs/superpowers/specs/2026-09-08-embryo-design.md`, make four edits:
+In `docs/superpowers/specs/2026-09-08-embryo-design.md`, make five edits:
 
 1. §2, decision 4: change "on a computer with no authority" to "on computers with no authority".
 2. §3, last line: change "a trial runs on a computer with no secrets, no chain and no policy, and installs nothing" to "a trial runs on computers with no secrets and no policy, on a scratch chain discarded with the trial, and installs nothing".
@@ -1000,8 +1080,13 @@ In `tests/flow/test_embryo_liturgy.py`, replace the turn-9 block's opening with:
     audit, reply = await embryo.public_say(signed9)
     trial = audit["tools"][0]
     assert trial["name"] == "try" and trial["status"] == "done", audit
-    assert [r["stdout"] for r in trial["runs"]] == ["1\n", "2\n"], trial
-    assert all(r["chain_head"] is not None for r in trial["runs"]), trial
+    # the audit carries what each invocation did and where it left the chain, never
+    # what it printed; two distinct heads are the disk surviving the first invocation
+    assert [r["exit_code"] for r in trial["runs"]] == [0, 0], trial
+    heads = [r["chain_head"] for r in trial["runs"]]
+    assert all(heads) and heads[0] != heads[1], trial
+    # the same command really ran twice, which is what a chain verb is for
+    assert [c for _, c in flow.host.guest.commands].count(counter_cmd) == 2
     # the scratch chain is discarded with the trial; the verb's own chain is untouched
     scratch = (
         await flow.client.get("/checkpoints", params={"label": f"verb/trial/{trial['trial']}"})
@@ -1111,7 +1196,11 @@ Replace the body of `test_t14_6_counter_chain_has_two_checkpoints`:
         assert [t["name"] for t in audit["tools"]] == ["try", "propose"], audit
         trial = audit["tools"][0]
         assert trial["status"] == "done", trial
-        assert [r["stdout"].strip() for r in trial["runs"]] == ["1", "2"], trial
+        # the audit summarises each invocation without its output (#118): two clean
+        # exits and two distinct chain heads are the trial's disk surviving run 1.
+        assert [r["exit_code"] for r in trial["runs"]] == [0, 0], trial
+        heads = [r["chain_head"] for r in trial["runs"]]
+        assert all(heads) and heads[0] != heads[1], trial
         scratch = await doors.client.get(
             "/checkpoints", params={"label": f"verb/trial/{trial['trial']}"}
         )
