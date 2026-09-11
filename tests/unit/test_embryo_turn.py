@@ -193,13 +193,14 @@ async def test_a_say_posts_the_request_and_acknowledges_without_a_model_call(
         anthropic_api_key="sk-test",
         model="anthropic",
         openai_api_key="o",
-        effort="medium",
+        default_effort="medium",
     )
     out = await say(ctx, payload_b64=b64("Hello. I am the one who hatched you."), door="api")
     audit, ack = _ack(out)
     assert audit["started"] is True and audit["turn"] == 1
     assert audit["principal"] == "root" and audit["door"] == "api"
-    assert audit["offered"] == ["propose", "remember", "try"] and audit["job"] == "rj-1"
+    assert audit["offered"] == ["effort", "propose", "remember", "try"]
+    assert audit["job"] == "rj-1"
     assert ack == {"turn": 1, "job": "rj-1"}
     posted = _fake(ctx).relay_jobs["rj-1"]
     assert posted["target"] == "https://api.anthropic.com/v1/messages"
@@ -208,7 +209,8 @@ async def test_a_say_posts_the_request_and_acknowledges_without_a_model_call(
     body = posted["body"]
     assert body["system"] == "SEED" and body["stream"] is True
     assert body["output_config"] == {"effort": "medium"}
-    assert [t["name"] for t in body["tools"]] == ["remember", "try", "propose"]  # insertion order
+    # insertion order
+    assert [t["name"] for t in body["tools"]] == ["remember", "effort", "try", "propose"]
     assert body["messages"][-1]["role"] == "user"
     assert "hatched you" in body["messages"][-1]["content"]
     pending = ctx.state.pending
@@ -522,13 +524,14 @@ async def test_tools_are_rebuilt_from_the_current_catalog_on_every_fork(tmp_path
     assert ctx.state.pending.calls[0]["result"]["stdout"] == "Example Domain\n"
     assert [t["name"] for t in _posted(ctx)["tools"]] == [
         "remember",
+        "effort",
         "try",
         "propose",
         "page_title",
     ]
     # the closing audit names every tool the turn offered, not only the first fork's
     audit, _ = split_output(await resume(ctx, ctx.state.pending.job))
-    assert audit["offered"] == ["page_title", "propose", "remember", "try"]
+    assert audit["offered"] == ["effort", "page_title", "propose", "remember", "try"]
 
 
 async def test_a_turn_that_ends_on_the_cap_claims_no_tools_it_never_offered(
@@ -553,7 +556,7 @@ async def test_a_turn_that_ends_on_the_cap_claims_no_tools_it_never_offered(
     audit, _ = split_output(out)
     assert audit["stopped"] == "cap" and len(audit["tools"]) == 20
     # page_title rode on the 20 requests that were posted, but not on the 21st
-    assert audit["offered"] == ["page_title", "propose", "remember", "try"]
+    assert audit["offered"] == ["effort", "page_title", "propose", "remember", "try"]
 
 
 async def test_closed_door_and_bad_payload_answer_one_line_and_post_nothing(
@@ -606,10 +609,16 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
     assert audit["hooks"][0]["computer_id"].startswith("comp-")
     # §10.7 is provable from the audit line alone: what was offered, not only
     # what was called. An authenticated principal who may propose gets all three.
-    assert audit["offered"] == ["propose", "remember", "try", "verify_ssh"]
+    assert audit["offered"] == ["effort", "propose", "remember", "try", "verify_ssh"]
     body = _posted(ctx)
     assert "recall:\n- who hatched me: mike" in body["messages"][-1]["content"]
-    assert {t["name"] for t in body["tools"]} == {"remember", "try", "propose", "verify_ssh"}
+    assert {t["name"] for t in body["tools"]} == {
+        "remember",
+        "effort",
+        "try",
+        "propose",
+        "verify_ssh",
+    }
     assert "ssh:mike" in state.principals and memory.entries[-1][1].principal == "ssh:mike"
 
     bad = json.dumps({"msg": "Who am I?", "sig": "bad"})
@@ -721,7 +730,9 @@ async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticat
     assert state.inbox == []
 
 
-async def test_authenticated_without_propose_rights_gets_remember_only(tmp_path: Path) -> None:
+async def test_authenticated_without_propose_rights_gets_remember_and_effort_only(
+    tmp_path: Path,
+) -> None:
     no_propose = {
         "principals": {"ssh:mike": {"invoke": [], "propose": False}},
         "hooks": ["verify_ssh"],
@@ -742,9 +753,9 @@ async def test_authenticated_without_propose_rights_gets_remember_only(tmp_path:
     )
     audit, _ = split_output(out)
     assert audit["principal"] == "ssh:mike"
-    # authenticated but may_propose is false: remember, and neither try nor propose
-    assert audit["offered"] == ["remember"]
-    assert {t["name"] for t in _posted(ctx)["tools"]} == {"remember"}
+    # authenticated but may_propose is false: remember and effort, neither try nor propose
+    assert audit["offered"] == ["effort", "remember"]
+    assert {t["name"] for t in _posted(ctx)["tools"]} == {"remember", "effort"}
 
 
 async def test_propose_tool_reports_a_declaration_error_as_invalid(tmp_path: Path) -> None:
@@ -867,3 +878,144 @@ async def test_a_refusal_on_the_next_request_ends_the_turn_after_the_calls_ran(
     assert audit["stopped"] == "error" and [t["name"] for t in audit["tools"]] == ["remember"]
     assert MODEL_FAILED in reply and "ConnectError" in reply
     assert ctx.state.pending is None
+
+
+async def test_every_model_call_records_the_effort_it_was_made_at(tmp_path: Path) -> None:
+    """#122: effort is per call now, so the audit says what each call actually spent.
+    One entry per call is what makes the measure's cost tables readable."""
+    ctx = _ctx(tmp_path, default_effort="medium")
+    out = await _turn(
+        ctx,
+        "go",
+        answers=[
+            message_of(tool_call_completion("remember", text="a fact")),
+            message_of(text_completion("noted")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert audit["effort"] == ["medium", "medium"]
+    assert len(audit["effort"]) == audit["model_calls"] == 2
+
+
+async def test_the_model_can_ask_for_more_effort_for_the_rest_of_the_turn(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path, default_effort="medium")
+    out = await _turn(
+        ctx,
+        "this is hard",
+        answers=[
+            message_of(tool_call_completion("effort", level="max")),
+            message_of(text_completion("done")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert audit["tools"] == [{"name": "effort", "status": "set"}]
+    assert _posted(ctx)["output_config"] == {"effort": "max"}
+    assert audit["effort"] == ["medium", "max"]
+
+
+async def test_a_request_for_more_effort_does_not_survive_the_turn(tmp_path: Path) -> None:
+    """A turn is a life. What one turn asked for is not the next turn's floor."""
+    ctx = _ctx(tmp_path, default_effort="medium")
+    await _turn(
+        ctx,
+        "this is hard",
+        answers=[
+            message_of(tool_call_completion("effort", level="max")),
+            message_of(text_completion("done")),
+        ],
+    )
+    out = await _turn(ctx, "and this is easy", answers=[message_of(text_completion("ok"))])
+    audit, _ = split_output(out)
+    assert audit["effort"] == ["medium"]
+
+
+async def test_the_model_cannot_ask_for_less_effort_than_the_run_was_given(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path, default_effort="high")
+    out = await _turn(
+        ctx,
+        "go",
+        answers=[
+            message_of(tool_call_completion("effort", level="low")),
+            message_of(text_completion("done")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert ctx.state.window[-1].audit["effort"] == ["high", "high"]
+    assert _posted(ctx)["output_config"] == {"effort": "high"}
+    assert audit["tools"] == [{"name": "effort", "status": "set"}]
+
+
+async def test_an_unknown_effort_level_is_refused_with_the_ones_that_would_work(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path, default_effort="medium")
+    out = await _turn(
+        ctx,
+        "go",
+        answers=[
+            message_of(tool_call_completion("effort", level="turbo")),
+            message_of(text_completion("done")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert audit["tools"][0]["status"] == "invalid"
+    assert "low, medium, high, xhigh, max" in audit["tools"][0]["error"]
+    # a refusal changes nothing: the second call is still made at the run's default
+    assert audit["effort"] == ["medium", "medium"]
+
+
+async def test_an_irreversible_verb_in_the_tool_list_raises_the_turn_effort(
+    tmp_path: Path,
+) -> None:
+    """The reversibility prior (#122). §10.8 keeps the embryo's own approvals to
+    `local` and `read`, so this catalog entry is placed directly: the prior is built
+    for the effects that exist once the invocation-time confirmation protocol does."""
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, default_effort="medium", api=api)
+    sender = parse_verb({**VERB, "name": "send_mail", "effect": "communicate"})
+    info = await api.create_recipe(sender.dockerfile)
+    await api.get_recipe(info.id)
+    ctx.state.catalog["send_mail"] = CatalogEntry(
+        verb=sender, status="ready", recipe_id=info.id, proposal_id="p-1"
+    )
+    out = await _turn(ctx, "go", answers=[message_of(text_completion("ok"))])
+    audit, _ = split_output(out)
+    assert "send_mail" in audit["offered"]
+    assert audit["effort"] == ["high"]
+    assert _posted(ctx)["output_config"] == {"effort": "high"}
+
+
+async def test_a_request_above_a_low_run_default_is_granted(tmp_path: Path) -> None:
+    """The model's standing request accumulates against the other requests, not
+    against the API's default: asking for more than a low floor must reach the wire."""
+    ctx = _ctx(tmp_path, default_effort="low")
+    out = await _turn(
+        ctx,
+        "go",
+        answers=[
+            message_of(tool_call_completion("effort", level="medium")),
+            message_of(text_completion("done")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert audit["effort"] == ["low", "medium"]
+    assert _posted(ctx)["output_config"] == {"effort": "medium"}
+
+
+async def test_a_second_request_cannot_walk_the_effort_back_down(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path, default_effort="low")
+    out = await _turn(
+        ctx,
+        "go",
+        answers=[
+            message_of(tool_call_completion("effort", level="xhigh")),
+            message_of(tool_call_completion("effort", level="medium")),
+            message_of(text_completion("done")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert audit["effort"] == ["low", "xhigh", "xhigh"]
+    # the second call is told what it actually got, not what it asked for
+    assert ctx.state.window[-1].audit["tools"][1] == {"name": "effort", "status": "set"}

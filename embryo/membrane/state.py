@@ -127,6 +127,11 @@ class Pending:
     # unconditional, so a build log, a trial result or a refusal consumed by a
     # turn the model service never answered would otherwise be lost for good.
     drained: list[dict[str, Any]] = field(default_factory=list)
+    # What the model asked for with the `effort` tool, and the effort every model
+    # call of this turn was actually made at, in order (#122). Both are the turn's:
+    # a turn is a life, so nothing here is the next turn's floor.
+    requested_effort: str | None = None
+    efforts: list[str | None] = field(default_factory=list)
 
     def to_doc(self) -> dict[str, Any]:
         return asdict(self)

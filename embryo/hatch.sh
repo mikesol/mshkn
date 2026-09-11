@@ -8,7 +8,8 @@
 # Optional: BRAIN_API_URL (what the brain dials; default MSHKN_API_URL),
 # MEMBRANE_MODEL (anthropic|scripted; default anthropic), MEMBRANE_MODEL_ID (the
 # model the brain runs; the membrane defaults to claude-opus-5), MEMBRANE_EFFORT
-# (low|medium|high|xhigh|max; default the API's), ANTHROPIC_API_KEY and
+# (low|medium|high|xhigh|max; the run's default effort, which a turn may raise but
+# never lower; default the API's), ANTHROPIC_API_KEY and
 # OPENAI_API_KEY (required for anthropic), ANTHROPIC_BASE_URL (optional, the
 # model's base URL; in scripted mode the server's route). Needs uv, curl and jq.
 set -euo pipefail

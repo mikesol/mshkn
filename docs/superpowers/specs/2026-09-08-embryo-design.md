@@ -19,7 +19,7 @@ The sentence the whole design serves, from the review: *the agent may generate a
 | 1 | Where does the mind live? | The agent is a checkpoint chain on mshkn labelled `brain`. Each interaction forks the head, runs, and self-destructs into the next checkpoint. Memory is the disk. |
 | 2 | How does a person talk to it? | curl. Conversation through an ingress rule in `sync` mode; the reply is the exec's stdout. Root commands through the authenticated fork-by-label endpoint. No client code. |
 | 3 | What runs in the brain? | A loop of about forty lines over plain JSON tool definitions and the Anthropic SDK, billed through the API. Not Claude Code: its power is the built-in tools we would have to switch off, and its permission model is a second, proprietary place to lock down what a JSON tool list already states. |
-| 4 | What can the brain do besides reason? | Three rules. **State is free for authenticated principals**: it may remember. **Action goes only through verbs**: no shell, no files, no network, no keys. **Capability is gated**: it may propose a change to itself; a human approves. A fourth tool, `try`, lets it test a declaration before proposing it, on a computer with no authority. |
+| 4 | What can the brain do besides reason? | Three rules. **State is free for authenticated principals**: it may remember. **Action goes only through verbs**: no shell, no files, no network, no keys. **Capability is gated**: it may propose a change to itself; a human approves. Two further tools are not effects on the world: `try` lets it test a declaration before proposing it, on a computer with no authority, and `effort` lets it ask for more deliberation on the rest of its turn (#122, #131). |
 | 5 | What is a verb? | A declaration (§4) whose invocation is a mshkn computer: ephemeral or a checkpoint chain (a chain reachable by ingress is specified for later). Nothing mshkn can do is inexpressible; "not expressible" is not a rejection reason. Every verb declares its effect. |
 | 6 | What does approval mean? | The declaration does it. The membrane executes the proposal exactly as written. What the proposal needs and cannot supply is declared in `requires` and blocks approval until root provides it. |
 | 7 | Who is root, and what does the brain hold? | Root is the mshkn account, minted only by the authenticated door; no hook can produce it. The brain holds a **scoped key** (#88) that can run verbs and nothing else: it cannot fork `brain`, so it cannot approve. The account key never enters a VM. |
@@ -36,7 +36,7 @@ Three parts, one of which we build.
 - **The membrane.** The program we build. It is the only thing that runs in the brain VM. It owns the catalog, the policy, the principals, the proposals, the inbox, the turn window and the memory store; it invokes the model; it invokes verbs on the model's behalf with the scoped key; it applies approved proposals, which with that key means building recipes and replacing its own files, nothing on the account beyond `verb/` chains; it enforces the invariants in §10. The model has no way to reach any of its files or the network except through the tools the membrane offers on that turn.
 - **Verbs.** Declarations the agent proposes and root approves. Each runs on its own computer from its own recipe. The brain holds no verb code and no verb state.
 
-The three rules in one sentence: the brain can change its own state freely, can change its own capabilities only with approval, and can act on the world only through verbs. The fourth tool, `try`, is not an exception: a trial runs on a computer with no secrets, no chain and no policy, and installs nothing.
+The three rules in one sentence: the brain can change its own state freely, can change its own capabilities only with approval, and can act on the world only through verbs. Neither of the other two tools is an exception. A `try` runs on a computer with no secrets, no chain and no policy, and installs nothing. An `effort` call reaches nothing outside the membrane at all -- not the catalog, not the policy, not a computer: it only says how much deliberation the membrane buys for the rest of the turn, and it can raise that and never lower it.
 
 ## 4. The verb model
 
@@ -44,7 +44,7 @@ A verb is one JSON document, carried inside a proposal (§5) or a trial:
 
 | Field | Meaning |
 |---|---|
-| `name` | Lower-case identifier matching `[a-z0-9_]+`, unique in the catalog, not `remember`, `propose` or `try`. It is the tool name as the model sees it (the API allows only letters, digits, `_` and `-` in tool names). |
+| `name` | Lower-case identifier matching `[a-z0-9_]+`, unique in the catalog, not `remember`, `propose`, `try` or `effort`. It is the tool name as the model sees it (the API allows only letters, digits, `_` and `-` in tool names). |
 | `description` | Shown to the model as the tool description. |
 | `params` | A JSON schema object. Becomes the tool's input schema. |
 | `dockerfile` | The recipe. Its final stage must be `FROM mshkn-base`; mshkn rejects anything else with a 422 before any build, and the membrane reports that as a failed proposal or trial. |
@@ -179,7 +179,7 @@ The priors, the state before turn 1:
 | `/brain/policy.json` | The initial policy, read once to seed the first `state.json`: `root` may invoke everything and propose; `anonymous` may invoke nothing and propose nothing; no pre-turn hooks; the public door is closed. |
 | `/brain/state.json` | Absent until the first command writes it. It is the one mutable document (#100): the policy, the self-description (empty), the catalog, proposals, trials, inbox and turn window (all empty), replaced atomically on every save. |
 | memory | Empty. |
-| Tools on turn 1 | `remember`, `try`, `propose`. |
+| Tools on turn 1 | `remember`, `effort`, `try`, `propose`. |
 
 ## 9. The liturgy
 
@@ -210,7 +210,7 @@ Policy is a JSON document, not code, and there are things no policy, proposal or
 4. Secrets are delivered only by declared scope, and never to the brain (#91, #92).
 5. The audit sink cannot be disabled: every turn prints its audit lines before its reply, and mshkn's `exec_log` keeps them outside the brain.
 6. The public door is closed while policy declares no pre-turn hook.
-7. Anonymous turns write no memory and hold no `remember`, `try` or `propose`.
+7. Anonymous turns write no memory and hold no `remember`, `try`, `propose` or `effort`. The last has a reason of its own: an anonymous caller that could ask for `max` on every turn is a cost attack through the public door.
 8. The embryo approves only `local` and `read` effects.
 
 ## 11. Proof and the measure

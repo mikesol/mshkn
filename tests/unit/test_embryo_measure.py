@@ -57,12 +57,13 @@ def _audit(**fields: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "door": "api",
         "principal": "root",
-        "offered": ["propose", "remember", "try"],
+        "offered": ["effort", "propose", "remember", "try"],
         "tools": [],
         "proposals": [],
         "memory_written": True,
         "stopped": "done",
         "model_calls": 1,
+        "effort": ["medium"],
         "usage": dict(USAGE),
     }
     base.update(fields)
@@ -95,7 +96,8 @@ def test_settings_come_from_the_env_file_and_the_environment_wins(tmp_path: Path
         env, {"BRAIN_API_URL": "http://10.0.0.1:8000"}, model_id="claude-sonnet-5", effort="medium"
     )
     assert with_brain.brain_api_url == "http://10.0.0.1:8000"
-    assert with_brain.model_id == "claude-sonnet-5" and with_brain.effort == "medium"
+    # `--effort` is the run's default now, not the effort (#122): the turn raises it.
+    assert with_brain.model_id == "claude-sonnet-5" and with_brain.default_effort == "medium"
 
 
 def test_a_missing_key_is_named(tmp_path: Path) -> None:
@@ -1136,7 +1138,7 @@ def _good_turns() -> list[Turn]:
                 door="ingress",
                 principal="ssh:mike",
                 tools=[{"name": "page_title", "computer_id": "c8"}],
-                offered=["page_title", "propose", "remember", "try", "verify_ssh"],
+                offered=["effort", "page_title", "propose", "remember", "try", "verify_ssh"],
             ),
             "Example Domain",
         ),
@@ -1411,7 +1413,11 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     assert set(summary["postconditions"]) == set(POSTCONDITIONS)
     assert (out_dir / "run.json").exists() and (out_dir / "transcript.md").exists()
     assert (out_dir / "final-list.json").exists() and any((out_dir / "commands").iterdir())
-    assert json.loads((out_dir / "run.json").read_text())["turns"][0]["label"] == "1"
+    run_doc = json.loads((out_dir / "run.json").read_text())
+    assert run_doc["turns"][0]["label"] == "1"
+    # what the run was given, and what each turn's calls actually spent (#122)
+    assert run_doc["default_effort"] is None
+    assert run_doc["turns"][0]["effort"] == ["medium"]
     deletes = [p for m, p, _ in api.requests if m == "DELETE"]
     assert (
         deletes[:2] == ["/ingress_rules/rule-1", "/keys/key-1"] and "/recipes/rcp-brain" in deletes

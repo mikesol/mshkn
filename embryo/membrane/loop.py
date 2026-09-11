@@ -27,6 +27,11 @@ OUT_OF_TIME = "out of time"
 class Tool:
     definition: dict[str, Any]
     handler: Handler
+    # What invoking it does outside the fork, on the declaration schema's scale
+    # (spec §"Verbs"). The effort prior reads it (#122). The built-ins default to
+    # `local`: none of them changes anything outside the membrane without an
+    # approval, and `effort` does not change anything outside the membrane at all.
+    effect: str = "local"
 
 
 async def run_calls(

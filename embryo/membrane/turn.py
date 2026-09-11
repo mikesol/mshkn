@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from membrane.declarations import DeclarationError
+from membrane.effort import API_DEFAULT, EFFORTS, highest, prior_for, resolve
 from membrane.hooks import principal_for
 from membrane.invariants import door_is_open, may_invoke, may_propose
 from membrane.loop import CAP_REACHED, OUT_OF_TOKENS, Tool, run_calls
@@ -63,6 +64,18 @@ TRY_TOOL = {
         "type": "object",
         "properties": {"verb": {"type": "object"}, "params": {"type": "object"}},
         "required": ["verb"],
+    },
+}
+EFFORT_TOOL = {
+    "name": "effort",
+    "description": "Ask for more deliberation on your remaining model calls this turn. One of "
+    "low, medium, high, xhigh, max. It is a request, not a setting: it can raise the effort this "
+    "turn is run at and never lower it, and it is forgotten when the turn ends. Available to "
+    "authenticated principals.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"level": {"type": "string", "enum": list(EFFORTS)}},
+        "required": ["level"],
     },
 }
 PROPOSE_TOOL = {
@@ -206,6 +219,20 @@ def build_tools(ctx: Context, pending: Pending) -> dict[str, Tool]:
             sleep=ctx.sleep,
         )
 
+    async def do_effort(inp: dict[str, Any]) -> dict[str, Any]:
+        level = str(inp.get("level", ""))
+        if level not in EFFORTS:
+            # A constructive refusal: it names what would have been valid.
+            return {
+                "status": "invalid",
+                "error": f"effort.level must be one of {', '.join(EFFORTS)}, not {level!r}",
+            }
+        pending.requested_effort = highest(pending.requested_effort, level)
+        # What it actually got, which is not always what it asked for: the run's
+        # default is a floor, and `None` on the wire is the API's default by name.
+        granted = _effort_for(ctx, pending, tools) or API_DEFAULT
+        return {"status": "set", "requested": level, "effort": granted}
+
     async def do_propose(inp: dict[str, Any]) -> dict[str, Any]:
         try:
             proposal = propose(state, inp)
@@ -216,6 +243,9 @@ def build_tools(ctx: Context, pending: Pending) -> dict[str, Tool]:
 
     if is_authenticated(principal):
         tools["remember"] = Tool(REMEMBER_TOOL, remember)
+        # §10.7's gate, for a reason of its own: an anonymous caller that could ask
+        # for `max` on every turn is a cost attack through the public door.
+        tools["effort"] = Tool(EFFORT_TOOL, do_effort)
         if may_propose(principal, policy):
             tools["try"] = Tool(TRY_TOOL, do_try)
             tools["propose"] = Tool(PROPOSE_TOOL, do_propose)
@@ -244,13 +274,26 @@ def build_tools(ctx: Context, pending: Pending) -> dict[str, Tool]:
 
             return handler
 
-        tools[name] = Tool(entry.verb.tool(), make(entry))
+        tools[name] = Tool(entry.verb.tool(), make(entry), effect=entry.verb.effect)
     return tools
+
+
+def _effort_for(ctx: Context, pending: Pending, tools: dict[str, Tool]) -> str | None:
+    """This call's effort (#122): the run's default, raised by the reversibility of
+    what the turn may do and by what the model asked for. The prior reads the tool
+    list because the membrane must choose before the call, and what the turn may do
+    is the only proxy it has for what the turn is about to do."""
+    return resolve(
+        default=ctx.settings.default_effort,
+        prior=prior_for(tool.effect for tool in tools.values()),
+        requested=pending.requested_effort,
+    )
 
 
 async def post_request(ctx: Context, pending: Pending, tools: dict[str, Tool]) -> None:
     """Compose the request and hand it to the relay; the job id is the turn's pointer."""
     settings = ctx.settings
+    effort = _effort_for(ctx, pending, tools)
     system = ctx.brain.seed()
     if ctx.state.self_description:
         system = f"{system}\n\n{ctx.state.self_description}"
@@ -261,7 +304,7 @@ async def post_request(ctx: Context, pending: Pending, tools: dict[str, Tool]) -
         # already handed to the relay must not change under it.
         messages=list(pending.messages),
         tools=[t.definition for t in tools.values()],
-        effort=settings.effort,
+        effort=effort,
     )
     pending.job = await ctx.api.create_relay_job(
         target=f"{settings.anthropic_base_url}/v1/messages",
@@ -269,6 +312,9 @@ async def post_request(ctx: Context, pending: Pending, tools: dict[str, Tool]) -
         body=body,
     )
     pending.model_calls += 1
+    # One entry per call, so the audit's `effort` and `model_calls` agree and the
+    # measure can read what a turn actually spent rather than what it was hatched with.
+    pending.efforts.append(effort)
 
 
 async def post_or_close(ctx: Context, pending: Pending, tools: dict[str, Tool]) -> str | None:
@@ -534,6 +580,7 @@ async def close_turn(ctx: Context, *, text: str, stopped: str) -> str:
         # The cost of the turn, from the model's own usage reports (#101). mem0's
         # extraction and embedding calls are not counted here.
         "model_calls": pending.model_calls,
+        "effort": pending.efforts,
         "usage": pending.usage,
         "forks": pending.forks,
         "started_at": pending.started_at,
