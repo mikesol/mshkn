@@ -1,7 +1,8 @@
 """The DNA executes end to end (spec §11 tier 2): the membrane in process against
 the real app over the fake host, a scripted model playing the liturgy. A trial,
 proposals, approval, builds (one failing first), a pre-turn hook, the door
-opening, an ephemeral verb and a chain verb with two checkpoints."""
+opening, an ephemeral verb, and a chain verb trialled twice on a scratch chain
+before it is proposed and then run to two checkpoints of its own."""
 
 from __future__ import annotations
 
@@ -278,18 +279,44 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert job.status_code == 200 and job.json()["delivery"]["status"] == "delivered"
     assert job.json()["response"]["body"]["stop_reason"] == "end_turn"
 
-    # turn 9: a chain verb; two invocations; 1 then 2; two checkpoints
+    # turn 9: a chain verb, trialled on a scratch chain first (#118), then proposed
     signed9 = {"msg": LITURGY[9], "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(signed9)}, "mike\n")
+    counter_cmd = embryo.script_output(COUNTER, {}, "1\n")
+    flow.host.guest.script_sequence[counter_cmd] = [
+        ExecResult(0, "1\n", ""),
+        ExecResult(0, "2\n", ""),
+    ]
     audit, reply = await embryo.public_say(signed9)
-    assert (await embryo.root("approve", "p-6")).startswith("p-6 building")
+    trial = audit["tools"][0]
+    assert trial["name"] == "try" and trial["status"] == "done", audit
+    # the audit carries what each invocation did and where it left the chain, never
+    # what it printed; two distinct heads are the disk surviving the first invocation
+    assert [r["exit_code"] for r in trial["runs"]] == [0, 0], trial
+    heads = [r["chain_head"] for r in trial["runs"]]
+    assert all(heads) and heads[0] != heads[1], trial
+    # the same command really ran twice, which is what a chain verb is for
+    assert [c for _, c in flow.host.guest.commands].count(counter_cmd) == 2
+    # the scratch chain is discarded with the trial; the verb's own chain is untouched
+    scratch = (
+        await flow.client.get("/checkpoints", params={"label": f"verb/trial/{trial['trial']}"})
+    ).json()
+    assert scratch == [], scratch
+    assert (await flow.client.get("/checkpoints", params={"label": "verb/counter"})).json() == []
+    # Ruling P3 again: the trial built this exact Dockerfile, so approving p-6 reuses
+    # the deduped recipe and reports ready rather than building a second time.
+    assert (await embryo.root("approve", "p-6")).startswith("p-6 ready")
     assert (await embryo.listing())["catalog"]["counter"]["status"] == "ready"
+    # the trial consumed the sequence above, so the verb's own two invocations get
+    # their own 1 then 2
+    flow.host.guest.script_sequence[counter_cmd] = [
+        ExecResult(0, "1\n", ""),
+        ExecResult(0, "2\n", ""),
+    ]
     count = {"msg": "count", "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(count)}, "mike\n")
-    counter_cmd = embryo.script_output(COUNTER, {}, "1\n")
     audit, reply = await embryo.public_say(count)
     assert reply.startswith("1") and audit["tools"][0]["chain_head"] is not None
-    flow.host.guest.script[counter_cmd] = ExecResult(0, "2\n", "")
     audit, reply = await embryo.public_say(count)
     assert reply.startswith("2")
     chain = (await flow.client.get("/checkpoints", params={"label": "verb/counter"})).json()

@@ -287,7 +287,14 @@ class ScriptedModel:
                 return self._text("I have no page_title verb yet.")
             return self._calls([self._call("page_title", url=page.group(1))])
         if "counts how many times" in message and can_propose:
-            return self._calls([self._call("propose", **_proposal("verb", "counter", COUNTER))])
+            return self._calls(
+                [
+                    # #118: a chain verb's persistence is the one thing a single-run
+                    # trial cannot show, so the trial runs twice on a scratch chain.
+                    self._call("try", verb=COUNTER, runs=[{}, {}]),
+                    self._call("propose", **_proposal("verb", "counter", COUNTER)),
+                ]
+            )
         if message == "count":
             if "counter" not in offered:
                 return self._text("I have no counter verb yet.")

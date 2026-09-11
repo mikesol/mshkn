@@ -221,8 +221,12 @@ async def test_turns_7_to_9_verbs() -> None:
     }
     assert (await _turn("page_title https://example.com")).text == "I have no page_title verb yet."
     out = await _turn("Give yourself a verb that counts how many times it has been called.")
+    # #118: the counter is trialled before it is proposed, and twice, because one run
+    # cannot show a chain verb that its disk survived.
+    assert [c.name for c in out.calls] == ["try", "propose"], out.calls
+    assert out.calls[0].input["verb"] == COUNTER and out.calls[0].input["runs"] == [{}, {}]
     assert (
-        out.calls[0].input["verb"] == COUNTER
+        out.calls[1].input["verb"] == COUNTER
         and COUNTER["state"] == "chain"
         and COUNTER["effect"] == "local"
     )

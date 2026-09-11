@@ -364,9 +364,34 @@ class TestPhase14Embryo:
     async def test_t14_6_counter_chain_has_two_checkpoints(self, doors: Doors) -> None:
         await doors.touch()
         audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[9]))
+        # #118: the chain verb is trialled twice on a scratch chain first, which is the
+        # only way a trial can show that its disk survived an invocation.
+        assert [t["name"] for t in audit["tools"]] == ["try", "propose"], audit
+        trial = audit["tools"][0]
+        assert trial["status"] == "done", trial
+        # the audit summarises each invocation without its output (#118): two clean
+        # exits, and two distinct chain heads.
+        assert [r["exit_code"] for r in trial["runs"]] == [0, 0], trial
+        heads = [r["chain_head"] for r in trial["runs"]]
+        assert all(heads) and heads[0] != heads[1], trial
+        # Distinct heads alone cannot tell a fork of run 1 from an unrelated fresh
+        # chain — both are random ids. The counter's own output can: each run's
+        # computer self-destructed, but its exec_log outlives it (T14.5 reads one the
+        # same way), and 1 then 2 is the disk surviving the first invocation.
+        said: list[str] = []
+        for run in trial["runs"]:
+            log = await doors.client.get(f"/computers/{run['computer_id']}/exec_log")
+            assert log.status_code == 200, log.text
+            said.append(log.json()["stdout"].strip())
+        assert said == ["1", "2"], said
+        # the scratch chain is discarded with the trial; the verb's own chain is untouched
+        scratch = await doors.client.get(
+            "/checkpoints", params={"label": f"verb/trial/{trial['trial']}"}
+        )
+        assert scratch.json() == [], scratch.text
         pid = audit["proposals"][0]["id"]
-        # No trial preceded this one, so approval is the first build of the counter.
-        assert await doors.approve_verb(pid, "counter") == "building"
+        # The trial built this very Dockerfile, so approval reuses that recipe (ruling P3).
+        assert await doors.approve_verb(pid, "counter") == "ready"
         listing = await doors.wait_ready("counter")
         assert listing["catalog"]["counter"]["status"] == "ready", listing["proposals"]
         _, one = await doors.public_say(_sign(doors.hatched.key_dir, "count"))

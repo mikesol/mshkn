@@ -54,19 +54,27 @@ class CatalogEntry:
 class Trial:
     id: str
     verb: Verb
-    params: dict[str, Any]
+    runs: list[dict[str, Any]]
     recipe_id: str | None
     status: TrialStatus
-    result: dict[str, Any] | None
+    results: list[dict[str, Any]]
+    build_log: str | None = None
+    # The scratch chain a `chain` verb's invocations share, `verb/trial/<id>`, and
+    # whether its checkpoints have been deleted (#118). `None` until run 1 is attempted.
+    chain: str | None = None
+    swept: bool = False
 
     def to_doc(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "verb": self.verb.to_doc(),
-            "params": self.params,
+            "runs": self.runs,
             "recipe_id": self.recipe_id,
             "status": self.status,
-            "result": self.result,
+            "results": self.results,
+            "build_log": self.build_log,
+            "chain": self.chain,
+            "swept": self.swept,
         }
 
     @classmethod
@@ -74,10 +82,13 @@ class Trial:
         return cls(
             id=doc["id"],
             verb=parse_verb(doc["verb"]),
-            params=doc["params"],
+            runs=doc["runs"],
             recipe_id=doc.get("recipe_id"),
             status=doc["status"],
-            result=doc.get("result"),
+            results=doc.get("results") or [],
+            build_log=doc.get("build_log"),
+            chain=doc.get("chain"),
+            swept=bool(doc.get("swept")),
         )
 
 
