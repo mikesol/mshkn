@@ -85,6 +85,19 @@ class _CleanupPass:
         elif self.interrupted is None:
             self.interrupted = outcome
 
+    async def steps(self, *actions: tuple[str, Awaitable[object]]) -> None:
+        """Run independent steps together, each as best-effort as `step`.
+
+        A cancellation lands on every step still in flight, each of which
+        records it and returns; gather then re-raises it once they are all
+        done, so nothing is left running when it is caught here.
+        """
+        try:
+            await asyncio.gather(*(self.step(what, action) for what, action in actions))
+        except asyncio.CancelledError as exc:
+            if self.interrupted is None:
+                self.interrupted = exc
+
 
 class ComputerService:
     def __init__(
@@ -358,14 +371,17 @@ class ComputerService:
         """
         logger.warning("Abandoning computer %s after a failed bring-up", computer_id)
         cleanup = _CleanupPass(computer_id)
-        await cleanup.step("route removal", self.host.proxy.remove_route(computer_id))
+        first: list[tuple[str, Awaitable[object]]] = [
+            ("route removal", self.host.proxy.remove_route(computer_id))
+        ]
         if vm is not None:
-            await cleanup.step("kill", self.host.hypervisor.kill(vm.pid))
-            await cleanup.step("evict", self.host.guest.evict(vm.vm_ip))
-        await cleanup.step(
-            "volume removal", self.host.blocks.remove(volume_id=volume_id, name=volume_name)
+            first.append(("kill", self.host.hypervisor.kill(vm.pid)))
+            first.append(("evict", self.host.guest.evict(vm.vm_ip)))
+        await cleanup.steps(*first)
+        await cleanup.steps(
+            ("volume removal", self.host.blocks.remove(volume_id=volume_id, name=volume_name)),
+            ("teardown", self.host.hypervisor.teardown_slot(slot)),
         )
-        await cleanup.step("teardown", self.host.hypervisor.teardown_slot(slot))
         await cleanup.step("status update", self._mark_destroyed(computer_id))
         # The row may already have been inserted, so the gauge has to be reset
         # from the database like every other state change (spec §10).
@@ -458,18 +474,29 @@ class ComputerService:
         on the returned pass for the caller to report.
         """
         cleanup = _CleanupPass(computer.id)
-        await cleanup.step("route removal", self.host.proxy.remove_route(computer.id))
+        # Two phases of independent steps (#148): the route, the process and
+        # the SSH session go together; then the volume and the tap, which both
+        # need the process gone. The Caddy reload and the tap's RCU wait would
+        # otherwise each add their whole length to the pass.
+        first: list[tuple[str, Awaitable[object]]] = [
+            ("route removal", self.host.proxy.remove_route(computer.id))
+        ]
         if computer.firecracker_pid is not None:
             # On a dead VM the process is gone; kill() is what releases the
             # API socket recorded for it.
-            await cleanup.step("kill", self.host.hypervisor.kill(computer.firecracker_pid))
+            first.append(("kill", self.host.hypervisor.kill(computer.firecracker_pid)))
         if computer.vm_ip:
-            await cleanup.step("evict", self.host.guest.evict(computer.vm_ip))
-        await cleanup.step(
-            "volume removal",
-            self.host.blocks.remove(volume_id=computer.thin_volume_id, name=computer.volume_name),
+            first.append(("evict", self.host.guest.evict(computer.vm_ip)))
+        await cleanup.steps(*first)
+        await cleanup.steps(
+            (
+                "volume removal",
+                self.host.blocks.remove(
+                    volume_id=computer.thin_volume_id, name=computer.volume_name
+                ),
+            ),
+            ("teardown", self.host.hypervisor.teardown_slot(computer.slot)),
         )
-        await cleanup.step("teardown", self.host.hypervisor.teardown_slot(computer.slot))
         await cleanup.step(
             "status update",
             update_computer_status(self.db, computer.id, ComputerStatus.DESTROYED),

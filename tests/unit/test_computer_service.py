@@ -361,3 +361,34 @@ async def test_bring_up_adds_the_route_while_the_ssh_warm_is_in_flight(
         "the route was published before the warm finished"
     )
     assert host.guest.warmed == [computer.vm_ip]
+
+
+async def test_teardown_removes_the_route_while_the_vm_is_being_killed(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Route removal, and then tap teardown, do not queue behind the steps they
+    are independent of: the Caddy reload overlaps the kill, and the tap delete
+    (67 ms of RCU on the live host) overlaps the volume removal (#148)."""
+    service, host = await _service(db, tmp_path)
+    computer = await service.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    routes_during_kill: list[dict[str, str]] = []
+    taps_during_volume_removal: list[list[int]] = []
+    real_kill = host.hypervisor.kill
+    real_remove = host.blocks.remove
+
+    async def slow_kill(pid: int) -> None:
+        await asyncio.sleep(0.01)
+        routes_during_kill.append(dict(host.proxy.routes))
+        await real_kill(pid)
+
+    async def slow_remove(*, volume_id: int, name: str) -> None:
+        await asyncio.sleep(0.01)
+        taps_during_volume_removal.append(list(host.hypervisor.torn_down))
+        await real_remove(volume_id=volume_id, name=name)
+
+    monkeypatch.setattr(host.hypervisor, "kill", slow_kill)
+    monkeypatch.setattr(host.blocks, "remove", slow_remove)
+    await service.destroy(computer.id)
+    assert routes_during_kill == [{}], "the route went while the kill was in flight"
+    assert taps_during_volume_removal == [[computer.slot]], "the tap went during the volume removal"
+    assert service.allocator.free_slots == frozenset({computer.slot})

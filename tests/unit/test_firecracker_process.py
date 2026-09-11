@@ -113,3 +113,19 @@ async def test_wait_for_port_times_out_on_a_closed_port() -> None:
     await server.wait_closed()
     with pytest.raises(TimeoutError, match="did not become reachable"):
         await wait_for_port("127.0.0.1", port, timeout=0.2)
+
+
+async def test_kill_returns_as_soon_as_the_process_is_gone(tmp_path: Path) -> None:
+    """The wait after SIGKILL is event-driven, not a 100 ms poll (#148).
+
+    On the live host the poll cost every destroy 100 to 200 ms; a pidfd wakes
+    the loop the moment the process exits.
+    """
+    socket_path = str(tmp_path / "fc.socket")
+    binary = _fake_binary(tmp_path, creates_socket=True)
+    pid = await start_firecracker_process(socket_path, binary=binary)
+    start = time.perf_counter()
+    await kill_firecracker_process(pid)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 0.05, f"kill took {elapsed:.3f}s for a process that died at once"
+    assert _survivors(binary) == []

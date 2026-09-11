@@ -211,23 +211,67 @@ async def start_firecracker_process(
     return proc.pid
 
 
+KILL_WAIT_SECONDS = 2.0
+
+
 async def kill_firecracker_process(pid: int) -> None:
-    """Kill a Firecracker process by PID and wait for it to exit."""
+    """Kill a Firecracker process by PID and wait for it to exit.
+
+    The wait is for the process to release its tap and block device, and for
+    the pid to be reaped so `is_alive` stops reporting it. A pidfd wakes the
+    loop the moment the process exits; the 100 ms poll it replaces cost every
+    destroy on the live host 100 to 200 ms (#148).
+    """
     try:
         os.kill(pid, signal.SIGKILL)
         logger.info("Killed Firecracker PID=%d", pid)
     except ProcessLookupError:
         logger.warning("Firecracker PID=%d already dead", pid)
         return
+    if not await _wait_for_exit(pid, KILL_WAIT_SECONDS):
+        logger.warning("Firecracker PID=%d still alive after %.0fs", pid, KILL_WAIT_SECONDS)
 
-    # Wait for process to actually exit so it releases tap device fds
-    for _ in range(20):  # up to 2s
+
+def _is_gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+async def _wait_for_exit(pid: int, timeout: float) -> bool:
+    """True once the pid is reaped, False if it is still there after timeout."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        fd = None  # no pidfd support here; poll instead
+    if fd is not None:
+        exited: asyncio.Future[None] = loop.create_future()
+
+        def on_exit() -> None:
+            if not exited.done():
+                exited.set_result(None)
+
+        loop.add_reader(fd, on_exit)
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        await asyncio.sleep(0.1)
-    logger.warning("Firecracker PID=%d still alive after 2s", pid)
+            await asyncio.wait_for(exited, timeout)
+        except TimeoutError:
+            return False
+        finally:
+            loop.remove_reader(fd)
+            os.close(fd)
+    # The pidfd fires on exit; the child watcher reaps a moment later, and
+    # `is_alive` (os.kill(pid, 0)) counts a zombie as alive until then.
+    while not _is_gone(pid):
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(0.002)
+    return True
 
 
 async def wait_for_port(ip: str, port: int, *, timeout: float, interval: float = 0.01) -> None:
