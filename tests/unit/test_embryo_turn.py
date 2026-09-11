@@ -24,8 +24,10 @@ from membrane.turn import (
     BAD_PAYLOAD,
     DOOR_CLOSED,
     MODEL_FAILED,
+    TRY_TOOL,
     Context,
     Door,
+    _tool_summary,
     compose_input,
     decode_payload,
     history_from,
@@ -867,3 +869,65 @@ async def test_a_refusal_on_the_next_request_ends_the_turn_after_the_calls_ran(
     assert audit["stopped"] == "error" and [t["name"] for t in audit["tools"]] == ["remember"]
     assert MODEL_FAILED in reply and "ConnectError" in reply
     assert ctx.state.pending is None
+
+
+def test_the_try_tool_offers_a_list_of_invocations() -> None:
+    props = TRY_TOOL["input_schema"]["properties"]
+    assert props["runs"]["type"] == "array" and props["runs"]["items"]["type"] == "object"
+    assert TRY_TOOL["input_schema"]["required"] == ["verb"]
+    # the seed says nothing about runs; this description is where the model learns it
+    assert "runs" in TRY_TOOL["description"] and "scratch chain" in TRY_TOOL["description"]
+
+
+def test_the_audit_summarises_every_run_without_its_output() -> None:
+    """A chain trial's exit_code and chain_head moved from the top level into runs,
+    so without this an audited trial reads as {name, status, trial} and loses every
+    reading. stdout stays out of the audit line, as it always has been."""
+    summary = _tool_summary(
+        {
+            "name": "try",
+            "result": {
+                "trial": "t-1",
+                "status": "done",
+                "build_log": "ok",
+                "runs": [
+                    {
+                        "status": "ok",
+                        "exit_code": 0,
+                        "computer_id": "comp-1",
+                        "stdout": "1\n",
+                        "stderr": "",
+                        "chain_head": "ckpt-a",
+                    },
+                    {
+                        "status": "ok",
+                        "exit_code": 0,
+                        "computer_id": "comp-2",
+                        "stdout": "2\n",
+                        "stderr": "",
+                        "chain_head": "ckpt-b",
+                    },
+                ],
+            },
+        }
+    )
+    assert summary["name"] == "try" and summary["status"] == "done"
+    assert summary["trial"] == "t-1"
+    assert summary["runs"] == [
+        {"status": "ok", "exit_code": 0, "chain_head": "ckpt-a"},
+        {"status": "ok", "exit_code": 0, "chain_head": "ckpt-b"},
+    ]
+
+
+def test_the_audit_keeps_a_runs_error_and_omits_absent_keys() -> None:
+    summary = _tool_summary(
+        {
+            "name": "try",
+            "result": {
+                "trial": "t-2",
+                "status": "out of time",
+                "runs": [{"status": "error", "error": "deferred def-1"}],
+            },
+        }
+    )
+    assert summary["runs"] == [{"status": "error", "error": "deferred def-1"}]
