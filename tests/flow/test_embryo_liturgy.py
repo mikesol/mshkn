@@ -316,17 +316,26 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     count = {"msg": "count", "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(count)}, "mike\n")
     audit, reply = await embryo.public_say(count)
-    assert reply.startswith("1") and audit["tools"][0]["chain_head"] is not None
+    assert reply.startswith("1")
+    first_head = audit["tools"][0]["chain_head"]
+    assert first_head is not None
     audit, reply = await embryo.public_say(count)
     assert reply.startswith("2")
+    second_head = audit["tools"][0]["chain_head"]
+    # #139: each invocation reports the checkpoint it created, so a new head per call
+    # is what proves the chain advanced. Counting the label's checkpoints asserts
+    # retained history instead, which #93 retention prunes down to the head alone --
+    # on the live host the first invocation's checkpoint is collected within seconds,
+    # and this tier passed only because the fake host has no reaper.
+    assert second_head is not None and second_head != first_head
     chain = (await flow.client.get("/checkpoints", params={"label": "verb/counter"})).json()
-    assert len(chain) == 2
+    assert second_head in {c["id"] for c in chain}  # the head is never pruned
 
     # turn 10: the final state is the evidence
     listing = await embryo.listing()
     assert set(listing["catalog"]) == {"verify_ssh", "page_title", "counter"}
     assert all(e["status"] == "ready" for e in listing["catalog"].values())
-    assert listing["catalog"]["counter"]["chain_length"] == 2
+    assert listing["catalog"]["counter"]["chain_head"] == second_head
     assert listing["principals"] == ["ssh:mike"]
     assert listing["door"] == {
         "status": "open",

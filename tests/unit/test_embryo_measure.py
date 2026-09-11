@@ -781,7 +781,10 @@ class FakeDoors:
                 entry["status"] = proposal["status"] = "ready"
         counts = len([s for s in self.sent if isinstance(s[2], dict) and s[2].get("msg") == COUNT])
         if "counter" in self.catalog:
+            # What `list_state` reports: the newest checkpoint on the label, which is
+            # the head the last invocation created (`verbs.py`, `chain_head`).
             self.catalog["counter"]["chain_length"] = counts
+            self.catalog["counter"]["chain_head"] = f"ck-{counts}" if counts else None
         return {
             "turn": self.turn,
             "door": {
@@ -1096,7 +1099,13 @@ def _good_final() -> dict[str, Any]:
                 "chain_length": 0,
                 "recipe_id": "r2",
             },
-            "counter": {"status": "ready", "state": "chain", "chain_length": 2, "recipe_id": "r3"},
+            "counter": {
+                "status": "ready",
+                "state": "chain",
+                "chain_length": 2,
+                "chain_head": "k2",
+                "recipe_id": "r3",
+            },
         },
         "proposals": [
             {
@@ -1268,16 +1277,56 @@ def test_page_title_needs_the_words_a_gone_computer_and_its_log() -> None:
     }
 
 
-def test_counter_needs_one_then_two_and_a_chain_of_two() -> None:
+def _repeated_head_turns() -> list[Turn]:
+    """The counted turns with both invocations reporting one head: the second
+    invocation left no new checkpoint, so the chain did not advance."""
+    turns = []
+    for t in _good_turns():
+        if t.label.startswith("9-count"):
+            audit = json.loads(json.dumps(t.audit))
+            for call in audit.get("tools", []):
+                if call.get("name") == "counter":
+                    call["chain_head"] = "k1"
+            t = _turn(t.label, t.door, audit, t.reply)
+        turns.append(t)
+    return turns
+
+
+def test_counter_needs_one_then_two_and_a_head_that_advanced_once_per_call() -> None:
+    """The counter is monotonic and every invocation leaves a new head (#139).
+    Counting the chain's rows instead asserted retained history, which #93
+    retention is entitled to collect: `list_prunable_checkpoints` keeps every
+    label's newest row and prunes the rest."""
     checks = _good_checks()
     checks["c9b"]["stdout"] = "3\n"
-    assert _judge(checks=checks)["counter"]["ok"] is False
+    assert _judge(checks=checks)["counter"]["ok"] is False  # 1 then 3, not monotonic
+
+    turns = _repeated_head_turns()
+    result = _judge(turns=turns)["counter"]
+    assert result["ok"] is False  # two calls, one head: the chain never advanced
+    assert result["evidence"]["chain_heads"] == ["k1", "k1"]
+
     final = _good_final()
-    final["catalog"]["counter"]["chain_length"] = 3
-    assert _judge(final=final)["counter"]["ok"] is False
+    final["catalog"]["counter"]["chain_head"] = "k-other"
+    assert _judge(final=final)["counter"]["ok"] is False  # the head is not the last call's
+
     turns = [t for t in _good_turns() if not t.label.startswith("9-count")]
     result = _judge(turns=turns)["counter"]
     assert result["ok"] is False and result["evidence"]["counts"] == []
+
+
+def test_the_counter_survives_retention_pruning_its_history() -> None:
+    """#139: `2026-09-11-turn2-run-1` invoked its counter twice, got 1 then 2, and
+    the reaper pruned the first invocation's checkpoint nine seconds later, so the
+    catalog reported one row for two invocations. Every durable fact still holds,
+    and the postcondition must pass on them."""
+    final = _good_final()
+    final["catalog"]["counter"]["chain_length"] = 1  # the older row is gone
+    result = _judge(final=final)["counter"]
+    assert result["ok"] is True
+    assert result["evidence"]["counts"] == [1, 2]
+    assert result["evidence"]["chain_heads"] == ["k1", "k2"]
+    assert result["evidence"]["final_chain_head"] == "k2"
 
 
 def test_a_trials_recipe_is_declared() -> None:
@@ -1650,11 +1699,13 @@ def test_the_counter_passes_when_the_model_verifies_its_verb_within_one_turn() -
     checks["c9b"]["stdout"] = "called 3 times\n"
     final = _good_final()
     final["catalog"]["counter"]["chain_length"] = 3
+    final["catalog"]["counter"]["chain_head"] = "k3"  # the third invocation's head
 
     result = _judge(turns=turns, checks=checks, final=final)["counter"]
 
     assert result["ok"] is True
     assert result["evidence"]["counts"] == [1, 2, 3]
+    assert result["evidence"]["chain_heads"] == ["k1", "k2", "k3"]
 
 
 def test_the_counter_fails_when_an_invocation_is_lost() -> None:
