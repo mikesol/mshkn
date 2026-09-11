@@ -153,6 +153,26 @@ The clause is restored with `or omits` made explicit, since that is the half the
 
 **The structural fact underneath is not this issue's to fix.** The embryo cannot read its own policy: its tools are `remember`, `try`, `propose` and approved verbs, and `list` is a root command. Every policy proposal is written blind, and before the cut the seed's schema paragraph stood in for reading it. An agent asked to replace a document should be able to read it; that is a design change adjacent to #119 and #124, and it would retire this clause properly rather than restating it.
 
+## 9b. The policy is part of a turn's environment
+
+Five runs against the reduced seed produced the same finding three times: the embryo will not write a policy it cannot read. `2026-09-10-postcut-run-1` refused because a blind full replacement might drop root's own access; `2026-09-11-postcut-run-5` asked for the schema rather than guess, and offered to propose the door "in the same turn" if shown it.
+
+**This is not a gap the seed or a refusal could close.** A refusal only teaches an agent willing to attempt the action, and a policy is the one declaration that is not safe to attempt: there is no `try` for it, a malformed one is refused harmlessly but a *valid-but-wrong* one is applied irrevocably, and `parse_policy` is permissive enough that `{}` succeeds and empties everything. A careful agent declines, and every model measured was careful.
+
+The real defect is narrower than "the schema is unlearnable". Approval can replace exactly three things (§10.3), and §5 requires each to be proposed as a whole document rather than a diff. Ask how much of each the embryo can read:
+
+| Mutable | How the embryo reads it |
+|---|---|
+| `self_description` | in full — `post_request` appends it to the system prompt |
+| `catalog` | as the turn's tool list, filtered to what this principal may invoke |
+| `policy` | **not at all** |
+
+Two of three already satisfy "you can read what you may be asked to replace". The policy was the exception, which made §5's whole-document rule unsatisfiable for it: no one can responsibly author a replacement for a document they have never seen.
+
+So `compose_input` carries the live policy, beside the principal, the door, the inbox and the recalled memories. It is passed in rather than fetched: a fourth built-in that reads state would contradict the seed's second rule ("You reason. All effects happen outside you, through verbs"), while enriching the turn's environment leaves the three rules untouched. The document is also its own example, so the schema becomes learnable by inspection — which is why nothing goes back into the seed.
+
+It is shown on every turn, including anonymous ones. Withholding it there was considered, for consistency with §10.7's reduced anonymous turn, and rejected: `close_turn` appends every turn to `state.window` regardless of principal and `start_turn` feeds that window to the next request, so an anonymous turn already carries root's recent conversation. Withholding the policy would buy little and would make the agent's self-knowledge vary by who knocked. The window's cross-principal bleed is the larger disclosure question and is not this issue's.
+
 ## 10. What this costs, and what the measure will say
 
 More turns per run, and probably lower scores. That is the point: the score is meant to measure the organism, not the genome. The 2026-09-09 round is the baseline for what an unaided agent did with turn 2, and it reached 3 of 7 at best; the 2026-09-10 round reached 7 of 7 with the seed as it now stands.

@@ -277,7 +277,13 @@ async def test_a_refusal_reaches_the_next_turn_the_way_a_build_log_does(
     await approve(api, state, p.id)
     inbox, state.inbox = state.inbox, []
     text = compose_input(
-        turn=2, principal="root", door="api", inbox=inbox, recalled=[], message="hi"
+        turn=2,
+        principal="root",
+        door="api",
+        policy=state.policy.to_doc(),
+        inbox=inbox,
+        recalled=[],
+        message="hi",
     )
     assert "administer" in text and "p-1" in text
 

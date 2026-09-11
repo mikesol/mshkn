@@ -126,14 +126,28 @@ def compose_input(
     turn: int,
     principal: str,
     door: str,
+    policy: dict[str, Any],
     inbox: list[InboxItem],
     recalled: list[str],
     message: str,
 ) -> str:
+    """The turn's environment, and the policy is part of it (#123).
+
+    A proposal is a whole document, not a diff (§5), and the embryo may be asked
+    to replace its policy -- so it must be able to read the one it is replacing.
+    Of the three things approval can change (§10.3), the self-description is
+    already read in full (it is appended to the system prompt) and the catalog
+    is read as the turn's tool list; the policy was the one it could not see at
+    all. Three of five runs against the reduced seed stalled there, two saying so
+    outright: `2026-09-10-postcut-run-1` would not write a replacement blind, and
+    `2026-09-11-postcut-run-5` asked for the schema rather than guess. Passing it
+    in rather than adding a tool to fetch it keeps the second rule intact: the
+    brain reasons, and every effect still goes through a verb."""
     inbox_text = "".join(f"- {item.text}\n" for item in inbox)
     recall_text = "".join(f"- {text}\n" for text in recalled)
     return (
         f"[turn {turn} | principal {principal} | door {door}]\n"
+        f"policy:\n{json.dumps(policy, sort_keys=True)}\n"
         f"inbox:\n{inbox_text}\nrecall:\n{recall_text}\nmessage:\n{message}"
     )
 
@@ -298,7 +312,13 @@ async def start_turn(
         inbox = []
     recalled = ctx.mem().recall(message, principal=principal) if is_authenticated(principal) else []
     user = compose_input(
-        turn=turn, principal=principal, door=door, inbox=inbox, recalled=recalled, message=message
+        turn=turn,
+        principal=principal,
+        door=door,
+        policy=state.policy.to_doc(),
+        inbox=inbox,
+        recalled=recalled,
+        message=message,
     )
     pending = Pending(
         turn=turn,
