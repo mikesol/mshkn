@@ -132,7 +132,7 @@ This section replaces §6 of the embryo spec from "A `say` turn, in order" on; t
 
 ### `say`
 
-Steps 1 to 4 of the embryo spec's §6 run as today: principal (hooks on the public door), builds and trials polled, inbox drained and memory recalled for an authenticated principal, tools decided. Then, instead of the loop: the membrane composes the request the model module used to send (`model`, `max_tokens` 64000, `stream: true`, `system`, `messages`, `tools`, and `output_config.effort` when set), posts it to `POST /relay` with `target` `<ANTHROPIC_BASE_URL>/v1/messages` and the key and version as `forward_headers`, stores `pending`, prints one audit line (`turn`, `principal`, `door`, `hooks`, `offered`, `job`, `started: true`) and the acknowledgement `{"turn": N, "job": "rj-…"}`, saves, exits 0. No model call happens inside a `say`. A closed door and a bad payload answer as today. A `say` that finds `pending` set runs the hooks, appends to `queue`, prints the audit line and `{"queued": position}`, and exits 0.
+Steps 1 to 4 of the embryo spec's §6 run as today: principal (hooks on the public door), builds and trials polled, inbox drained and memory recalled for an authenticated principal, tools decided. Then, instead of the loop: the membrane composes the request the model module used to send (`model`, `max_tokens` 64000, `stream: true`, `system`, `messages`, `tools`, and `output_config.effort` when set; `system` is a list of text blocks and it and the request carry `cache_control` since #126), posts it to `POST /relay` with `target` `<ANTHROPIC_BASE_URL>/v1/messages` and the key and version as `forward_headers`, stores `pending`, prints one audit line (`turn`, `principal`, `door`, `hooks`, `offered`, `job`, `started: true`) and the acknowledgement `{"turn": N, "job": "rj-…"}`, saves, exits 0. No model call happens inside a `say`. A closed door and a bad payload answer as today. A `say` that finds `pending` set runs the hooks, appends to `queue`, prints the audit line and `{"queued": position}`, and exits 0.
 
 ### `resume <job_id>`
 
@@ -166,7 +166,7 @@ Unchanged from the embryo spec, and one thing more: it cannot make the host call
 
 ### `membrane serve`
 
-`membrane serve [--port 8000]` answers `POST /v1/messages` from the `ScriptedModel` on the Messages API wire format, with the standard library's HTTP server and no new dependency. It reads `system`, `messages` and `tools` from the request body, calls the scripted model, and answers a plain JSON message: `content` as the scripted completion's content, `stop_reason` `tool_use` when it carries calls and `end_turn` otherwise, `usage` zeros. `stream` is ignored; the relay stores the JSON verbatim. The handler is one function over the body so the flow tier can mount it as an ASGI app. It refuses to start unless `MEMBRANE_MODEL=scripted`.
+`membrane serve [--port 8000]` answers `POST /v1/messages` from the `ScriptedModel` on the Messages API wire format, with the standard library's HTTP server and no new dependency. It reads `system` (the text of its blocks, `model.system_text`), `messages` and `tools` from the request body, calls the scripted model, and answers a plain JSON message: `content` as the scripted completion's content, `stop_reason` `tool_use` when it carries calls and `end_turn` otherwise, `usage` zeros. `stream` is ignored; the relay stores the JSON verbatim. The handler is one function over the body so the flow tier can mount it as an ASGI app. It refuses to start unless `MEMBRANE_MODEL=scripted`.
 
 ### `.env` and hatching
 

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from membrane.liturgy import LITURGY
-from membrane.model import zero_usage
+from membrane.model import Completion, compose_request, zero_usage
 from membrane.scripted import ScriptedModel
 from membrane.serve import answer, build_server, main
 
@@ -22,12 +22,12 @@ if TYPE_CHECKING:
 def _request(
     system: str, message: str, tools: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
-    return {
-        "model": "scripted",
-        "max_tokens": 64000,
-        "stream": True,
-        "system": system,
-        "messages": [
+    """What the membrane composes (`compose_request`): the system prompt arrives
+    as cacheable text blocks, not a bare string (#126)."""
+    return compose_request(
+        model_id="scripted",
+        system=system,
+        messages=[
             {
                 "role": "user",
                 "content": (
@@ -36,8 +36,9 @@ def _request(
                 ),
             }
         ],
-        "tools": tools or [],
-    }
+        tools=tools or [],
+        effort=None,
+    )
 
 
 def test_answer_is_a_message_with_end_turn_for_text_and_tool_use_for_calls() -> None:
@@ -55,6 +56,31 @@ def test_answer_is_a_message_with_end_turn_for_text_and_tool_use_for_calls() -> 
     assert calls["stop_reason"] == "tool_use"
     assert [b["type"] for b in calls["content"]] == ["tool_use", "tool_use", "tool_use"]
     assert [b["name"] for b in calls["content"]] == ["try", "propose", "propose"]
+
+
+class _Recorder:
+    """A model that keeps what `answer` handed it."""
+
+    def __init__(self) -> None:
+        self.system: object = None
+
+    async def complete(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        timeout: float | None = None,
+    ) -> Completion:
+        del messages, tools, timeout
+        self.system = system
+        return Completion(text="", calls=(), content=[])
+
+
+def test_answer_hands_the_model_the_system_words_not_the_cacheable_blocks() -> None:
+    recorder = _Recorder()
+    answer(recorder, _request("seed\n\nI verify.", LITURGY[1]))
+    assert recorder.system == "seed\n\nI verify."
 
 
 def test_the_server_answers_post_v1_messages_and_nothing_else() -> None:

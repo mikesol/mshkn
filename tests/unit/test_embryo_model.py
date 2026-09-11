@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from membrane.model import (
     ANTHROPIC_VERSION,
+    CACHE_CONTROL,
     MAX_TOKENS,
     USAGE_KEYS,
     ToolCall,
@@ -12,6 +13,7 @@ from membrane.model import (
     compose_request,
     parse_message,
     request_headers,
+    system_text,
     usage_from,
     zero_usage,
 )
@@ -31,14 +33,43 @@ def test_compose_request_streams_with_the_full_budget_and_only_what_is_set() -> 
         "model": "claude-opus-5",
         "max_tokens": MAX_TOKENS,
         "stream": True,
-        "system": "seed",
+        "system": [{"type": "text", "text": "seed", "cache_control": CACHE_CONTROL}],
         "messages": [{"role": "user", "content": "hi"}],
         "tools": TOOLS,
+        "cache_control": CACHE_CONTROL,
     }
     assert MAX_TOKENS == 64000
     bare = compose_request(model_id="m", system="s", messages=[], tools=[], effort="medium")
     assert "tools" not in bare and bare["output_config"] == {"effort": "medium"}
     assert "thinking" not in bare
+
+
+def test_compose_request_marks_the_prefix_and_the_settled_tail_cacheable() -> None:
+    """#126: the same prefix was re-encoded at full price on every call of a turn."""
+    body = compose_request(
+        model_id="claude-opus-5",
+        system="seed",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=TOOLS,
+        effort=None,
+    )
+    # `tools` render before `system`, so the one breakpoint on the system block
+    # covers the tool list too: the whole stable prefix of every call of a turn.
+    assert body["system"] == [{"type": "text", "text": "seed", "cache_control": CACHE_CONTROL}]
+    # The tail is settled the moment the request is composed, so the automatic
+    # breakpoint lands at the end of it and the next call reads all of it back.
+    assert body["cache_control"] == CACHE_CONTROL
+    # The default five minutes: the calls of a turn are seconds apart, every read
+    # refreshes the entry, and the one-hour TTL would only double the write price.
+    assert CACHE_CONTROL == {"type": "ephemeral"}
+
+
+def test_system_text_reads_the_prompt_back_out_of_the_cacheable_blocks() -> None:
+    body = compose_request(
+        model_id="m", system="seed\n\nI verify.", messages=[], tools=[], effort=None
+    )
+    assert system_text(body["system"]) == "seed\n\nI verify."
+    assert system_text([]) == "" and system_text(None) == ""
 
 
 def test_request_headers_carry_the_version_and_the_key_when_there_is_one() -> None:
