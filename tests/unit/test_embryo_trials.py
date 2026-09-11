@@ -363,3 +363,29 @@ async def test_a_trial_with_no_time_left_makes_no_request() -> None:
         "ran": 0,
         "of": 1,
     }
+
+
+async def test_a_poll_with_no_time_left_leaves_the_trial_building_for_the_next_turn() -> None:
+    """#135: a recipe that became ready between turns, polled in a turn with less
+    than RUN_MARGIN left, must not be marked done having run nothing. The next
+    poll with room runs it, exactly as try_verb defers a run it cannot fit."""
+    api, state = FakeMshkn(), State()
+    info = await api.create_recipe(VERB["dockerfile"])
+    await api.get_recipe(info.id)  # ready
+    state.trials["t-1"] = Trial(
+        id="t-1",
+        verb=parse_verb(VERB),
+        runs=[{"url": "u"}],
+        recipe_id=info.id,
+        status="building",
+        results=[],
+    )
+    api.calls.clear()
+    assert await poll_trials(api, state, remaining=RUN_MARGIN - 1.0) == []
+    assert state.trials["t-1"].status == "building"
+    assert "create_computer" not in [c[0] for c in api.calls]
+    api.outputs[render_command(parse_verb(VERB), {"url": "u"})] = (0, "ran", "")
+    items = await poll_trials(api, state, remaining=50.0)
+    assert len(items) == 1 and "trial t-1 of page_title: 1 of 1 ran" in items[0].text
+    trial = state.trials["t-1"]
+    assert trial.status == "done" and trial.results[0]["stdout"] == "ran"

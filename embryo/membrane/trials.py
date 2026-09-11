@@ -206,6 +206,11 @@ async def poll_trials(api: MshknApi, state: State, *, remaining: float) -> list[
             continue
         info = await api.get_recipe(trial.recipe_id)
         if info.status == "ready":
+            if remaining < RUN_MARGIN:
+                # Ready, but this turn cannot fit a run: stay `building` so the next
+                # poll with room runs it, as try_verb defers in the same case. Marking
+                # it done here reported `0 of n ran` and nothing ever retried it (#135).
+                continue
             result = await run_trial(api, trial, remaining=remaining)
             trial.status = "done"
             trial.build_log = log_tail(info.build_log)
