@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -130,7 +131,9 @@ async def test_builds_exports_writes_volume_zero_and_drops_the_bare_template(
     )
     assert log == "Successfully built base"
     cmd = str(seen["cmd"])
-    assert cmd.startswith("docker build --memory=4g --cpuset-cpus=0-1 -t mshkn-base ")
+    assert cmd.startswith(
+        "docker build --memory=4g --cpuset-cpus=0-1 --build-arg APT_MIRROR='' -t mshkn-base "
+    )
     assert seen["context"] == ["Dockerfile", "mshkn_key.pub"]
     assert seen["key"] == "ssh-ed25519 AAAA test\n"
     build_dir = seen["build_dir"]
@@ -254,3 +257,54 @@ async def test_base_volume_command_succeeds(
     assert "base volume mshkn-base written from mshkn-base" in capsys.readouterr().out
     assert ("mkfs", "mshkn-base") in host.blocks.calls
     host.close()
+
+
+async def test_the_apt_mirror_reaches_the_build_and_is_quoted(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """#137: every recipe builds `FROM mshkn-base`, so the image's apt sources decide
+    where the whole product resolves packages. An empty mirror is stock Ubuntu; a set
+    one has to survive the trip to `docker build` intact."""
+    seen: dict[str, str] = {}
+
+    async def build_image(cmd: str) -> str:
+        seen["cmd"] = cmd
+        return "built"
+
+    async def run_with(mirror: str, case: str) -> str:
+        # A fresh host and a fresh key dir per call: writing volume 0 twice over one
+        # FakeHost trips #68's dangling fcnet.service symlink, which is not what this
+        # test is about.
+        host = FakeHost()
+        await host.blocks.activate(volume_id=0, name="mshkn-base")
+        root = tmp_path / case
+        root.mkdir()
+        await write_base_volume(
+            config=replace(_config(root), apt_mirror=mirror),
+            db=db,
+            blocks=host.blocks,
+            dockerfile=_dockerfile(root),
+            run=FakeShell(fail_on=INACTIVE),
+            build_image=build_image,
+        )
+        return seen["cmd"]
+
+    cmd = await run_with("http://mirror.hetzner.com/ubuntu/packages", "set")
+    assert "--build-arg APT_MIRROR=http://mirror.hetzner.com/ubuntu/packages " in cmd
+    # the value lands on a shell command line, so a mirror carrying a space or a
+    # semicolon must not become two words or two commands
+    cmd = await run_with("http://host/a b; rm -rf /", "quoted")
+    assert "--build-arg APT_MIRROR='http://host/a b; rm -rf /' " in cmd
+
+
+def test_the_base_dockerfile_rewrites_apt_sources_before_it_uses_them() -> None:
+    """#137, and the ordering is the whole fix: a sed that ran after `apt-get update`
+    would leave the update itself pointed at the mirror that stalls."""
+    text = DEFAULT_DOCKERFILE.read_text()
+    arg = text.index("ARG APT_MIRROR=")
+    assert text.index("sources.list.d/ubuntu.sources") > arg
+    assert arg < text.index("apt-get update")
+    # both hosts move together, or a working mirror still leaves security stalling
+    assert "archive.ubuntu.com" in text and "security.ubuntu.com" in text
+    # empty is stock Ubuntu, byte for byte: the rewrite is guarded, not unconditional
+    assert 'if [ -n "$APT_MIRROR" ]' in text

@@ -9,6 +9,7 @@ not snapped from anything.
 from __future__ import annotations
 
 import asyncio
+import shlex
 import shutil
 import tempfile
 from pathlib import Path
@@ -78,8 +79,12 @@ async def write_base_volume(
     try:
         shutil.copy(dockerfile, build_dir / "Dockerfile")
         shutil.copy(pub_key, build_dir / "mshkn_key.pub")
+        # The mirror rides in as a build arg rather than being baked into the Dockerfile:
+        # which mirror works is a property of the host, not of the image (#137).
         log = await build_image(
-            f"docker build --memory=4g --cpuset-cpus=0-1 -t {image_tag} {build_dir}"
+            f"docker build --memory=4g --cpuset-cpus=0-1 "
+            f"--build-arg APT_MIRROR={shlex.quote(config.apt_mirror)} "
+            f"-t {image_tag} {build_dir}"
         )
         tar_path = build_dir / "rootfs.tar"
         await export_image(

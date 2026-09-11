@@ -1,5 +1,19 @@
 FROM ubuntu:24.04
 
+# Every recipe builds `FROM mshkn-base` and every bare computer boots this filesystem, so
+# these sources decide where the whole product resolves packages. archive.ubuntu.com is
+# unreachable from some hosts -- it returned 0 bytes in 30s from the Hetzner box while a
+# mirror on the same network served 26 MB/s (#137) -- and apt answers that with a ten-minute
+# stall, not an error. Empty is stock Ubuntu, byte for byte; MSHKN_APT_MIRROR names the
+# mirror this host uses and moves the security pocket with it, so set one that carries
+# `<release>-security` as well.
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then \
+      sed -i -e "s|http://archive.ubuntu.com/ubuntu|$APT_MIRROR|g" \
+             -e "s|http://security.ubuntu.com/ubuntu|$APT_MIRROR|g" \
+             /etc/apt/sources.list.d/ubuntu.sources; \
+    fi
+
 # Minimal system for Firecracker microVM
 RUN apt-get update && apt-get install -y --no-install-recommends \
     systemd systemd-sysv dbus udev \

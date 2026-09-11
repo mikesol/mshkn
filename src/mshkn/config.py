@@ -58,6 +58,10 @@ class Config:
     relay_timeout_seconds: int = 3600  # default and cap of a job's upstream timeout
     relay_body_bytes: int = 8 * 1024 * 1024  # a job's request body and an upstream response
 
+    # Base image (#137). Empty leaves the stock Ubuntu sources; a URL replaces both
+    # archive.ubuntu.com and security.ubuntu.com in the image every recipe builds from.
+    apt_mirror: str = ""
+
     # Networking
     domain: str = "mshkn.dev"
     caddy_admin_url: str = "http://localhost:2019"

@@ -87,7 +87,14 @@ docker images mshkn-base
 e2fsck -fn /dev/mapper/mshkn-base
 ```
 
-Rerun it after changing `Dockerfile.mshkn-base` or the key, with the service stopped. Existing checkpoint and recipe volumes are unaffected (a thin snapshot is independent of its origin), and the bare template is rebuilt on the next create. If it fails part way, rerun it; volume 0 is not usable until a run succeeds.
+`MSHKN_APT_MIRROR` from step 7's `.env` is passed to the build as the `APT_MIRROR` arg and replaces both `archive.ubuntu.com` and `security.ubuntu.com` in the image. Unset leaves the stock Ubuntu sources. This matters more than it looks: every recipe builds `FROM mshkn-base` and every bare computer boots this filesystem, so one unreachable mirror stalls every build in the product for ten minutes at a time rather than failing (#137). Check the mirror before building, and check the security pocket too:
+
+```bash
+for p in noble noble-security; do curl -o /dev/null -sw "$p %{http_code} %{speed_download}B/s\n" \
+  "${MSHKN_APT_MIRROR:-http://archive.ubuntu.com/ubuntu}/dists/$p/Release"; done
+```
+
+Rerun the base-volume command after changing `Dockerfile.mshkn-base`, `MSHKN_APT_MIRROR` or the key, with the service stopped. Existing checkpoint and recipe volumes are unaffected (a thin snapshot is independent of its origin), and the bare template is rebuilt on the next create. If it fails part way, rerun it; volume 0 is not usable until a run succeeds.
 
 ## 7. Environment and R2
 
@@ -100,7 +107,10 @@ R2_SECRET_ACCESS_KEY=<secret>
 R2_BUCKET=mshkn-checkpoints
 MSHKN_IDLE_TIMEOUT=120
 MSHKN_CHECKPOINT_RETENTION=5
+MSHKN_APT_MIRROR=http://mirror.hetzner.com/ubuntu/packages
 ```
+
+`MSHKN_APT_MIRROR` is the host's working Ubuntu mirror, baked into `mshkn-base` by step 6. The value above is right for the Hetzner host; on another host use whichever mirror that network reaches, and leave it unset only if `archive.ubuntu.com` is fast from there. `archive.ubuntu.com` returned 0 bytes in 30 s from the current host while the mirror above served 26 MB/s (#137).
 
 Configure rclone for R2. Do not set an ACL: R2 rejects `x-amz-acl` with a 403, which makes every upload fail. Bucket-scoped tokens cannot list buckets, so verify against the bucket itself:
 
