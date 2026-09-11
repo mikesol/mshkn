@@ -376,8 +376,12 @@ class FirecrackerHypervisor:
             client = FirecrackerClient(socket_path)
             try:
                 await client.pause()
-                await client.create_snapshot(str(files.vmstate), str(files.memory))
-                await client.resume()
+                try:
+                    await client.create_snapshot(str(files.vmstate), str(files.memory))
+                finally:
+                    # A snapshot that could not be written (a full tmpfs, say)
+                    # must not leave the guest paused for good.
+                    await client.resume()
             finally:
                 await client.close()
             logger.info("VM snapshot created at %s", dest_dir)

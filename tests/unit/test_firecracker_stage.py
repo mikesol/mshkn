@@ -76,6 +76,7 @@ class FakeClient:
         self._record("resume")
 
     async def create_snapshot(self, vmstate: str, memory: str) -> None:
+        self._maybe_fail("create_snapshot")
         self.calls.append(("create_snapshot", (vmstate, memory)))
         self._record("snapshot")
 
@@ -541,3 +542,14 @@ async def test_staging_cleanup_runs_once_until_a_stage_fails(staged: Staged) -> 
     assert after_failure.index(remove) < after_failure.index(_staging_table(10)), (
         "the stage after a failure cleans before it maps"
     )
+
+
+async def test_snapshot_resumes_the_vm_when_the_write_fails(staged: Staged, tmp_path: Path) -> None:
+    """A snapshot that cannot be written (tmpfs full, say) must not leave the VM paused."""
+    hv, _, _ = staged
+    FakeClient.fail_on = "create_snapshot"
+    with pytest.raises(HostError):
+        await hv.snapshot("/tmp/fc-mshkn-comp-a.socket", tmp_path / "s")
+    (client,) = FakeClient.instances
+    assert [n for n, _ in client.calls] == ["pause", "resume"], "resumed despite the failure"
+    assert client.closed

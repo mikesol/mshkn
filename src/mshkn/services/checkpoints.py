@@ -26,7 +26,7 @@ from mshkn.db import (
     list_checkpoints_by_account,
     list_prunable_checkpoints,
 )
-from mshkn.errors import BadRequest, Conflict, NotFound
+from mshkn.errors import BadRequest, Conflict, HostError, NotFound
 from mshkn.models import Checkpoint, CheckpointTrigger, Computer, checkpoint_volume_name
 from mshkn.observability.metrics import checkpoints_total, timed
 from mshkn.services.merge import (
@@ -159,7 +159,9 @@ class CheckpointService:
         checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
         # Written on tmpfs: Firecracker fsyncs the memory file, and on the
         # durable disk that alone was 300 ms and more per checkpoint (#144).
-        snapshot_dir = self.config.checkpoint_staging_dir / checkpoint_id
+        staging_dir = self.config.checkpoint_staging_dir / checkpoint_id
+        durable_dir = self.config.checkpoint_local_dir / checkpoint_id
+        staged = True
         async with timed("checkpoint"):
             # Flush the guest's page cache to the block device: dm-thin snapshots
             # see only what reached the disk.
@@ -176,7 +178,20 @@ class CheckpointService:
             # of #147). The pooled SSH session is kept across the pause: a pause
             # of a few hundred milliseconds does not break a TCP connection, and
             # the unconditional evict cost the next exec a full handshake (#150).
-            await self.host.hypervisor.snapshot(computer.socket_path, snapshot_dir)
+            try:
+                await self.host.hypervisor.snapshot(computer.socket_path, staging_dir)
+            except HostError:
+                # A full tmpfs must not cost the checkpoint: write it to disk instead.
+                logger.warning(
+                    "Snapshot of %s onto %s failed; writing it to %s instead",
+                    computer.id,
+                    staging_dir,
+                    durable_dir,
+                    exc_info=True,
+                )
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                staged = False
+                await self.host.hypervisor.snapshot(computer.socket_path, durable_dir)
             volume_name = checkpoint_volume_name(checkpoint_id)
             volume_id = await self._snap_disk(computer.thin_volume_id, volume_name)
             latest = await get_latest_checkpoint_for_computer(self.db, computer.id)
@@ -201,7 +216,7 @@ class CheckpointService:
             await insert_checkpoint(self.db, ckpt)
         checkpoints_total.labels(trigger=trigger.value).inc()
         self.tasks.spawn(
-            self._persist_and_upload(checkpoint_id, ckpt.r2_prefix),
+            self._persist_and_upload(checkpoint_id, ckpt.r2_prefix, staged=staged),
             name=self.upload_task_key(checkpoint_id),
             key=self.upload_task_key(checkpoint_id),
         )
@@ -225,38 +240,46 @@ class CheckpointService:
         await self.host.blocks.activate(volume_id=volume_id, name=volume_name)
         return volume_id
 
-    async def _persist_and_upload(self, checkpoint_id: str, r2_prefix: str) -> None:
-        """Copy the snapshot from tmpfs to the durable directory, upload it, then
-        release the tmpfs copy after a linger.
+    async def _persist_and_upload(
+        self, checkpoint_id: str, r2_prefix: str, *, staged: bool
+    ) -> None:
+        """Copy the snapshot from tmpfs to the durable directory, release the
+        tmpfs copy after a linger, and upload.
 
         The durable copy is built under `<id>.tmp` and renamed into place, so
-        it is complete whenever it exists. A copy that fails leaves the tmpfs
-        copy as the only one: it is uploaded from there and kept.
+        it is complete whenever it exists, and the linger starts the moment it
+        does: uploads run one at a time and take tens of seconds each, so a
+        tmpfs copy held until its upload ended would pile up with the others
+        until the tmpfs was full. A copy that fails leaves the tmpfs copy as
+        the only one: it is uploaded from there and kept. `staged` is False
+        when the snapshot was written to the durable directory in the first
+        place, in which case there is nothing to persist or release.
         """
         staging_dir = self.config.checkpoint_staging_dir / checkpoint_id
         durable_dir = self.config.checkpoint_local_dir / checkpoint_id
-        source = staging_dir
-        try:
-            await asyncio.to_thread(_persist_snapshot, staging_dir, durable_dir)
-            source = durable_dir
-        except Exception:
-            logger.warning(
-                "Could not persist checkpoint %s to %s; keeping the staging copy",
-                checkpoint_id,
-                durable_dir,
-                exc_info=True,
-            )
+        source = durable_dir
+        if staged:
+            try:
+                await asyncio.to_thread(_persist_snapshot, staging_dir, durable_dir)
+            except Exception:
+                logger.warning(
+                    "Could not persist checkpoint %s to %s; keeping the staging copy",
+                    checkpoint_id,
+                    durable_dir,
+                    exc_info=True,
+                )
+                source = staging_dir
+            else:
+                self.tasks.spawn(
+                    self._clear_staging(staging_dir),
+                    name=self.staging_clear_task_key(checkpoint_id),
+                    key=self.staging_clear_task_key(checkpoint_id),
+                )
         async with self._upload_slot:
             try:
                 await self.host.objects.upload_dir(source, r2_prefix)
             except Exception:
                 logger.warning("R2 upload failed for checkpoint %s", checkpoint_id, exc_info=True)
-        if source is durable_dir:
-            self.tasks.spawn(
-                self._clear_staging(staging_dir),
-                name=self.staging_clear_task_key(checkpoint_id),
-                key=self.staging_clear_task_key(checkpoint_id),
-            )
 
     @staticmethod
     async def _clear_staging(staging_dir: Path) -> None:

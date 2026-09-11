@@ -549,3 +549,50 @@ async def test_a_failed_persist_still_uploads_from_staging_and_keeps_it(
     await checkpoints.tasks.wait(checkpoints.staging_clear_task_key(ckpt.id))
     assert sorted(host.objects.prefixes[f"acct-1/{ckpt.id}"]) == ["memory", "vmstate"]
     assert (tmp_path / "staging" / ckpt.id / "memory").exists(), "the only copy is kept"
+
+
+async def test_the_staging_copy_is_released_once_the_durable_copy_exists(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The linger starts when the durable copy lands, not when the upload ends.
+
+    Uploads run one at a time and take tens of seconds each, so freeing tmpfs
+    only after the upload let staging copies pile up until /dev/shm was full
+    and Firecracker failed with ENOSPC on the live host.
+    """
+    monkeypatch.setattr("mshkn.services.checkpoints._STAGING_LINGER_SECONDS", 0.0)
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    upload_started = asyncio.Event()
+    release_upload = asyncio.Event()
+
+    async def blocked_upload(local_dir: Path, prefix: str) -> None:
+        upload_started.set()
+        await release_upload.wait()
+
+    monkeypatch.setattr(host.objects, "upload_dir", blocked_upload)
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    await upload_started.wait()
+    await checkpoints.tasks.wait(checkpoints.staging_clear_task_key(ckpt.id))
+    assert not (tmp_path / "staging" / ckpt.id).exists(), "released while the upload still runs"
+    assert (tmp_path / "ckpts" / ckpt.id / "memory").exists()
+    release_upload.set()
+    await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
+
+
+async def test_create_falls_back_to_the_durable_dir_when_the_staging_write_fails(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """A full tmpfs must not cost the checkpoint: the snapshot is retried onto disk."""
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    host.hypervisor.fail_next("snapshot")
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    assert host.hypervisor.snapshots[-1] == (
+        computer.socket_path,
+        tmp_path / "ckpts" / ckpt.id,
+    ), "the retry wrote straight into the durable directory"
+    assert not (tmp_path / "staging" / ckpt.id).exists()
+    await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
+    assert sorted(host.objects.prefixes[f"acct-1/{ckpt.id}"]) == ["memory", "vmstate"]
+    assert checkpoints.staging_clear_task_key(ckpt.id) not in checkpoints.tasks.names()
