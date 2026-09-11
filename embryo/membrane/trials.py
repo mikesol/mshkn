@@ -24,17 +24,19 @@ TRIAL_MARGIN = 30.0
 # A trial's computer needs at least this long to boot and run; with less left in
 # the turn the trial stays `building` for the next turn to run (#109).
 RUN_MARGIN = 20.0
+# A chain trial's invocations share this label, never the verb's own `verb/<name>`.
+# declarations.py refuses a declared `chain` under this prefix (#118 fix round 1),
+# so a supersede of a catalogued verb can never touch a trial's live chain.
 TRIAL_CHAIN_PREFIX = "verb/trial/"
-# A chain trial's invocations share this label, never the verb's own `verb/<name>`:
-# a verb name holds no slash, so the two can never collide, and a supersede of a
-# catalogued verb cannot touch the live chain (#118).
 
 
 async def _one_run(
     api: MshknApi, trial: Trial, params: dict[str, Any], *, remaining: float
 ) -> dict[str, Any]:
     """One invocation. A `chain` verb's first run creates the scratch chain; later
-    runs fork it, exactly as `verbs.invoke` advances a catalogued verb's chain."""
+    runs fork it. Unlike `verbs.invoke`, which asks mshkn for a catalogued verb's
+    `chain_head`, this trusts `trial.chain` in memory: the trial owns the label, so
+    no one else can have advanced it, and the extra round trip would only cost."""
     assert trial.recipe_id is not None
     verb = trial.verb
     try:
@@ -46,6 +48,11 @@ async def _one_run(
             run = forked
         else:
             label = TRIAL_CHAIN_PREFIX + trial.id if verb.state == "chain" else None
+            # Recorded before the call returns: a timeout that lands after mshkn
+            # commits the checkpoint (docs/embryo/2026-09-09-run-6/run.json) still
+            # raises, and without the label recorded first no later sweep could
+            # find the checkpoint it left behind (#118 fix round 1).
+            trial.chain = label
             run = await api.create_computer(
                 recipe_id=trial.recipe_id,
                 command=command,
@@ -53,8 +60,10 @@ async def _one_run(
                 label=label,
                 timeout=remaining,
             )
-            trial.chain = label
     except (DeclarationError, MshknError) as exc:
+        # str(exc), not exc.detail as verbs.invoke uses: the mshkn status prefix
+        # ("mshkn 409: ...") tells the agent more, and it is the existing trials
+        # idiom (#118 fix round 1).
         return {"status": "error", "error": str(exc)}
     doc = run_result_doc(run)
     if verb.state == "chain":
@@ -178,9 +187,11 @@ async def poll_trials(api: MshknApi, state: State, *, remaining: float) -> list[
     items: list[InboxItem] = []
     for trial in state.trials.values():
         if trial.status != "building" or trial.recipe_id is None:
-            # A trial whose turn died between its last run and its sweep, or one that
-            # ran out of time, leaves a scratch chain for this turn to discard (#118).
-            if trial.chain is not None and not trial.swept:
+            # A trial that ran out of time, or one whose sweep mshkn refused, leaves
+            # a scratch chain for this turn to discard (#118). Budgeted like the
+            # rest of this file: an unsweepable trial would otherwise retry every
+            # turn forever, and there is no attempt counter to stop it.
+            if remaining >= RUN_MARGIN and trial.chain is not None and not trial.swept:
                 await sweep_trial(api, trial)
             continue
         info = await api.get_recipe(trial.recipe_id)

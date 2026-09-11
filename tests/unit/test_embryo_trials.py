@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from membrane.declarations import parse_verb, render_command
+from membrane.mshkn import MshknError
 from membrane.state import State, Trial
-from membrane.trials import RUN_MARGIN, poll_trials, run_trial, try_verb
+from membrane.trials import RUN_MARGIN, poll_trials, run_trial, sweep_trial, try_verb
 
 from tests.support_embryo import FakeMshkn
 from tests.unit.test_embryo_declarations import VERB
@@ -104,7 +105,13 @@ async def test_an_error_stops_the_sequence_and_keeps_what_it_read() -> None:
     assert len(result["runs"]) == 1 and result["runs"][0]["status"] == "error"
     assert "not ready" in result["runs"][0]["error"]
     # the trial itself completed; the error is one run's reading, per spec §3
-    assert result["status"] == "done" and trial.swept is True
+    assert result["status"] == "done"
+    # the label is recorded before create_computer is awaited (#118 fix round 1), so
+    # the failed run still leaves a real chain for the sweep to look at, not None —
+    # and the sweep actually looked (list_checkpoints ran), rather than taking
+    # sweep_trial's no-op early return for a None chain
+    assert trial.chain == "verb/trial/t-x" and trial.swept is True
+    assert ("list_checkpoints", {"label": "verb/trial/t-x"}) in api.calls
 
 
 async def test_an_out_of_time_sequence_returns_what_it_got_and_leaves_the_sweep() -> None:
@@ -168,6 +175,32 @@ async def test_the_next_turn_sweeps_a_trial_that_died_before_its_sweep() -> None
     )
     assert await poll_trials(api, state, remaining=50.0) == []
     assert api.chains == {} and state.trials["t-7"].swept is True
+
+
+async def test_a_refused_delete_leaves_the_trial_unswept_for_the_next_poll() -> None:
+    """sweep_trial's own contract (#118 fix round 1): a delete mshkn refuses never
+    crashes the turn, and the trial stays unswept so the next poll tries again."""
+
+    class RefusingMshkn(FakeMshkn):
+        async def delete_checkpoint(self, checkpoint_id: str) -> None:
+            self.calls.append(("delete_checkpoint", {"checkpoint_id": checkpoint_id}))
+            raise MshknError(409, "conflict")
+
+    api = RefusingMshkn()
+    api.chains["verb/trial/t-1"] = ["ckpt-a"]
+    trial = Trial(
+        id="t-1",
+        verb=parse_verb(CHAIN_VERB),
+        runs=[],
+        recipe_id="rcp-1",
+        status="done",
+        results=[],
+        chain="verb/trial/t-1",
+        swept=False,
+    )
+    await sweep_trial(api, trial)
+    assert trial.swept is False
+    assert api.chains["verb/trial/t-1"] == ["ckpt-a"]  # nothing was actually removed
 
 
 async def test_a_trial_refuses_params_and_runs_together() -> None:

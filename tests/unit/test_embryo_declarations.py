@@ -55,6 +55,9 @@ def test_parse_verb_fills_defaults() -> None:
         ({"asserts": "root"}, "reserved"),
         ({"requires": [{"kind": "secret"}]}, "requires"),
         ({"chain": "other/x"}, "verb/"),
+        # #118 fix round 1: a declared chain under trials.py's scratch prefix would
+        # let an unrelated trial's sweep delete this verb's live chain.
+        ({"chain": "verb/trial/t-3"}, "verb/trial/"),
         ({"description": ""}, "description"),
         # §4: allow lists namespaced principals. root is never a declaration's
         # to grant (§10.1) and what anonymous may do is policy's to say (§6).

@@ -25,6 +25,11 @@ POLICY_FIELDS: frozenset[str] = frozenset({"principals", "hooks", "door"})
 VERB_REQUIRED = ("name", "description", "params", "dockerfile", "entrypoint", "effect", "state")
 PROPOSAL_REQUIRED = ("kind", "title", "rationale")
 CHAIN_PREFIX = "verb/"
+# trials.py reserves this prefix for a trial's own scratch chain (#118); a
+# declared chain under it would let an unrelated trial's sweep delete the
+# verb's live chain. Kept as a literal here, not imported from trials.py:
+# declarations.py talks to nothing.
+TRIAL_CHAIN_PREFIX = "verb/trial/"
 TIMEOUT_DEFAULT = 60
 # A verb runs in its own computer under mshkn's 300 s exec budget, but it is
 # awaited inside a turn whose deadline is 240 s; 200 leaves 40 s for the loop
@@ -214,6 +219,11 @@ def parse_verb(doc: object) -> Verb:
         or len(chain) <= len(CHAIN_PREFIX)
     ):
         raise DeclarationError(f"verb.chain must start with {CHAIN_PREFIX!r}")
+    if chain.startswith(TRIAL_CHAIN_PREFIX):
+        raise DeclarationError(
+            f"verb.chain may not start with {TRIAL_CHAIN_PREFIX!r}, which trials use for "
+            f"their own scratch chains; name a chain under {CHAIN_PREFIX!r} instead"
+        )
     asserts = _str(d, "asserts", "verb", required=False)
     if asserts is not None:
         if asserts in RESERVED_NAMESPACES:
