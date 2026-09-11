@@ -26,6 +26,7 @@ from membrane.model import add_usage, compose_request, parse_message, request_he
 from membrane.mshkn import MshknError
 from membrane.principals import ROOT, is_authenticated, namespace_of
 from membrane.proposals import propose
+from membrane.references import describe, unknown_references
 from membrane.state import WINDOW, Exchange, InboxItem, Pending, Queued
 from membrane.trials import poll_trials, try_verb
 from membrane.verbs import invoke, poll_builds
@@ -585,6 +586,16 @@ async def close_turn(ctx: Context, *, text: str, stopped: str) -> str:
         f"{pending.principal}: {pending.message}\nembryo: {text}",
         Provenance(principal=pending.principal, door=pending.door, turn=pending.turn),
     )
+    # Ids the reply names that the membrane never issued (#121). Only a reply the
+    # model wrote is a claim: an error turn's text is the membrane's own words.
+    references = [] if stopped == "error" else unknown_references(text, state)
+    if references:
+        state.inbox.append(
+            InboxItem(
+                kind="reference",
+                text=describe(turn=pending.turn, unknown=references, state=state),
+            )
+        )
     audit: dict[str, Any] = {
         "turn": pending.turn,
         "principal": pending.principal,
@@ -593,6 +604,7 @@ async def close_turn(ctx: Context, *, text: str, stopped: str) -> str:
         "offered": pending.offered,
         "tools": [_tool_summary(c) for c in pending.calls],
         "proposals": proposals_made,
+        "references": references,
         "memory_written": memory_written,
         "stopped": stopped,
         # The cost of the turn, from the model's own usage reports (#101). mem0's
