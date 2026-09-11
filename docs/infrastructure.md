@@ -13,6 +13,7 @@ mshkn's unit and flow tests run anywhere. The E2E suite (`tests/e2e/`, 163 tests
 | Disk | 250 GB NVMe | 100 GB sparse thin-pool file, Docker image cache, local checkpoint snapshots (vmstate + 256 MiB memory each). SATA works but latency targets are calibrated on NVMe. |
 | Network | Public IPv4, outbound internet | VMs reach the internet through host NAT; tests fetch packages inside VMs; Caddy answers on 80/443. |
 | Kernel | `dm_thin_pool` module and `thin-provisioning-tools` | dm-thin copy-on-write snapshots are how fork is O(1). |
+| Ubuntu apt mirror | A mirror the host reaches at MB/s, carrying `<release>` **and** `<release>-security` | Every recipe builds `FROM mshkn-base` and every bare computer boots it, so the image's apt sources are where the whole product resolves packages. `archive.ubuntu.com` is not reliably reachable from every provider — from the current host it returned 0 bytes in 30 s while `mirror.hetzner.com` served 26 MB/s — and apt answers an unreachable mirror with a stall, not an error, so a bad one costs ten minutes per build (#137). Set it as `MSHKN_APT_MIRROR` (DEPLOY.md step 7) and rebuild the base volume. |
 
 Docker on Ubuntu 24.04 (`docker.io`) ships without the buildx plugin, so `docker build` runs the deprecated legacy builder; mshkn keeps each recipe's image so that builder's layer cache serves rebuilds. If a Docker upgrade removes the legacy builder, install `docker-buildx` and re-check the recipe build log format, which BuildKit changes.
 
