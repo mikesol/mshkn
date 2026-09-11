@@ -107,11 +107,36 @@ async def test_an_error_stops_the_sequence_and_keeps_what_it_read() -> None:
     # the trial itself completed; the error is one run's reading, per spec §3
     assert result["status"] == "done"
     # the label is recorded before create_computer is awaited (#118 fix round 1), so
-    # the failed run still leaves a real chain for the sweep to look at, not None —
-    # and the sweep actually looked (list_checkpoints ran), rather than taking
-    # sweep_trial's no-op early return for a None chain
-    assert trial.chain == "verb/trial/t-x" and trial.swept is True
-    assert ("list_checkpoints", {"label": "verb/trial/t-x"}) in api.calls
+    # the failed run still leaves a real chain for a later sweep to look at, not None
+    assert trial.chain == "verb/trial/t-x"
+    # but this turn does NOT sweep it: the invocation's outcome is unknown, so the
+    # checkpoint may still be committed after we gave up (PR #134 review)
+    assert trial.swept is False
+    assert ("list_checkpoints", {"label": "verb/trial/t-x"}) not in api.calls
+
+
+async def test_a_checkpoint_that_lands_after_a_failed_run_is_swept_next_turn() -> None:
+    """A client timeout does not cancel the server. If the sweep ran in the same turn
+    it would list nothing, set `swept`, and leave the late checkpoint for #93
+    retention to keep forever (PR #134 review)."""
+    api = FakeMshkn()
+    state = State()
+    trial = Trial(
+        id="t-x",
+        verb=parse_verb(CHAIN_VERB),
+        runs=[{}, {}],
+        recipe_id="rcp-missing",
+        status="building",
+        results=[],
+    )
+    state.trials["t-x"] = trial
+    await run_trial(api, trial, remaining=200.0)
+    assert trial.swept is False
+    # the server commits the checkpoint after the turn gave up on it
+    api.chains["verb/trial/t-x"] = ["ckpt-late"]
+    trial.status = "done"
+    assert await poll_trials(api, state, remaining=200.0) == []
+    assert api.chains == {} and trial.swept is True
 
 
 async def test_an_out_of_time_sequence_returns_what_it_got_and_leaves_the_sweep() -> None:

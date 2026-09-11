@@ -124,7 +124,13 @@ async def run_trial(
             "ran": len(results),
             "of": len(trial.runs),
         }
-    await sweep_trial(api, trial)
+    if not stopped:
+        await sweep_trial(api, trial)
+    # A stopped sequence's last invocation has an unknown outcome: a client timeout
+    # does not cancel the server, which may commit the scratch checkpoint after we
+    # gave up. Sweeping now would list nothing, set `swept`, and leave that
+    # checkpoint for #93 retention to keep forever. The next turn's poll sweeps it,
+    # by which time it exists (#118, found by review on PR #134).
     return {"runs": results, "status": "done"}
 
 
