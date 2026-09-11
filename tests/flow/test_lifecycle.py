@@ -45,7 +45,7 @@ async def test_create_exec_checkpoint_fork_destroy(flow: Flow) -> None:
     host.guest.stream_script["echo hi"] = [("stdout", "hi")]
     assert await _exec(flow, cid, "echo hi") == [("stdout", "hi"), ("exit", "0")]
 
-    # checkpoint: sync, snapshot files, evict, frozen disk, row with no parent
+    # checkpoint: sync, snapshot files, frozen disk, row with no parent
     host.guest.script["sync"] = ExecResult(0, "", "")
     resp = await flow.client.post(f"/computers/{cid}/checkpoint", json={"label": "base"})
     assert resp.status_code == 200, resp.text
@@ -53,7 +53,7 @@ async def test_create_exec_checkpoint_fork_destroy(flow: Flow) -> None:
     ckpt = await get_checkpoint(flow.runtime.db, ckpt_id)
     assert ckpt is not None and ckpt.parent_id is None and ckpt.label == "base"
     assert any(cmd == "sync" for _, cmd in host.guest.commands)
-    assert host.guest.evicted == [row.vm_ip]
+    assert host.guest.evicted == [], "the pooled session survives the pause"
     assert host.blocks.volumes[ckpt.thin_volume_id or -1] == row.thin_volume_id
     assert host.blocks.active[f"mshkn-ckpt-{ckpt_id}"] == ckpt.thin_volume_id
     assert (flow.runtime.config.checkpoint_local_dir / ckpt_id / "vmstate").exists()
@@ -80,7 +80,7 @@ async def test_create_exec_checkpoint_fork_destroy(flow: Flow) -> None:
     assert row.thin_volume_id not in host.blocks.volumes
     assert fork_row.thin_volume_id not in host.blocks.volumes
     assert ckpt.thin_volume_id in host.blocks.volumes  # checkpoints persist
-    assert host.guest.evicted == [row.vm_ip, row.vm_ip, fork_row.vm_ip]
+    assert host.guest.evicted == [row.vm_ip, fork_row.vm_ip]
     for target in (cid, fork_id):
         r = await get_computer(flow.runtime.db, target)
         assert r is not None and r.status is ComputerStatus.DESTROYED

@@ -9,7 +9,7 @@ import pytest
 from mshkn.config import Config
 from mshkn.db import get_checkpoint, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, Conflict, NotFound
-from mshkn.host import ExecResult
+from mshkn.host import ExecResult, SnapshotFiles
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import Checkpoint, CheckpointTrigger, Computer, ExecSpec
 from mshkn.observability.metrics import checkpoints_total
@@ -69,7 +69,7 @@ async def test_create_runs_the_five_steps_in_order_and_labels_the_metric(
     assert host.hypervisor.snapshots[before_snapshots:] == [
         (computer.socket_path, tmp_path / "ckpts" / ckpt.id)
     ]
-    assert host.guest.evicted[-1] == computer.vm_ip
+    assert host.guest.evicted == [], "a 300 ms pause does not break the pooled session (#150)"
     assert host.blocks.volumes[ckpt.thin_volume_id or -1] == computer.thin_volume_id
     assert host.blocks.active[ckpt.volume_name] == ckpt.thin_volume_id
     assert ckpt.parent_id is None and ckpt.pinned and ckpt.label == "base"
@@ -447,3 +447,26 @@ async def test_label_locks_exist_only_while_held(db: aiosqlite.Connection, tmp_p
         ),
     )
     assert checkpoints._label_locks == {}
+
+
+async def test_create_snaps_the_disk_while_the_memory_is_being_written(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dm-thin snap does not wait for the 256 MiB memory dump (#147).
+
+    The disk was already snapped after the resume, so nothing depended on the
+    order; taken during the pause it matches the memory image more closely.
+    """
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    real_snapshot = host.hypervisor.snapshot
+    volumes_during_dump: list[set[int]] = []
+
+    async def slow_snapshot(socket_path: str, dest_dir: Path) -> SnapshotFiles:
+        await asyncio.sleep(0.01)  # the dump takes a while; the snap should land meanwhile
+        volumes_during_dump.append(set(host.blocks.volumes))
+        return await real_snapshot(socket_path, dest_dir)
+
+    monkeypatch.setattr(host.hypervisor, "snapshot", slow_snapshot)
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    assert ckpt.thin_volume_id in volumes_during_dump[0], "the snap ran during the dump"

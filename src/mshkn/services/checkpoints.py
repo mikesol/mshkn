@@ -154,15 +154,17 @@ class CheckpointService:
                 self.host.guest.exec(computer.vm_ip, "sync", timeout=10.0),
                 timeout=_SYNC_TIMEOUT_SECONDS,
             )
-            await self.host.hypervisor.snapshot(computer.socket_path, snapshot_dir)
-            # pause/resume breaks the pooled TCP session
-            await self.host.guest.evict(computer.vm_ip)
-            volume_id = await self.allocator.acquire_volume_id()
+            # The memory dump (pause, write, resume) and the disk snap are
+            # independent, so they run together; the snap then lands during the
+            # pause, closer to the memory image than the post-resume snap it
+            # replaced (#147). The pooled SSH session is kept: a pause of a few
+            # hundred milliseconds does not break a TCP connection, and the
+            # unconditional evict cost the next exec a full handshake (#150).
             volume_name = checkpoint_volume_name(checkpoint_id)
-            await self.host.blocks.snap(
-                source_volume_id=computer.thin_volume_id, new_volume_id=volume_id
+            _, volume_id = await asyncio.gather(
+                self.host.hypervisor.snapshot(computer.socket_path, snapshot_dir),
+                self._snap_disk(computer.thin_volume_id, volume_name),
             )
-            await self.host.blocks.activate(volume_id=volume_id, name=volume_name)
             latest = await get_latest_checkpoint_for_computer(self.db, computer.id)
             if latest is not None:
                 parent_id: str | None = latest.id
@@ -201,6 +203,13 @@ class CheckpointService:
             },
         )
         return ckpt
+
+    async def _snap_disk(self, source_volume_id: int, volume_name: str) -> int:
+        """A new thin volume snapped from the computer's, mapped under volume_name."""
+        volume_id = await self.allocator.acquire_volume_id()
+        await self.host.blocks.snap(source_volume_id=source_volume_id, new_volume_id=volume_id)
+        await self.host.blocks.activate(volume_id=volume_id, name=volume_name)
+        return volume_id
 
     async def _upload(self, snapshot_dir: Path, r2_prefix: str, checkpoint_id: str) -> None:
         try:
