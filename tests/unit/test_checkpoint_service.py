@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
+import mshkn.services.checkpoints
 from mshkn.config import Config
 from mshkn.db import get_checkpoint, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, Conflict, NotFound
@@ -22,8 +26,6 @@ from mshkn.services.recipes import RecipeService
 from tests.support import account_row, checkpoint_row
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import aiosqlite
 
 ACCOUNT = account_row(api_key="k")
@@ -613,3 +615,53 @@ async def test_create_writes_to_the_durable_dir_when_tmpfs_has_no_room(
     assert host.hypervisor.snapshots[before:] == [
         (computer.socket_path, tmp_path / "ckpts" / ckpt.id)
     ]
+
+
+async def test_persists_run_one_at_a_time_and_fsync_their_files(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persisted copy is written through to disk before the next one starts.
+
+    Left to the page cache, ten 256 MiB copies became one multi-gigabyte
+    write-back burst, and Firecracker's drive flush inside the next
+    create_snapshot queued behind it for over a second (T1.2 many-small-files
+    p95 1786 ms in run 7 of the branch). One fsynced copy at a time bounds
+    what any flush can wait behind to a single copy.
+    """
+    checkpoints, computers, _host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    synced: list[str] = []
+    real_fsync = os.fsync
+
+    def fsync(fd: int) -> None:
+        synced.append(str(Path(f"/proc/self/fd/{fd}").readlink()))
+        real_fsync(fd)
+
+    in_flight = 0
+    peak = 0
+    real_persist = mshkn.services.checkpoints._persist_snapshot
+
+    def persist(staging_dir: Path, durable_dir: Path) -> None:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        time.sleep(0.01)
+        try:
+            real_persist(staging_dir, durable_dir)
+        finally:
+            in_flight -= 1
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(mshkn.services.checkpoints, "_persist_snapshot", persist)
+    made = [
+        await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+        for _ in range(3)
+    ]
+    for ckpt in made:
+        await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
+    assert peak == 1
+    for ckpt in made:
+        durable = tmp_path / "ckpts" / ckpt.id
+        assert str(durable) + ".tmp/memory" in synced or str(durable / "memory") in synced, (
+            f"the memory file of {ckpt.id} was fsynced before the rename"
+        )

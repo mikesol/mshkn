@@ -24,7 +24,7 @@ import pytest_asyncio
 
 from tests.support_embryo import LITURGY, b64, split_output
 
-from .conftest import API_KEY, API_URL, HEADERS
+from .conftest import API_KEY, API_URL, HEADERS, LIMITS
 
 # One hatched embryo per module, so the fixtures and the tests share one event loop.
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -241,12 +241,14 @@ def hatched(tmp_path_factory: pytest.TempPathFactory) -> Hatched:
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def doors(hatched: Hatched) -> AsyncIterator[Doors]:
     async with (
-        httpx.AsyncClient(base_url=API_URL, headers=HEADERS, timeout=TURN_TIMEOUT) as client,
+        httpx.AsyncClient(
+            base_url=API_URL, headers=HEADERS, timeout=TURN_TIMEOUT, limits=LIMITS
+        ) as client,
         # The public door carries no credential. It is dialled through MSHKN_API_URL
         # rather than the rule's own ingress_url so the suite depends on the API the
         # rest of the tier uses, not on public DNS and TLS; the two name one rule
         # (asserted in T14.1).
-        httpx.AsyncClient(base_url=API_URL, timeout=TURN_TIMEOUT) as public,
+        httpx.AsyncClient(base_url=API_URL, timeout=TURN_TIMEOUT, limits=LIMITS) as public,
     ):
         doors = Doors(client, public, hatched)
         yield doors

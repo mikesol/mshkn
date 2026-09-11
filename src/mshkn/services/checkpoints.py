@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import tempfile
 import uuid
@@ -121,6 +122,11 @@ class CheckpointService:
         # Uploads go one at a time: several 256 MiB rclone copies at once against
         # the disk the next checkpoint writes to is what made T1.2 decay (#145).
         self._upload_slot = asyncio.Semaphore(1)
+        # Persists go one at a time too, and each is written through to disk
+        # before the next starts: ten 256 MiB copies left to the page cache
+        # became one multi-gigabyte write-back burst that Firecracker's drive
+        # flush inside the next create_snapshot queued behind for a second.
+        self._persist_slot = asyncio.Semaphore(1)
 
     @staticmethod
     def upload_task_key(checkpoint_id: str) -> str:
@@ -287,7 +293,8 @@ class CheckpointService:
         source = durable_dir
         if staged:
             try:
-                await asyncio.to_thread(_persist_snapshot, staging_dir, durable_dir)
+                async with self._persist_slot:
+                    await asyncio.to_thread(_persist_snapshot, staging_dir, durable_dir)
             except Exception:
                 logger.warning(
                     "Could not persist checkpoint %s to %s; keeping the staging copy",
@@ -560,11 +567,28 @@ class CheckpointService:
 
 
 def _persist_snapshot(staging_dir: Path, durable_dir: Path) -> None:
-    """Copy a snapshot directory into place atomically. Blocking."""
+    """Copy a snapshot directory into place atomically, written through. Blocking.
+
+    Every file is fsynced before the rename, so the copy costs the disk its
+    bytes now, at one copy's worth of queue, instead of piling up in the page
+    cache for the flusher to write back in a burst under the next checkpoint.
+    """
     tmp = durable_dir.with_name(f"{durable_dir.name}.tmp")
     shutil.rmtree(tmp, ignore_errors=True)
     shutil.copytree(staging_dir, tmp)
+    for entry in tmp.iterdir():
+        if entry.is_file():
+            fd = os.open(entry, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
     tmp.rename(durable_dir)
+    dir_fd = os.open(durable_dir.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def _merge_into(parent: Path, fork_a: Path, fork_b: Path, output: Path) -> MergeResult:
