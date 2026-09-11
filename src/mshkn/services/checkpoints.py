@@ -281,6 +281,32 @@ class CheckpointService:
             except Exception:
                 logger.warning("R2 upload failed for checkpoint %s", checkpoint_id, exc_info=True)
 
+    async def recover_staging(self) -> int:
+        """Finish what a previous process's persist tasks left in the staging
+        directory: persist every complete copy that has no durable twin, then
+        empty the directory. Called once at start-up. Returns how many were
+        persisted; an incomplete copy (a snapshot the process died inside)
+        has nothing worth keeping and is removed with the rest.
+        """
+        staging_root = self.config.checkpoint_staging_dir
+        if not staging_root.is_dir():
+            return 0
+        persisted = 0
+        for entry in sorted(staging_root.iterdir()):
+            durable_dir = self.config.checkpoint_local_dir / entry.name
+            complete = (entry / "vmstate").exists() and (entry / "memory").exists()
+            if complete and not durable_dir.exists():
+                try:
+                    await asyncio.to_thread(_persist_snapshot, entry, durable_dir)
+                    persisted += 1
+                except Exception:
+                    logger.warning(
+                        "Could not persist staged checkpoint %s", entry.name, exc_info=True
+                    )
+                    continue
+            shutil.rmtree(entry, ignore_errors=True)
+        return persisted
+
     @staticmethod
     async def _clear_staging(staging_dir: Path) -> None:
         await asyncio.sleep(_STAGING_LINGER_SECONDS)

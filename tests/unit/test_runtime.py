@@ -197,3 +197,32 @@ async def test_start_finishes_a_teardown_the_previous_process_left_half_done(
         assert any("Startup: finished 1 interrupted teardown(s)" in m for m in messages)
     finally:
         await runtime.close()
+
+
+async def test_start_persists_staging_copies_a_previous_process_left_behind(
+    runtime: Runtime, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A restart loses the tasks that move tmpfs snapshots to disk and release
+    them, so start-up finishes that work: a copy with no durable twin is
+    persisted, one whose twin exists is released, and tmpfs holds nothing."""
+    staging = runtime.config.checkpoint_staging_dir
+    durable = runtime.config.checkpoint_local_dir
+    for name in ("ckpt-orphan", "ckpt-done"):
+        (staging / name).mkdir(parents=True)
+        (staging / name / "vmstate").write_bytes(b"v")
+        (staging / name / "memory").write_bytes(b"m")
+    (durable / "ckpt-done").mkdir(parents=True)
+    (durable / "ckpt-done" / "vmstate").write_bytes(b"v")
+    (durable / "ckpt-done" / "memory").write_bytes(b"m")
+    (staging / "ckpt-half").mkdir()  # a snapshot that never finished: nothing to keep
+    (staging / "ckpt-half" / "vmstate").write_bytes(b"v")
+
+    with caplog.at_level(logging.INFO):
+        await runtime.start()
+    await runtime.close()
+
+    assert (durable / "ckpt-orphan" / "memory").read_bytes() == b"m"
+    assert (durable / "ckpt-done" / "memory").read_bytes() == b"m"
+    assert not (durable / "ckpt-half").exists()
+    assert sorted(p.name for p in staging.iterdir()) == []
+    assert "Startup: persisted 1 staged checkpoint(s)" in caplog.text
