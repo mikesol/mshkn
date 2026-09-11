@@ -94,7 +94,7 @@ for p in noble noble-security; do curl -o /dev/null -sw "$p %{http_code} %{speed
   "${MSHKN_APT_MIRROR:-http://archive.ubuntu.com/ubuntu}/dists/$p/Release"; done
 ```
 
-Rerun the base-volume command after changing `Dockerfile.mshkn-base`, `MSHKN_APT_MIRROR` or the key, with the service stopped. Existing checkpoint and recipe volumes are unaffected (a thin snapshot is independent of its origin), and the bare template is rebuilt on the next create. If it fails part way, rerun it; volume 0 is not usable until a run succeeds.
+Rerun the base-volume command after changing `Dockerfile.mshkn-base`, `_post_process_rootfs` in `src/mshkn/services/recipes.py`, `MSHKN_APT_MIRROR` or the key, with the service stopped. A recipe volume built before such a change keeps the old rootfs until its recipe is deleted and created again. Existing checkpoint and recipe volumes are unaffected (a thin snapshot is independent of its origin), and the bare template is rebuilt on the next create. If it fails part way, rerun it; volume 0 is not usable until a run succeeds.
 
 ## 7. Environment and R2
 
@@ -109,6 +109,8 @@ MSHKN_IDLE_TIMEOUT=120
 MSHKN_CHECKPOINT_RETENTION=5
 MSHKN_APT_MIRROR=http://mirror.hetzner.com/ubuntu/packages
 ```
+
+Checkpoint snapshots are written to `MSHKN_CHECKPOINT_STAGING_DIR` first (`/dev/shm/mshkn` by default, which every Linux host has; no mount to set up) and moved to `/opt/mshkn/checkpoints` by the upload task, because Firecracker fsyncs the 256 MiB memory file.
 
 `MSHKN_APT_MIRROR` is the host's working Ubuntu mirror, baked into `mshkn-base` by step 6. The value above is right for the Hetzner host; on another host use whichever mirror that network reaches, and leave it unset only if `archive.ubuntu.com` is fast from there. `archive.ubuntu.com` returned 0 bytes in 30 s from the current host while the mirror above served 26 MB/s (#137).
 

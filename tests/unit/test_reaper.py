@@ -44,6 +44,7 @@ async def _reaper(
     config = Config(
         domain="test.dev",
         checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
         idle_timeout_seconds=idle_timeout,
     )
     allocator = SlotAllocator()

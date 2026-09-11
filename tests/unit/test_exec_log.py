@@ -68,6 +68,7 @@ async def _services(
     config = Config(
         domain="test.dev",
         checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
         idle_timeout_seconds=0,
         exec_log_retention_seconds=retention,
     )

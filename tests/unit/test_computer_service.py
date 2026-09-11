@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mshkn.config import Config
-from mshkn.db import get_computer, insert_account, insert_checkpoint
+from mshkn.db import get_checkpoint, get_computer, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, HostError, LimitExceeded, NotFound
 from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
@@ -17,7 +17,7 @@ from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.computers import ComputerService
 from mshkn.services.recipes import RecipeService
-from tests.support import account_row
+from tests.support import account_row, checkpoint_row
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -36,7 +36,11 @@ async def _service(
 ) -> tuple[ComputerService, FakeHostInstance]:
     await insert_account(db, ACCOUNT)
     host = FakeHost()
-    config = Config(domain="test.dev", checkpoint_local_dir=tmp_path / "ckpts")
+    config = Config(
+        domain="test.dev",
+        checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
+    )
     allocator = SlotAllocator()
     recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, BackgroundTasks())
     return ComputerService(config, db, host, allocator, recipes), host
@@ -392,3 +396,26 @@ async def test_teardown_removes_the_route_while_the_vm_is_being_killed(
     assert routes_during_kill == [{}], "the route went while the kill was in flight"
     assert taps_during_volume_removal == [[computer.slot]], "the tap went during the volume removal"
     assert service.allocator.free_slots == frozenset({computer.slot})
+
+
+async def test_fork_restores_from_the_staging_copy_until_the_durable_one_lands(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """A fork right after a checkpoint reads the tmpfs copy; once the durable
+    copy exists it is preferred, so the staging copy can go (#144)."""
+    service, host = await _service(db, tmp_path)
+    await insert_checkpoint(db, checkpoint_row("ckpt-s", thin_volume_id=0))
+    staging = tmp_path / "staging" / "ckpt-s"
+    staging.mkdir(parents=True)
+    (staging / "vmstate").write_bytes(b"v")
+    (staging / "memory").write_bytes(b"m")
+    ckpt = await get_checkpoint(db, "ckpt-s")
+    assert ckpt is not None
+    await service.fork(ACCOUNT, ckpt, recipe_id=None)
+    assert host.hypervisor.restored[-1][1].memory == staging / "memory"
+    durable = tmp_path / "ckpts" / "ckpt-s"
+    durable.mkdir(parents=True)
+    (durable / "vmstate").write_bytes(b"v")
+    (durable / "memory").write_bytes(b"m")
+    await service.fork(ACCOUNT, ckpt, recipe_id=None)
+    assert host.hypervisor.restored[-1][1].memory == durable / "memory"

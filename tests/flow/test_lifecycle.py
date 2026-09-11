@@ -56,8 +56,10 @@ async def test_create_exec_checkpoint_fork_destroy(flow: Flow) -> None:
     assert host.guest.evicted == [], "the pooled session survives the pause"
     assert host.blocks.volumes[ckpt.thin_volume_id or -1] == row.thin_volume_id
     assert host.blocks.active[f"mshkn-ckpt-{ckpt_id}"] == ckpt.thin_volume_id
-    assert (flow.runtime.config.checkpoint_local_dir / ckpt_id / "vmstate").exists()
+    # The snapshot lands on the tmpfs staging dir; the upload task persists it (#144).
+    assert (flow.runtime.config.checkpoint_staging_dir / ckpt_id / "memory").exists()
     await flow.runtime.tasks.wait(f"upload:{ckpt_id}")
+    assert (flow.runtime.config.checkpoint_local_dir / ckpt_id / "vmstate").exists()
     assert f"acct-1/{ckpt_id}" in host.objects.prefixes
 
     # fork: a new VM restored from the checkpoint's disk and snapshot files

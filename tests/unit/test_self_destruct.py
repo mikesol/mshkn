@@ -142,7 +142,7 @@ async def test_self_destruct_creates_checkpoint_and_destroys(
     assert host.guest.commands == [(ip, "echo done"), (ip, "sync")]
     assert host.hypervisor.snapshots[-1] == (
         computer.socket_path,
-        tmp_path / "ckpts" / checkpoint_id,
+        tmp_path / "staging" / checkpoint_id,
     )
     # once, when the computer is destroyed; the checkpoint's pause keeps the session
     assert host.guest.evicted == [ip]

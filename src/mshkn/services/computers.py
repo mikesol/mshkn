@@ -253,10 +253,20 @@ class ComputerService:
         return await self.recipes.ensure_template(recipe)
 
     async def _snapshot_files_for(self, checkpoint: Checkpoint) -> SnapshotFiles | None:
+        """The durable copy, else the tmpfs copy a fresh checkpoint still has, else R2.
+
+        The durable copy appears by rename, so it is complete when it exists;
+        the staging copy lingers past it (#144), so a fork that resolved the
+        staging path a moment earlier still finds its files.
+        """
         ckpt_dir = self.config.checkpoint_local_dir / checkpoint.id
         files = SnapshotFiles(vmstate=ckpt_dir / "vmstate", memory=ckpt_dir / "memory")
         if files.vmstate.exists() and files.memory.exists():
             return files
+        staging_dir = self.config.checkpoint_staging_dir / checkpoint.id
+        staged = SnapshotFiles(vmstate=staging_dir / "vmstate", memory=staging_dir / "memory")
+        if staged.vmstate.exists() and staged.memory.exists():
+            return staged
         if not checkpoint.r2_prefix:
             logger.info("Checkpoint %s has no R2 prefix, will cold-boot", checkpoint.id)
             return None

@@ -42,6 +42,7 @@ async def runtime(
     config = Config(
         domain="test.dev",
         checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
         ssh_key_path=tmp_path / "id_ed25519",
     )
     config.ssh_key_path.parent.mkdir(parents=True, exist_ok=True)
