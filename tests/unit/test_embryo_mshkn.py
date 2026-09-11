@@ -10,6 +10,8 @@ import pytest
 from membrane.config import Settings
 from membrane.mshkn import Deferred, Mshkn, MshknError, RunResult
 
+from tests.support_embryo import FakeMshkn
+
 
 def _client(handler: Any) -> Mshkn:
     return Mshkn(
@@ -300,3 +302,37 @@ async def test_get_relay_job_reads_the_status_the_response_and_the_error() -> No
     )
     bad = await api.get_relay_job("rj-bad")
     assert bad.status == "failed" and bad.error == "HTTP 529" and bad.response_status == 529
+
+
+async def test_delete_checkpoint_calls_the_route() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json={"status": "deleted"})
+
+    api = _client(handler)
+    await api.delete_checkpoint("ckpt-1")
+    assert seen == [("DELETE", "/checkpoints/ckpt-1")]
+    await api.aclose()
+
+
+async def test_delete_checkpoint_raises_on_a_refusal() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"detail": "Scope labels does not cover 'verb/trial/t-1'"})
+
+    api = _client(handler)
+    with pytest.raises(MshknError) as exc:
+        await api.delete_checkpoint("ckpt-1")
+    assert exc.value.status == 403 and "Scope labels" in exc.value.detail
+    await api.aclose()
+
+
+async def test_the_fake_forgets_a_deleted_checkpoint() -> None:
+    api = FakeMshkn()
+    api.chains["verb/trial/t-1"] = ["ckpt-a", "ckpt-b"]
+    await api.delete_checkpoint("ckpt-a")
+    assert api.chains["verb/trial/t-1"] == ["ckpt-b"]
+    await api.delete_checkpoint("ckpt-b")
+    assert "verb/trial/t-1" not in api.chains
+    assert ("delete_checkpoint", {"checkpoint_id": "ckpt-b"}) in api.calls

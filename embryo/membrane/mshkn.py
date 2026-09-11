@@ -1,4 +1,4 @@
-"""mshkn as the membrane sees it: seven calls, made with the scoped key (spec §3, §4)."""
+"""mshkn as the membrane sees it: eight calls, made with the scoped key (spec §3, §4)."""
 
 from __future__ import annotations
 
@@ -76,6 +76,8 @@ class MshknApi(Protocol):
     ) -> RunResult | Deferred: ...
 
     async def list_checkpoints(self, label: str) -> list[CheckpointInfo]: ...
+
+    async def delete_checkpoint(self, checkpoint_id: str) -> None: ...
 
     async def create_relay_job(
         self, *, target: str, headers: dict[str, str], body: dict[str, Any]
@@ -190,6 +192,9 @@ class Mshkn:
             for c in body
         ]
         return sorted(rows, key=lambda c: c.created_at, reverse=True)
+
+    async def delete_checkpoint(self, checkpoint_id: str) -> None:
+        await self._request("DELETE", f"/checkpoints/{checkpoint_id}")
 
     async def create_relay_job(
         self, *, target: str, headers: dict[str, str], body: dict[str, Any]

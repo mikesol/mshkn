@@ -186,6 +186,16 @@ class FakeMshkn:
             for i, c in reversed(list(enumerate(ids)))
         ]
 
+    async def delete_checkpoint(self, checkpoint_id: str) -> None:
+        self.calls.append(("delete_checkpoint", {"checkpoint_id": checkpoint_id}))
+        for label, ids in list(self.chains.items()):
+            if checkpoint_id in ids:
+                ids.remove(checkpoint_id)
+                if not ids:
+                    del self.chains[label]
+                return
+        raise MshknError(404, "Checkpoint not found")
+
     async def create_relay_job(
         self, *, target: str, headers: dict[str, str], body: dict[str, Any]
     ) -> str:
