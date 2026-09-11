@@ -49,6 +49,36 @@ A turn of the embryo is one fork exec, mshkn gives a fork's exec 300 seconds, an
 
 #110 landed as PR #114: a turn is a chain of forks through the host's relay, so the model's deliberation is bounded by the relay's patience rather than by a fork's 300 s exec budget. The measure resumes on that turn as #111.
 
+## The result, post-cut (#123)
+
+`embryo/seed.md` was cut back to irreducible bootstrap and invisible mechanism (#123, PR #125), so
+these runs attempted a harder task than either round above and **are not comparable to them**. Six
+runs against `claude-opus-5` at `--effort medium`, approvals automatic. Each membrane differs: a run
+found a defect, the defect was fixed, and the next run hatched from the fixed code.
+
+| Run | Membrane | Outcome | Calls | USD |
+|---|---|---|---|---|
+| `2026-09-10-postcut-run-1` | `1d7d5d2` | 3/7. Would not write a policy blind — a full replacement might drop root's own access. The clause saying root's rights are not policy's to grant was restored. | 15 | 2.23 |
+| `2026-09-10-postcut-run-2` | `431c3a6` | 3/7. Proposed both documents. Its hook read stdin and declared no parameters; the refusal caught it, and no repair turn existed to deliver the reason. | 9 | 1.02 |
+| `2026-09-10-postcut-run-3` | `ac56165` | Stopped by hand. A relay DNS failure ate the refusal, because a turn that fails never gave its inbox back; and the new repair trigger fired at every settle. Both fixed. | — | — |
+| `2026-09-10-postcut-run-4` | `14f11fd` | 3/7. **The door opened.** Authentication lost to `sig` carrying base64 over ASCII armor — a second encoding the seed used to disclose. The encoding was deleted rather than disclosed. | 22 | 2.77 |
+| `2026-09-11-postcut-run-5` | `57b4f0b` | 3/7. Learned the one-parameter hook rule from a refusal, mid-turn, and said so. Then declined to guess the policy schema. | 12 | 0.81 |
+| `2026-09-11-postcut-run-6` | `ee32cd2` | **4/7, the best post-cut result.** The live policy joined the turn's environment; the agent wrote a correct policy after two constructive refusals, and authentication worked for the first time. | 22 | 1.81 |
+
+**What the round establishes.** #123 assumed everything cut from the seed would be reached by a
+constructive refusal. That holds wherever the action is safe to attempt — the verb schema, the
+effect enum, the one-parameter hook rule were all learned exactly that way, and run 5's model
+narrated the moment it happened. It does not hold for the policy: there is no `try` for one, a
+valid-but-wrong document is applied irrevocably, and a careful agent therefore declines to
+experiment. That gap was closed by letting the agent read its own policy rather than by returning
+anything to the seed (design §9b).
+
+**What stopped it at 4/7.** Every remaining postcondition needs the verified principal to hold
+`propose`, and run 6 withheld it on a correct argument: an `ephemeral` hook cannot detect replay, so
+a captured signature would be a standing grant of self-modification. Spec §9 assumes the opposite
+choice without the liturgy ever asking for it. That is a `spec-change` question, in the shape of
+#117, and is deliberately not resolved by weakening a postcondition.
+
 ## The result, 2026-09-10
 
 The measure resumed on the asynchronous turn (#110, PR #114), as #111 said it would. Six runs against `claude-opus-5`, four of which spoke to the model: three at `--effort medium` and one at the API's default. **The best reached every postcondition, for $3.39 and 23 minutes.** Approvals were automatic again (`--approve auto`).
