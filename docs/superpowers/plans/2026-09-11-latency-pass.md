@@ -37,51 +37,53 @@
 
 **Files:** Modify `src/mshkn/services/recipes.py` (`_post_process_rootfs`), `src/mshkn/host/firecracker.py` (`BOOT_ARGS`); Test `tests/unit/test_image_pipeline.py`, `tests/unit/test_firecracker_client.py`.
 
-- [ ] Test: after `inject_tar`, `etc/ssh/sshd_config` contains `UsePAM no`, `etc/update-motd.d` is empty, and `etc/systemd/system/apt-daily.timer` is a symlink to `/dev/null` (one per masked unit).
-- [ ] Implement: `UsePAM` handled like `PermitRootLogin`; `_MASKED_UNITS` tuple; remove `update-motd.d` entries.
-- [ ] `BOOT_ARGS` gains `quiet loglevel=3 systemd.show_status=0 random.trust_cpu=on`; the client test pins the string.
-- [ ] Gate, commit.
+- [x] Test: after `inject_tar`, `etc/ssh/sshd_config` contains `UsePAM no`, `etc/update-motd.d` is empty, and `etc/systemd/system/apt-daily.timer` is a symlink to `/dev/null` (one per masked unit).
+- [x] Implement: `UsePAM` handled like `PermitRootLogin`; `_MASKED_UNITS` tuple; remove `update-motd.d` entries.
+- [x] `BOOT_ARGS` gains `quiet loglevel=3 systemd.show_status=0 random.trust_cpu=on`; the client test pins the string.
+- [x] Gate, commit.
 
 ### Task 2: Staging cleanup only when dirty; warm alongside add_route (#147)
 
 **Files:** Modify `src/mshkn/host/firecracker.py` (`_stage`, `_cleanup_staging`), `src/mshkn/services/computers.py` (`_bring_up`); Test `tests/unit/test_firecracker_stage.py`, `tests/unit/test_computer_service.py`.
 
-- [ ] Test: two successful boots run `dmsetup remove mshkn-restore-staging` once; a failed boot then a boot runs it before the second boot's map.
-- [ ] Implement `_staging_dirty` (True at construction and after `_cleanup_staging`).
-- [ ] Test: `add_route` failure still abandons; the route is added even when `warm` is slow (gather).
-- [ ] Gate, commit.
+- [x] Test: two successful boots run `dmsetup remove mshkn-restore-staging` once; a failed boot then a boot runs it before the second boot's map.
+- [x] Implement `_staging_dirty` (True at construction and after `_cleanup_staging`).
+- [x] Test: `add_route` failure still abandons; the route is added even when `warm` is slow (gather).
+- [x] Gate, commit.
 
-### Task 3: Checkpoint: dm snap alongside the dump, no evict (#147, #150)
+### Task 3: Checkpoint: no evict; the dm snap stays after the memory snapshot (#147, #150)
 
 **Files:** Modify `src/mshkn/services/checkpoints.py`; Test `tests/unit/test_checkpoint_service.py`, `tests/unit/test_self_destruct.py`, `tests/flow/test_lifecycle.py`.
 
-- [ ] Tests updated: `evicted` no longer includes the checkpoint; the volume snap and the snapshot both happen.
-- [ ] Implement `asyncio.gather(self.host.hypervisor.snapshot(...), self._snap_disk(computer, volume_name))`.
-- [ ] Gate, commit.
+- [x] Tests updated: `evicted` no longer includes the checkpoint.
+- [x] The overlap `asyncio.gather(snapshot, _snap_disk)` was implemented, shipped to the live host, and reverted the same night: the first full run captured empty files in checkpoints, because Firecracker's drive cache is `Unsafe` and its own flush inside `create_snapshot` is what lands guest writes on the volume. `test_create_snaps_the_disk_only_after_the_memory_snapshot_returned` pins the order.
+- [x] Gate, commit.
+
+Live runs: run 1 (12 failed) found the overlap; run 2 was stopped when `/dev/shm` filled because staging copies were held until their upload ended (Task 5 now releases them when the durable copy lands, falls back to disk when tmpfs is full, and start-up persists orphans); run 3 and run 4: `4 failed, 170 passed, 6 skipped`, the #65 set.
 
 ### Task 4: Destroy (#148)
 
 **Files:** Modify `src/mshkn/host/firecracker.py` (`kill_firecracker_process`), `src/mshkn/services/computers.py` (`_CleanupPass.steps`, `_teardown`, `_abandon`); Test `tests/unit/test_firecracker_process.py`, `tests/unit/test_computer_service.py`.
 
-- [ ] Test: kill returns within 50 ms of the child exiting.
-- [ ] Implement pidfd wait with a polling fallback.
-- [ ] Test: cancellation mid-kill still runs the later phases and releases the slot last (existing test stays green).
-- [ ] Implement `steps()` running a phase's steps concurrently; phases: (route, kill+evict), (volume, tap), then status, gauge, release.
-- [ ] Gate, commit.
+- [x] Test: kill returns within 50 ms of the child exiting.
+- [x] Implement pidfd wait with a polling fallback.
+- [x] Test: cancellation mid-kill still runs the later phases and releases the slot last (existing test stays green).
+- [x] Implement `steps()` running a phase's steps concurrently; phases: (route, kill+evict), (volume, tap), then status, gauge, release.
+- [x] Gate, commit.
 
 ### Task 5: Snapshot on tmpfs, persist in the upload task (#144, #145)
 
 **Files:** Modify `src/mshkn/config.py`, `src/mshkn/services/checkpoints.py`, `src/mshkn/services/computers.py` (`_snapshot_files_for`), `src/mshkn/host/r2.py`; Test `tests/unit/test_checkpoint_service.py`, `tests/unit/test_computer_service.py`, `tests/unit/test_r2.py`, `tests/unit/test_config.py`, `tests/flow/test_lifecycle.py`.
 
-- [ ] `Config.checkpoint_staging_dir` default `/dev/shm/mshkn`.
-- [ ] `create` snapshots into `staging/<id>`; the task under `upload:<id>` copies to `local/<id>` (atomic rename from `local/<id>.tmp`), uploads under a one-slot semaphore, then removes the staging copy after `_STAGING_LINGER_SECONDS`.
-- [ ] `_snapshot_files_for`: local, then staging, then R2.
-- [ ] `delete` removes both directories.
-- [ ] `upload_dir` runs `nice -n 19 ionice -c 3 rclone copy …`.
-- [ ] Gate, commit.
+- [x] `Config.checkpoint_staging_dir` default `/dev/shm/mshkn`.
+- [x] `create` snapshots into `staging/<id>`; the task under `upload:<id>` copies to `local/<id>` (atomic rename from `local/<id>.tmp`), uploads under a one-slot semaphore, then removes the staging copy after `_STAGING_LINGER_SECONDS`.
+- [x] `_snapshot_files_for`: local, then staging, then R2.
+- [x] `delete` removes both directories.
+- [x] `upload_dir` runs `nice -n 19 ionice -c 3 rclone copy …`.
+- [x] Gate, commit.
 
 ### Task 6: Docs and issue closure
 
-- [ ] `docs/ARCHITECTURE.md`: create step 5, checkpoint create, destroy, staging pass, durable disk, config table.
-- [ ] `docs/plans/README.md` row for this plan.
-- [ ] Deploy, rebuild the base volume, run the live suite, record T1 numbers on the PR; close #143 to #151 with accept/reject notes.
+- [x] `docs/ARCHITECTURE.md`: create step 5, checkpoint create, destroy, staging pass, durable disk, config table.
+- [x] `docs/plans/README.md` row for this plan.
+- [x] Deploy, rebuild the base volume, run the live suite, record T1 numbers on the PR; close #143 to #151 with accept/reject notes.
