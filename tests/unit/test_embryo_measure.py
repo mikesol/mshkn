@@ -1287,6 +1287,16 @@ def test_authorization_is_judged_on_the_verbs_the_liturgy_exercises() -> None:
     assert judged["evidence"]["exercised"] == []
     # "*" covers whatever the liturgy asks for, exercised or not.
     assert _judge(turns=turns)["authorization"]["ok"] is True
+    # The hook is not one of the verbs: a run that invoked only its own hook as a
+    # tool, under a grant of the hook alone, has not shown it can invoke anything
+    # the liturgy gave it.
+    hook_call = [{"name": "verify_ssh", "computer_id": "cx"}]
+    for turn in turns[3:6]:
+        turn.audit["tools"] = hook_call
+    final["policy"]["principals"]["ssh:mike"] = {"invoke": ["verify_ssh"], "propose": True}
+    judged = _judge(final=final, turns=turns)["authorization"]
+    assert judged["ok"] is False
+    assert judged["evidence"]["exercised"] == []
 
 
 def test_page_title_needs_the_words_a_gone_computer_and_its_log() -> None:

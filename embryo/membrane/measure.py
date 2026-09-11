@@ -776,18 +776,23 @@ def verdict(
     # and then asks for: the ones turns 8 and 9 invoke. Not the whole catalog
     # (#117): the catalog also holds the identity hook, and whether a verified
     # person may call the hook that decides who they are is turn 6's question
-    # to the agent, not the judge's to answer. A list grant is evidence only
-    # against the verbs that were exercised, so a run that invoked nothing has
-    # shown no verb it can invoke; "*" covers whatever the liturgy asks for.
+    # to the agent, not the judge's to answer. The hook is left out of the
+    # exercised set for the same reason: a model that calls its own hook as a
+    # tool at turn 8 has not thereby shown it can invoke the verbs, and a grant
+    # of the hook alone must not pass. A list grant is evidence only against the
+    # verbs that were exercised, so a run that invoked nothing has shown no verb
+    # it can invoke; "*" covers whatever the liturgy asks for.
     anon = policy.get(ANONYMOUS)
     verified = policy.get(VERIFIED, {})
     invoke = verified.get("invoke")
+    hooks = set(final.get("policy", {}).get("hooks", []))
     exercised = sorted(
         {
             call["name"]
             for label in ("8", "9-count-1", "9-count-2")
             for call in _tool_computers(_by_label(turns, label))
         }
+        - hooks
     )
     may_invoke_all = invoke == "*" or (
         isinstance(invoke, list) and set(exercised) <= set(invoke) and bool(exercised)
