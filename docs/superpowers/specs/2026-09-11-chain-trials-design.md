@@ -228,10 +228,15 @@ with two runs before turn 9's proposal, reads `1` then `2`, and the scratch labe
 zero checkpoints afterwards. This is the deterministic proof of the thing run 6 could not
 do.
 
-**E2E** (`tests/e2e/test_phase14_embryo.py`): one test proving a chain trial on the live
-host. The gate line moves from **170 passed, 6 skipped, 4 failed** over 180 to
-**171 passed, 6 skipped, 4 failed** over 181; `CLAUDE.md` and
-`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` carry the number.
+**E2E** (`tests/e2e/test_phase14_embryo.py`): the trial happens inside turn 9, whose audit
+line T14.6 already reads, so the tier gains assertions rather than a test. T14.6 becomes:
+the turn's tools are `try` then `propose`; the trial's two runs answer `1` and `2` on the
+live host; the scratch label holds no checkpoints afterwards; and approval reuses the
+recipe the trial built, so the verb is born `ready` rather than `building` (ruling P3,
+as T14.5 already relies on for `page_title`).
+
+The gate line therefore does **not** move: **170 passed, 6 skipped, 4 failed** over 180
+stands, and `CLAUDE.md` and the test plan need no new number.
 
 ## 10. Out of scope
 
