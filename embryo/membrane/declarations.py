@@ -257,6 +257,24 @@ def parse_verb(doc: object) -> Verb:
     )
 
 
+def parse_runs(params: object, runs: object) -> list[dict[str, Any]]:
+    """The invocations of one trial (#118). `params` is one invocation; `runs` is
+    several, in order. A `chain` verb's runs share the trial's scratch chain, so a
+    second entry is how the model sees whether its state persisted."""
+    if params is not None and runs is not None:
+        raise DeclarationError(
+            "give params for one invocation or runs for several, not both; "
+            "runs is a list of parameter objects, one per invocation, in order"
+        )
+    if runs is None:
+        return [dict(_obj(params, "params"))] if params is not None else [{}]
+    if not isinstance(runs, list):
+        raise DeclarationError("runs must be a list of parameter objects, one per invocation")
+    if not runs:
+        raise DeclarationError("runs must name at least one invocation")
+    return [dict(_obj(entry, f"runs[{i}]")) for i, entry in enumerate(runs)]
+
+
 def render_command(verb: Verb, params: dict[str, Any]) -> str:
     """The entrypoint with every {{param}} shell-quoted, under the guest's timeout."""
 

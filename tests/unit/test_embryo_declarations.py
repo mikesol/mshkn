@@ -12,6 +12,7 @@ from membrane.declarations import (
     Policy,
     parse_policy,
     parse_proposal,
+    parse_runs,
     parse_verb,
     render_command,
 )
@@ -237,3 +238,33 @@ def test_a_proposal_missing_fields_is_told_the_whole_shape_at_once() -> None:
     message = str(exc.value)
     for field_name in ("kind", "title", "rationale"):
         assert field_name in message, field_name
+
+
+def test_parse_runs_defaults_to_one_invocation() -> None:
+    assert parse_runs({"url": "u"}, None) == [{"url": "u"}]
+    assert parse_runs(None, None) == [{}]
+
+
+def test_parse_runs_takes_a_list_of_parameter_sets() -> None:
+    assert parse_runs(None, [{"n": 1}, {"n": 2}]) == [{"n": 1}, {"n": 2}]
+
+
+def test_parse_runs_refuses_both_and_names_the_choice() -> None:
+    with pytest.raises(DeclarationError) as exc:
+        parse_runs({"url": "u"}, [{"url": "u"}])
+    assert "params" in str(exc.value) and "runs" in str(exc.value)
+
+
+def test_parse_runs_refuses_an_empty_list() -> None:
+    with pytest.raises(DeclarationError) as exc:
+        parse_runs(None, [])
+    assert "at least one invocation" in str(exc.value)
+
+
+def test_parse_runs_refuses_a_non_list_and_a_non_object_entry() -> None:
+    with pytest.raises(DeclarationError) as exc:
+        parse_runs(None, {"n": 1})
+    assert "list" in str(exc.value)
+    with pytest.raises(DeclarationError) as exc:
+        parse_runs(None, [{"n": 1}, "two"])
+    assert "runs[1]" in str(exc.value)
