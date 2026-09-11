@@ -235,11 +235,18 @@ class FakeGuest(_Failable):
     ``stream_script`` maps a command to the lines it yields. A script may end
     with its own ``("exit", code)`` line to model a non-zero exit; if it does
     not, a clean ``("exit", "0")`` is appended.
+
+    ``script_sequence`` maps a command to the results of its successive runs,
+    taking precedence over ``script``; the last one stands for every run after
+    it.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.script: dict[str, ExecResult] = {}
+        # A command that answers differently each time, which is what a chain verb
+        # does; `script` alone is keyed by command and cannot say that.
+        self.script_sequence: dict[str, list[ExecResult]] = {}
         self.stream_script: dict[str, list[OutputLine]] = {}
         self.commands: list[tuple[str, str]] = []
         self.files: dict[tuple[str, str], bytes] = {}
@@ -266,6 +273,9 @@ class FakeGuest(_Failable):
     ) -> ExecResult:
         self._maybe_fail("exec")
         self.commands.append((vm_ip, command))
+        seq = self.script_sequence.get(command)
+        if seq:
+            return seq.pop(0) if len(seq) > 1 else seq[0]
         return self.script.get(command, self.default)
 
     async def stream(
