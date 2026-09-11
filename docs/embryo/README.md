@@ -82,6 +82,46 @@ answered in turn 2's words rather than in the measure: root now says it will kee
 agent to become something different from out there, so the grant is a decision the agent is
 asked to make instead of one the spec assumed it would infer.
 
+## The result, post-#128 (2026-09-11)
+
+One run, on the branch of PR #129, against a liturgy whose turn 2 states root's intent to keep
+changing the agent from the public door (#128). **It is not comparable to any round above**, and for
+once the reason is the liturgy rather than the seed. `--effort medium`, approvals automatic.
+
+| Run | Membrane | Outcome | Calls | Tokens in / out | USD | Minutes |
+|---|---|---|---|---|---|---|
+| `2026-09-11-turn2-run-1` | `807b582` | **6/7 as judged, 7/7 under the judge as corrected by #139.** The first post-cut run to reach `authorization`. | 32 | 377 979 / 38 966 | 2.60 | 20.0 |
+
+**What it establishes.** Turn 2's policy granted `ssh:mike` `invoke: "*"` and `propose: true` — the
+grant `2026-09-11-postcut-run-6` and `2026-09-10-postcut-run-4` each withheld on a correct argument
+about replay, at a cost of three postconditions apiece. With it, `authorization` and `page_title`
+both passed. The agent named the residue unprompted, which is the answer #128 hoped for: "this
+grants you a voice from outside, not authority over me… Root's powers are untouched; I granted
+myself nothing", and, on the new sentence itself, "if you ask me to become something different, the
+becoming still has to pass through your approval, which is as it should be."
+
+**What it does not establish, and this matters more than the score.** #128 argued that an agent told
+root will keep changing it from outside "must confront that an `ephemeral` hook proves authorship
+but not freshness", and would then either solve that — a nonce spent once against a `chain` verb —
+or grant anyway and say why. It granted, and never met the problem. Across the run's 43 000-character
+transcript there is not one occurrence of replay, freshness, nonce or "valid forever", and the hook
+was never trialled on a chain, though #118 had landed expressly so that it could be. The change
+bought the grant; it did not buy the reasoning. At N = 1 that is one run's silence, not a refutation
+— but it is the claim to watch in the next round, not the postcondition count.
+
+**The `counter` miss was the instrument, not the embryo.** The verb worked: two invocations on two
+computers returned 1 then 2, and the first invocation's checkpoint was pruned by #93 retention nine
+seconds after the second created a new head, so the catalog reported one row for two calls. The
+`run.json` in the run directory records the verdict the judge gave at the time, `ok: false`, and it
+is left as it was recorded; #139 and PR #140 replace the postcondition with the head each invocation
+creates, and on this run's own evidence — `ckpt-5276cbe9ed22` then `ckpt-e28e40f9bcca`, distinct,
+the second still the catalog's head — it passes.
+
+**Also worth recording.** The agent needed three attempts at the policy document, reporting "Third
+form, after two schema rejections", even though #123's round closed that gap by putting the live
+policy in the turn's environment (design §9b). The constructive-refusal path works, and it is not
+cheap.
+
 ## The result, 2026-09-10
 
 The measure resumed on the asynchronous turn (#110, PR #114), as #111 said it would. Six runs against `claude-opus-5`, four of which spoke to the model: three at `--effort medium` and one at the API's default. **The best reached every postcondition, for $3.39 and 23 minutes.** Approvals were automatic again (`--approve auto`).

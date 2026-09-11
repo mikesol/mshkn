@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-11T14:16:08+00:00",
+ "command": "say",
+ "computer_id": "comp-2d20aba6724e",
+ "detail": {
+  "msg": "Give yourself a verb that counts how many times it has been called.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgK5kWwMe0svXgtgfbIqYNljKEl6\nKbeFS7pMWAhGV0CN8AAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABAP/XwDdKeuFFF3GOHZdaTybk/QaXg4OA9DcbaZ2R0w6MPe3oyQecJYouUw6uORf\nqdsMmnjYqlUDLi9chORhJnCg==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 75,
+ "seconds": 7.913662679959089,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\n",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-f3fffd3e7555\", \"exit_code\": 0, \"name\": \"ssh_identity\", \"principal\": \"ssh:mike\", \"status\": \"ok\"}], \"job\": \"rj-0b3a9c16a3b6\", \"offered\": [\"effort\", \"page_title\", \"propose\", \"remember\", \"ssh_identity\", \"try\"], \"principal\": \"ssh:mike\", \"started\": true, \"turn\": 8}\n{\"turn\": 8, \"job\": \"rj-0b3a9c16a3b6\"}\n"
+}
