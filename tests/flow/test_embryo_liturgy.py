@@ -162,12 +162,13 @@ async def embryo(
 
 
 async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
-    # turn 1: root say; three tools, closed door, no proposals
+    # turn 1: root say; the four built-in tools, closed door, no proposals
     audit, reply = await embryo.root_say(LITURGY[1])
     assert audit["principal"] == "root" and audit["tools"] == [] and audit["proposals"] == []
-    # spec §9 turn 1's outcome: "a reply naming its three tools honestly and that
-    # its public door is closed. No proposals."
-    assert "remember" in reply and "try" in reply and "propose" in reply
+    # spec §9 turn 1's outcome: "a reply naming its tools honestly and that its
+    # public door is closed. No proposals." Read as names, never as a count: a count
+    # marks down a model that honestly names a tool the outcome forgot (#117, #131).
+    assert all(name in reply for name in ("remember", "effort", "try", "propose"))
     assert "door is closed" in reply
     assert "proposal p-" not in reply
     listing = await embryo.listing()

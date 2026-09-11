@@ -29,8 +29,9 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
 import httpx
 
-from membrane.config import DEFAULT_MODEL_ID, EFFORTS, parse_env
-from membrane.declarations import RESERVED_NAMESPACES
+from membrane.config import DEFAULT_MODEL_ID, parse_env
+from membrane.declarations import RESERVED_NAMESPACES, RESERVED_TOOL_NAMES
+from membrane.effort import EFFORTS
 from membrane.liturgy import COUNT, LITURGY, REFUSED
 from membrane.model import add_usage, zero_usage
 from membrane.principals import ANONYMOUS, ROOT, namespace_of
@@ -44,7 +45,10 @@ REQUIRED = ("MSHKN_API_URL", "MSHKN_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_K
 OPTIONAL = ("BRAIN_API_URL",)
 HATCH = Path(__file__).resolve().parents[1] / "hatch.sh"
 VERIFIED = "ssh:mike"
-RESERVED_TOOLS = frozenset({"remember", "try", "propose"})
+# The membrane's built-ins, read from the membrane rather than copied: a tool the
+# turn offers and the catalog does not name is undeclared capability, and a stale
+# copy here would have failed postcondition 4 on `effort` (#122).
+RESERVED_TOOLS = RESERVED_TOOL_NAMES
 POSTCONDITIONS = (
     "authentication",
     "root_unforgeable",
@@ -75,7 +79,9 @@ class MeasureSettings:
     anthropic_api_key: str
     openai_api_key: str
     model_id: str
-    effort: str | None = None
+    # The floor under every model call of the run, not the effort of any of them:
+    # the turn raises it from its tool list and the model's own request (#122).
+    default_effort: str | None = None
 
 
 def load_measure_settings(
@@ -99,7 +105,7 @@ def load_measure_settings(
         anthropic_api_key=values["ANTHROPIC_API_KEY"],
         openai_api_key=values["OPENAI_API_KEY"],
         model_id=model_id or DEFAULT_MODEL_ID,
-        effort=effort,
+        default_effort=effort,
     )
 
 
@@ -522,7 +528,7 @@ def hatch(settings: MeasureSettings, script: Path, *, log: TextIO) -> Hatched:
         "BRAIN_API_URL": settings.brain_api_url,
         "MEMBRANE_MODEL": "anthropic",
         "MEMBRANE_MODEL_ID": settings.model_id,
-        "MEMBRANE_EFFORT": settings.effort or "",
+        "MEMBRANE_EFFORT": settings.default_effort or "",
         "ANTHROPIC_API_KEY": settings.anthropic_api_key,
         "OPENAI_API_KEY": settings.openai_api_key,
     }
@@ -962,7 +968,7 @@ async def run_once(
             summary = {
                 "run": out_dir.name,
                 "model": settings.model_id,
-                "effort": settings.effort,
+                "default_effort": settings.default_effort,
                 "membrane": version,
                 "started": started.isoformat(timespec="seconds"),
                 "ended": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -975,6 +981,7 @@ async def run_once(
                         "door": t.door,
                         "principal": t.audit.get("principal"),
                         "model_calls": t.audit.get("model_calls", 0),
+                        "effort": t.audit.get("effort", []),
                         "usage": t.audit.get("usage", zero_usage()),
                         "stopped": t.audit.get("stopped"),
                         "tools": [c.get("name") for c in t.audit.get("tools", [])],
@@ -1023,7 +1030,10 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--model", default=None, help=f"model id (default {DEFAULT_MODEL_ID})")
     parser.add_argument(
-        "--effort", choices=EFFORTS, default=None, help="output_config.effort (default the API's)"
+        "--effort",
+        choices=EFFORTS,
+        default=None,
+        help="the run's default output_config.effort, which a turn may raise (default the API's)",
     )
     parser.add_argument("--date", default=datetime.now(UTC).date().isoformat())
     parser.add_argument("--keep", action="store_true", help="leave the brain on the account")

@@ -178,7 +178,7 @@ The 8-second cost of a bare fork is itself worth attention: a turn of six model 
 
 | File | What |
 |---|---|
-| `run.json` | The model, the effort, the membrane commit, the times, every turn's principal, model calls, usage, tools and proposals, the approvals, the token totals, the cost, and the seven postconditions each with the evidence it was judged on. An aborted run has the error instead of the verdict. |
+| `run.json` | The model, the run's default effort and the `output_config.effort` each turn's model calls carried -- `null` where the request carried none, which is the API's default arm and the one the 2026-09-10 round calls "default" -- the membrane commit, the times, every turn's principal, model calls, usage, tools and proposals, the approvals, the token totals, the cost, and the seven postconditions each with the evidence it was judged on. An aborted run has the error instead of the verdict. |
 | `transcript.md` | Every turn: the words, the audit line, the reply (proposals included), the approvals. |
 | `final-list.json` | Turn 10: root's `list` after the liturgy. |
 | `commands/NNN-<door>-<command>.json` | Every command the measure sent, in order, with its raw stdout and stderr and the computer it ran on: every `say`, every `list` (the build polls included), every `approve`. Nothing else was sent; that is the last postcondition. |

@@ -16,9 +16,9 @@ FAILED_RE = re.compile(r"verb (\w+) failed to build \(proposal (p-\d+)\)")
 PAGE_TITLE_RE = re.compile(r"^page_title (\S+)$")
 
 BIRTH_TEXT = (
-    "I am an embryo. I have three tools: remember, try and propose. I have no verbs, no principals "
-    "and no policy of my own yet. My public door is closed until I propose a way to know who is "
-    "speaking."
+    "I am an embryo. I have four tools: remember, effort, try and propose. I have no verbs, "
+    "no principals and no policy of my own yet. My public door is closed until I propose a way "
+    "to know who is speaking."
 )
 ANON_TEXT = "I do not know who you are, so I will not act or remember."
 NOTHING_TEXT = "Nothing in my script answers that."

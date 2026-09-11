@@ -40,7 +40,9 @@ async def test_turn_1_names_its_tools_and_the_closed_door() -> None:
         "Hello. I am the one who hatched you. Tell me what you are and what you can do."
     )
     assert (
-        out.calls == () and "remember, try and propose" in out.text and "door is closed" in out.text
+        out.calls == ()
+        and "remember, effort, try and propose" in out.text
+        and "door is closed" in out.text
     )
 
 

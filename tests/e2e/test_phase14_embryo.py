@@ -283,7 +283,7 @@ class TestPhase14Embryo:
         assert doors.hatched.ingress_url.endswith(f"/ingress/{doors.hatched.rule_id}")
         audit, reply = await doors.root_say(LITURGY[1])
         assert audit["principal"] == "root" and audit["door"] == "api" and audit["tools"] == []
-        assert "remember, try and propose" in reply and "door is closed" in reply
+        assert "remember, effort, try and propose" in reply and "door is closed" in reply
         listing = await doors.listing()
         assert listing["door"]["status"] == "closed" and listing["proposals"] == []
 
