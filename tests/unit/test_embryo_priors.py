@@ -175,16 +175,38 @@ def test_turn_two_states_the_facts_only_the_sender_can_state() -> None:
         assert phrase not in turn2, phrase
 
 
+def test_turn_two_states_roots_intent_to_keep_changing_the_agent_from_outside() -> None:
+    """#128: turns 4 to 9 all arrive at ingress, where the hatcher is `ssh:mike`
+    and nothing but the policy turn 2 writes can let that principal propose. So
+    turn 2's choice is one-shot — an agent that withholds the grant cannot
+    propose its way out of it — and until now nothing in turn 2 said root would
+    ever ask for anything from out there. It says so now, as an outcome: no
+    field, no tool and no document is named, and root is not named either,
+    because the policy language cannot express root's rights and asking for them
+    invites a correct refusal. What the intent raises — that a signature proves
+    authorship and not freshness — is the model's problem to meet."""
+    turn2 = LITURGY[2]
+    assert "I'll speak to you from outside rather than from here" in turn2
+    assert "asking you to become something different" in turn2
+    for phrase in ("grant", "`propose`", "authority", "root", "replay", "nonce"):
+        assert phrase not in turn2, phrase
+
+
 def test_the_liturgy_the_tiers_send_is_the_liturgy_the_repository_publishes() -> None:
     """`LITURGY` is the script the flow and E2E tiers speak; `embryo/liturgy.md`
-    is the table a reader sees (spec §9). Nothing else in the suite would notice
-    the two drifting apart, so every turn's words are pinned here. Turn 2 is
-    split around its `{key}` placeholder, which the document writes as an
-    ellipsis."""
-    published = (EMBRYO / "liturgy.md").read_text()
-    for turn, words in LITURGY.items():
-        for part in words.split("{key}"):
-            assert part in published, (turn, part)
+    is the table a reader sees, and §9 of the design spec copies that table a
+    third time. Nothing else in the suite would notice the three drifting
+    apart — the E2E tier reads the scripted model's reply rather than a real
+    one, so a liturgy that disagrees with the membrane still goes green — so
+    every turn's words are pinned here, in every document that publishes them.
+    Turn 2 is split around its `{key}` placeholder, which both documents write
+    as an ellipsis."""
+    spec = EMBRYO.parent / "docs/superpowers/specs/2026-09-08-embryo-design.md"
+    for document in ((EMBRYO / "liturgy.md"), spec):
+        published = document.read_text()
+        for turn, words in LITURGY.items():
+            for part in words.split("{key}"):
+                assert part in published, (document.name, turn, part)
 
 
 def _expand(expression: str, wheel_name: str) -> str:

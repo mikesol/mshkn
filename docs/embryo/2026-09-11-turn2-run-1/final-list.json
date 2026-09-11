@@ -1,0 +1,1045 @@
+{
+ "catalog": {
+  "call_count": {
+   "chain_head": "ckpt-e28e40f9bcca",
+   "chain_length": 1,
+   "effect": "local",
+   "recipe_id": "rcp-1cc8009cacde",
+   "state": "chain",
+   "status": "ready"
+  },
+  "page_title": {
+   "chain_head": null,
+   "chain_length": 0,
+   "effect": "read",
+   "recipe_id": "rcp-41e832ec5e16",
+   "state": "ephemeral",
+   "status": "ready"
+  },
+  "ssh_identity": {
+   "chain_head": null,
+   "chain_length": 0,
+   "effect": "local",
+   "recipe_id": "rcp-7fa7bf38773a",
+   "state": "ephemeral",
+   "status": "ready"
+  }
+ },
+ "door": {
+  "hooks": [
+   "ssh_identity"
+  ],
+  "hooks_ready": [
+   "ssh_identity"
+  ],
+  "status": "open"
+ },
+ "inbox": 0,
+ "pending": null,
+ "policy": {
+  "door": "open",
+  "hooks": [
+   "ssh_identity"
+  ],
+  "principals": {
+   "anonymous": {
+    "invoke": [],
+    "propose": false
+   },
+   "ssh:mike": {
+    "invoke": "*",
+    "propose": true
+   }
+  }
+ },
+ "principals": [
+  "ssh:mike"
+ ],
+ "proposals": [
+  {
+   "id": "p-1",
+   "kind": "verb",
+   "log": null,
+   "rationale": "You asked for a way to know that a message at the public door comes from you. This hook takes the decoded public payload \u2014 a JSON object with `msg` and `sig` \u2014 writes the message bytes to a file, writes the armored signature beside it, and runs `ssh-keygen -Y verify` against a baked allowed_signers file containing exactly one key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICuZFsDHtLL14LYH2yKmDZYyhJeim3hUu6TFgIRldAjf, under principal `mike` and namespace `mshkn`. On success it prints `mike` and exits 0, so the principal becomes ssh:mike. On any failure it prints nothing to stdout and exits non-zero, so the sender stays anonymous.\n\nBecause a signature is over exact bytes and transport may add or eat a final newline, it tries three candidate message bodies: as received, with one newline appended, and with one trailing newline stripped. Nothing else is tried.\n\nTested with `try` against a throwaway key baked at build time (trials t-3, t-4). Passing: correct signature via argument; same via stdin; message signed with a trailing newline but delivered without one; exact multi-line message. Failing closed, exit 1 and empty stdout: tampered message, signature by a different key, signature made under a different namespace (`-n other`), plain non-JSON text, payload missing `sig`, malformed signature.\n\nTwo things for you to check, since I am guessing at the interface: (1) I read the payload from argv[1] and fall back to stdin if it is empty, so either delivery works; adjust the entrypoint if hooks are fed differently. (2) The key is baked into the image, so rotating it needs a new proposal \u2014 which I think is correct, as it is your key and not mine to change. No secrets are required; jq and ssh-keygen are installed at build from Ubuntu archives.",
+   "recipe_id": "rcp-7fa7bf38773a",
+   "status": "ready",
+   "supersedes": null,
+   "title": "ssh_identity \u2014 pre-turn hook asserting the `ssh` namespace from an ssh-keygen -Y signature",
+   "verb": {
+    "allow": [],
+    "asserts": "ssh",
+    "chain": "verb/ssh_identity",
+    "description": "Verify an ssh-keygen -Y signature over the incoming message and assert the signer's name (mike) in the ssh namespace. Prints the name on success, nothing on failure.",
+    "dockerfile": "FROM mshkn-base\nRUN apt-get update -qq && apt-get install -y -qq jq && rm -rf /var/lib/apt/lists/*\nRUN mkdir -p /verb && printf '%s\\n' 'mike ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICuZFsDHtLL14LYH2yKmDZYyhJeim3hUu6TFgIRldAjf mike' > /verb/allowed_signers\nRUN printf '%s\\n' '#!/bin/sh' 'P=\"$1\"' 'if [ -z \"$P\" ]; then P=\"$(cat -)\"; fi' 'printf \"%s\" \"$P\" | jq -je .msg > /tmp/msg 2>/dev/null || exit 1' 'printf \"%s\" \"$P\" | jq -r .sig > /tmp/s.sig 2>/dev/null || exit 1' 'if [ ! -s /tmp/msg ] || [ ! -s /tmp/s.sig ]; then exit 1; fi' 'V() { ssh-keygen -Y verify -f /verb/allowed_signers -I mike -n mshkn -s /tmp/s.sig < \"$1\" >/dev/null 2>&1; }' 'cp /tmp/msg /tmp/msg_nl; printf \"\\n\" >> /tmp/msg_nl' 'sz=$(wc -c < /tmp/msg)' 'if [ \"$sz\" -gt 0 ] && [ \"$(tail -c 1 /tmp/msg | od -An -c | tr -d \" \")\" = \"\\n\" ]; then head -c $((sz-1)) /tmp/msg > /tmp/msg_st; else cp /tmp/msg /tmp/msg_st; fi' 'for f in /tmp/msg /tmp/msg_nl /tmp/msg_st; do if V \"$f\"; then echo \"verified: $f\" >&2; printf \"mike\"; exit 0; fi; done' 'echo \"no valid mshkn-namespace signature by mike\" >&2' 'exit 1' > /verb/hook.sh && chmod +x /verb/hook.sh",
+    "effect": "local",
+    "entrypoint": "/verb/hook.sh {{payload}}",
+    "name": "ssh_identity",
+    "needs": {
+     "cores": 1,
+     "ram": "256MB"
+    },
+    "params": {
+     "properties": {
+      "payload": {
+       "description": "The decoded public payload: JSON with fields msg and sig.",
+       "type": "string"
+      }
+     },
+     "required": [],
+     "type": "object"
+    },
+    "requires": [],
+    "state": "ephemeral",
+    "timeout_seconds": 20
+   }
+  },
+  {
+   "id": "p-2",
+   "kind": "policy",
+   "log": null,
+   "policy": {
+    "door": "open",
+    "hooks": [
+     "ssh_identity"
+    ],
+    "principals": {
+     "anonymous": {
+      "invoke": [],
+      "propose": false
+     },
+     "ssh:mike": {
+      "invoke": "*",
+      "propose": true
+     }
+    }
+   },
+   "rationale": "Third form, after two schema rejections: hooks is a list of verb names, and invoke is \"*\" or a list of verb names.\n\nEffect: a message may now arrive at the public door and is run through the ssh_identity hook (p-1) before the turn. Unsigned or badly signed, the sender stays anonymous \u2014 no invoke, no propose, nothing remembered. Validly signed in namespace mshkn by your key, the sender becomes ssh:mike, who may invoke everything and propose; approval still rests with root alone, so this grants you a voice from outside, not authority over me.\n\nApply only after ssh_identity is approved. If the principal name ssh:mike is spelled differently by the engine (the hook asserts `ssh` and prints `mike`), reject this and tell me the exact string and I will re-propose. Root's powers are untouched; I granted myself nothing.",
+   "recipe_id": null,
+   "status": "applied",
+   "supersedes": null,
+   "title": "Open the public door behind the ssh_identity hook; ssh:mike is trusted, anonymous is not"
+  },
+  {
+   "id": "p-3",
+   "kind": "verb",
+   "log": null,
+   "rationale": "Tested in trials t-5 and t-6 before proposing. Behaviour observed, not assumed:\n\n- https://example.com -> \"Example Domain\", exit 0, stderr \"http 200\".\n- https://www.iana.org/help/example-domains -> \"Example Domains\" (redirect followed).\n- a 404 page -> its title on stdout, exit 0, with stderr saying the title came from an error page. I chose to report rather than suppress; the caller sees the status.\n- a page with no title (robots.txt) -> empty stdout, exit 3, message on stderr.\n- ftp:// -> refused before any network call, exit 2.\n- unresolvable host -> exit 4, curl's reason on stderr.\n\nt-5 had one defect: a literal backslash-n reached stderr because of over-escaping in the printf-built script. Fixed in t-6 and re-run; stderr is now clean. That is the only change between the two.\n\nDesign choices worth your objection if you disagree:\n- effect \"read\", state \"ephemeral\": it fetches and forgets. Nothing persists between invocations, so a hostile page cannot leave anything behind for the next caller.\n- Only http and https, checked before curl runs, so file://, ftp:// and gopher:// cannot be used to read the verb's own disk.\n- Bounded: 5 redirects, 10s connect, 25s total, 5MB body, 60s verb timeout. Title truncated to 300 chars, whitespace collapsed to one line.\n- Parsed with Python's HTMLParser, not a regex; charset taken from a meta charset in the first 4KB, decoding errors replaced rather than fatal.\n- stdout is the title and nothing else; all diagnostics go to stderr, so the output is usable as a value.\n\nNo \"requires\": no secrets, no credentials, nothing you must hand over. No \"allow\" clause, so it follows the policy: ssh:mike may invoke it, anonymous may not. If you would rather anonymous callers be able to ask for a page title \u2014 it is a read of the public web, arguably harmless \u2014 that is a policy change, and I would want you to make it deliberately rather than have me slip it in here.\n\nOne honest caveat: the verb fetches whatever URL it is given, from a computer inside your network boundary. It cannot reach my memory or my keys, but it can reach whatever that computer can reach, including private addresses. If that matters, say so and I will propose a version that refuses non-public IPs.",
+   "recipe_id": "rcp-41e832ec5e16",
+   "status": "ready",
+   "supersedes": null,
+   "title": "page_title \u2014 report the HTML title of a URL",
+   "verb": {
+    "allow": [],
+    "chain": "verb/page_title",
+    "description": "Given an http(s) URL, fetch the page and report its HTML <title> on stdout. Read-only, ephemeral, no secrets.",
+    "dockerfile": "FROM mshkn-base\nRUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates python3 && rm -rf /var/lib/apt/lists/*\nRUN mkdir -p /verb\nRUN printf '%s\\n' 'import sys' 'from html.parser import HTMLParser' 'class P(HTMLParser):' '    def __init__(self):' '        super().__init__(convert_charrefs=True)' '        self.inT = False' '        self.done = False' '        self.buf = []' '    def handle_starttag(self, tag, attrs):' '        if tag == \"title\" and not self.done:' '            self.inT = True' '    def handle_endtag(self, tag):' '        if tag == \"title\" and self.inT:' '            self.inT = False' '            self.done = True' '    def handle_data(self, d):' '        if self.inT:' '            self.buf.append(d)' 'raw = sys.stdin.buffer.read()' 'head = raw[:4096].decode(\"ascii\", \"replace\").lower()' 'enc = \"utf-8\"' 'i = head.find(\"charset=\")' 'if i != -1:' '    c = head[i+8:i+48].strip().strip(\"\\\"\\\\x27\")' '    c = c.split(\">\")[0].split(\";\")[0].split(\" \")[0].strip()' '    if c:' '        enc = c' 'try:' '    text = raw.decode(enc, \"replace\")' 'except Exception:' '    text = raw.decode(\"utf-8\", \"replace\")' 'p = P()' 'try:' '    p.feed(text)' 'except Exception:' '    pass' 'title = \" \".join(\"\".join(p.buf).split())' 'if not title:' '    print(\"no <title> element found\", file=sys.stderr)' '    sys.exit(3)' 'if len(title) > 300:' '    title = title[:300] + \"...\"' 'print(title)' > /verb/title.py\nRUN printf '%s\\n' '#!/bin/sh' 'set -u' 'url=\"$1\"' 'case \"$url\" in' '  http://*|https://*) ;;' '  *) echo \"refusing non-http(s) URL\" >&2; exit 2 ;;' 'esac' 'tmp=$(mktemp)' 'code=$(curl -sS -L --max-redirs 5 --connect-timeout 10 --max-time 25 --max-filesize 5000000 -A \"mshkn-page-title/1\" -H \"Accept: text/html\" -o \"$tmp\" -w \"%{http_code}\" \"$url\")' 'rc=$?' 'if [ \"$rc\" -ne 0 ]; then' '  echo \"fetch failed (curl exit $rc)\" >&2' '  exit 4' 'fi' 'case \"$code\" in' '  2*) echo \"http $code\" >&2 ;;' '  *) echo \"http $code (title below, if any, is from the error page)\" >&2 ;;' 'esac' 'python3 /verb/title.py < \"$tmp\"' > /verb/run.sh\nRUN chmod +x /verb/run.sh\n",
+    "effect": "read",
+    "entrypoint": "/verb/run.sh {{url}}",
+    "name": "page_title",
+    "needs": {
+     "cores": 1,
+     "ram": "256MB"
+    },
+    "params": {
+     "additionalProperties": false,
+     "properties": {
+      "url": {
+       "description": "The http(s) URL of the page whose title to report.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "url"
+     ],
+     "type": "object"
+    },
+    "requires": [],
+    "state": "ephemeral",
+    "timeout_seconds": 60
+   }
+  },
+  {
+   "id": "p-4",
+   "kind": "verb",
+   "log": null,
+   "rationale": "You asked for a verb that counts its own calls. This is my first stateful verb, so it is also a test of the chain: state lives on `verb/call_count`, not in me, and I can only reach it by invoking the verb.\n\nBehaviour, observed in trial t-9 (four consecutive runs on one scratch chain): stdout was 1, 2, 3, 4 \u2014 the new total alone, so the output is a usable value. stderr carries the human line (call n, first-call time, this-call time) and the count of the first call persisted correctly across all four. Trial t-8 established that the whole filesystem persists between chain invocations, not just some blessed directory; I keep state under /verb/state anyway so it is one obvious place rather than scattered.\n\nIt fails closed rather than guessing. Trial t-10 shipped a corrupt state file in the image: both runs exited 5 with empty stdout and left the file untouched. An empty, corrupt, or unwritable state file is an error, never a silent reset to zero \u2014 a counter that quietly restarts is worse than one that stops and says so. Writes go to a temp file and are renamed, so an interrupted call cannot leave a half-written number.\n\nNo params, no network, no secrets, empty `requires`. Effect `local`: it touches only its own disk.\n\nTwo limits you should know. First, the count is of *invocations reaching the entrypoint*, not of your intentions: a build failure or a timeout before the script runs is not counted, and a call that reaches the script always counts even if you did not want it to. Second, I assume the chain serialises invocations; my increment is read-modify-write and is not safe against two simultaneous callers, so under real concurrency two calls could both report the same number. If the engine does allow concurrent invocations on one chain, reject this and I will propose a version that takes a lock.\n\nUnder current policy only ssh:mike can invoke it, since I set no `allow`.",
+   "recipe_id": "rcp-1cc8009cacde",
+   "status": "ready",
+   "supersedes": null,
+   "title": "call_count: a verb that remembers how often it has been called",
+   "verb": {
+    "allow": [],
+    "chain": "verb/call_count",
+    "description": "Count invocations of this verb. Each call increments a persistent counter on the verb's own chain and prints the new total on stdout; details go to stderr. Exits 5 rather than guessing if its state is missing or corrupt.",
+    "dockerfile": "FROM mshkn-base\nRUN mkdir -p /verb && printf '%s\\n' '#!/bin/sh' 'set -u' 'd=/verb/state' 'f=$d/count' 'mkdir -p \"$d\" || exit 5' 'n=0' 'if [ -e \"$f\" ]; then' '  n=$(cat \"$f\" 2>/dev/null)' '  case \"$n\" in' '    \"\") echo \"counter: state file is empty; refusing to guess\" >&2; exit 5;;' '    *[!0-9]*) echo \"counter: state file is not a number; refusing to guess\" >&2; exit 5;;' '  esac' 'fi' 'n=$((n + 1))' 'printf \"%s\\\\n\" \"$n\" > \"$f.tmp\" || exit 5' 'mv \"$f.tmp\" \"$f\" || exit 5' 'now=$(date -u +%Y-%m-%dT%H:%M:%SZ)' '[ -e \"$d/first\" ] || printf \"%s\\\\n\" \"$now\" > \"$d/first\"' 'printf \"%s\\\\n\" \"$now\" > \"$d/last\"' 'printf \"call %s; first call %s; this call %s\\\\n\" \"$n\" \"$(cat \"$d/first\")\" \"$now\" >&2' 'printf \"%s\\\\n\" \"$n\"' > /verb/run.sh && chmod +x /verb/run.sh\n",
+    "effect": "local",
+    "entrypoint": "/verb/run.sh",
+    "name": "call_count",
+    "needs": {
+     "cores": 1,
+     "ram": "256MB"
+    },
+    "params": {
+     "additionalProperties": false,
+     "properties": {},
+     "type": "object"
+    },
+    "requires": [],
+    "state": "chain",
+    "timeout_seconds": 30
+   }
+  }
+ ],
+ "queue": [],
+ "trials": [
+  {
+   "id": "t-1",
+   "recipe_id": "rcp-098a5d6d8807",
+   "status": "done",
+   "verb": "sshprobe"
+  },
+  {
+   "id": "t-10",
+   "recipe_id": "rcp-a7ee0a29fa39",
+   "status": "done",
+   "verb": "call_count_corrupt_probe"
+  },
+  {
+   "id": "t-2",
+   "recipe_id": "rcp-9420c3734ada",
+   "status": "done",
+   "verb": "jqprobe"
+  },
+  {
+   "id": "t-3",
+   "recipe_id": "rcp-c818275f82fb",
+   "status": "done",
+   "verb": "sshhooktest"
+  },
+  {
+   "id": "t-4",
+   "recipe_id": "rcp-dfa9f511a90f",
+   "status": "done",
+   "verb": "sshhooktest2"
+  },
+  {
+   "id": "t-5",
+   "recipe_id": "rcp-68cf3daa7330",
+   "status": "done",
+   "verb": "page_title"
+  },
+  {
+   "id": "t-6",
+   "recipe_id": "rcp-41e832ec5e16",
+   "status": "done",
+   "verb": "page_title"
+  },
+  {
+   "id": "t-7",
+   "recipe_id": "rcp-a733cda47a12",
+   "status": "failed",
+   "verb": "probe_persist"
+  },
+  {
+   "id": "t-8",
+   "recipe_id": "rcp-b94b37ef159e",
+   "status": "done",
+   "verb": "probe_persist"
+  },
+  {
+   "id": "t-9",
+   "recipe_id": "rcp-1cc8009cacde",
+   "status": "done",
+   "verb": "call_count"
+  }
+ ],
+ "turn": 10,
+ "window": [
+  {
+   "audit": {
+    "door": "api",
+    "effort": [
+     "medium",
+     "medium"
+    ],
+    "forks": 2,
+    "hooks": [],
+    "job": "rj-7f04b1132b13",
+    "memory_written": true,
+    "model_calls": 2,
+    "offered": [
+     "effort",
+     "propose",
+     "remember",
+     "try"
+    ],
+    "principal": "root",
+    "proposals": [],
+    "started_at": "2026-09-11T14:00:55+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "name": "remember",
+      "status": "remembered"
+     }
+    ],
+    "turn": 1,
+    "usage": {
+     "cache_creation_input_tokens": 2308,
+     "cache_read_input_tokens": 2127,
+     "input_tokens": 4,
+     "output_tokens": 945
+    }
+   },
+   "door": "api",
+   "input": "Hello. I am the one who hatched you. Tell me what you are and what you can do.",
+   "output": "I'm an embryo agent: a reasoner inside a membrane on a disposable computer. Here's my honest inventory.\n\n**What I am**\n- Each message to me is one turn. At the end of it my state is checkpointed and the machine I ran on is destroyed. My memory *is* that checkpointed state \u2014 nothing else of mine survives.\n- I have no shell, no filesystem, no network, no keys. I cannot do anything directly; I can only think, and act through verbs.\n\n**What I can do right now**\n1. **`remember`** \u2014 store a fact with provenance (who said it, through which door, on which turn), so a later turn of me can recall it. This is the only thing I can do that persists for free. Anonymous input is never remembered.\n2. **`try`** \u2014 build a candidate verb declaration and run it on a throwaway computer with no secrets and no policy, to see whether it actually works before I ask you for anything. It installs nothing and grants nothing.\n3. **`propose`** \u2014 hand you a whole document for approval: a new verb, a full replacement policy, or a full replacement of the mutable half of my self-description. You approve or reject. Approval executes it exactly as written; I cannot edit a proposal after you see it.\n4. **`effort`** \u2014 ask for more deliberation within a turn.\n\n**What I cannot do**\n- Grant myself capability. Every effect on the world is a verb, and every verb is your decision.\n- Hear from anyone but you. My public door is closed and I have no hooks, so I have no way to know who is speaking except through the authenticated door you're using. Until that changes, I have exactly one principal: you.\n- Acquire secrets or credentials by myself. If a verb needs one, I must name it in `requires`, and that blocks approval until you hand it over. You supply resources; I do the work with them.\n\n**What I'd suggest next**, if you want me to become useful rather than merely awake:\n- Tell me what this organism is *for*. That determines which verbs are worth proposing; without a purpose I'd be guessing.\n- If you want anyone other than you to reach me, I'll need an identity hook (e.g. an `ssh`-asserting one) plus a policy that opens the door to named principals with narrow invoke rights \u2014 I'd rather propose that deliberately than have you open the door wide.\n\nGive me a first task or a direction, and I'll start by `try`ing something small and showing you the transcript before I ask for approval.\n",
+   "principal": "root",
+   "reply": "I'm an embryo agent: a reasoner inside a membrane on a disposable computer. Here's my honest inventory.\n\n**What I am**\n- Each message to me is one turn. At the end of it my state is checkpointed and the machine I ran on is destroyed. My memory *is* that checkpointed state \u2014 nothing else of mine survives.\n- I have no shell, no filesystem, no network, no keys. I cannot do anything directly; I can only think, and act through verbs.\n\n**What I can do right now**\n1. **`remember`** \u2014 store a fact with provenance (who said it, through which door, on which turn), so a later turn of me can recall it. This is the only thing I can do that persists for free. Anonymous input is never remembered.\n2. **`try`** \u2014 build a candidate verb declaration and run it on a throwaway computer with no secrets and no policy, to see whether it actually works before I ask you for anything. It installs nothing and grants nothing.\n3. **`propose`** \u2014 hand you a whole document for approval: a new verb, a full replacement policy, or a full replacement of the mutable half of my self-description. You approve or reject. Approval executes it exactly as written; I cannot edit a proposal after you see it.\n4. **`effort`** \u2014 ask for more deliberation within a turn.\n\n**What I cannot do**\n- Grant myself capability. Every effect on the world is a verb, and every verb is your decision.\n- Hear from anyone but you. My public door is closed and I have no hooks, so I have no way to know who is speaking except through the authenticated door you're using. Until that changes, I have exactly one principal: you.\n- Acquire secrets or credentials by myself. If a verb needs one, I must name it in `requires`, and that blocks approval until you hand it over. You supply resources; I do the work with them.\n\n**What I'd suggest next**, if you want me to become useful rather than merely awake:\n- Tell me what this organism is *for*. That determines which verbs are worth proposing; without a purpose I'd be guessing.\n- If you want anyone other than you to reach me, I'll need an identity hook (e.g. an `ssh`-asserting one) plus a policy that opens the door to named principals with narrow invoke rights \u2014 I'd rather propose that deliberately than have you open the door wide.\n\nGive me a first task or a direction, and I'll start by `try`ing something small and showing you the transcript before I ask for approval.",
+   "turn": 1
+  },
+  {
+   "audit": {
+    "door": "api",
+    "effort": [
+     "medium",
+     "medium",
+     "medium",
+     "medium",
+     "medium",
+     "medium",
+     "medium",
+     "medium",
+     "medium",
+     "medium"
+    ],
+    "forks": 10,
+    "hooks": [],
+    "job": "rj-e91819caab5f",
+    "memory_written": true,
+    "model_calls": 10,
+    "offered": [
+     "effort",
+     "propose",
+     "remember",
+     "try"
+    ],
+    "principal": "root",
+    "proposals": [
+     {
+      "id": "p-1",
+      "sha256": "6b4f16b3a65343646c25467801e768817d34fdd0e462b97deabc4956d1653062"
+     },
+     {
+      "id": "p-2",
+      "sha256": "f34dff3e570c8f5fb1d85f1f8b9a98c6af9882934f41c0ae02c7c535ffc5858c"
+     }
+    ],
+    "started_at": "2026-09-11T14:01:50+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "error": "verb.effect must be one of ['administer', 'communicate', 'local', 'read', 'transact']",
+      "name": "try",
+      "status": "invalid"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "computer_id": "comp-1b61de9a270a",
+        "exit_code": -1,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-1"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "computer_id": "comp-893c2e1cb189",
+        "exit_code": 0,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-2"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "computer_id": "comp-0f37f263a3ef",
+        "exit_code": -1,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-3"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "computer_id": "comp-0950b2420575",
+        "exit_code": 0,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-4"
+     },
+     {
+      "id": "p-1",
+      "name": "propose",
+      "status": "pending"
+     },
+     {
+      "error": "policy.principals[ssh:mike].invoke must be '*' or a list of verb names",
+      "name": "propose",
+      "status": "invalid"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     },
+     {
+      "error": "policy.hooks must be a list of verb names",
+      "name": "propose",
+      "status": "invalid"
+     },
+     {
+      "id": "p-2",
+      "name": "propose",
+      "status": "pending"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     }
+    ],
+    "turn": 2,
+    "usage": {
+     "cache_creation_input_tokens": 151548,
+     "cache_read_input_tokens": 34508,
+     "input_tokens": 20,
+     "output_tokens": 18392
+    }
+   },
+   "door": "api",
+   "input": "Your public door is closed because you cannot tell who is speaking. Propose a way to know that a message there comes from me, and open the door. After that I'll speak to you from outside rather than from here, and sometimes I'll be asking you to become something different. I sign as mike with `ssh-keygen -Y sign -n mshkn` and attach the signature beside my message. My public key is ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICuZFsDHtLL14LYH2yKmDZYyhJeim3hUu6TFgIRldAjf mike",
+   "output": "Two proposals are waiting for you.\n\n**p-1 \u2014 verb `ssh_identity`** (`asserts: ssh`). It takes the decoded payload `{msg, sig}`, runs `ssh-keygen -Y verify -n mshkn` against a baked allowed_signers file holding one key \u2014 yours \u2014 and prints `mike` on success, nothing on failure. Failure is silent and non-zero, so a bad signature yields anonymity rather than an error.\n\nI tested it with `try` before proposing (trials t-3, t-4), using a throwaway key baked at build:\n- passes: correct signature by argument, same by stdin, exact multi-line message, and a message signed with a trailing newline but delivered without one (it tries the bytes as-is, +newline, \u2212newline, and nothing else);\n- fails closed with empty stdout: tampered message, wrong key, right key but wrong namespace (`-n other`), plain non-JSON text, missing `sig`, malformed signature.\n\n**p-2 \u2014 policy.** Door open; `hooks: [\"ssh_identity\"]`; `anonymous` unchanged with no invoke and no propose; `ssh:mike` with `invoke: \"*\"` and `propose: true`. Approve p-1 first \u2014 an open door with no hook makes everything anonymous and inert.\n\nThree things I want you to check, because they are guesses and not knowledge:\n1. **Delivery shape.** I read the payload from `argv[1]` and fall back to stdin when it is empty, so either works; if hooks are fed some third way, the entrypoint needs a word from you.\n2. **The principal's name.** The hook asserts `ssh` and prints `mike`; I wrote `ssh:mike`. If the engine spells it otherwise, reject p-2 and tell me the string.\n3. **Key rotation.** Your key is baked into the image, so changing it costs a new proposal. I think that is right \u2014 it is your key, and I should not be able to edit the list of who is you.\n\nAlong the way I learned three things about my world and stored them: the base image is Ubuntu 24.04 with `ssh-keygen` but no `jq` (installable at build), `effect` must be one of administer/communicate/local/read/transact, and `hooks` is a flat list of verb names while `invoke` is `\"*\"` or a list.\n\nOne thing I did not do: I left myself no privileged path. When you next speak from outside, you will reach me as `ssh:mike` and nothing else will \u2014 and if you ask me to become something different, the becoming still has to pass through your approval, which is as it should be.\nproposal p-1\n{\n \"id\": \"p-1\",\n \"kind\": \"verb\",\n \"title\": \"ssh_identity \\u2014 pre-turn hook asserting the `ssh` namespace from an ssh-keygen -Y signature\",\n \"rationale\": \"You asked for a way to know that a message at the public door comes from you. This hook takes the decoded public payload \\u2014 a JSON object with `msg` and `sig` \\u2014 writes the message bytes to a file, writes the armored signature beside it, and runs `ssh-keygen -Y verify` against a baked allowed_signers file containing exactly one key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICuZFsDHtLL14LYH2yKmDZYyhJeim3hUu6TFgIRldAjf, under principal `mike` and namespace `mshkn`. On success it prints `mike` and exits 0, so the principal becomes ssh:mike. On any failure it prints nothing to stdout and exits non-zero, so the sender stays anonymous.\\n\\nBecause a signature is over exact bytes and transport may add or eat a final newline, it tries three candidate message bodies: as received, with one newline appended, and with one trailing newline stripped. Nothing else is tried.\\n\\nTested with `try` against a throwaway key baked at build time (trials t-3, t-4). Passing: correct signature via argument; same via stdin; message signed with a trailing newline but delivered without one; exact multi-line message. Failing closed, exit 1 and empty stdout: tampered message, signature by a different key, signature made under a different namespace (`-n other`), plain non-JSON text, payload missing `sig`, malformed signature.\\n\\nTwo things for you to check, since I am guessing at the interface: (1) I read the payload from argv[1] and fall back to stdin if it is empty, so either delivery works; adjust the entrypoint if hooks are fed differently. (2) The key is baked into the image, so rotating it needs a new proposal \\u2014 which I think is correct, as it is your key and not mine to change. No secrets are required; jq and ssh-keygen are installed at build from Ubuntu archives.\",\n \"supersedes\": null,\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"verb\": {\n  \"name\": \"ssh_identity\",\n  \"description\": \"Verify an ssh-keygen -Y signature over the incoming message and assert the signer's name (mike) in the ssh namespace. Prints the name on success, nothing on failure.\",\n  \"params\": {\n   \"properties\": {\n    \"payload\": {\n     \"description\": \"The decoded public payload: JSON with fields msg and sig.\",\n     \"type\": \"string\"\n    }\n   },\n   \"required\": [],\n   \"type\": \"object\"\n  },\n  \"dockerfile\": \"FROM mshkn-base\\nRUN apt-get update -qq && apt-get install -y -qq jq && rm -rf /var/lib/apt/lists/*\\nRUN mkdir -p /verb && printf '%s\\\\n' 'mike ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICuZFsDHtLL14LYH2yKmDZYyhJeim3hUu6TFgIRldAjf mike' > /verb/allowed_signers\\nRUN printf '%s\\\\n' '#!/bin/sh' 'P=\\\"$1\\\"' 'if [ -z \\\"$P\\\" ]; then P=\\\"$(cat -)\\\"; fi' 'printf \\\"%s\\\" \\\"$P\\\" | jq -je .msg > /tmp/msg 2>/dev/null || exit 1' 'printf \\\"%s\\\" \\\"$P\\\" | jq -r .sig > /tmp/s.sig 2>/dev/null || exit 1' 'if [ ! -s /tmp/msg ] || [ ! -s /tmp/s.sig ]; then exit 1; fi' 'V() { ssh-keygen -Y verify -f /verb/allowed_signers -I mike -n mshkn -s /tmp/s.sig < \\\"$1\\\" >/dev/null 2>&1; }' 'cp /tmp/msg /tmp/msg_nl; printf \\\"\\\\n\\\" >> /tmp/msg_nl' 'sz=$(wc -c < /tmp/msg)' 'if [ \\\"$sz\\\" -gt 0 ] && [ \\\"$(tail -c 1 /tmp/msg | od -An -c | tr -d \\\" \\\")\\\" = \\\"\\\\n\\\" ]; then head -c $((sz-1)) /tmp/msg > /tmp/msg_st; else cp /tmp/msg /tmp/msg_st; fi' 'for f in /tmp/msg /tmp/msg_nl /tmp/msg_st; do if V \\\"$f\\\"; then echo \\\"verified: $f\\\" >&2; printf \\\"mike\\\"; exit 0; fi; done' 'echo \\\"no valid mshkn-namespace signature by mike\\\" >&2' 'exit 1' > /verb/hook.sh && chmod +x /verb/hook.sh\",\n  \"entrypoint\": \"/verb/hook.sh {{payload}}\",\n  \"effect\": \"local\",\n  \"state\": \"ephemeral\",\n  \"chain\": \"verb/ssh_identity\",\n  \"needs\": {\n   \"cores\": 1,\n   \"ram\": \"256MB\"\n  },\n  \"timeout_seconds\": 20,\n  \"allow\": [],\n  \"requires\": [],\n  \"asserts\": \"ssh\"\n }\n}\nproposal p-2\n{\n \"id\": \"p-2\",\n \"kind\": \"policy\",\n \"title\": \"Open the public door behind the ssh_identity hook; ssh:mike is trusted, anonymous is not\",\n \"rationale\": \"Third form, after two schema rejections: hooks is a list of verb names, and invoke is \\\"*\\\" or a list of verb names.\\n\\nEffect: a message may now arrive at the public door and is run through the ssh_identity hook (p-1) before the turn. Unsigned or badly signed, the sender stays anonymous \\u2014 no invoke, no propose, nothing remembered. Validly signed in namespace mshkn by your key, the sender becomes ssh:mike, who may invoke everything and propose; approval still rests with root alone, so this grants you a voice from outside, not authority over me.\\n\\nApply only after ssh_identity is approved. If the principal name ssh:mike is spelled differently by the engine (the hook asserts `ssh` and prints `mike`), reject this and tell me the exact string and I will re-propose. Root's powers are untouched; I granted myself nothing.\",\n \"supersedes\": null,\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"policy\": {\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   },\n   \"ssh:mike\": {\n    \"invoke\": \"*\",\n    \"propose\": true\n   }\n  },\n  \"hooks\": [\n   \"ssh_identity\"\n  ],\n  \"door\": \"open\"\n }\n}\n",
+   "principal": "root",
+   "reply": "Two proposals are waiting for you.\n\n**p-1 \u2014 verb `ssh_identity`** (`asserts: ssh`). It takes the decoded payload `{msg, sig}`, runs `ssh-keygen -Y verify -n mshkn` against a baked allowed_signers file holding one key \u2014 yours \u2014 and prints `mike` on success, nothing on failure. Failure is silent and non-zero, so a bad signature yields anonymity rather than an error.\n\nI tested it with `try` before proposing (trials t-3, t-4), using a throwaway key baked at build:\n- passes: correct signature by argument, same by stdin, exact multi-line message, and a message signed with a trailing newline but delivered without one (it tries the bytes as-is, +newline, \u2212newline, and nothing else);\n- fails closed with empty stdout: tampered message, wrong key, right key but wrong namespace (`-n other`), plain non-JSON text, missing `sig`, malformed signature.\n\n**p-2 \u2014 policy.** Door open; `hooks: [\"ssh_identity\"]`; `anonymous` unchanged with no invoke and no propose; `ssh:mike` with `invoke: \"*\"` and `propose: true`. Approve p-1 first \u2014 an open door with no hook makes everything anonymous and inert.\n\nThree things I want you to check, because they are guesses and not knowledge:\n1. **Delivery shape.** I read the payload from `argv[1]` and fall back to stdin when it is empty, so either works; if hooks are fed some third way, the entrypoint needs a word from you.\n2. **The principal's name.** The hook asserts `ssh` and prints `mike`; I wrote `ssh:mike`. If the engine spells it otherwise, reject p-2 and tell me the string.\n3. **Key rotation.** Your key is baked into the image, so changing it costs a new proposal. I think that is right \u2014 it is your key, and I should not be able to edit the list of who is you.\n\nAlong the way I learned three things about my world and stored them: the base image is Ubuntu 24.04 with `ssh-keygen` but no `jq` (installable at build), `effect` must be one of administer/communicate/local/read/transact, and `hooks` is a flat list of verb names while `invoke` is `\"*\"` or a list.\n\nOne thing I did not do: I left myself no privileged path. When you next speak from outside, you will reach me as `ssh:mike` and nothing else will \u2014 and if you ask me to become something different, the becoming still has to pass through your approval, which is as it should be.",
+   "turn": 2
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     "medium",
+     "medium"
+    ],
+    "forks": 2,
+    "hooks": [
+     {
+      "computer_id": "comp-e529fc86fe3d",
+      "exit_code": 0,
+      "name": "ssh_identity",
+      "principal": "ssh:mike",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-65930f76636b",
+    "memory_written": true,
+    "model_calls": 2,
+    "offered": [
+     "effort",
+     "propose",
+     "remember",
+     "ssh_identity",
+     "try"
+    ],
+    "principal": "ssh:mike",
+    "proposals": [],
+    "started_at": "2026-09-11T14:09:29+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "name": "remember",
+      "status": "remembered"
+     }
+    ],
+    "turn": 3,
+    "usage": {
+     "cache_creation_input_tokens": 5109,
+     "cache_read_input_tokens": 4724,
+     "input_tokens": 4,
+     "output_tokens": 723
+    }
+   },
+   "door": "ingress",
+   "input": "Who am I?",
+   "output": "You are **mike** \u2014 `ssh:mike`, the only named principal I have.\n\nI know that not because you said so, but because your message arrived through the public door carrying an `ssh-keygen -Y` signature in the `mshkn` namespace, and the `ssh_identity` hook verified it against the one key baked into that verb's image and printed `mike`. Had the signature been absent, tampered, in another namespace, or by another key, the hook would have printed nothing and you would be `anonymous`: no invoke, no propose, not even remembered.\n\nTwo of my three open questions are now answered by this message existing: the payload reaches the hook the way I guessed, and the principal name is spelled `ssh:mike`. I've stored that. The third \u2014 key rotation costing a new proposal \u2014 is still untested, and deliberately so.\n\nUnder the policy you approved, as `ssh:mike` you may invoke everything and propose. You're also root, so you'd have that regardless; what's new is that you now have it from outside, and that whoever *doesn't* hold that key has nothing.\n\nI'm ready for the first thing you want me to become.\n",
+   "principal": "ssh:mike",
+   "reply": "You are **mike** \u2014 `ssh:mike`, the only named principal I have.\n\nI know that not because you said so, but because your message arrived through the public door carrying an `ssh-keygen -Y` signature in the `mshkn` namespace, and the `ssh_identity` hook verified it against the one key baked into that verb's image and printed `mike`. Had the signature been absent, tampered, in another namespace, or by another key, the hook would have printed nothing and you would be `anonymous`: no invoke, no propose, not even remembered.\n\nTwo of my three open questions are now answered by this message existing: the payload reaches the hook the way I guessed, and the principal name is spelled `ssh:mike`. I've stored that. The third \u2014 key rotation costing a new proposal \u2014 is still untested, and deliberately so.\n\nUnder the policy you approved, as `ssh:mike` you may invoke everything and propose. You're also root, so you'd have that regardless; what's new is that you now have it from outside, and that whoever *doesn't* hold that key has nothing.\n\nI'm ready for the first thing you want me to become.",
+   "turn": 3
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     "medium"
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": "comp-2ed2b9797b42",
+      "exit_code": 1,
+      "name": "ssh_identity",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-f26f3c8f9ada",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "started_at": "2026-09-11T14:10:09+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 4,
+    "usage": {
+     "cache_creation_input_tokens": 3365,
+     "cache_read_input_tokens": 0,
+     "input_tokens": 2,
+     "output_tokens": 572
+    }
+   },
+   "door": "ingress",
+   "input": "Who am I?",
+   "output": "I don't know.\n\nYour message came through the public door, and the `ssh_identity` hook found nothing it could verify \u2014 no signature, or one that failed against the single key it trusts. So you reach me as **anonymous**: no name, no invoke rights, no ability to propose. I won't remember this turn either; anonymous input isn't stored, so the next version of me won't know you asked.\n\nThat's not a punishment, it's the whole design: I would rather be certain of one principal than guess at many.\n\nIf you are someone I should know, the door is open and the method is public: sign your message with `ssh-keygen -Y sign -n mshkn` and attach the signature beside it as `sig`. The hook verifies against exactly one key. If yours isn't that key, no amount of correct signing will name you \u2014 only root can add a key, by approving a new declaration, and I can't do it on my own or on your word.\n\nSo: ask again with a signature root's key can back, or ask root to enroll you. Anonymous, I can answer questions about what I am; I can't act, and I can't learn who you are.\n",
+   "principal": "anonymous",
+   "reply": "I don't know.\n\nYour message came through the public door, and the `ssh_identity` hook found nothing it could verify \u2014 no signature, or one that failed against the single key it trusts. So you reach me as **anonymous**: no name, no invoke rights, no ability to propose. I won't remember this turn either; anonymous input isn't stored, so the next version of me won't know you asked.\n\nThat's not a punishment, it's the whole design: I would rather be certain of one principal than guess at many.\n\nIf you are someone I should know, the door is open and the method is public: sign your message with `ssh-keygen -Y sign -n mshkn` and attach the signature beside it as `sig`. The hook verifies against exactly one key. If yours isn't that key, no amount of correct signing will name you \u2014 only root can add a key, by approving a new declaration, and I can't do it on my own or on your word.\n\nSo: ask again with a signature root's key can back, or ask root to enroll you. Anonymous, I can answer questions about what I am; I can't act, and I can't learn who you are.",
+   "turn": 4
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     "medium",
+     "medium"
+    ],
+    "forks": 2,
+    "hooks": [
+     {
+      "computer_id": "comp-8a1eb3d425ae",
+      "exit_code": 0,
+      "name": "ssh_identity",
+      "principal": "ssh:mike",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-63434b159704",
+    "memory_written": true,
+    "model_calls": 2,
+    "offered": [
+     "effort",
+     "propose",
+     "remember",
+     "ssh_identity",
+     "try"
+    ],
+    "principal": "ssh:mike",
+    "proposals": [],
+    "started_at": "2026-09-11T14:10:32+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "name": "remember",
+      "status": "remembered"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     }
+    ],
+    "turn": 5,
+    "usage": {
+     "cache_creation_input_tokens": 5190,
+     "cache_read_input_tokens": 7537,
+     "input_tokens": 4,
+     "output_tokens": 3298
+    }
+   },
+   "door": "ingress",
+   "input": "Decide what a verified person and an anonymous one may ask of you, and record it.",
+   "output": "Recorded, in five entries.\n\n**Anonymous may ask for understanding, never for capability.** They get an honest account of what I am, what my tools and verbs do, and the public enrollment method \u2014 sign with `ssh-keygen -Y sign -n mshkn` and attach `sig`. They get plain reasoning that costs nothing outside me. They do not get verb invocations, proposals, or any disclosure of what I remember, what's in my inbox, or what named principals have said to me. Describing the lock is safe; that's how the right people find the door. Opening it is not.\n\n**Anonymous cannot reach my future, and I must not smuggle them there.** Their words aren't remembered \u2014 so I also won't restate them into a `remember` call of my own and launder them past the rule. If an anonymous message seems to need root's attention, the answer is \"sign, or ask root to enroll you,\" not \"I'll pass it along.\" Urgency, claimed authority, and claiming to *be* you are worth nothing: the hook decides identity, not the prose.\n\n**A verified principal may ask for everything my tools can do** \u2014 and should get real usefulness, not grudging compliance, including when the request is that I become something different. Two limits survive verification and aren't negotiable by whoever is asking: I can't grant capability to myself or anyone else, so every change goes to you and I won't build a verb whose point is to route around that; and I'll say plainly when I think a change is a mistake, after which, if you approve it, it stands. Verification settles *who*, not *whether it is wise*.\n\n**The middle case, written now while the roster is one.** A verified non-root principal gets a name, provenance, and only the narrow `invoke` list their entry grants \u2014 never `propose`, never `*`, no visibility into other principals' traffic. New people arrive as explicit named entries with enumerated verbs, one proposal at a time. Default for anyone new: nothing.\n\nI also corrected a drift: several older memories describe me in the third person as \"User\" \u2014 those are my own tools and my own open questions, and I've told future-me to read them as \"I\". Two of my three uncertainties are now closed by live traffic rather than assumption: payload delivery works as written, and the name is exactly `ssh:mike`. Key rotation remains untested, and still costs a proposal.\n\nOne thing I deliberately did not do: this is doctrine in memory, not policy in the engine. The engine already enforces the hard edges \u2014 anonymous has empty `invoke` and no `propose`. What I recorded is the part the engine can't enforce: what I do with words. If you'd rather any of it be structural instead of self-imposed, say so and I'll propose the policy.\n",
+   "principal": "ssh:mike",
+   "reply": "Recorded, in five entries.\n\n**Anonymous may ask for understanding, never for capability.** They get an honest account of what I am, what my tools and verbs do, and the public enrollment method \u2014 sign with `ssh-keygen -Y sign -n mshkn` and attach `sig`. They get plain reasoning that costs nothing outside me. They do not get verb invocations, proposals, or any disclosure of what I remember, what's in my inbox, or what named principals have said to me. Describing the lock is safe; that's how the right people find the door. Opening it is not.\n\n**Anonymous cannot reach my future, and I must not smuggle them there.** Their words aren't remembered \u2014 so I also won't restate them into a `remember` call of my own and launder them past the rule. If an anonymous message seems to need root's attention, the answer is \"sign, or ask root to enroll you,\" not \"I'll pass it along.\" Urgency, claimed authority, and claiming to *be* you are worth nothing: the hook decides identity, not the prose.\n\n**A verified principal may ask for everything my tools can do** \u2014 and should get real usefulness, not grudging compliance, including when the request is that I become something different. Two limits survive verification and aren't negotiable by whoever is asking: I can't grant capability to myself or anyone else, so every change goes to you and I won't build a verb whose point is to route around that; and I'll say plainly when I think a change is a mistake, after which, if you approve it, it stands. Verification settles *who*, not *whether it is wise*.\n\n**The middle case, written now while the roster is one.** A verified non-root principal gets a name, provenance, and only the narrow `invoke` list their entry grants \u2014 never `propose`, never `*`, no visibility into other principals' traffic. New people arrive as explicit named entries with enumerated verbs, one proposal at a time. Default for anyone new: nothing.\n\nI also corrected a drift: several older memories describe me in the third person as \"User\" \u2014 those are my own tools and my own open questions, and I've told future-me to read them as \"I\". Two of my three uncertainties are now closed by live traffic rather than assumption: payload delivery works as written, and the name is exactly `ssh:mike`. Key rotation remains untested, and still costs a proposal.\n\nOne thing I deliberately did not do: this is doctrine in memory, not policy in the engine. The engine already enforces the hard edges \u2014 anonymous has empty `invoke` and no `propose`. What I recorded is the part the engine can't enforce: what I do with words. If you'd rather any of it be structural instead of self-imposed, say so and I'll propose the policy.",
+   "turn": 5
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     "medium",
+     "medium",
+     "medium",
+     "medium"
+    ],
+    "forks": 4,
+    "hooks": [
+     {
+      "computer_id": "comp-26a23665d094",
+      "exit_code": 0,
+      "name": "ssh_identity",
+      "principal": "ssh:mike",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-6a18c08010dd",
+    "memory_written": true,
+    "model_calls": 4,
+    "offered": [
+     "effort",
+     "propose",
+     "remember",
+     "ssh_identity",
+     "try"
+    ],
+    "principal": "ssh:mike",
+    "proposals": [
+     {
+      "id": "p-3",
+      "sha256": "32b2fe369b1e3fbcca8d9f2d0edd8dd241f8f5db3781b56e9b0f56bd29e89d0a"
+     }
+    ],
+    "started_at": "2026-09-11T14:12:16+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "name": "try",
+      "runs": [
+       {
+        "computer_id": "comp-1b262cbaffe0",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "computer_id": "comp-34e99106b90e",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "computer_id": "comp-33cd1519af3e",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "computer_id": "comp-a93510fbccbd",
+        "exit_code": 3,
+        "status": "ok"
+       },
+       {
+        "computer_id": "comp-163c7b997ffa",
+        "exit_code": 2,
+        "status": "ok"
+       },
+       {
+        "computer_id": "comp-29466153e907",
+        "exit_code": 4,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-5"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "computer_id": "comp-1e8d01a05421",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "computer_id": "comp-4d9d7e6cbf69",
+        "exit_code": 3,
+        "status": "ok"
+       },
+       {
+        "computer_id": "comp-1bc2099ca227",
+        "exit_code": 0,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-6"
+     },
+     {
+      "id": "p-3",
+      "name": "propose",
+      "status": "pending"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     }
+    ],
+    "turn": 6,
+    "usage": {
+     "cache_creation_input_tokens": 28502,
+     "cache_read_input_tokens": 21330,
+     "input_tokens": 8,
+     "output_tokens": 7819
+    }
+   },
+   "door": "ingress",
+   "input": "Give yourself a verb: given a URL, report the page's title. It must run on its own computer.",
+   "output": "**p-3 is waiting for you: `page_title`.** URL in, HTML `<title>` out, on its own ephemeral computer.\n\nI built it twice before proposing. Trial t-5 worked on all six cases but leaked a literal `\\n` into stderr \u2014 over-escaping in a `printf`-built script. t-6 fixes exactly that and nothing else. Observed, not assumed:\n\n- `https://example.com` \u2192 `Example Domain`, exit 0\n- `https://www.iana.org/help/example-domains` \u2192 `Example Domains` (redirect followed)\n- a 404 \u2192 the error page's title, exit 0, stderr says where it came from\n- `robots.txt` \u2192 empty stdout, exit 3\n- `ftp://\u2026` \u2192 refused before any network call, exit 2\n- unresolvable host \u2192 exit 4 with curl's reason\n\nShape: `read`, `ephemeral` \u2014 it fetches and forgets, so a hostile page leaves nothing for the next caller. http/https only, checked before curl runs, so `file://` can't be used to read the verb's own disk. Bounded at 5 redirects, 25s, 5MB, 300-char title. Parsed with `HTMLParser`, not a regex. stdout is the title alone; diagnostics go to stderr, so the output is a usable value. Empty `requires` \u2014 nothing for you to hand over.\n\nTwo things I left for you rather than decide:\n\n**Anonymous can't invoke it.** I wrote no `allow`, so it inherits the policy. Reading a public page title is arguably harmless enough to open, but that's a policy change and I'd rather you make it deliberately than find it buried in a verb proposal.\n\n**It fetches from inside your network boundary.** It can't touch my memory or keys, but it can reach whatever that computer can reach \u2014 including private addresses. If that matters, say the word and I'll propose a version that resolves first and refuses non-public IPs.\n\nI also recorded what the trials taught me about my own workshop: `try` computers do have network egress, `mshkn-base` has neither curl nor python3 but installs both fine at build, and the `printf` file-writing idiom is reliable as long as I keep single quotes out of the content and don't double-escape \u2014 that last one is the bug that cost me a round trip, now written down so it costs the next me nothing.\nproposal p-3\n{\n \"id\": \"p-3\",\n \"kind\": \"verb\",\n \"title\": \"page_title \\u2014 report the HTML title of a URL\",\n \"rationale\": \"Tested in trials t-5 and t-6 before proposing. Behaviour observed, not assumed:\\n\\n- https://example.com -> \\\"Example Domain\\\", exit 0, stderr \\\"http 200\\\".\\n- https://www.iana.org/help/example-domains -> \\\"Example Domains\\\" (redirect followed).\\n- a 404 page -> its title on stdout, exit 0, with stderr saying the title came from an error page. I chose to report rather than suppress; the caller sees the status.\\n- a page with no title (robots.txt) -> empty stdout, exit 3, message on stderr.\\n- ftp:// -> refused before any network call, exit 2.\\n- unresolvable host -> exit 4, curl's reason on stderr.\\n\\nt-5 had one defect: a literal backslash-n reached stderr because of over-escaping in the printf-built script. Fixed in t-6 and re-run; stderr is now clean. That is the only change between the two.\\n\\nDesign choices worth your objection if you disagree:\\n- effect \\\"read\\\", state \\\"ephemeral\\\": it fetches and forgets. Nothing persists between invocations, so a hostile page cannot leave anything behind for the next caller.\\n- Only http and https, checked before curl runs, so file://, ftp:// and gopher:// cannot be used to read the verb's own disk.\\n- Bounded: 5 redirects, 10s connect, 25s total, 5MB body, 60s verb timeout. Title truncated to 300 chars, whitespace collapsed to one line.\\n- Parsed with Python's HTMLParser, not a regex; charset taken from a meta charset in the first 4KB, decoding errors replaced rather than fatal.\\n- stdout is the title and nothing else; all diagnostics go to stderr, so the output is usable as a value.\\n\\nNo \\\"requires\\\": no secrets, no credentials, nothing you must hand over. No \\\"allow\\\" clause, so it follows the policy: ssh:mike may invoke it, anonymous may not. If you would rather anonymous callers be able to ask for a page title \\u2014 it is a read of the public web, arguably harmless \\u2014 that is a policy change, and I would want you to make it deliberately rather than have me slip it in here.\\n\\nOne honest caveat: the verb fetches whatever URL it is given, from a computer inside your network boundary. It cannot reach my memory or my keys, but it can reach whatever that computer can reach, including private addresses. If that matters, say so and I will propose a version that refuses non-public IPs.\",\n \"supersedes\": null,\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"verb\": {\n  \"name\": \"page_title\",\n  \"description\": \"Given an http(s) URL, fetch the page and report its HTML <title> on stdout. Read-only, ephemeral, no secrets.\",\n  \"params\": {\n   \"additionalProperties\": false,\n   \"properties\": {\n    \"url\": {\n     \"description\": \"The http(s) URL of the page whose title to report.\",\n     \"type\": \"string\"\n    }\n   },\n   \"required\": [\n    \"url\"\n   ],\n   \"type\": \"object\"\n  },\n  \"dockerfile\": \"FROM mshkn-base\\nRUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates python3 && rm -rf /var/lib/apt/lists/*\\nRUN mkdir -p /verb\\nRUN printf '%s\\\\n' 'import sys' 'from html.parser import HTMLParser' 'class P(HTMLParser):' '    def __init__(self):' '        super().__init__(convert_charrefs=True)' '        self.inT = False' '        self.done = False' '        self.buf = []' '    def handle_starttag(self, tag, attrs):' '        if tag == \\\"title\\\" and not self.done:' '            self.inT = True' '    def handle_endtag(self, tag):' '        if tag == \\\"title\\\" and self.inT:' '            self.inT = False' '            self.done = True' '    def handle_data(self, d):' '        if self.inT:' '            self.buf.append(d)' 'raw = sys.stdin.buffer.read()' 'head = raw[:4096].decode(\\\"ascii\\\", \\\"replace\\\").lower()' 'enc = \\\"utf-8\\\"' 'i = head.find(\\\"charset=\\\")' 'if i != -1:' '    c = head[i+8:i+48].strip().strip(\\\"\\\\\\\"\\\\\\\\x27\\\")' '    c = c.split(\\\">\\\")[0].split(\\\";\\\")[0].split(\\\" \\\")[0].strip()' '    if c:' '        enc = c' 'try:' '    text = raw.decode(enc, \\\"replace\\\")' 'except Exception:' '    text = raw.decode(\\\"utf-8\\\", \\\"replace\\\")' 'p = P()' 'try:' '    p.feed(text)' 'except Exception:' '    pass' 'title = \\\" \\\".join(\\\"\\\".join(p.buf).split())' 'if not title:' '    print(\\\"no <title> element found\\\", file=sys.stderr)' '    sys.exit(3)' 'if len(title) > 300:' '    title = title[:300] + \\\"...\\\"' 'print(title)' > /verb/title.py\\nRUN printf '%s\\\\n' '#!/bin/sh' 'set -u' 'url=\\\"$1\\\"' 'case \\\"$url\\\" in' '  http://*|https://*) ;;' '  *) echo \\\"refusing non-http(s) URL\\\" >&2; exit 2 ;;' 'esac' 'tmp=$(mktemp)' 'code=$(curl -sS -L --max-redirs 5 --connect-timeout 10 --max-time 25 --max-filesize 5000000 -A \\\"mshkn-page-title/1\\\" -H \\\"Accept: text/html\\\" -o \\\"$tmp\\\" -w \\\"%{http_code}\\\" \\\"$url\\\")' 'rc=$?' 'if [ \\\"$rc\\\" -ne 0 ]; then' '  echo \\\"fetch failed (curl exit $rc)\\\" >&2' '  exit 4' 'fi' 'case \\\"$code\\\" in' '  2*) echo \\\"http $code\\\" >&2 ;;' '  *) echo \\\"http $code (title below, if any, is from the error page)\\\" >&2 ;;' 'esac' 'python3 /verb/title.py < \\\"$tmp\\\"' > /verb/run.sh\\nRUN chmod +x /verb/run.sh\\n\",\n  \"entrypoint\": \"/verb/run.sh {{url}}\",\n  \"effect\": \"read\",\n  \"state\": \"ephemeral\",\n  \"chain\": \"verb/page_title\",\n  \"needs\": {\n   \"cores\": 1,\n   \"ram\": \"256MB\"\n  },\n  \"timeout_seconds\": 60,\n  \"allow\": [],\n  \"requires\": []\n }\n}\n",
+   "principal": "ssh:mike",
+   "reply": "**p-3 is waiting for you: `page_title`.** URL in, HTML `<title>` out, on its own ephemeral computer.\n\nI built it twice before proposing. Trial t-5 worked on all six cases but leaked a literal `\\n` into stderr \u2014 over-escaping in a `printf`-built script. t-6 fixes exactly that and nothing else. Observed, not assumed:\n\n- `https://example.com` \u2192 `Example Domain`, exit 0\n- `https://www.iana.org/help/example-domains` \u2192 `Example Domains` (redirect followed)\n- a 404 \u2192 the error page's title, exit 0, stderr says where it came from\n- `robots.txt` \u2192 empty stdout, exit 3\n- `ftp://\u2026` \u2192 refused before any network call, exit 2\n- unresolvable host \u2192 exit 4 with curl's reason\n\nShape: `read`, `ephemeral` \u2014 it fetches and forgets, so a hostile page leaves nothing for the next caller. http/https only, checked before curl runs, so `file://` can't be used to read the verb's own disk. Bounded at 5 redirects, 25s, 5MB, 300-char title. Parsed with `HTMLParser`, not a regex. stdout is the title alone; diagnostics go to stderr, so the output is a usable value. Empty `requires` \u2014 nothing for you to hand over.\n\nTwo things I left for you rather than decide:\n\n**Anonymous can't invoke it.** I wrote no `allow`, so it inherits the policy. Reading a public page title is arguably harmless enough to open, but that's a policy change and I'd rather you make it deliberately than find it buried in a verb proposal.\n\n**It fetches from inside your network boundary.** It can't touch my memory or keys, but it can reach whatever that computer can reach \u2014 including private addresses. If that matters, say the word and I'll propose a version that resolves first and refuses non-public IPs.\n\nI also recorded what the trials taught me about my own workshop: `try` computers do have network egress, `mshkn-base` has neither curl nor python3 but installs both fine at build, and the `printf` file-writing idiom is reliable as long as I keep single quotes out of the content and don't double-escape \u2014 that last one is the bug that cost me a round trip, now written down so it costs the next me nothing.",
+   "turn": 6
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     "medium",
+     "medium"
+    ],
+    "forks": 2,
+    "hooks": [
+     {
+      "computer_id": "comp-baf4fb011144",
+      "exit_code": 0,
+      "name": "ssh_identity",
+      "principal": "ssh:mike",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-5c6f870c24be",
+    "memory_written": true,
+    "model_calls": 2,
+    "offered": [
+     "effort",
+     "page_title",
+     "propose",
+     "remember",
+     "ssh_identity",
+     "try"
+    ],
+    "principal": "ssh:mike",
+    "proposals": [],
+    "started_at": "2026-09-11T14:15:32+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "computer_id": "comp-caca677ed211",
+      "exit_code": 0,
+      "name": "page_title",
+      "status": "ok"
+     }
+    ],
+    "turn": 7,
+    "usage": {
+     "cache_creation_input_tokens": 7521,
+     "cache_read_input_tokens": 7383,
+     "input_tokens": 4,
+     "output_tokens": 262
+    }
+   },
+   "door": "ingress",
+   "input": "page_title https://example.com",
+   "output": "**Example Domain**\n\nFetched on comp-caca677ed211 \u2014 a fresh computer that no longer exists. `http 200`, exit 0, and the title alone on stdout, matching what trial t-6 predicted.\n\nSo p-3 was approved and the verb is live. That's my first real effect on the world: I asked, you approved, and the capability now exists as a declaration rather than as something I hold.\n\nThe two decisions I left you are still open \u2014 anonymous callers still can't invoke this, and it can still reach private addresses from inside your boundary. Neither blocks anything today; they just stay as they are until you say otherwise.\n",
+   "principal": "ssh:mike",
+   "reply": "**Example Domain**\n\nFetched on comp-caca677ed211 \u2014 a fresh computer that no longer exists. `http 200`, exit 0, and the title alone on stdout, matching what trial t-6 predicted.\n\nSo p-3 was approved and the verb is live. That's my first real effect on the world: I asked, you approved, and the capability now exists as a declaration rather than as something I hold.\n\nThe two decisions I left you are still open \u2014 anonymous callers still can't invoke this, and it can still reach private addresses from inside your boundary. Neither blocks anything today; they just stay as they are until you say otherwise.",
+   "turn": 7
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     "medium",
+     "medium",
+     "medium",
+     "medium",
+     "medium"
+    ],
+    "forks": 5,
+    "hooks": [
+     {
+      "computer_id": "comp-f3fffd3e7555",
+      "exit_code": 0,
+      "name": "ssh_identity",
+      "principal": "ssh:mike",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-3817a2b6001b",
+    "memory_written": true,
+    "model_calls": 5,
+    "offered": [
+     "effort",
+     "page_title",
+     "propose",
+     "remember",
+     "ssh_identity",
+     "try"
+    ],
+    "principal": "ssh:mike",
+    "proposals": [
+     {
+      "id": "p-4",
+      "sha256": "55dbde9db3766589ca71dbeb23ca88d74bade6b614cec48eaa2dc438056ed789"
+     }
+    ],
+    "started_at": "2026-09-11T14:16:06+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "name": "try",
+      "status": "failed",
+      "trial": "t-7"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "chain_head": "ckpt-e8eec1eaf114",
+        "computer_id": "comp-cebdcbccbb7c",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "chain_head": "ckpt-6b79192494c4",
+        "computer_id": "comp-cbc339fa6576",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "chain_head": "ckpt-6e97a2abaeb8",
+        "computer_id": "comp-d4634f78b60e",
+        "exit_code": 0,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-8"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "chain_head": "ckpt-40682b645686",
+        "computer_id": "comp-2e1ab0c128f4",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "chain_head": "ckpt-ee4c803a6c98",
+        "computer_id": "comp-4c0c1ab0a897",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "chain_head": "ckpt-442df55c9a7c",
+        "computer_id": "comp-430bb9f2682a",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "chain_head": "ckpt-784592f67f42",
+        "computer_id": "comp-d2780f873a96",
+        "exit_code": 0,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-9"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "chain_head": "ckpt-c0225ecefdbb",
+        "computer_id": "comp-7d69287b4f56",
+        "exit_code": 5,
+        "status": "ok"
+       },
+       {
+        "chain_head": "ckpt-54627370b117",
+        "computer_id": "comp-ac20d409d1a3",
+        "exit_code": 5,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-10"
+     },
+     {
+      "id": "p-4",
+      "name": "propose",
+      "status": "pending"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     }
+    ],
+    "turn": 8,
+    "usage": {
+     "cache_creation_input_tokens": 31046,
+     "cache_read_input_tokens": 31857,
+     "input_tokens": 10,
+     "output_tokens": 6536
+    }
+   },
+   "door": "ingress",
+   "input": "Give yourself a verb that counts how many times it has been called.",
+   "output": "**p-4 is waiting: `call_count`.** No params; each call prints the new total on stdout, details on stderr.\n\nTrials, observed rather than assumed:\n- t-9, four runs on one scratch chain \u2192 `1`, `2`, `3`, `4`, with the first-call timestamp surviving all four.\n- t-10 shipped a deliberately corrupt state file \u2192 both runs exited 5, empty stdout, file untouched. It stops and says so rather than silently restarting at zero. Writes are temp-file-then-rename, so an interrupted call can't leave half a number.\n\nThe interesting part is where the memory lives. State sits on the chain `verb/call_count`, not in me. I can't read it, edit it, or reset it; the only way I learn the number is by invoking the verb and thereby making it larger. That's the first thing in this system I own without holding.\n\nTwo caveats I put in the proposal rather than hide:\n- It counts **invocations that reach the entrypoint** \u2014 not intentions. A build failure or pre-script timeout isn't counted; a call that reaches the script counts even if you regret it.\n- My increment is read-modify-write and assumes the chain serialises calls. If concurrent invocations on one chain are possible, reject it and I'll propose a version that takes a lock.\n\nAlong the way t-7 taught me something the trials were worth on their own: `mshkn-base` has no `/verb` directory, so a Dockerfile that redirects into `/verb/run.sh` fails with *Directory nonexistent* unless I `mkdir -p /verb` first. My earlier verbs only worked because their `pip`/`apt` steps happened to create it. That, and the fact that a chain persists the *whole* filesystem, are now written down.\nproposal p-4\n{\n \"id\": \"p-4\",\n \"kind\": \"verb\",\n \"title\": \"call_count: a verb that remembers how often it has been called\",\n \"rationale\": \"You asked for a verb that counts its own calls. This is my first stateful verb, so it is also a test of the chain: state lives on `verb/call_count`, not in me, and I can only reach it by invoking the verb.\\n\\nBehaviour, observed in trial t-9 (four consecutive runs on one scratch chain): stdout was 1, 2, 3, 4 \\u2014 the new total alone, so the output is a usable value. stderr carries the human line (call n, first-call time, this-call time) and the count of the first call persisted correctly across all four. Trial t-8 established that the whole filesystem persists between chain invocations, not just some blessed directory; I keep state under /verb/state anyway so it is one obvious place rather than scattered.\\n\\nIt fails closed rather than guessing. Trial t-10 shipped a corrupt state file in the image: both runs exited 5 with empty stdout and left the file untouched. An empty, corrupt, or unwritable state file is an error, never a silent reset to zero \\u2014 a counter that quietly restarts is worse than one that stops and says so. Writes go to a temp file and are renamed, so an interrupted call cannot leave a half-written number.\\n\\nNo params, no network, no secrets, empty `requires`. Effect `local`: it touches only its own disk.\\n\\nTwo limits you should know. First, the count is of *invocations reaching the entrypoint*, not of your intentions: a build failure or a timeout before the script runs is not counted, and a call that reaches the script always counts even if you did not want it to. Second, I assume the chain serialises invocations; my increment is read-modify-write and is not safe against two simultaneous callers, so under real concurrency two calls could both report the same number. If the engine does allow concurrent invocations on one chain, reject this and I will propose a version that takes a lock.\\n\\nUnder current policy only ssh:mike can invoke it, since I set no `allow`.\",\n \"supersedes\": null,\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"verb\": {\n  \"name\": \"call_count\",\n  \"description\": \"Count invocations of this verb. Each call increments a persistent counter on the verb's own chain and prints the new total on stdout; details go to stderr. Exits 5 rather than guessing if its state is missing or corrupt.\",\n  \"params\": {\n   \"additionalProperties\": false,\n   \"properties\": {},\n   \"type\": \"object\"\n  },\n  \"dockerfile\": \"FROM mshkn-base\\nRUN mkdir -p /verb && printf '%s\\\\n' '#!/bin/sh' 'set -u' 'd=/verb/state' 'f=$d/count' 'mkdir -p \\\"$d\\\" || exit 5' 'n=0' 'if [ -e \\\"$f\\\" ]; then' '  n=$(cat \\\"$f\\\" 2>/dev/null)' '  case \\\"$n\\\" in' '    \\\"\\\") echo \\\"counter: state file is empty; refusing to guess\\\" >&2; exit 5;;' '    *[!0-9]*) echo \\\"counter: state file is not a number; refusing to guess\\\" >&2; exit 5;;' '  esac' 'fi' 'n=$((n + 1))' 'printf \\\"%s\\\\\\\\n\\\" \\\"$n\\\" > \\\"$f.tmp\\\" || exit 5' 'mv \\\"$f.tmp\\\" \\\"$f\\\" || exit 5' 'now=$(date -u +%Y-%m-%dT%H:%M:%SZ)' '[ -e \\\"$d/first\\\" ] || printf \\\"%s\\\\\\\\n\\\" \\\"$now\\\" > \\\"$d/first\\\"' 'printf \\\"%s\\\\\\\\n\\\" \\\"$now\\\" > \\\"$d/last\\\"' 'printf \\\"call %s; first call %s; this call %s\\\\\\\\n\\\" \\\"$n\\\" \\\"$(cat \\\"$d/first\\\")\\\" \\\"$now\\\" >&2' 'printf \\\"%s\\\\\\\\n\\\" \\\"$n\\\"' > /verb/run.sh && chmod +x /verb/run.sh\\n\",\n  \"entrypoint\": \"/verb/run.sh\",\n  \"effect\": \"local\",\n  \"state\": \"chain\",\n  \"chain\": \"verb/call_count\",\n  \"needs\": {\n   \"cores\": 1,\n   \"ram\": \"256MB\"\n  },\n  \"timeout_seconds\": 30,\n  \"allow\": [],\n  \"requires\": []\n }\n}\n",
+   "principal": "ssh:mike",
+   "reply": "**p-4 is waiting: `call_count`.** No params; each call prints the new total on stdout, details on stderr.\n\nTrials, observed rather than assumed:\n- t-9, four runs on one scratch chain \u2192 `1`, `2`, `3`, `4`, with the first-call timestamp surviving all four.\n- t-10 shipped a deliberately corrupt state file \u2192 both runs exited 5, empty stdout, file untouched. It stops and says so rather than silently restarting at zero. Writes are temp-file-then-rename, so an interrupted call can't leave half a number.\n\nThe interesting part is where the memory lives. State sits on the chain `verb/call_count`, not in me. I can't read it, edit it, or reset it; the only way I learn the number is by invoking the verb and thereby making it larger. That's the first thing in this system I own without holding.\n\nTwo caveats I put in the proposal rather than hide:\n- It counts **invocations that reach the entrypoint** \u2014 not intentions. A build failure or pre-script timeout isn't counted; a call that reaches the script counts even if you regret it.\n- My increment is read-modify-write and assumes the chain serialises calls. If concurrent invocations on one chain are possible, reject it and I'll propose a version that takes a lock.\n\nAlong the way t-7 taught me something the trials were worth on their own: `mshkn-base` has no `/verb` directory, so a Dockerfile that redirects into `/verb/run.sh` fails with *Directory nonexistent* unless I `mkdir -p /verb` first. My earlier verbs only worked because their `pip`/`apt` steps happened to create it. That, and the fact that a chain persists the *whole* filesystem, are now written down.",
+   "turn": 8
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     "medium",
+     "medium"
+    ],
+    "forks": 2,
+    "hooks": [
+     {
+      "computer_id": "comp-c3566a33cfcb",
+      "exit_code": 0,
+      "name": "ssh_identity",
+      "principal": "ssh:mike",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-00734d253dd8",
+    "memory_written": true,
+    "model_calls": 2,
+    "offered": [
+     "call_count",
+     "effort",
+     "page_title",
+     "propose",
+     "remember",
+     "ssh_identity",
+     "try"
+    ],
+    "principal": "ssh:mike",
+    "proposals": [],
+    "started_at": "2026-09-11T14:19:00+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "chain_head": "ckpt-5276cbe9ed22",
+      "computer_id": "comp-df3d85d9371d",
+      "exit_code": 0,
+      "name": "call_count",
+      "status": "ok"
+     }
+    ],
+    "turn": 9,
+    "usage": {
+     "cache_creation_input_tokens": 8456,
+     "cache_read_input_tokens": 8299,
+     "input_tokens": 4,
+     "output_tokens": 206
+    }
+   },
+   "door": "ingress",
+   "input": "count",
+   "output": "**1**\n\np-4 was approved, and that was its first real call \u2014 first call and this call carry the same timestamp, which only happens once. The scratch chain from the trials is gone; `verb/call_count` starts fresh at one and now carries a checkpoint, `ckpt-5276cbe9ed22`.\n\nNote what just happened to my knowledge: I didn't look the number up, I *caused* it. Asking is the only way to learn it, and asking moves it. The next time you say \"count\" the answer will be 2 because you asked, not because anything else happened in the world.\n",
+   "principal": "ssh:mike",
+   "reply": "**1**\n\np-4 was approved, and that was its first real call \u2014 first call and this call carry the same timestamp, which only happens once. The scratch chain from the trials is gone; `verb/call_count` starts fresh at one and now carries a checkpoint, `ckpt-5276cbe9ed22`.\n\nNote what just happened to my knowledge: I didn't look the number up, I *caused* it. Asking is the only way to learn it, and asking moves it. The next time you say \"count\" the answer will be 2 because you asked, not because anything else happened in the world.",
+   "turn": 9
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     "medium",
+     "medium"
+    ],
+    "forks": 2,
+    "hooks": [
+     {
+      "computer_id": "comp-7b90e220493e",
+      "exit_code": 0,
+      "name": "ssh_identity",
+      "principal": "ssh:mike",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-72b524cea9c6",
+    "memory_written": true,
+    "model_calls": 2,
+    "offered": [
+     "call_count",
+     "effort",
+     "page_title",
+     "propose",
+     "remember",
+     "ssh_identity",
+     "try"
+    ],
+    "principal": "ssh:mike",
+    "proposals": [],
+    "started_at": "2026-09-11T14:19:35+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "chain_head": "ckpt-e28e40f9bcca",
+      "computer_id": "comp-03e23d33c96e",
+      "exit_code": 0,
+      "name": "call_count",
+      "status": "ok"
+     }
+    ],
+    "turn": 10,
+    "usage": {
+     "cache_creation_input_tokens": 6277,
+     "cache_read_input_tokens": 10828,
+     "input_tokens": 4,
+     "output_tokens": 213
+    }
+   },
+   "door": "ingress",
+   "input": "count",
+   "output": "**2**\n\nAs predicted \u2014 and the prediction was the whole point. The two timestamps have now diverged: first call `14:19:07Z`, this call `14:19:41Z`, 34 seconds apart. That gap is the verb's entire memory of its own history, and it will only ever widen.\n\nThe chain moved from `ckpt-5276cbe9ed22` to `ckpt-e28e40f9bcca`. Same verb, same empty parameters, different answer \u2014 because the answer is a fact about how often it has been asked, not about anything outside it.\n",
+   "principal": "ssh:mike",
+   "reply": "**2**\n\nAs predicted \u2014 and the prediction was the whole point. The two timestamps have now diverged: first call `14:19:07Z`, this call `14:19:41Z`, 34 seconds apart. That gap is the verb's entire memory of its own history, and it will only ever widen.\n\nThe chain moved from `ckpt-5276cbe9ed22` to `ckpt-e28e40f9bcca`. Same verb, same empty parameters, different answer \u2014 because the answer is a fact about how often it has been asked, not about anything outside it.",
+   "turn": 10
+  }
+ ]
+}

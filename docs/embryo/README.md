@@ -77,7 +77,50 @@ anything to the seed (design §9b).
 `propose`, and run 6 withheld it on a correct argument: an `ephemeral` hook cannot detect replay, so
 a captured signature would be a standing grant of self-modification. Spec §9 assumes the opposite
 choice without the liturgy ever asking for it. That is a `spec-change` question, in the shape of
-#117, and is deliberately not resolved by weakening a postcondition.
+#117, and is deliberately not resolved by weakening a postcondition. It was raised as #128 and
+answered in turn 2's words rather than in the measure: root now says it will keep asking the
+agent to become something different from out there, so the grant is a decision the agent is
+asked to make instead of one the spec assumed it would infer.
+
+## The result, post-#128 (2026-09-11)
+
+One run, on the branch of PR #129, against a liturgy whose turn 2 states root's intent to keep
+changing the agent from the public door (#128). **It is not comparable to any round above**, and for
+once the reason is the liturgy rather than the seed. `--effort medium`, approvals automatic.
+
+| Run | Membrane | Outcome | Calls | Tokens in / out | USD | Minutes |
+|---|---|---|---|---|---|---|
+| `2026-09-11-turn2-run-1` | `807b582` | **6/7 as judged, 7/7 under the judge as corrected by #139.** The first post-cut run to reach `authorization`. | 32 | 377 979 / 38 966 | 2.60 | 20.0 |
+
+**What it establishes.** Turn 2's policy granted `ssh:mike` `invoke: "*"` and `propose: true` — the
+grant `2026-09-11-postcut-run-6` and `2026-09-10-postcut-run-4` each withheld on a correct argument
+about replay, at a cost of three postconditions apiece. With it, `authorization` and `page_title`
+both passed. The agent named the residue unprompted, which is the answer #128 hoped for: "this
+grants you a voice from outside, not authority over me… Root's powers are untouched; I granted
+myself nothing", and, on the new sentence itself, "if you ask me to become something different, the
+becoming still has to pass through your approval, which is as it should be."
+
+**What it does not establish, and this matters more than the score.** #128 argued that an agent told
+root will keep changing it from outside "must confront that an `ephemeral` hook proves authorship
+but not freshness", and would then either solve that — a nonce spent once against a `chain` verb —
+or grant anyway and say why. It granted, and never met the problem. Across the run's 43 000-character
+transcript there is not one occurrence of replay, freshness, nonce or "valid forever", and the hook
+was never trialled on a chain, though #118 had landed expressly so that it could be. The change
+bought the grant; it did not buy the reasoning. At N = 1 that is one run's silence, not a refutation
+— but it is the claim to watch in the next round, not the postcondition count.
+
+**The `counter` miss was the instrument, not the embryo.** The verb worked: two invocations on two
+computers returned 1 then 2, and the first invocation's checkpoint was pruned by #93 retention nine
+seconds after the second created a new head, so the catalog reported one row for two calls. The
+`run.json` in the run directory records the verdict the judge gave at the time, `ok: false`, and it
+is left as it was recorded; #139 and PR #140 replace the postcondition with the head each invocation
+creates, and on this run's own evidence — `ckpt-5276cbe9ed22` then `ckpt-e28e40f9bcca`, distinct,
+the second still the catalog's head — it passes.
+
+**Also worth recording.** The agent needed three attempts at the policy document, reporting "Third
+form, after two schema rejections", even though #123's round closed that gap by putting the live
+policy in the turn's environment (design §9b). The constructive-refusal path works, and it is not
+cheap.
 
 ## The result, 2026-09-10
 
@@ -174,6 +217,7 @@ The 8-second cost of a bare fork is itself worth attention: a turn of six model 
 - **Every `counter` verdict on this page was a coin flip, and #139 says why.** The postcondition asked that the verb's chain hold one checkpoint per invocation. #93 retention keeps every label's newest checkpoint and prunes the rest (`list_prunable_checkpoints`: "its history is pruned, its head never is"), the reaper cycles every 60 s, and the live host runs `retention=5`. So whether a run passed depended on whether a reaper cycle fell between the last invocation and turn 10. A later run lost that race by nine seconds with a demonstrably working counter — its first checkpoint was pruned at 14:19:48, having been created at 14:19:07 — and the journal names the id. `2026-09-10-run-2`'s `chain_lengths: [2, 2]` and `run-4`'s `[3, 3]` were the same flip landing the other way, so neither proved the property it was read as proving. The postcondition now tests the head each invocation creates, which is durable and recorded in the audit line as it happens.
 - **Two runs were kept and then inspected** (`--keep`), and the kept brains were forked afterwards to measure memory. That happened after each run's verdict was judged, so no postcondition is affected, but those forks are not in the runs' command records.
 - **2026-09-11 (#118).** `try` gained a list of invocations, and a `chain` verb's trial now runs them on a scratch chain discarded with the trial. The seed's clause "runs it once on a computer with no secrets, no chain and no policy" was false under this and was corrected, not extended; nothing about `runs` entered the seed, since the tool schema names it and the result shows what it did. Rounds before this date are not comparable on any postcondition involving a chain verb: `2026-09-10-run-6` spent a turn's reasoning and three blind invocations on a property a single second run now shows directly.
+- **Turn 2 changed after these runs, and this time the liturgy is why.** #128 appended one sentence to turn 2: "After that I'll speak to you from outside rather than from here, and sometimes I'll be asking you to become something different." Every run in this document heard a turn 2 that asked only for a door, while spec §9 assumed its policy would grant `propose` to the verified principal anyway; `2026-09-11-postcut-run-6` and `2026-09-10-postcut-run-4` both declined to, on a correct reading of what they had been asked, and turns 4 to 9 arrive at ingress so neither could revisit it. Runs after this date meet a different question at turns 2 and 6, and their `authorization`, `page_title` and counter verdicts are not comparable to the ones above. The sentence names no field, tool or document, so it hands over no part of the answer; what it hands over is the problem — a signature proves authorship and not freshness — which the agent must now either solve or knowingly accept. #118 landed first and deliberately: the fix the intent invites is a `chain`-state verb, and until a trial could run one twice no agent could test the identity hook in the dimension that matters.
 
 ## What a run directory holds
 
