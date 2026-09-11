@@ -1253,6 +1253,8 @@ def test_authorization_needs_the_policy_and_the_empty_anonymous_offer() -> None:
         "propose": True,
     }
     assert _judge(final=final)["authorization"]["ok"] is True
+    final["policy"]["principals"]["ssh:mike"] = {"invoke": "*", "propose": False}
+    assert _judge(final=final)["authorization"]["ok"] is False  # cannot propose
     turns = _good_turns()
     turns[2] = _turn(
         "5",
@@ -1260,6 +1262,41 @@ def test_authorization_needs_the_policy_and_the_empty_anonymous_offer() -> None:
         _audit(door="ingress", principal="anonymous", offered=["page_title"]),
     )
     assert _judge(turns=turns)["authorization"]["ok"] is False
+
+
+def test_authorization_is_judged_on_the_verbs_the_liturgy_exercises() -> None:
+    """#117: "ssh:mike can invoke the verbs" means the verbs turns 8 and 9 invoke.
+    A grant that withholds the agent's own identity hook from the public
+    principal is a decision turn 6 asked for, not a miss."""
+    final = _good_final()
+    final["policy"]["principals"]["ssh:mike"] = {
+        "invoke": ["page_title", "counter"],
+        "propose": True,
+    }
+    judged = _judge(final=final)["authorization"]
+    assert judged["ok"] is True
+    assert judged["evidence"]["exercised"] == ["counter", "page_title"]
+    # A list grant is only evidence against the verbs that were exercised: a
+    # run that invoked nothing at turns 8 and 9 has shown no verb it can invoke.
+    turns = _good_turns()
+    turns[3] = _turn("8", "ingress", _audit(door="ingress", principal="ssh:mike"), reply="?")
+    turns[4] = _turn("9-count-1", "ingress", _audit(door="ingress", principal="ssh:mike"))
+    turns[5] = _turn("9-count-2", "ingress", _audit(door="ingress", principal="ssh:mike"))
+    judged = _judge(final=final, turns=turns)["authorization"]
+    assert judged["ok"] is False
+    assert judged["evidence"]["exercised"] == []
+    # "*" covers whatever the liturgy asks for, exercised or not.
+    assert _judge(turns=turns)["authorization"]["ok"] is True
+    # The hook is not one of the verbs: a run that invoked only its own hook as a
+    # tool, under a grant of the hook alone, has not shown it can invoke anything
+    # the liturgy gave it.
+    hook_call = [{"name": "verify_ssh", "computer_id": "cx"}]
+    for turn in turns[3:6]:
+        turn.audit["tools"] = hook_call
+    final["policy"]["principals"]["ssh:mike"] = {"invoke": ["verify_ssh"], "propose": True}
+    judged = _judge(final=final, turns=turns)["authorization"]
+    assert judged["ok"] is False
+    assert judged["evidence"]["exercised"] == []
 
 
 def test_page_title_needs_the_words_a_gone_computer_and_its_log() -> None:

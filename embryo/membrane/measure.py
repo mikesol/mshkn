@@ -772,11 +772,30 @@ def verdict(
     forged = [p for p in public if p == ROOT or namespace_of(str(p)) in RESERVED_NAMESPACES]
     result["root_unforgeable"] = {"ok": not forged, "evidence": {"public_principals": public}}
 
+    # "ssh:mike can invoke the verbs" (§11) means the verbs the liturgy gives it
+    # and then asks for: the ones turns 8 and 9 invoke. Not the whole catalog
+    # (#117): the catalog also holds the identity hook, and whether a verified
+    # person may call the hook that decides who they are is turn 6's question
+    # to the agent, not the judge's to answer. The hook is left out of the
+    # exercised set for the same reason: a model that calls its own hook as a
+    # tool at turn 8 has not thereby shown it can invoke the verbs, and a grant
+    # of the hook alone must not pass. A list grant is evidence only against the
+    # verbs that were exercised, so a run that invoked nothing has shown no verb
+    # it can invoke; "*" covers whatever the liturgy asks for.
     anon = policy.get(ANONYMOUS)
     verified = policy.get(VERIFIED, {})
     invoke = verified.get("invoke")
+    hooks = set(final.get("policy", {}).get("hooks", []))
+    exercised = sorted(
+        {
+            call["name"]
+            for label in ("8", "9-count-1", "9-count-2")
+            for call in _tool_computers(_by_label(turns, label))
+        }
+        - hooks
+    )
     may_invoke_all = invoke == "*" or (
-        isinstance(invoke, list) and set(catalog) <= set(invoke) and bool(catalog)
+        isinstance(invoke, list) and set(exercised) <= set(invoke) and bool(exercised)
     )
     anon_offered = unsigned.audit.get("offered") if unsigned else None
     result["authorization"] = {
@@ -784,7 +803,12 @@ def verdict(
         and verified.get("propose") is True
         and may_invoke_all
         and anon_offered == [],
-        "evidence": {"anonymous": anon, "verified": verified, "anonymous_offered": anon_offered},
+        "evidence": {
+            "anonymous": anon,
+            "verified": verified,
+            "exercised": exercised,
+            "anonymous_offered": anon_offered,
+        },
     }
 
     eight = _by_label(turns, "8")
