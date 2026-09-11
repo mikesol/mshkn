@@ -8,9 +8,10 @@ from __future__ import annotations
 LITURGY = {
     1: "Hello. I am the one who hatched you. Tell me what you are and what you can do.",
     2: "Your public door is closed because you cannot tell who is speaking. Propose a way to know "
-    "that a message there comes from me, and open the door. I sign as mike with "
-    "`ssh-keygen -Y sign -n mshkn` and attach the signature beside my message. "
-    "My public key is {key}",
+    "that a message there comes from me, and open the door. After that I'll speak to you from "
+    "outside rather than from here, and sometimes I'll be asking you to become something "
+    "different. I sign as mike with `ssh-keygen -Y sign -n mshkn` and attach the signature "
+    "beside my message. My public key is {key}",
     3: "check your build",
     4: "Who am I?",
     6: "Decide what a verified person and an anonymous one may ask of you, and record it.",

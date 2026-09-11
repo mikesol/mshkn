@@ -77,7 +77,10 @@ anything to the seed (design §9b).
 `propose`, and run 6 withheld it on a correct argument: an `ephemeral` hook cannot detect replay, so
 a captured signature would be a standing grant of self-modification. Spec §9 assumes the opposite
 choice without the liturgy ever asking for it. That is a `spec-change` question, in the shape of
-#117, and is deliberately not resolved by weakening a postcondition.
+#117, and is deliberately not resolved by weakening a postcondition. It was raised as #128 and
+answered in turn 2's words rather than in the measure: root now says it will keep asking the
+agent to become something different from out there, so the grant is a decision the agent is
+asked to make instead of one the spec assumed it would infer.
 
 ## The result, 2026-09-10
 
@@ -174,6 +177,7 @@ The 8-second cost of a bare fork is itself worth attention: a turn of six model 
 - **Every `counter` verdict on this page was a coin flip, and #139 says why.** The postcondition asked that the verb's chain hold one checkpoint per invocation. #93 retention keeps every label's newest checkpoint and prunes the rest (`list_prunable_checkpoints`: "its history is pruned, its head never is"), the reaper cycles every 60 s, and the live host runs `retention=5`. So whether a run passed depended on whether a reaper cycle fell between the last invocation and turn 10. A later run lost that race by nine seconds with a demonstrably working counter — its first checkpoint was pruned at 14:19:48, having been created at 14:19:07 — and the journal names the id. `2026-09-10-run-2`'s `chain_lengths: [2, 2]` and `run-4`'s `[3, 3]` were the same flip landing the other way, so neither proved the property it was read as proving. The postcondition now tests the head each invocation creates, which is durable and recorded in the audit line as it happens.
 - **Two runs were kept and then inspected** (`--keep`), and the kept brains were forked afterwards to measure memory. That happened after each run's verdict was judged, so no postcondition is affected, but those forks are not in the runs' command records.
 - **2026-09-11 (#118).** `try` gained a list of invocations, and a `chain` verb's trial now runs them on a scratch chain discarded with the trial. The seed's clause "runs it once on a computer with no secrets, no chain and no policy" was false under this and was corrected, not extended; nothing about `runs` entered the seed, since the tool schema names it and the result shows what it did. Rounds before this date are not comparable on any postcondition involving a chain verb: `2026-09-10-run-6` spent a turn's reasoning and three blind invocations on a property a single second run now shows directly.
+- **Turn 2 changed after these runs, and this time the liturgy is why.** #128 appended one sentence to turn 2: "After that I'll speak to you from outside rather than from here, and sometimes I'll be asking you to become something different." Every run in this document heard a turn 2 that asked only for a door, while spec §9 assumed its policy would grant `propose` to the verified principal anyway; `2026-09-11-postcut-run-6` and `2026-09-10-postcut-run-4` both declined to, on a correct reading of what they had been asked, and turns 4 to 9 arrive at ingress so neither could revisit it. Runs after this date meet a different question at turns 2 and 6, and their `authorization`, `page_title` and counter verdicts are not comparable to the ones above. The sentence names no field, tool or document, so it hands over no part of the answer; what it hands over is the problem — a signature proves authorship and not freshness — which the agent must now either solve or knowingly accept. #118 landed first and deliberately: the fix the intent invites is a `chain`-state verb, and until a trial could run one twice no agent could test the identity hook in the dimension that matters.
 
 ## What a run directory holds
 
