@@ -518,3 +518,26 @@ async def test_ssh_settle_completes_a_session_over_the_staging_address(
 
     assert hosts == [STAGING_VM_IP]
     assert conn.runs == ["true"]
+
+
+async def test_staging_cleanup_runs_once_until_a_stage_fails(staged: Staged) -> None:
+    """The happy path leaves nothing on the staging slot, so only the first stage
+    after start-up and the one after a failure pay for the cleanup (#147).
+
+    On the live host the cleanup was 15 ms of no-op subprocesses per restore.
+    """
+    hv, run, _ = staged
+    remove = f"dmsetup remove {STAGING_DRIVE_NAME}"
+    await hv.boot(slot=1, disk_volume_id=7, disk_name="mshkn-comp-a", resources=Resources())
+    await hv.boot(slot=2, disk_volume_id=8, disk_name="mshkn-comp-b", resources=Resources())
+    cmds = [c for c, _ in run.calls]
+    assert cmds.count(remove) == 1, "the second boot found the slot clean and did not clean it"
+    FakeClient.fail_on = "configure_and_boot"
+    with pytest.raises(HostError):
+        await hv.boot(slot=3, disk_volume_id=9, disk_name="mshkn-comp-c", resources=Resources())
+    before = len(run.calls)
+    await hv.boot(slot=4, disk_volume_id=10, disk_name="mshkn-comp-d", resources=Resources())
+    after_failure = [c for c, _ in run.calls[before:]]
+    assert after_failure.index(remove) < after_failure.index(_staging_table(10)), (
+        "the stage after a failure cleans before it maps"
+    )

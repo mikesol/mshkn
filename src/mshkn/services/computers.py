@@ -267,7 +267,7 @@ class ComputerService:
         files_for: Callable[[], Awaitable[SnapshotFiles | None]],
         api_key_id: str | None,
     ) -> Computer:
-        """Snap the disk, boot or restore, warm SSH, record, route.
+        """Snap the disk, boot or restore, record, then warm SSH and route together.
 
         Everything after the snap is guarded: on any failure the VM (if any)
         is killed, the route removed, the volume removed, the tap torn down,
@@ -299,7 +299,6 @@ class ComputerService:
                         disk_name=volume_name,
                         resources=resources,
                     )
-            await self.host.guest.warm(vm.vm_ip)
             computer = Computer(
                 id=computer_id,
                 account_id=account.id,
@@ -316,7 +315,13 @@ class ComputerService:
                 api_key_id=api_key_id,
             )
             await insert_computer(self.db, computer)
-            await self.host.proxy.add_route(computer_id, vm.vm_ip)
+            # The SSH warm and the Caddy route depend on nothing but the address,
+            # so the route's config reload does not wait for the handshake (#147).
+            # _abandon removes the route whatever happened, so a warm that fails
+            # mid-flight leaves nothing behind.
+            await asyncio.gather(
+                self.host.guest.warm(vm.vm_ip), self.host.proxy.add_route(computer_id, vm.vm_ip)
+            )
         except BaseException as exc:
             await self._abandon(computer_id, slot, volume_id, volume_name, vm)
             if isinstance(exc, MshknError | asyncio.CancelledError):

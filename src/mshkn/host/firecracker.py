@@ -271,6 +271,11 @@ class FirecrackerHypervisor:
         # Wall clock, injectable: the staging pass stamps it into the guest.
         self._clock = clock
         self._staging_lock = asyncio.Lock()
+        # The staging slot is cleaned before a stage only when something may be
+        # on it: at start-up (a previous process may have died mid-stage) and
+        # after a failed stage. A successful stage renames both the tap and the
+        # mapping away, so cleaning before every stage was 15 ms of no-ops (#147).
+        self._staging_dirty = True
         # pid -> API socket path, so a killed VM's socket is removed. Firecracker
         # does not unlink its own socket on exit, and start_firecracker_process
         # only clears a stale one for the path it is about to use, so without
@@ -425,7 +430,9 @@ class FirecrackerHypervisor:
         pid: int | None = None
         async with self._staging_lock:
             try:
-                await self._ensure_staging_clean()
+                if self._staging_dirty:
+                    await self._ensure_staging_clean()
+                    self._staging_dirty = False
                 fc_task = asyncio.create_task(start_firecracker_process(socket_path))
                 try:
                     await asyncio.gather(
@@ -497,6 +504,8 @@ class FirecrackerHypervisor:
                 logger.warning("Failed to kill staging FC process PID=%s", pid)
             self._unlink_socket(pid)
         await self._ensure_staging_clean()
+        # Best-effort cleanup may itself have failed; the next stage checks again.
+        self._staging_dirty = True
 
     async def _ssh_settle(self) -> None:
         """Complete one SSH session on the staging address before a template is snapshotted.

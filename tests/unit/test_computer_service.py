@@ -339,3 +339,25 @@ async def test_exec_marks_the_computer_busy_and_touches_it_when_the_command_ends
     async for _ in service.stream(computer, "ls"):
         assert service.busy == {computer.id}
     assert service.busy == set()
+
+
+async def test_bring_up_adds_the_route_while_the_ssh_warm_is_in_flight(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """warm and add_route depend on nothing but the VM's address, so they run
+    together: the Caddy reload no longer waits for the SSH handshake (#147)."""
+    service, host = await _service(db, tmp_path)
+    seen_routes: list[dict[str, str]] = []
+    real_warm = host.guest.warm
+
+    async def warm(vm_ip: str) -> None:
+        await asyncio.sleep(0)  # the handshake takes a turn of the loop
+        seen_routes.append(dict(host.proxy.routes))
+        await real_warm(vm_ip)
+
+    monkeypatch.setattr(host.guest, "warm", warm)
+    computer = await service.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    assert seen_routes == [{computer.id: computer.vm_ip}], (
+        "the route was published before the warm finished"
+    )
+    assert host.guest.warmed == [computer.vm_ip]
