@@ -167,17 +167,18 @@ class CheckpointService:
                 self.host.guest.exec(computer.vm_ip, "sync", timeout=10.0),
                 timeout=_SYNC_TIMEOUT_SECONDS,
             )
-            # The memory dump (pause, write, resume) and the disk snap are
-            # independent, so they run together; the snap then lands during the
-            # pause, closer to the memory image than the post-resume snap it
-            # replaced (#147). The pooled SSH session is kept: a pause of a few
-            # hundred milliseconds does not break a TCP connection, and the
-            # unconditional evict cost the next exec a full handshake (#150).
+            # The disk snap must follow the memory snapshot, not overlap it: the
+            # guest's `sync` does not reach the host disk (Firecracker's drive
+            # cache is Unsafe, so guest flushes are ignored), and it is
+            # Firecracker's own flush inside create_snapshot that lands the
+            # guest's writes on the thin volume. A snap taken alongside the dump
+            # raced that flush and captured empty files (found by the live run
+            # of #147). The pooled SSH session is kept across the pause: a pause
+            # of a few hundred milliseconds does not break a TCP connection, and
+            # the unconditional evict cost the next exec a full handshake (#150).
+            await self.host.hypervisor.snapshot(computer.socket_path, snapshot_dir)
             volume_name = checkpoint_volume_name(checkpoint_id)
-            _, volume_id = await asyncio.gather(
-                self.host.hypervisor.snapshot(computer.socket_path, snapshot_dir),
-                self._snap_disk(computer.thin_volume_id, volume_name),
-            )
+            volume_id = await self._snap_disk(computer.thin_volume_id, volume_name)
             latest = await get_latest_checkpoint_for_computer(self.db, computer.id)
             if latest is not None:
                 parent_id: str | None = latest.id

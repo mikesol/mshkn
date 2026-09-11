@@ -453,13 +453,15 @@ async def test_label_locks_exist_only_while_held(db: aiosqlite.Connection, tmp_p
     assert checkpoints._label_locks == {}
 
 
-async def test_create_snaps_the_disk_while_the_memory_is_being_written(
+async def test_create_snaps_the_disk_only_after_the_memory_snapshot_returned(
     db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The dm-thin snap does not wait for the 256 MiB memory dump (#147).
+    """The dm-thin snap waits for the memory snapshot; overlapping them is wrong.
 
-    The disk was already snapped after the resume, so nothing depended on the
-    order; taken during the pause it matches the memory image more closely.
+    Firecracker's drive cache is Unsafe: the guest's `sync` never reaches the
+    host disk, and it is Firecracker's own flush inside create_snapshot that
+    lands the guest's writes on the thin volume. A snap taken during the dump
+    captured empty files on the live host (the #147 overlap, reverted).
     """
     checkpoints, computers, host = await _services(db, tmp_path)
     computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
@@ -473,7 +475,10 @@ async def test_create_snaps_the_disk_while_the_memory_is_being_written(
 
     monkeypatch.setattr(host.hypervisor, "snapshot", slow_snapshot)
     ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
-    assert ckpt.thin_volume_id in volumes_during_dump[0], "the snap ran during the dump"
+    assert ckpt.thin_volume_id not in volumes_during_dump[0], (
+        "the disk snap must not run until Firecracker has flushed the drive"
+    )
+    assert ckpt.thin_volume_id in host.blocks.volumes
 
 
 async def test_the_staging_copy_goes_after_a_linger_and_delete_clears_both(

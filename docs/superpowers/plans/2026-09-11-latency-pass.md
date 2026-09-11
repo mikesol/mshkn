@@ -25,7 +25,7 @@
 | #144 fsync | accept | Firecracker `sync_all()` on 256 MiB; snapshot on `/dev/shm`, move in the upload task |
 | #145 uploads | accept nice/ionice + one at a time; reject zstd | zstd changes the R2 layout for a second-order gain |
 | #146 udev | reject | on the live host `--noudevsync` and `--noudevrules` both leave `/dev/mapper/<name>` absent when `dmsetup` returns, and `remove --noudevsync` failed with EBUSY; Firecracker opens the node at once |
-| #147 overlap | accept gather(warm, add_route); overlap dm snap with the dump; skip happy-path staging cleanup; keep `warm`; keep `activate` | lazy activation would hide checkpoint volumes from `blocks.max_volume_id` |
+| #147 overlap | accept gather(warm, add_route); skip happy-path staging cleanup; keep `warm`; keep `activate`; **reject** overlapping the dm snap with the dump | the live run captured empty files: Firecracker's flush inside create_snapshot is what lands guest writes on the volume (drive cache Unsafe); lazy activation would hide checkpoint volumes from `blocks.max_volume_id` |
 | #148 destroy | accept | pidfd wait; route removal alongside the kill; tap teardown alongside volume removal |
 | #149 cold boot | accept boot args and masking the timers; keep `console=ttyS0` | the timers also fire inside restored guests when `date -s` moves the clock |
 | #150 evict | accept, subject to the live run | a 300 ms pause does not break TCP; revert if `ConnectionLost` appears |

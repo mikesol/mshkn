@@ -177,7 +177,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 ## 7. Lifecycle of a checkpoint
 
-**Create** (`CheckpointService.create`, timed `op="checkpoint"`): `sync` inside the guest so the page cache reaches the block device; `Hypervisor.snapshot` (pause, write `vmstate` and `memory` onto the staging directory, resume) and, alongside it, acquire a volume id, snap the computer's volume into a new checkpoint volume and activate it; the pooled SSH session is kept across the pause; insert the row with `parent_id` = the computer's latest checkpoint, else the checkpoint it was forked from; count `mshkn_checkpoints_total{trigger}`; spawn the persist-and-upload task under key `upload:<checkpoint id>` (uploads run one at a time, under `nice` and `ionice`).
+**Create** (`CheckpointService.create`, timed `op="checkpoint"`): `sync` inside the guest so the page cache reaches the block device; `Hypervisor.snapshot` (pause, write `vmstate` and `memory` onto the staging directory, resume; Firecracker flushes the drive inside this call, which is what lands the guest's writes on the thin volume, since its drive cache ignores guest flushes); then acquire a volume id, snap the computer's volume into a new checkpoint volume and activate it; the pooled SSH session is kept across the pause; insert the row with `parent_id` = the computer's latest checkpoint, else the checkpoint it was forked from; count `mshkn_checkpoints_total{trigger}`; spawn the persist-and-upload task under key `upload:<checkpoint id>` (uploads run one at a time, under `nice` and `ionice`).
 
 **Delete** cancels the upload task first, then removes the thin volume, the local directory and the R2 prefix, then the row.
 
