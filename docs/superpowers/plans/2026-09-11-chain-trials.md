@@ -1187,11 +1187,39 @@ T14.6 already reads turn 9's audit line, so the E2E tier gains assertions rather
 One consequence to get right: because the trial now builds the counter's Dockerfile, approval reuses that recipe and the verb is born `ready`, not `building` (ruling P3, which T14.5 already relies on for `page_title`).
 
 **Files:**
+- Modify: `embryo/membrane/turn.py` (`RUN_AUDIT_KEYS`)
+- Modify: `tests/unit/test_embryo_turn.py` (the audit projection test)
 - Modify: `tests/e2e/test_phase14_embryo.py` (`test_t14_6_counter_chain_has_two_checkpoints`)
 
 **Interfaces:**
 - Consumes: everything above.
 - Produces: nothing.
+
+- [ ] **Step 0: the audit must name each run's computer**
+
+Task 5 left `computer_id` out of `RUN_AUDIT_KEYS`. It has to go back in, because without it the
+live tier cannot tell a fork of run 1 from an unrelated fresh chain: checkpoint ids are random
+uuid4s (`src/mshkn/services/checkpoints.py`), so two distinct `chain_head`s prove only that two
+checkpoints exist. With the computer id, the E2E test reads each run's `exec_log` — which
+outlives the self-destructed computer, exactly as T14.5 already does for `page_title` — and sees
+the counter say `1` then `2`. `stdout` itself still stays out of the audit line.
+
+In `embryo/membrane/turn.py`:
+
+```python
+RUN_AUDIT_KEYS = ("exit_code", "computer_id", "chain_head", "error")
+```
+
+and in `tests/unit/test_embryo_turn.py`, `test_the_audit_summarises_every_run_without_its_output`
+now expects the id and still refuses the output:
+
+```python
+    assert summary["runs"] == [
+        {"status": "ok", "exit_code": 0, "computer_id": "comp-1", "chain_head": "ckpt-a"},
+        {"status": "ok", "exit_code": 0, "computer_id": "comp-2", "chain_head": "ckpt-b"},
+    ]
+    assert not any("stdout" in r or "stderr" in r for r in summary["runs"])
+```
 
 - [ ] **Step 1: Rewrite T14.6**
 
@@ -1207,10 +1235,20 @@ Replace the body of `test_t14_6_counter_chain_has_two_checkpoints`:
         trial = audit["tools"][0]
         assert trial["status"] == "done", trial
         # the audit summarises each invocation without its output (#118): two clean
-        # exits and two distinct chain heads are the trial's disk surviving run 1.
+        # exits, and two distinct chain heads.
         assert [r["exit_code"] for r in trial["runs"]] == [0, 0], trial
         heads = [r["chain_head"] for r in trial["runs"]]
         assert all(heads) and heads[0] != heads[1], trial
+        # Distinct heads alone cannot tell a fork of run 1 from an unrelated fresh
+        # chain — both are random ids. The counter's own output can: each run's
+        # computer self-destructed, but its exec_log outlives it (T14.5 reads one the
+        # same way), and 1 then 2 is the disk surviving the first invocation.
+        said = []
+        for run in trial["runs"]:
+            log = await doors.client.get(f"/computers/{run['computer_id']}/exec_log")
+            assert log.status_code == 200, log.text
+            said.append(log.json()["stdout"].strip())
+        assert said == ["1", "2"], said
         scratch = await doors.client.get(
             "/checkpoints", params={"label": f"verb/trial/{trial['trial']}"}
         )
