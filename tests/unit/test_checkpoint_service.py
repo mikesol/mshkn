@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -665,3 +666,33 @@ async def test_persists_run_one_at_a_time_and_fsync_their_files(
         assert str(durable) + ".tmp/memory" in synced or str(durable / "memory") in synced, (
             f"the memory file of {ckpt.id} was fsynced before the rename"
         )
+
+
+async def test_delete_during_a_persist_leaves_no_durable_copy_behind(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancelling the upload task does not stop the copy thread; a delete that
+    races it must not end with a published directory nobody can reclaim."""
+    checkpoints, computers, _host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    started = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def slow_persist(staging_dir: Path, durable_dir: Path) -> None:
+        # The copy is done and the rename is about to happen when delete lands.
+        tmp = durable_dir.with_name(f"{durable_dir.name}.tmp")
+        shutil.copytree(staging_dir, tmp)
+        loop.call_soon_threadsafe(started.set)
+        time.sleep(0.2)
+        tmp.rename(durable_dir)
+
+    monkeypatch.setattr(mshkn.services.checkpoints, "_persist_snapshot", slow_persist)
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    await started.wait()
+    await checkpoints.delete(ckpt)
+    await asyncio.sleep(0.4)  # long enough for an unstoppable thread to have published
+    durable = tmp_path / "ckpts" / ckpt.id
+    assert not durable.exists(), "the copy published after the delete was taken back"
+    assert not durable.with_name(f"{ckpt.id}.tmp").exists()
+    assert not (tmp_path / "staging" / ckpt.id).exists()
+    assert await get_checkpoint(db, ckpt.id) is None

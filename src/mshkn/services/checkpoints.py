@@ -294,7 +294,7 @@ class CheckpointService:
         if staged:
             try:
                 async with self._persist_slot:
-                    await asyncio.to_thread(_persist_snapshot, staging_dir, durable_dir)
+                    await self._persist(staging_dir, durable_dir)
             except Exception:
                 logger.warning(
                     "Could not persist checkpoint %s to %s; keeping the staging copy",
@@ -314,6 +314,24 @@ class CheckpointService:
                 await self.host.objects.upload_dir(source, r2_prefix)
             except Exception:
                 logger.warning("R2 upload failed for checkpoint %s", checkpoint_id, exc_info=True)
+
+    @staticmethod
+    async def _persist(staging_dir: Path, durable_dir: Path) -> None:
+        """Run the blocking copy in a thread; if cancelled (a delete), wait for
+        the thread anyway and take back whatever it published.
+
+        Cancelling the task does not stop the thread, and delete has already
+        removed the row: a directory the thread renamed into place afterwards
+        would belong to nothing and never be reclaimed.
+        """
+        copy = asyncio.ensure_future(asyncio.to_thread(_persist_snapshot, staging_dir, durable_dir))
+        try:
+            await asyncio.shield(copy)
+        except asyncio.CancelledError:
+            await asyncio.gather(copy, return_exceptions=True)
+            shutil.rmtree(durable_dir, ignore_errors=True)
+            shutil.rmtree(durable_dir.with_name(f"{durable_dir.name}.tmp"), ignore_errors=True)
+            raise
 
     async def recover_staging(self) -> int:
         """Finish what a previous process's persist tasks left in the staging
