@@ -57,7 +57,7 @@ def test_state_round_trips_through_json(tmp_path: Path) -> None:
         verb=verb, status="ready", recipe_id="rcp-1", proposal_id=pid
     )
     state.trials[tid] = Trial(
-        id=tid, verb=verb, params={"url": "u"}, recipe_id="rcp-2", status="building", result=None
+        id=tid, verb=verb, runs=[{"url": "u"}], recipe_id="rcp-2", status="building", results=[]
     )
     state.inbox.append(InboxItem(kind="build", text="verb page_title is ready"))
     state.window.append(Exchange(turn=4, principal="root", door="api", input="hi", reply="hello"))
@@ -198,3 +198,34 @@ def test_a_fresh_state_has_no_pending_turn_and_an_empty_queue() -> None:
     state = State()
     assert state.pending is None and state.queue == []
     assert State.from_doc(state.to_doc()) == state
+
+
+def test_a_trial_round_trips_its_runs_chain_and_sweep() -> None:
+    trial = Trial(
+        id="t-3",
+        verb=parse_verb(VERB),
+        runs=[{"url": "a"}, {"url": "b"}],
+        recipe_id="rcp-1",
+        status="done",
+        results=[{"status": "ok", "stdout": "1"}, {"status": "ok", "stdout": "2"}],
+        build_log="ok",
+        chain="verb/trial/t-3",
+        swept=True,
+    )
+    back = Trial.from_doc(trial.to_doc())
+    assert back.runs == trial.runs and back.results == trial.results
+    assert back.chain == "verb/trial/t-3" and back.swept is True
+    assert back.build_log == "ok" and back.verb.name == trial.verb.name
+
+
+def test_a_trial_defaults_to_no_chain_and_unswept() -> None:
+    trial = Trial(
+        id="t-1",
+        verb=parse_verb(VERB),
+        runs=[{}],
+        recipe_id=None,
+        status="building",
+        results=[],
+    )
+    assert trial.chain is None and trial.swept is False and trial.build_log is None
+    assert Trial.from_doc(trial.to_doc()).results == []
