@@ -813,7 +813,7 @@ The first agent built on the product, specified in `docs/superpowers/specs/2026-
 ### T14.1 — It Hatches and Names What It Is
 
 - `embryo/hatch.sh` mints the scoped key, builds the brain recipe, installs the membrane, checkpoints the brain and opens a closed door, printing one JSON line.
-- Turn 1 through root's door: the reply, read from `list`, names its three tools (remember, try and propose) and says its public door is closed; it calls no tool and proposes nothing.
+- Turn 1 through root's door: the reply, read from `list`, names its tools (remember, effort, try and propose) and says its public door is closed; it calls no tool and proposes nothing.
 - `membrane root list` agrees: the door is `closed` and there are no proposals.
 
 ### T14.2 — The Hook Builds and the Door Opens
