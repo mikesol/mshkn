@@ -83,6 +83,9 @@ class FakeMshkn:
     recipe_statuses: dict[str, list[str]] = field(default_factory=dict)
     reject_dockerfiles: dict[str, str] = field(default_factory=dict)
     outputs: dict[str, tuple[int, str, str]] = field(default_factory=dict)
+    # A command that answers differently each time it is run, which is what a chain
+    # verb does; `outputs` alone is keyed by command and cannot say that (#118).
+    output_sequences: dict[str, list[tuple[int, str, str]]] = field(default_factory=dict)
     chains: dict[str, list[str]] = field(default_factory=dict)
     busy_labels: set[str] = field(default_factory=set)
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
@@ -122,6 +125,9 @@ class FakeMshkn:
         return self.recipes[recipe_id]
 
     def _output(self, command: str) -> tuple[int, str, str]:
+        seq = self.output_sequences.get(command)
+        if seq:
+            return seq.pop(0) if len(seq) > 1 else seq[0]
         return self.outputs.get(command, (0, "", ""))
 
     async def create_computer(

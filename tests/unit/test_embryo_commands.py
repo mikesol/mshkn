@@ -344,7 +344,7 @@ async def test_list_state_names_each_trials_recipe(brain_dir: Path) -> None:
 
     state = State()
     state.trials["t-1"] = Trial(
-        id="t-1", verb=parse_verb(VERB), params={}, recipe_id="rcp-trial", status="done", result={}
+        id="t-1", verb=parse_verb(VERB), runs=[{}], recipe_id="rcp-trial", status="done", results=[]
     )
     listing = json.loads(await list_state(FakeMshkn(), state))
     assert listing["trials"] == [

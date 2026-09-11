@@ -24,21 +24,157 @@ async def test_a_trial_builds_runs_and_returns_the_output_as_data() -> None:
         api, state, VERB, {"url": "u"}, until=100.0, now=lambda: 0.0, sleep=_no_sleep
     )
     assert result["status"] == "done" and result["trial"] == "t-1"
-    assert result["stdout"] == "Example Domain" and result["exit_code"] == 0
+    assert result["runs"][0]["stdout"] == "Example Domain" and result["runs"][0]["exit_code"] == 0
     assert state.trials["t-1"].status == "done"
     assert state.catalog == {} and state.proposals == {}
     create = next(c for c in api.calls if c[0] == "create_computer")
     assert create[1]["label"] is None
 
 
-async def test_a_chain_declaration_is_trialled_without_a_chain() -> None:
+async def test_a_chain_trial_runs_twice_on_one_scratch_chain_and_sweeps_it() -> None:
     api = FakeMshkn()
     state = State()
+    cmd = render_command(parse_verb(CHAIN_VERB), {})
+    api.output_sequences[cmd] = [(0, "1\n", ""), (0, "2\n", "")]
     result = await try_verb(
-        api, state, CHAIN_VERB, {}, until=100.0, now=lambda: 0.0, sleep=_no_sleep
+        api, state, CHAIN_VERB, None, runs=[{}, {}], until=200.0, now=lambda: 0.0, sleep=_no_sleep
     )
     assert result["status"] == "done"
+    assert [r["stdout"] for r in result["runs"]] == ["1\n", "2\n"]
+    assert all(r["chain_head"] is not None for r in result["runs"])
+    kinds = [c[0] for c in api.calls]
+    assert kinds.count("create_computer") == 1 and kinds.count("fork_label") == 1
+    create = next(c for c in api.calls if c[0] == "create_computer")
+    assert create[1]["label"] == "verb/trial/t-1"
+    fork = next(c for c in api.calls if c[0] == "fork_label")
+    assert fork[1]["label"] == "verb/trial/t-1"
+    # the scratch chain is gone, and the verb's own chain was never touched
     assert api.chains == {}
+    assert state.trials["t-1"].swept is True
+
+
+async def test_an_ephemeral_trial_runs_each_invocation_on_a_fresh_computer() -> None:
+    api = FakeMshkn()
+    state = State()
+    api.outputs[render_command(parse_verb(VERB), {"url": "a"})] = (0, "A", "")
+    api.outputs[render_command(parse_verb(VERB), {"url": "b"})] = (0, "B", "")
+    result = await try_verb(
+        api,
+        state,
+        VERB,
+        None,
+        runs=[{"url": "a"}, {"url": "b"}],
+        until=200.0,
+        now=lambda: 0.0,
+        sleep=_no_sleep,
+    )
+    assert [r["stdout"] for r in result["runs"]] == ["A", "B"]
+    assert all("chain_head" not in r for r in result["runs"])
+    creates = [c for c in api.calls if c[0] == "create_computer"]
+    assert len(creates) == 2 and all(c[1]["label"] is None for c in creates)
+    assert api.chains == {} and state.trials["t-1"].chain is None
+
+
+async def test_a_non_zero_exit_does_not_stop_the_sequence() -> None:
+    """The replay-protected hook of #118: the same signature twice must be accepted
+    once and refused once, so run 2's non-zero exit is the reading, not a failure."""
+    api = FakeMshkn()
+    cmd = render_command(parse_verb(CHAIN_VERB), {})
+    api.output_sequences[cmd] = [(0, "ok\n", ""), (1, "", "replay\n")]
+    result = await try_verb(
+        api, State(), CHAIN_VERB, None, runs=[{}, {}], until=200.0, now=lambda: 0.0, sleep=_no_sleep
+    )
+    assert [r["exit_code"] for r in result["runs"]] == [0, 1]
+    assert result["status"] == "done"
+
+
+async def test_an_error_stops_the_sequence_and_keeps_what_it_read() -> None:
+    api = FakeMshkn()
+    state = State()
+    trial = Trial(
+        id="t-x",
+        verb=parse_verb(CHAIN_VERB),
+        runs=[{}, {}],
+        recipe_id="rcp-missing",
+        status="building",
+        results=[],
+    )
+    state.trials["t-x"] = trial
+    result = await run_trial(api, trial, remaining=200.0)
+    assert len(result["runs"]) == 1 and result["runs"][0]["status"] == "error"
+    assert "not ready" in result["runs"][0]["error"]
+    # the trial itself completed; the error is one run's reading, per spec §3
+    assert result["status"] == "done" and trial.swept is True
+
+
+async def test_an_out_of_time_sequence_returns_what_it_got_and_leaves_the_sweep() -> None:
+    api = FakeMshkn()
+    info = await api.create_recipe(CHAIN_VERB["dockerfile"])
+    await api.get_recipe(info.id)
+    cmd = render_command(parse_verb(CHAIN_VERB), {})
+    api.output_sequences[cmd] = [(0, "1\n", ""), (0, "2\n", "")]
+    trial = Trial(
+        id="t-1",
+        verb=parse_verb(CHAIN_VERB),
+        runs=[{}, {}, {}],
+        recipe_id=info.id,
+        status="building",
+        results=[],
+    )
+    # run_trial reads the clock once to fix its deadline and once per loop turn:
+    # 200 s, then 200 s left, then 110 s left, then 15 s left — too little for a third
+    ticks = iter([0.0, 0.0, 90.0, 185.0])
+    result = await run_trial(api, trial, remaining=200.0, now=lambda: next(ticks))
+    assert result["status"] == "out of time" and result["ran"] == 2 and result["of"] == 3
+    assert [r["stdout"] for r in result["runs"]] == ["1\n", "2\n"]
+    # the sweep costs time the turn does not have; the next poll does it
+    assert trial.swept is False
+    assert "delete_checkpoint" not in [c[0] for c in api.calls]
+
+
+async def test_a_deferred_fork_stops_the_sequence() -> None:
+    """A scratch label only this trial knows should never be busy, but mshkn may
+    answer 202 anyway; that is data, not a crashed turn."""
+    api = FakeMshkn()
+    api.busy_labels.add("verb/trial/t-1")
+    result = await try_verb(
+        api,
+        State(),
+        CHAIN_VERB,
+        None,
+        runs=[{}, {}],
+        until=200.0,
+        now=lambda: 0.0,
+        sleep=_no_sleep,
+    )
+    assert len(result["runs"]) == 2
+    assert result["runs"][0]["status"] == "ok"
+    assert result["runs"][1]["status"] == "error" and "deferred" in result["runs"][1]["error"]
+
+
+async def test_the_next_turn_sweeps_a_trial_that_died_before_its_sweep() -> None:
+    api = FakeMshkn()
+    state = State()
+    api.chains["verb/trial/t-7"] = ["ckpt-a", "ckpt-b"]
+    state.trials["t-7"] = Trial(
+        id="t-7",
+        verb=parse_verb(CHAIN_VERB),
+        runs=[{}, {}],
+        recipe_id="rcp-1",
+        status="done",
+        results=[{"status": "ok"}],
+        chain="verb/trial/t-7",
+        swept=False,
+    )
+    assert await poll_trials(api, state, remaining=50.0) == []
+    assert api.chains == {} and state.trials["t-7"].swept is True
+
+
+async def test_a_trial_refuses_params_and_runs_together() -> None:
+    api = FakeMshkn()
+    result = await try_verb(api, State(), VERB, {"url": "u"}, runs=[{"url": "u"}], until=100.0)
+    assert result["status"] == "invalid" and "not both" in result["error"]
+    assert api.calls == []
 
 
 async def test_a_wrong_base_fails_before_any_build() -> None:
@@ -76,9 +212,10 @@ async def test_a_slow_build_outlives_the_turn_and_lands_in_the_inbox() -> None:
     api.outputs[render_command(parse_verb(VERB), {"url": "u"})] = (2, "", "curl: (6) no host")
     items = await poll_trials(api, state, remaining=50.0)
     assert len(items) == 1 and items[0].kind == "trial"
-    assert "trial t-1 of page_title: exit 2" in items[0].text and "no host" in items[0].text
+    assert "trial t-1 of page_title: 1 of 1 ran" in items[0].text
+    assert "run 1: exit 2" in items[0].text and "no host" in items[0].text
     trial = state.trials["t-1"]
-    assert trial.status == "done" and trial.result is not None
+    assert trial.status == "done" and trial.results
     assert await poll_trials(api, state, remaining=50.0) == []
 
 
@@ -119,13 +256,13 @@ async def test_run_trial_reports_a_computer_creation_error_as_data() -> None:
     trial = Trial(
         id="t-x",
         verb=parse_verb(VERB),
-        params={"url": "u"},
+        runs=[{"url": "u"}],
         recipe_id="rcp-missing",
         status="building",
-        result=None,
+        results=[],
     )
     result = await run_trial(api, trial, remaining=60.0)
-    assert result["status"] == "error" and "not ready" in result["error"]
+    assert result["runs"][0]["status"] == "error" and "not ready" in result["runs"][0]["error"]
 
 
 async def test_poll_trials_leaves_a_still_building_trial_untouched() -> None:
@@ -136,10 +273,10 @@ async def test_poll_trials_leaves_a_still_building_trial_untouched() -> None:
     state.trials["t-1"] = Trial(
         id="t-1",
         verb=parse_verb(VERB),
-        params={"url": "u"},
+        runs=[{"url": "u"}],
         recipe_id=info.id,
         status="building",
-        result=None,
+        results=[],
     )
     items = await poll_trials(api, state, remaining=50.0)
     assert items == []
@@ -163,6 +300,8 @@ async def test_a_trial_with_no_time_left_makes_no_request() -> None:
     assert out["status"] == "building" and state.trials["t-1"].status == "building"
     assert [c[0] for c in api.calls] == ["create_recipe", "get_recipe"]
     assert (await run_trial(api, state.trials["t-1"], remaining=5.0)) == {
-        "status": "error",
-        "error": "out of time",
+        "runs": [],
+        "status": "out of time",
+        "ran": 0,
+        "of": 1,
     }
