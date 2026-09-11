@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 from membrane.config import load_settings
-from membrane.model import Model, zero_usage
+from membrane.model import Model, system_text, zero_usage
 from membrane.scripted import ScriptedModel
 
 DEFAULT_PORT = 8000
@@ -28,7 +28,7 @@ async def answer_async(model: Model, body: dict[str, Any]) -> dict[str, Any]:
     global _counter
     _counter += 1
     completion = await model.complete(
-        system=str(body.get("system", "")),
+        system=system_text(body.get("system")),
         messages=list(body.get("messages") or []),
         tools=list(body.get("tools") or []),
     )

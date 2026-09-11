@@ -15,7 +15,7 @@ from membrane.declarations import parse_policy, parse_verb, render_command
 from membrane.hooks import principal_for
 from membrane.loop import CAP_REACHED, OUT_OF_TOKENS
 from membrane.memory import Provenance
-from membrane.model import zero_usage
+from membrane.model import CACHE_CONTROL, system_text, zero_usage
 from membrane.mshkn import MshknError, RelayJob
 from membrane.principals import ROOT
 from membrane.proposals import approve, propose
@@ -208,7 +208,8 @@ async def test_a_say_posts_the_request_and_acknowledges_without_a_model_call(
     assert posted["headers"]["x-api-key"] == "sk-test"
     assert posted["headers"]["anthropic-version"] == "2023-06-01"
     body = posted["body"]
-    assert body["system"] == "SEED" and body["stream"] is True
+    assert system_text(body["system"]) == "SEED" and body["stream"] is True
+    assert body["cache_control"] == CACHE_CONTROL  # #126: the settled tail is a read point
     assert body["output_config"] == {"effort": "medium"}
     assert [t["name"] for t in body["tools"]] == ["remember", "try", "propose"]  # insertion order
     assert body["messages"][-1]["role"] == "user"
@@ -225,7 +226,7 @@ async def test_system_prompt_is_seed_then_self(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     ctx.state.self_description = "I verify."
     await say(ctx, payload_b64=b64("x"), door="api")
-    assert _posted(ctx)["system"] == "SEED\n\nI verify."
+    assert system_text(_posted(ctx)["system"]) == "SEED\n\nI verify."
 
 
 async def test_a_text_answer_closes_the_turn_with_the_full_audit_and_the_reply(

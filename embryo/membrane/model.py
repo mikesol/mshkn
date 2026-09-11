@@ -24,6 +24,10 @@ USAGE_KEYS = (
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
 )
+# One cache breakpoint (#126). The default five-minute entry is the right one
+# here: the calls of a turn are seconds apart, every read refreshes the entry's
+# timer for free, and the one-hour TTL only doubles the write price.
+CACHE_CONTROL = {"type": "ephemeral"}
 
 
 def zero_usage() -> dict[str, int]:
@@ -83,14 +87,29 @@ def compose_request(
         "model": model_id,
         "max_tokens": MAX_TOKENS,
         "stream": True,
-        "system": system,
+        # The stable prefix of every call of a turn, marked cacheable (#126).
+        # `tools` render before `system`, so this one breakpoint covers the tool
+        # list as well as the seed and the self-description.
+        "system": [{"type": "text", "text": system, "cache_control": CACHE_CONTROL}],
         "messages": messages,
+        # Everything in `messages` is settled by the time the request is composed,
+        # so the automatic breakpoint lands at the end of it: the next call of the
+        # turn reads its whole history back instead of re-encoding it.
+        "cache_control": CACHE_CONTROL,
     }
     if tools:
         body["tools"] = tools
     if effort is not None:
         body["output_config"] = {"effort": effort}
     return body
+
+
+def system_text(blocks: object) -> str:
+    """The system prompt read back out of a composed body: the scripted model is
+    handed the words, not the cacheable blocks `compose_request` wraps them in."""
+    if not isinstance(blocks, list):
+        return ""
+    return "\n\n".join(str(block.get("text", "")) for block in blocks if isinstance(block, dict))
 
 
 def request_headers(api_key: str | None) -> dict[str, str]:
