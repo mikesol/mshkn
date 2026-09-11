@@ -458,3 +458,37 @@ async def test_fork_retries_from_the_durable_copy_when_the_staging_copy_vanished
     computer = await service.fork(ACCOUNT, ckpt, recipe_id=None)
     assert attempts == [staging / "memory", durable / "memory"]
     assert computer.status is ComputerStatus.RUNNING
+
+
+async def test_fork_does_not_retry_a_restore_that_failed_with_its_files_still_there(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a vanished snapshot file earns a second restore. Any other failure
+    may have let the guest run and write its disk, and a retry would pair that
+    disk with the old memory image; it is abandoned instead, as before."""
+    service, host = await _service(db, tmp_path)
+    await insert_checkpoint(db, checkpoint_row("ckpt-s", thin_volume_id=0))
+    staging = tmp_path / "staging" / "ckpt-s"
+    staging.mkdir(parents=True)
+    (staging / "vmstate").write_bytes(b"v")
+    (staging / "memory").write_bytes(b"m")
+    durable = tmp_path / "ckpts" / "ckpt-s"
+    durable.mkdir(parents=True)
+    attempts = 0
+
+    async def restore(
+        *, slot: int, disk_volume_id: int, disk_name: str, snapshot: SnapshotFiles
+    ) -> RunningVM:
+        nonlocal attempts
+        attempts += 1
+        (durable / "vmstate").write_bytes(b"v")
+        (durable / "memory").write_bytes(b"m")  # a durable copy appears meanwhile
+        raise HostError("restore: TimeoutError: 172.16.254.2:22 did not become reachable")
+
+    monkeypatch.setattr(host.hypervisor, "restore", restore)
+    ckpt = await get_checkpoint(db, "ckpt-s")
+    assert ckpt is not None
+    with pytest.raises(HostError, match="did not become reachable"):
+        await service.fork(ACCOUNT, ckpt, recipe_id=None)
+    assert attempts == 1
+    assert host.blocks.volumes == {0: None}, "the fork was abandoned and its volume released"

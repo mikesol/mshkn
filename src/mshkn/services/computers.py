@@ -323,6 +323,13 @@ class ComputerService:
                         # taken. A fork that chose a checkpoint's tmpfs copy and
                         # then waited past its linger finds that copy gone; the
                         # durable copy exists by then, so resolve once more.
+                        # Only that case is retried: Firecracker opens the files
+                        # before the guest runs, so a missing file means the
+                        # disk is untouched. Any other failure may have let the
+                        # guest write the disk, and pairing it with the old
+                        # memory image again would be wrong.
+                        if files.memory.exists() and files.vmstate.exists():
+                            raise
                         again = await files_for()
                         if again is None or again == files:
                             raise
