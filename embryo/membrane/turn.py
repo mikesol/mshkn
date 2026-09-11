@@ -25,7 +25,7 @@ from membrane.model import add_usage, compose_request, parse_message, request_he
 from membrane.mshkn import MshknError
 from membrane.principals import ROOT, is_authenticated, namespace_of
 from membrane.proposals import propose
-from membrane.state import WINDOW, Exchange, Pending, Queued
+from membrane.state import WINDOW, Exchange, InboxItem, Pending, Queued
 from membrane.trials import poll_trials, try_verb
 from membrane.verbs import invoke, poll_builds
 
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from membrane.config import Settings
     from membrane.memory import MemoryStore
     from membrane.mshkn import MshknApi, RelayJob
-    from membrane.state import Brain, CatalogEntry, InboxItem, State
+    from membrane.state import Brain, CatalogEntry, State
 
 Door = Literal["api", "ingress"]
 # One fork's clock: bounds the tool runs of that fork, not the model (#110).
@@ -126,14 +126,28 @@ def compose_input(
     turn: int,
     principal: str,
     door: str,
+    policy: dict[str, Any],
     inbox: list[InboxItem],
     recalled: list[str],
     message: str,
 ) -> str:
+    """The turn's environment, and the policy is part of it (#123).
+
+    A proposal is a whole document, not a diff (§5), and the embryo may be asked
+    to replace its policy -- so it must be able to read the one it is replacing.
+    Of the three things approval can change (§10.3), the self-description is
+    already read in full (it is appended to the system prompt) and the catalog
+    is read as the turn's tool list; the policy was the one it could not see at
+    all. Three of five runs against the reduced seed stalled there, two saying so
+    outright: `2026-09-10-postcut-run-1` would not write a replacement blind, and
+    `2026-09-11-postcut-run-5` asked for the schema rather than guess. Passing it
+    in rather than adding a tool to fetch it keeps the second rule intact: the
+    brain reasons, and every effect still goes through a verb."""
     inbox_text = "".join(f"- {item.text}\n" for item in inbox)
     recall_text = "".join(f"- {text}\n" for text in recalled)
     return (
         f"[turn {turn} | principal {principal} | door {door}]\n"
+        f"policy:\n{json.dumps(policy, sort_keys=True)}\n"
         f"inbox:\n{inbox_text}\nrecall:\n{recall_text}\nmessage:\n{message}"
     )
 
@@ -298,7 +312,13 @@ async def start_turn(
         inbox = []
     recalled = ctx.mem().recall(message, principal=principal) if is_authenticated(principal) else []
     user = compose_input(
-        turn=turn, principal=principal, door=door, inbox=inbox, recalled=recalled, message=message
+        turn=turn,
+        principal=principal,
+        door=door,
+        policy=state.policy.to_doc(),
+        inbox=inbox,
+        recalled=recalled,
+        message=message,
     )
     pending = Pending(
         turn=turn,
@@ -312,6 +332,7 @@ async def start_turn(
         hooks=hook_runs,
         started_at=datetime.now(UTC).isoformat(timespec="seconds"),
         write_memory=is_authenticated(principal),
+        drained=[{"kind": item.kind, "text": item.text} for item in inbox],
     )
     tools = build_tools(ctx, pending)
     # What the principal was offered, not only what the model called: §10.7 is an
@@ -479,6 +500,11 @@ async def close_turn(ctx: Context, *, text: str, stopped: str) -> str:
     state = ctx.state
     pending = state.pending
     assert pending is not None
+    if stopped == "error" and pending.drained:
+        # The model never answered, so nothing in this turn's inbox was read.
+        # Give it back ahead of anything polled since (#123, 2026-09-10-postcut-run-3,
+        # where a relay DNS failure swallowed the refusal that turn 3 existed to deliver).
+        state.inbox[:0] = [InboxItem(**doc) for doc in pending.drained]
     proposals_made = [
         {
             "id": pid,

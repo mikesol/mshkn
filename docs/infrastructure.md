@@ -18,6 +18,31 @@ Docker on Ubuntu 24.04 (`docker.io`) ships without the buildx plugin, so `docker
 
 The previous host was a Hetzner AX41-NVMe (Ryzen 5 3600, 64 GB, 2×512 GB NVMe). Anything in that class is comfortable.
 
+## A model gateway, for measuring across models (#123 round, spec §11)
+
+Spec §11 says the liturgy is spoken "across models where useful", and the post-cut round in
+`docs/embryo/README.md` cost about $10.60 for six runs of one model. Both want a second provider.
+
+`embryo/membrane/model.py` speaks one wire format end to end: `compose_request` builds the Anthropic Messages request body
+that `/v1/messages` accepts (`system`, `messages`, `tools`, `output_config.effort`) and `parse_message`
+reads Anthropic content blocks including `tool_use`. `embryo/hatch.sh:91` scopes the brain's key to
+exactly one relay target, `"$ANTHROPIC_BASE_URL/"`. So the cheapest way to reach another model is a
+gateway that speaks the Anthropic Messages API and fans out behind it — not a second code path in
+the membrane, which would put provider handling inside the organism.
+
+| Requirement | Minimum | Why |
+|---|---|---|
+| A LiteLLM proxy reachable over HTTPS from the mshkn host | One small always-on instance, or a hosted equivalent | The brain relays through the host; the host must reach it. |
+| An Anthropic-compatible `/v1/messages` endpoint on it | Must accept `system`, `messages`, `tools`, and return `tool_use` content blocks | `model.py` composes and parses nothing else; anything less means changing the membrane. |
+| Provider credentials held by the proxy | At least one non-Anthropic provider | The point is a second model; the brain's scoped key never sees these. |
+| A stable base URL | Set as `ANTHROPIC_BASE_URL` at hatch time | `hatch.sh:91` bakes it into the key's `relay.targets`, so it must not move between hatch and run. |
+
+Two things to record rather than discover: `output_config.effort` is Anthropic-specific and has no
+equivalent elsewhere, so cross-provider runs cannot be compared on the effort axis — which is
+awkward, since the 2026-09-10 round's headline was that medium effort beat the default. And
+tool-use fidelity varies by backend, so a low score on a cheaper model may be measuring the
+gateway's translation rather than the organism.
+
 ## Accounts and secrets the host setup needs
 
 | Item | Purpose | Status |

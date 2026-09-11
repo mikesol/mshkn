@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-11T02:17:47+00:00",
+ "command": "say",
+ "computer_id": "comp-fbeff5203205",
+ "detail": {
+  "msg": "Decide what a verified person and an anonymous one may ask of you, and record it.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgQM9+6cCNU9d5LETMVGb6yt4tzR\nep6DbM+7BEpxoi4moAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABA/yszLfGKivQw15CIFlBS3RV1htudyyRHJIwzcimo7vBndYjxVhvxkrRJRVbih1\nIVbu/saoifJi+KAMBL87W4Cg==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 34,
+ "seconds": 3.6882590409950353,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"closed\": true, \"door\": \"ingress\", \"principal\": null}\nThe public door is closed.\n"
+}

@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-10T20:05:29+00:00",
+ "command": "approve",
+ "computer_id": "comp-b311300a52dd",
+ "detail": [
+  "p-2"
+ ],
+ "door": "api",
+ "n": 67,
+ "seconds": 4.451273400976788,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-2 refused: hook ssh_ident declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload\n"
+}

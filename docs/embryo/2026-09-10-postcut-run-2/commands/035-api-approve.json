@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-10T19:08:31+00:00",
+ "command": "approve",
+ "computer_id": "comp-886d0ed0442e",
+ "detail": [
+  "p-2"
+ ],
+ "door": "api",
+ "n": 35,
+ "seconds": 4.287863340985496,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-2 refused: hook whoami declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload\n"
+}

@@ -21,6 +21,9 @@ EMBRYO_EFFECTS: frozenset[str] = frozenset({"local", "read"})
 STATE_KINDS: frozenset[str] = frozenset({"ephemeral", "chain"})
 RESERVED_TOOL_NAMES: frozenset[str] = frozenset({"remember", "propose", "try"})
 RESERVED_NAMESPACES: frozenset[str] = frozenset({"root", "system"})
+POLICY_FIELDS: frozenset[str] = frozenset({"principals", "hooks", "door"})
+VERB_REQUIRED = ("name", "description", "params", "dockerfile", "entrypoint", "effect", "state")
+PROPOSAL_REQUIRED = ("kind", "title", "rationale")
 CHAIN_PREFIX = "verb/"
 TIMEOUT_DEFAULT = 60
 # A verb runs in its own computer under mshkn's 300 s exec budget, but it is
@@ -69,6 +72,14 @@ def _str(doc: dict[str, Any], key: str, what: str, *, required: bool = True) -> 
     if not isinstance(value, str) or not value.strip():
         raise DeclarationError(f"{what}.{key} must be a non-empty string")
     return value
+
+
+def _require(doc: dict[str, Any], what: str, fields: tuple[str, ...]) -> None:
+    """One refusal that names the whole shape, not the first field missing: a
+    serial walk teaches a document one field per round trip (#123)."""
+    missing = [f for f in fields if doc.get(f) is None]
+    if missing:
+        raise DeclarationError(f"{what} is missing {missing}; {what} requires {list(fields)}")
 
 
 @dataclass(frozen=True)
@@ -127,7 +138,9 @@ def _requirements(raw: object) -> tuple[Requirement, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
-        raise DeclarationError("verb.requires must be a list")
+        raise DeclarationError(
+            "verb.requires must be a list of objects with kind, name and optional scope"
+        )
     out: list[Requirement] = []
     for item in raw:
         entry = _obj(item, "verb.requires[]")
@@ -158,12 +171,15 @@ def _namespaced_principals(raw: object, where: str) -> tuple[str, ...]:
 
 def parse_verb(doc: object) -> Verb:
     d = _obj(doc, "verb")
+    _require(d, "verb", VERB_REQUIRED)
     name = _str(d, "name", "verb")
     assert name is not None
     if not NAME_RE.match(name):
         raise DeclarationError(f"verb.name {name!r} must match [a-z0-9_]+")
     if name in RESERVED_TOOL_NAMES:
-        raise DeclarationError(f"verb.name {name!r} is reserved")
+        raise DeclarationError(
+            f"verb.name {name!r} is reserved; the reserved names are {sorted(RESERVED_TOOL_NAMES)}"
+        )
     description = _str(d, "description", "verb")
     dockerfile = _str(d, "dockerfile", "verb")
     entrypoint = _str(d, "entrypoint", "verb")
@@ -176,13 +192,19 @@ def parse_verb(doc: object) -> Verb:
         raise DeclarationError("verb.params.properties must be an object")
     for placeholder in PLACEHOLDER_RE.findall(entrypoint):
         if placeholder not in properties:
-            raise DeclarationError(f"verb.entrypoint names {placeholder!r}, which is not a param")
+            raise DeclarationError(
+                f"verb.entrypoint names {placeholder!r}, which is not a param; "
+                f"the params are {sorted(properties)}"
+            )
     effect = d.get("effect")
     if effect not in EFFECTS:
         raise DeclarationError(f"verb.effect must be one of {sorted(EFFECTS)}")
     state = d.get("state")
     if state == "event":
-        raise DeclarationError("verb.state event is specified but not in the embryo (spec §4)")
+        raise DeclarationError(
+            "verb.state event is specified but not in the embryo (spec §4); "
+            f"must be one of {sorted(STATE_KINDS)}"
+        )
     if state not in STATE_KINDS:
         raise DeclarationError(f"verb.state must be one of {sorted(STATE_KINDS)}")
     chain = d.get("chain", f"{CHAIN_PREFIX}{name}")
@@ -195,9 +217,23 @@ def parse_verb(doc: object) -> Verb:
     asserts = _str(d, "asserts", "verb", required=False)
     if asserts is not None:
         if asserts in RESERVED_NAMESPACES:
-            raise DeclarationError(f"verb.asserts {asserts!r} is a reserved namespace")
+            raise DeclarationError(
+                f"verb.asserts {asserts!r} is a reserved namespace; "
+                f"the reserved namespaces are {sorted(RESERVED_NAMESPACES)}"
+            )
         if not NAMESPACE_RE.match(asserts):
             raise DeclarationError("verb.asserts must be a lower-case identifier")
+        # `asserts` has no meaning except to a pre-turn hook, and hooks.py invokes a
+        # hook with the decoded payload as the value of its single parameter. Two of
+        # the first three post-cut runs wrote a hook that read stdin and declared no
+        # parameters (#123); refusing at propose time puts the correction in the same
+        # turn as the mistake, instead of at approval, in an inbox, a turn later.
+        if len(properties) != 1:
+            raise DeclarationError(
+                f"verb.asserts makes {name!r} a pre-turn hook, and a hook takes exactly one "
+                f"parameter, which receives the decoded payload; it declares "
+                f"{sorted(properties)}"
+            )
     needs = d.get("needs", dict(DEFAULT_NEEDS))
     if not isinstance(needs, dict):
         raise DeclarationError("verb.needs must be an object")
@@ -272,14 +308,28 @@ class Policy:
 
 def parse_policy(doc: object) -> Policy:
     d = _obj(doc, "policy")
-    unknown = sorted(set(d) - {"principals", "hooks", "door"})
+    unknown = sorted(set(d) - POLICY_FIELDS)
     if unknown:
-        raise DeclarationError(f"policy has unknown fields {unknown}; policy is data, not code")
+        raise DeclarationError(
+            f"policy has unknown fields {unknown}; policy is data, not code: "
+            f"the fields are {sorted(POLICY_FIELDS)}"
+        )
     principals_raw = _obj(d.get("principals", {}), "policy.principals")
     principals: dict[str, Grant] = {}
     for principal, grant_raw in principals_raw.items():
+        # §10.1: root may always invoke everything and propose, and
+        # may_invoke/may_propose short-circuit on it, so a policy naming root
+        # would be silently inert. The seed used to assert this; the refusal
+        # does now (#123).
+        if principal == "root":
+            raise DeclarationError(
+                "policy.principals: root is fixed and is not policy's to grant or refuse (§10.1)"
+            )
         if not PRINCIPAL_RE.match(principal):
-            raise DeclarationError(f"policy.principals: {principal!r} is not a principal")
+            raise DeclarationError(
+                f"policy.principals: {principal!r} is not a principal; "
+                "a principal is 'root', 'anonymous' or '<namespace>:<name>'"
+            )
         grant = _obj(grant_raw, f"policy.principals[{principal}]")
         invoke_raw = grant.get("invoke", [])
         invoke: Literal["*"] | tuple[str, ...]
@@ -344,6 +394,7 @@ class Proposal:
 
 def parse_proposal(doc: object, *, id: str) -> Proposal:  # noqa: A002 — the field is called id
     d = _obj(doc, "proposal")
+    _require(d, "proposal", PROPOSAL_REQUIRED)
     kind = d.get("kind")
     if kind not in ("verb", "policy", "prompt"):
         raise DeclarationError("proposal.kind must be verb, policy or prompt")

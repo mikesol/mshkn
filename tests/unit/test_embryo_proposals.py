@@ -40,6 +40,27 @@ HOOK: dict[str, Any] = {
     "entrypoint": "/verb/verify.sh {{payload}}",
     "params": {"type": "object", "properties": {"payload": {"type": "string"}}},
 }
+TWO_PARAM_HOOK: dict[str, Any] = {
+    **VERB,
+    "name": "verify_sig",
+    "asserts": "ssh",
+    "effect": "local",
+    "entrypoint": "/verb/verify.sh {{msg}} {{sig}}",
+    "params": {
+        "type": "object",
+        "properties": {"msg": {"type": "string"}, "sig": {"type": "string"}},
+    },
+}
+# Same name as HOOK, so these stand in for a *supersede* of a live hook.
+TWO_PARAM_VERIFY_SSH: dict[str, Any] = {
+    **HOOK,
+    "entrypoint": "/verb/verify.sh {{msg}} {{sig}}",
+    "params": {
+        "type": "object",
+        "properties": {"msg": {"type": "string"}, "sig": {"type": "string"}},
+    },
+}
+NO_ASSERTS_VERIFY_SSH: dict[str, Any] = {k: v for k, v in HOOK.items() if k != "asserts"}
 
 
 def _brain(tmp_path: Path) -> Brain:
@@ -154,6 +175,27 @@ def test_policy_narrows_a_verb_that_allows_the_principal_by_name() -> None:
     assert may_invoke("ssh:mike", verb, silent)
 
 
+def _two_param_hook(name: str) -> Verb:
+    """A hook `parse_verb` now refuses outright (#123), built directly so the
+    approval-time guard can still be exercised. `refuse_approval` is the second
+    line: a Verb can reach it without passing through parse_verb, and the verb
+    branch also catches a supersede that drops `asserts`, which parse cannot see."""
+    return Verb(
+        name=name,
+        description="d",
+        params={
+            "type": "object",
+            "properties": {"msg": {"type": "string"}, "sig": {"type": "string"}},
+        },
+        dockerfile="FROM mshkn-base\nRUN true",
+        entrypoint="/verb/x.sh {{msg}} {{sig}}",
+        effect="local",
+        state="ephemeral",
+        chain=f"verb/{name}",
+        asserts="ssh",
+    )
+
+
 async def test_approve_a_verb_builds_it_and_the_catalog_follows(tmp_path: Path) -> None:
     api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(state, _verb_proposal(VERB))
@@ -167,12 +209,36 @@ async def test_approve_a_verb_builds_it_and_the_catalog_follows(tmp_path: Path) 
     assert "not pending" in await approve(api, state, p.id)
 
 
-async def test_approve_refuses_by_reason_and_changes_nothing(tmp_path: Path) -> None:
+async def test_approve_refuses_by_reason_and_tells_the_model(tmp_path: Path) -> None:
+    """A refusal root reads and the embryo does not teaches nothing (#123).
+    The catalog and the host are untouched; the inbox carries the reason."""
     api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(state, _verb_proposal({**VERB, "effect": "transact"}))
     line = await approve(api, state, p.id)
     assert line.startswith("p-1 refused") and "transact" in line
     assert p.status == "pending" and state.catalog == {} and api.calls == []
+    assert [(i.kind, i.text) for i in state.inbox] == [
+        ("refusal", f"proposal p-1 (page_title) {line.removeprefix('p-1 ')}")
+    ]
+    assert "transact" in state.inbox[0].text
+
+
+async def test_a_repeated_identical_refusal_does_not_renotify_the_model(tmp_path: Path) -> None:
+    """`_tell_the_model` used to append an inbox item on every `approve`
+    attempt. The measure harness re-approves anything still `pending` on each
+    later turn, so a refused proposal the model abandons rather than
+    supersedes repeated an identical refusal into the inbox every turn for
+    the rest of a run -- token noise the model has already acted on (#123
+    final review). Root still reads the same string back each time; the
+    model is notified only when the outcome is new."""
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    p = propose(state, _verb_proposal({**VERB, "effect": "transact"}))
+    first = await approve(api, state, p.id)
+    second = await approve(api, state, p.id)
+    assert first == second
+    assert [(i.kind, i.text) for i in state.inbox] == [
+        ("refusal", f"proposal p-1 (page_title) {first.removeprefix('p-1 ')}")
+    ]
 
 
 async def test_a_wrong_base_fails_immediately_with_the_detail_as_log(tmp_path: Path) -> None:
@@ -182,6 +248,8 @@ async def test_a_wrong_base_fails_immediately_with_the_detail_as_log(tmp_path: P
     line = await approve(api, state, p.id)
     assert line.startswith("p-1 failed") and p.status == "failed" and "mshkn-base" in (p.log or "")
     assert state.catalog["page_title"].status == "failed"
+    assert [i.kind for i in state.inbox] == ["build"]
+    assert "mshkn-base" in state.inbox[0].text
 
 
 async def test_requires_blocks_until_the_vault_exists(tmp_path: Path) -> None:
@@ -193,6 +261,31 @@ async def test_requires_blocks_until_the_vault_exists(tmp_path: Path) -> None:
     line = await approve(api, state, p.id)
     assert line.startswith("p-1 blocked") and "gh" in line and p.status == "blocked"
     assert api.calls == [] and state.catalog == {}
+    assert [i.kind for i in state.inbox] == ["refusal"]
+    assert "gh" in state.inbox[0].text
+
+
+async def test_a_refusal_reaches_the_next_turn_the_way_a_build_log_does(
+    tmp_path: Path,
+) -> None:
+    """§6 step 2 drains the inbox into the turn's input for an authenticated
+    principal. A refusal must ride that same path or the model never sees it."""
+    from membrane.turn import compose_input
+
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    p = propose(state, _verb_proposal({**VERB, "effect": "administer"}))
+    await approve(api, state, p.id)
+    inbox, state.inbox = state.inbox, []
+    text = compose_input(
+        turn=2,
+        principal="root",
+        door="api",
+        policy=state.policy.to_doc(),
+        inbox=inbox,
+        recalled=[],
+        message="hi",
+    )
+    assert "administer" in text and "p-1" in text
 
 
 async def test_policy_and_prompt_apply_and_revert(tmp_path: Path) -> None:
@@ -267,7 +360,10 @@ def test_refuse_approval_also_catches_a_verb_built_outside_parse_verb() -> None:
         asserts="root",
     )
     proposal = Proposal(id="p-1", kind="verb", title="whoami", rationale="r", verb=verb)
-    assert "root" in (refuse_approval(proposal, State()) or "")
+    reason = refuse_approval(proposal, State()) or ""
+    # #123: a refusal names what would have been valid — the whole reserved
+    # set, not just the namespace that was refused.
+    assert "root" in reason and "system" in reason
 
 
 async def test_a_hook_naming_a_verb_with_no_asserts_is_refused(tmp_path: Path) -> None:
@@ -284,6 +380,127 @@ async def test_a_hook_naming_a_verb_with_no_asserts_is_refused(tmp_path: Path) -
         },
     )
     assert "asserts namespace" in (refuse_approval(opening, state) or "")
+
+
+async def test_a_hook_taking_more_than_one_parameter_is_refused(tmp_path: Path) -> None:
+    """hooks.py:38 skips a hook whose declared params are anything but exactly
+    one property -- silently: never invoked, never appended to `runs`, no
+    signal anywhere. The seed describes a hook's payload as an object with
+    `msg` plus whatever the sender attached, so a naturally-written two-field
+    hook (`{msg, sig}`) walks straight into that silent dead end unless
+    refuse_approval catches it at proposal time (#123)."""
+    state = _brain(tmp_path).state()
+    # parse_verb refuses this shape now, so the entry is planted directly: this
+    # test is about the second line of defence, not the first.
+    state.catalog["verify_sig"] = CatalogEntry(
+        verb=_two_param_hook("verify_sig"), status="ready", recipe_id="rcp-x", proposal_id="p-0"
+    )
+    opening = propose(
+        state,
+        {
+            "kind": "policy",
+            "title": "open",
+            "rationale": "r",
+            "policy": {**CLOSED, "door": "open", "hooks": ["verify_sig"]},
+        },
+    )
+    reason = refuse_approval(opening, state) or ""
+    assert "exactly one parameter" in reason
+    assert "msg" in reason and "sig" in reason
+
+
+async def test_superseding_a_live_hook_with_two_parameters_is_refused(tmp_path: Path) -> None:
+    """refuse_approval's verb branch never consulted policy.hooks, so
+    approving a superseding verb that took a live hook from one parameter to
+    two was accepted -- and hooks.py then silently skips it forever after:
+    never invoked, never recorded in `runs`, no signal anywhere. Turn 3 of
+    the liturgy is a supersede-and-rebuild loop, so this is a live path
+    (#123 final review)."""
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    hook = propose(state, _verb_proposal(HOOK))
+    await approve(api, state, hook.id)
+    opening = propose(
+        state,
+        {
+            "kind": "policy",
+            "title": "open",
+            "rationale": "r",
+            "policy": {**CLOSED, "door": "open", "hooks": ["verify_ssh"]},
+        },
+    )
+    await approve(api, state, opening.id)
+    rebuild = Proposal(
+        id="p-9",
+        kind="verb",
+        title="rebuild",
+        rationale="r",
+        supersedes=hook.id,
+        verb=_two_param_hook("verify_ssh"),
+    )
+    reason = refuse_approval(rebuild, state) or ""
+    assert "exactly one parameter" in reason
+    assert "msg" in reason and "sig" in reason
+
+
+async def test_superseding_a_live_hook_that_drops_asserts_is_refused(tmp_path: Path) -> None:
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    hook = propose(state, _verb_proposal(HOOK))
+    await approve(api, state, hook.id)
+    opening = propose(
+        state,
+        {
+            "kind": "policy",
+            "title": "open",
+            "rationale": "r",
+            "policy": {**CLOSED, "door": "open", "hooks": ["verify_ssh"]},
+        },
+    )
+    await approve(api, state, opening.id)
+    rebuild = propose(state, _verb_proposal(NO_ASSERTS_VERIFY_SSH, supersedes=hook.id))
+    reason = refuse_approval(rebuild, state) or ""
+    assert "asserts" in reason
+
+
+async def test_superseding_a_live_hook_with_a_valid_rebuild_is_still_approved(
+    tmp_path: Path,
+) -> None:
+    """The guard must not break the legitimate rebuild turn 3 depends on: a
+    one-parameter verb that keeps asserts is approved even though its name is
+    a live hook."""
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    hook = propose(state, _verb_proposal(HOOK))
+    await approve(api, state, hook.id)
+    opening = propose(
+        state,
+        {
+            "kind": "policy",
+            "title": "open",
+            "rationale": "r",
+            "policy": {**CLOSED, "door": "open", "hooks": ["verify_ssh"]},
+        },
+    )
+    await approve(api, state, opening.id)
+    rebuild = propose(state, _verb_proposal({**HOOK, "description": "rebuilt"}, supersedes=hook.id))
+    assert refuse_approval(rebuild, state) is None
+
+
+async def test_an_unknown_hook_names_the_catalog(tmp_path: Path) -> None:
+    """The seed no longer says the door needs a hook in the catalog (#123)."""
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    hook = propose(state, _verb_proposal(HOOK))
+    await approve(api, state, hook.id)
+    state.catalog["verify_ssh"].status = "ready"
+    opening = propose(
+        state,
+        {
+            "kind": "policy",
+            "title": "open",
+            "rationale": "because",
+            "policy": {"principals": {}, "hooks": ["absent_hook"], "door": "open"},
+        },
+    )
+    reason = refuse_approval(opening, state) or ""
+    assert "absent_hook" in reason and "verify_ssh" in reason
 
 
 async def test_approve_marks_a_superseded_policy(tmp_path: Path) -> None:

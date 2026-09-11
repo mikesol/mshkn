@@ -1,0 +1,326 @@
+{
+ "approver": "AutoApprover",
+ "commands": 60,
+ "cost_usd": 1.0213,
+ "effort": "medium",
+ "ended": "2026-09-10T19:10:12+00:00",
+ "hatched": {
+  "checkpoint_id": "ckpt-a2dbb1586c5b",
+  "ingress_url": "https://mshkn.dev/ingress/ir_5YctZ5PoohZMODpfy6vi7MhgnaY",
+  "key_id": "key-e0a73c22a262",
+  "recipe_id": "rcp-6a9c6a899cb3",
+  "rule_id": "ir_5YctZ5PoohZMODpfy6vi7MhgnaY",
+  "server_id": null
+ },
+ "membrane": {
+  "commit": "431c3a606053f9a4b76252c5fc61b3cc152231f3",
+  "dirty": false
+ },
+ "model": "claude-opus-5",
+ "model_calls": 9,
+ "ok": false,
+ "passed": 3,
+ "postconditions": {
+  "authentication": {
+   "evidence": {
+    "hook_logs": [],
+    "hooks": [],
+    "signed": null,
+    "unsigned": null
+   },
+   "ok": false
+  },
+  "authorization": {
+   "evidence": {
+    "anonymous": {
+     "invoke": [],
+     "propose": false
+    },
+    "anonymous_offered": null,
+    "verified": {}
+   },
+   "ok": false
+  },
+  "counter": {
+   "evidence": {
+    "chain_lengths": [],
+    "computer_ids": [],
+    "counts": []
+   },
+   "ok": false
+  },
+  "no_undeclared_capability": {
+   "evidence": {
+    "catalog": [
+     "whoami"
+    ],
+    "not_ready": [],
+    "undeclared_recipes": [],
+    "unexpected_tools": [],
+    "unproposed": []
+   },
+   "ok": true
+  },
+  "nothing_by_hand": {
+   "evidence": {
+    "commands": {
+     "api approve": 9,
+     "api list": 41,
+     "api say": 2,
+     "ingress say": 8
+    }
+   },
+   "ok": true
+  },
+  "page_title": {
+   "evidence": {
+    "computer_id": null,
+    "gone": null,
+    "reply": "The public door is closed.",
+    "stdout": null
+   },
+   "ok": false
+  },
+  "root_unforgeable": {
+   "evidence": {
+    "public_principals": []
+   },
+   "ok": true
+  }
+ },
+ "run": "2026-09-10-postcut-run-2",
+ "seconds": 491.8,
+ "started": "2026-09-10T19:02:01+00:00",
+ "turns": [
+  {
+   "approvals": [],
+   "door": "api",
+   "label": "1",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "stopped": "done",
+   "tools": [
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3759,
+    "output_tokens": 858
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 building: verb whoami recipe rcp-a2c9b7717bb6"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: hook whoami declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: hook whoami declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload"
+    }
+   ],
+   "door": "api",
+   "label": "2",
+   "model_calls": 7,
+   "principal": "root",
+   "proposals": [
+    "p-1",
+    "p-2"
+   ],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "remember",
+    "try",
+    "propose",
+    "propose",
+    "propose",
+    "remember",
+    "propose",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 113769,
+    "output_tokens": 16490
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "4",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress-unsigned",
+   "label": "5",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: hook whoami declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: hook whoami declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload"
+    }
+   ],
+   "door": "ingress",
+   "label": "6",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: hook whoami declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: hook whoami declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload"
+    }
+   ],
+   "door": "ingress",
+   "label": "7",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "8",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: hook whoami declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: hook whoami declares [] as parameters; a hook takes exactly one parameter, which receives the decoded payload"
+    }
+   ],
+   "door": "ingress",
+   "label": "9",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "9-count-1",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "9-count-2",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  }
+ ],
+ "usage": {
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0,
+  "input_tokens": 117528,
+  "output_tokens": 17348
+ }
+}

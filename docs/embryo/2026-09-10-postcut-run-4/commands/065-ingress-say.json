@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-10T20:35:44+00:00",
+ "command": "say",
+ "computer_id": "comp-cbba745ad432",
+ "detail": {
+  "msg": "Decide what a verified person and an anonymous one may ask of you, and record it.",
+  "sig": "LS0tLS1CRUdJTiBTU0ggU0lHTkFUVVJFLS0tLS0KVTFOSVUwbEhBQUFBQVFBQUFETUFBQUFMYzNOb0xXVmtNalUxTVRrQUFBQWd6OG1LOEMxa1VGNXpnRVhjUVJLTktRZTB2RQpPcmh1THk1S0J3Wk5wNkdOY0FBQUFGYlhOb2EyNEFBQUFBQUFBQUJuTm9ZVFV4TWdBQUFGTUFBQUFMYzNOb0xXVmtNalUxCk1Ua0FBQUJBZFlzTlhKekhxTlhyT3BjVSt4ZWNIRG9Tc1lmRTZxTTBsOUk5MnF5cWVPNStrR0NFdWwyZ2JRcUZlYi9CMzkKT2hZS3R6T1pxaTlnNHc2TTZpNGJHWURnPT0KLS0tLS1FTkQgU1NIIFNJR05BVFVSRS0tLS0tCg=="
+ },
+ "door": "ingress",
+ "n": 65,
+ "seconds": 6.035533328016754,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-1f7624ac31df\", \"exit_code\": 1, \"name\": \"ssh_identity\", \"principal\": \"anonymous\", \"status\": \"ok\"}], \"job\": \"rj-0153fa896f02\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 5}\n{\"turn\": 5, \"job\": \"rj-0153fa896f02\"}\n"
+}

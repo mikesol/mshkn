@@ -8,13 +8,14 @@ import base64
 import io
 import json
 import stat
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from membrane.liturgy import COUNT, LITURGY
+from membrane.liturgy import COUNT, LITURGY, REFUSED
 from membrane.measure import (
     POSTCONDITIONS,
     TURN_WAIT,
@@ -504,8 +505,26 @@ def test_new_key_names_its_owner_and_sign_verifies(tmp_path: Path) -> None:
     assert kind == "ssh-ed25519" and comment == "mike" and len(key) > 40
     payload = sign(tmp_path, "Who am I?")
     assert payload["msg"] == "Who am I?"
-    sig = base64.b64decode(payload["sig"])
-    assert sig.startswith(b"-----BEGIN SSH SIGNATURE-----")
+    # The envelope carries the armor `ssh-keygen -Y sign` printed, with no second
+    # encoding over it (#123): a hook that writes `sig` to a file and verifies it,
+    # which is the obvious thing to write, must succeed. 2026-09-10-postcut-run-4
+    # lost authentication to a base64 layer nothing disclosed and nothing reported.
+    assert payload["sig"].startswith("-----BEGIN SSH SIGNATURE-----")
+    (tmp_path / "allowed_signers").write_text(f"mike {pubkey}\n")
+    (tmp_path / "sig.txt").write_text(payload["sig"])
+    (tmp_path / "msg.txt").write_text(payload["msg"])
+    verified = subprocess.run(
+        [
+            *("ssh-keygen", "-Y", "verify"),
+            *("-f", str(tmp_path / "allowed_signers")),
+            *("-I", "mike"),
+            *("-n", "mshkn"),
+            *("-s", str(tmp_path / "sig.txt")),
+        ],
+        stdin=(tmp_path / "msg.txt").open("rb"),
+        capture_output=True,
+    )
+    assert verified.returncode == 0, verified.stderr.decode()
 
 
 # ---------------------------------------------------------------- the liturgy over a fake door
@@ -718,10 +737,14 @@ class FakeDoors:
             proposal["status"] = "rejected"
             return f"{pid} rejected\n"
         if pid in self.refuse:
+            # The membrane records a refusal on the proposal and puts it in the
+            # inbox (#123), which is how the driver knows a repair turn is owed.
+            proposal["log"] = "refused: an effect the embryo does not approve"
             return f"{pid} refused: an effect the embryo does not approve\n"
         if proposal["kind"] == "policy":
             missing = [h for h in proposal["policy"]["hooks"] if h not in self.catalog]
             if missing:  # the membrane's invariant (§10.6): a door needs its hook
+                proposal["log"] = f"refused: hook {missing[0]} is not a verb in the catalog"
                 return f"{pid} refused: hook {missing[0]} is not a verb in the catalog\n"
             proposal["status"] = "applied"
             self.policy = proposal["policy"]
@@ -909,6 +932,36 @@ async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) 
     assert turns[1].audit["stopped"] == "deadline" and turns[1].approvals == []
     assert [a["id"] for a in turns[2].approvals] == ["p-1", "p-2"]
     assert turns[3].audit["principal"] == "ssh:mike"
+
+
+async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
+    tmp_path: Path,
+) -> None:
+    """2026-09-10-postcut-run-2: the membrane refused a hook that declared no
+    parameters and put the reason in the inbox, but the repair loop watched only
+    the catalog for a failed build, so no turn ever existed in which to read it.
+    Turns 4 onward all arrive through the public door, so turn 3 is the only
+    window there is."""
+    doors = FakeDoors(refuse={"p-1"})
+    key_dir, pubkey = _keys(tmp_path)
+    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    labels = [t.label for t in turns]
+    assert "3-repair-1" in labels, labels
+    repair = turns[labels.index("3-repair-1")]
+    assert repair.words == REFUSED == "check your inbox"
+
+
+async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Path) -> None:
+    """A proposal the model never repairs keeps its reason forever, and settle()
+    runs after turns 6, 7 and 9 as well as turn 2. Without a memo each of those
+    would buy three more turns of the model's time on a refusal it has already
+    been shown and declined to fix (2026-09-10-postcut-run-3, killed by hand
+    while it did exactly that)."""
+    doors = FakeDoors(refuse={"p-1"})
+    key_dir, pubkey = _keys(tmp_path)
+    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    repairs = [t.label for t in turns if t.label.startswith("3-repair-")]
+    assert repairs == ["3-repair-1"], repairs
 
 
 async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:

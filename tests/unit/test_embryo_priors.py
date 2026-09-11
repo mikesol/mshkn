@@ -29,27 +29,61 @@ def test_initial_policy_is_closed_and_grants_anonymous_nothing() -> None:
     assert "root" not in policy.principals  # root is fixed, not policy
 
 
-def test_seed_says_what_the_spec_requires() -> None:
+def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> None:
+    """The contract of docs/superpowers/specs/2026-09-10-seed-reduction-design.md
+    §3, and the standing rule in CLAUDE.md. Present: what cannot be learned
+    because learning it requires it, and what no experiment reveals because the
+    failure is silent. Absent: everything a constructive refusal, a tool
+    description or the liturgy teaches instead (#123)."""
     seed = (EMBRYO / "seed.md").read_text()
     for phrase in (
+        # bootstrap
         "remember",
         "try",
         "propose",
         "verb",
         "proposal",
-        "local",
-        "read",
+        "dockerfile",
+        "entrypoint",
         "requires",
         "no verbs",
         "public door is closed",
         "root",
-        # what a hook receives (live run 2026-09-09-run-3: the model guessed the
-        # payload shape, said so, and its correct hook named nobody)
-        "`msg`",
-        '"sig"',
-        "ssh-keygen -Y sign -n mshkn",
+        # invisible mechanism: no experiment reveals these, because the
+        # failure is silent
+        "shell-quoted",
+        "Anonymous input is never remembered",
+        "verb/<name>",
+        "inbox",
+        # 2026-09-10-postcut-run-1: the model refused to propose the policy that opens
+        # the door because a blind full replacement might drop root's own access, and it
+        # cannot read its policy. No refusal can teach this — a refusal fires on an act the
+        # model correctly declines to take — and the only experiment that would risks
+        # permanent loss of contact with the one party who could repair it.
+        "whatever your policy says or omits",
     ):
         assert phrase in seed, phrase
+    for phrase in (
+        # the liturgy asks instead (turn 2)
+        "ssh-keygen",
+        '"sig"',
+        "ssh:mike",
+        # a constructive refusal teaches these
+        "communicate",
+        "transact",
+        "administer",
+        "200",
+        "[a-z0-9_]",
+        "`principals`",
+        "`hooks`",
+        "`door`",
+        "`local`",
+        "`read`",
+        "supersedes",
+        # PROPOSE_TOOL's description carries this
+        "not a diff",
+    ):
+        assert phrase not in seed, phrase
 
 
 def test_brain_dockerfile_is_from_the_base_and_pins_the_sdks() -> None:
@@ -109,6 +143,20 @@ def test_hatch_script_makes_the_calls_the_spec_lists() -> None:
     assert scopes.relay_deliver == RelayDelivery(label="brain", exec="membrane resume")
     assert "set -euo pipefail" in script
     assert (EMBRYO / "liturgy.md").read_text().count("| ") > 20
+
+
+def test_turn_two_states_the_facts_only_the_sender_can_state() -> None:
+    """The seed no longer carries the signing protocol (#123). ssh-keygen -Y
+    verify needs the signer's exact namespace, and root builds the envelope,
+    so both are root's to state; the identity is stated because the measure
+    scores the literal ssh:mike and inventing a name flexes no muscle. What
+    to build, which namespace to assert and what the policy says stay the
+    embryo's."""
+    turn2 = LITURGY[2]
+    for phrase in ("ssh-keygen -Y sign -n mshkn", "mike", "beside my message", "{key}"):
+        assert phrase in turn2, phrase
+    for phrase in ("allowed_signers", "asserts", "hook", "policy"):
+        assert phrase not in turn2, phrase
 
 
 def test_the_liturgy_the_tiers_send_is_the_liturgy_the_repository_publishes() -> None:

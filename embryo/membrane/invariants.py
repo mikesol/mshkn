@@ -53,7 +53,10 @@ def refuse_approval(proposal: Proposal, state: State) -> str | None:
                 f"effect {verb.effect} is not approved by the embryo (only local and read, §10.8)"
             )
         if verb.asserts in RESERVED_NAMESPACES:
-            return f"a hook may not assert {verb.asserts} (§10.1)"
+            return (
+                f"a hook may not assert {verb.asserts}; "
+                f"the reserved namespaces are {sorted(RESERVED_NAMESPACES)} (§10.1)"
+            )
         existing = state.catalog.get(verb.name)
         if (
             existing is not None
@@ -64,6 +67,15 @@ def refuse_approval(proposal: Proposal, state: State) -> str | None:
                 f"verb {verb.name} already exists as {existing.proposal_id}; "
                 "propose with supersedes"
             )
+        if verb.name in state.policy.hooks:
+            properties = verb.params.get("properties", {})
+            if len(properties) != 1 or verb.asserts is None:
+                return (
+                    f"verb {verb.name} is the policy's live hook; a hook must keep exactly "
+                    "one parameter, which receives the decoded payload, and a non-null "
+                    f"asserts, but this declaration has {sorted(properties)} as parameters "
+                    f"and asserts {verb.asserts!r}"
+                )
         return None
     if proposal.kind == "policy":
         new = proposal.policy
@@ -73,9 +85,18 @@ def refuse_approval(proposal: Proposal, state: State) -> str | None:
         for hook in new.hooks:
             entry = state.catalog.get(hook)
             if entry is None:
-                return f"hook {hook} is not a verb in the catalog"
+                return (
+                    f"hook {hook} is not a verb in the catalog; "
+                    f"the catalog has {sorted(state.catalog)}"
+                )
             if entry.verb.asserts is None:
                 return f"hook {hook} declares no asserts namespace"
+            properties = entry.verb.params.get("properties", {})
+            if len(properties) != 1:
+                return (
+                    f"hook {hook} declares {sorted(properties)} as parameters; "
+                    "a hook takes exactly one parameter, which receives the decoded payload"
+                )
         if new.grant(ANONYMOUS).propose:
             return "anonymous may never propose (§10.7)"
         return None

@@ -31,7 +31,7 @@ import httpx
 
 from membrane.config import DEFAULT_MODEL_ID, EFFORTS, parse_env
 from membrane.declarations import RESERVED_NAMESPACES
-from membrane.liturgy import COUNT, LITURGY
+from membrane.liturgy import COUNT, LITURGY, REFUSED
 from membrane.model import add_usage, zero_usage
 from membrane.principals import ANONYMOUS, ROOT, namespace_of
 
@@ -484,7 +484,12 @@ def sign(key_dir: Path, message: str) -> dict[str, str]:
         check=True,
         capture_output=True,
     )
-    return {"msg": message, "sig": base64.b64encode(sig.read_bytes()).decode()}
+    # `ssh-keygen -Y sign` emits ASCII armor, which is already JSON-safe. Sending
+    # it verbatim keeps the envelope self-evident: `sig` is what the signer printed.
+    # Base64 over the armor was a second encoding the seed had to disclose, and
+    # 2026-09-10-postcut-run-4 lost authentication to it: the hook fed the value
+    # straight to ssh-keygen, as anyone would, and got exit 1 with nothing to read.
+    return {"msg": message, "sig": sig.read_text()}
 
 
 def membrane_version(where: Path | None = None) -> dict[str, Any]:
@@ -619,20 +624,45 @@ async def speak_liturgy(
         stopped = turn.audit.get("stopped")
         return stopped in ("deadline", "cap", "max_tokens") and not turn.audit.get("proposals")
 
+    repaired: set[str] = set()
+
     async def settle(turn: Turn) -> None:
         """Approvals, builds, and at most MAX_REPAIRS rounds of turn 3 for a failed
-        build or a turn that ran out before proposing."""
+        build, a refused approval, or a turn that ran out before proposing.
+
+        A refusal leaves its proposal `pending` with the reason on its `log`, and
+        the catalog untouched, so a build-only trigger walks straight past it
+        (2026-09-10-postcut-run-2). Turns 4 onward all arrive through the public
+        door, so turn 3 is the only window in which the model can read what the
+        membrane told it and supersede."""
         listing = await approve_pending(turn)
         current = turn
         repairs = 0
         while repairs < MAX_REPAIRS:
             failed = sorted(n for n, e in listing["catalog"].items() if e["status"] == "failed")
-            if not failed and not unfinished(current):
+            # Once per refusal, not once per settle: a proposal the model never
+            # repairs stays pending with its reason forever, and every later
+            # settle would otherwise buy it three more turns of the model's time
+            # (2026-09-10-postcut-run-3).
+            refused = sorted(
+                p["id"]
+                for p in listing["proposals"]
+                if p["status"] in ("pending", "blocked")
+                and p.get("log")
+                and p["id"] not in repaired
+            )
+            if not failed and not refused and not unfinished(current):
                 return
             repairs += 1
-            why = f"build failed for {', '.join(failed)}" if failed else "the turn ran out"
+            if failed:
+                why, words = f"build failed for {', '.join(failed)}", LITURGY[3]
+            elif refused:
+                repaired.update(refused)
+                why, words = f"approval refused for {', '.join(refused)}", REFUSED
+            else:
+                why, words = "the turn ran out", LITURGY[3]
             log.write(f"  {why}; turn 3, repair {repairs}\n")
-            current = await root_turn(f"3-repair-{repairs}", LITURGY[3])
+            current = await root_turn(f"3-repair-{repairs}", words)
             listing = await approve_pending(current)
 
     async def root_turn(label: str, words: str) -> Turn:

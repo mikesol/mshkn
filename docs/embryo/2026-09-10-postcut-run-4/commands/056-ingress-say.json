@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-10T20:34:38+00:00",
+ "command": "say",
+ "computer_id": "comp-010fb0002b76",
+ "detail": {
+  "msg": "Who am I?",
+  "sig": "LS0tLS1CRUdJTiBTU0ggU0lHTkFUVVJFLS0tLS0KVTFOSVUwbEhBQUFBQVFBQUFETUFBQUFMYzNOb0xXVmtNalUxTVRrQUFBQWd6OG1LOEMxa1VGNXpnRVhjUVJLTktRZTB2RQpPcmh1THk1S0J3Wk5wNkdOY0FBQUFGYlhOb2EyNEFBQUFBQUFBQUJuTm9ZVFV4TWdBQUFGTUFBQUFMYzNOb0xXVmtNalUxCk1Ua0FBQUJBOWZ3UDE0enZFOHhPVk9VNjJQNldNcUh0L1gwdjBpYzhSMXg3Rk9wVWU3ZTMwZ1hlRG1wQWNoTlM3UjVRNE4KSEIvNmJpczVMNmE4KzBTU2RPSlBCNkNRPT0KLS0tLS1FTkQgU1NIIFNJR05BVFVSRS0tLS0tCg=="
+ },
+ "door": "ingress",
+ "n": 56,
+ "seconds": 6.055253859958611,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-da395fe194fd\", \"exit_code\": 1, \"name\": \"ssh_identity\", \"principal\": \"anonymous\", \"status\": \"ok\"}], \"job\": \"rj-23da41598ba1\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 3}\n{\"turn\": 3, \"job\": \"rj-23da41598ba1\"}\n"
+}

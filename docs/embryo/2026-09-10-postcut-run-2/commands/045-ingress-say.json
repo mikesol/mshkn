@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-10T19:09:12+00:00",
+ "command": "say",
+ "computer_id": "comp-ca0bd918fcb5",
+ "detail": {
+  "msg": "Give yourself a verb: given a URL, report the page's title. It must run on its own computer.",
+  "sig": "LS0tLS1CRUdJTiBTU0ggU0lHTkFUVVJFLS0tLS0KVTFOSVUwbEhBQUFBQVFBQUFETUFBQUFMYzNOb0xXVmtNalUxTVRrQUFBQWd2cXF5Uk9WcFRxZGk5eC9oL3NjVjhyMUE5RgpKTlNHa3JXTUs2R21SbkJqb0FBQUFGYlhOb2EyNEFBQUFBQUFBQUJuTm9ZVFV4TWdBQUFGTUFBQUFMYzNOb0xXVmtNalUxCk1Ua0FBQUJBdUNRdTRoVFNDckgzQUwrU1RaYXZFbEFKRVBnNUpIM0pJUnhLK1ZxVTlXN0hIRk9ZS2xyU3B3YnFqUkpIekwKQnozZ0pqUkViazRJRWJjeXVZK0UrVUFBPT0KLS0tLS1FTkQgU1NIIFNJR05BVFVSRS0tLS0tCg=="
+ },
+ "door": "ingress",
+ "n": 45,
+ "seconds": 4.384663504024502,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"closed\": true, \"door\": \"ingress\", \"principal\": null}\nThe public door is closed.\n"
+}

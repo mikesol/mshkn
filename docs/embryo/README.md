@@ -49,6 +49,36 @@ A turn of the embryo is one fork exec, mshkn gives a fork's exec 300 seconds, an
 
 #110 landed as PR #114: a turn is a chain of forks through the host's relay, so the model's deliberation is bounded by the relay's patience rather than by a fork's 300 s exec budget. The measure resumes on that turn as #111.
 
+## The result, post-cut (#123)
+
+`embryo/seed.md` was cut back to irreducible bootstrap and invisible mechanism (#123, PR #125), so
+these runs attempted a harder task than either round above and **are not comparable to them**. Six
+runs against `claude-opus-5` at `--effort medium`, approvals automatic. Each membrane differs: a run
+found a defect, the defect was fixed, and the next run hatched from the fixed code.
+
+| Run | Membrane | Outcome | Calls | USD |
+|---|---|---|---|---|
+| `2026-09-10-postcut-run-1` | `1d7d5d2` | 3/7. Would not write a policy blind — a full replacement might drop root's own access. The clause saying root's rights are not policy's to grant was restored. | 15 | 2.23 |
+| `2026-09-10-postcut-run-2` | `431c3a6` | 3/7. Proposed both documents. Its hook read stdin and declared no parameters; the refusal caught it, and no repair turn existed to deliver the reason. | 9 | 1.02 |
+| `2026-09-10-postcut-run-3` | `ac56165` | Stopped by hand. A relay DNS failure ate the refusal, because a turn that fails never gave its inbox back; and the new repair trigger fired at every settle. Both fixed. | — | — |
+| `2026-09-10-postcut-run-4` | `14f11fd` | 3/7. **The door opened.** Authentication lost to `sig` carrying base64 over ASCII armor — a second encoding the seed used to disclose. The encoding was deleted rather than disclosed. | 22 | 2.77 |
+| `2026-09-11-postcut-run-5` | `57b4f0b` | 3/7. Learned the one-parameter hook rule from a refusal, mid-turn, and said so. Then declined to guess the policy schema. | 12 | 0.81 |
+| `2026-09-11-postcut-run-6` | `ee32cd2` | **4/7, the best post-cut result.** The live policy joined the turn's environment; the agent wrote a correct policy after two constructive refusals, and authentication worked for the first time. | 22 | 1.81 |
+
+**What the round establishes.** #123 assumed everything cut from the seed would be reached by a
+constructive refusal. That holds wherever the action is safe to attempt — the verb schema, the
+effect enum, the one-parameter hook rule were all learned exactly that way, and run 5's model
+narrated the moment it happened. It does not hold for the policy: there is no `try` for one, a
+valid-but-wrong document is applied irrevocably, and a careful agent therefore declines to
+experiment. That gap was closed by letting the agent read its own policy rather than by returning
+anything to the seed (design §9b).
+
+**What stopped it at 4/7.** Every remaining postcondition needs the verified principal to hold
+`propose`, and run 6 withheld it on a correct argument: an `ephemeral` hook cannot detect replay, so
+a captured signature would be a standing grant of self-modification. Spec §9 assumes the opposite
+choice without the liturgy ever asking for it. That is a `spec-change` question, in the shape of
+#117, and is deliberately not resolved by weakening a postcondition.
+
 ## The result, 2026-09-10
 
 The measure resumed on the asynchronous turn (#110, PR #114), as #111 said it would. Six runs against `claude-opus-5`, four of which spoke to the model: three at `--effort medium` and one at the API's default. **The best reached every postcondition, for $3.39 and 23 minutes.** Approvals were automatic again (`--approve auto`).
@@ -140,6 +170,7 @@ The 8-second cost of a bare fork is itself worth attention: a turn of six model 
 - **One liturgy, one model.** Every conclusion here is about `claude-opus-5` speaking `embryo/liturgy.md`. Where medium effort's directness stops being an asset and starts being a liability is exactly what this liturgy cannot show: its tasks are small, well specified, and checkable within the turn.
 - **Approvals were automatic.** This measures the embryo under a root that approves whatever the membrane's invariants permit, not a discerning one.
 - **The two rounds are not fully comparable, and the seed is why.** After `2026-09-09-run-3` guessed the public payload's shape, `embryo/seed.md` was amended to state it: root signs with `ssh-keygen -Y sign -n mshkn` and sends `{"msg", "sig"}`, and a hook's stdout `mike` becomes the principal `ssh:mike`. Turn 2 of the liturgy asks the agent to invent a way to know who is speaking, so that amendment hands over part of the answer to a question the measure scores — and the `authentication` and `authorization` postconditions both turn on it. The 2026-09-10 runs therefore attempted an easier task than the 2026-09-09 runs did. The seed also carries operational scar tissue of the same kind (that the builder has no heredoc syntax, so scripts are written with `printf`). Both are recorded here rather than quietly enjoyed, and the standing rule in `CLAUDE.md` ("Keep the seed a seed") exists to stop the drift: only irreducible bootstrap and invisible mechanism belong there, and everything else must be reached by the liturgy or by a refusal that teaches.
+- **A third boundary, and the seed is why again.** #123 cut `embryo/seed.md` back to the two admissible categories: out came the `effect` enum and the `local`/`read` restriction, the `timeout_seconds` ceiling, the `name` charset and reserved names, the policy schema, the proposal field list, and the root-signature protocol — the signing command, the `{"msg", "sig"}` envelope and the `mike` → `ssh:mike` clause. Each is now taught by a constructive refusal the model can read (approval-time refusals reached only root's stdout before #123 and now ride the inbox), by `PROPOSE_TOOL`'s description, or by turn 2 of the liturgy, which states the facts only the sender can state. One of those refusals is new since #123 landed: `refuse_approval` in `embryo/membrane/invariants.py` now refuses a policy whose hook verb does not declare exactly one parameter, naming the verb's actual parameters. It closes a failure that was silent before and predates #123 — `embryo/membrane/hooks.py:38-40` skips such a hook without invoking it, recording it, or signalling anything — so the seed used to carry "with the decoded payload as their single parameter" as a substitute, and now a refusal does instead. One thing #123 called for did not come out: the builder's lack of heredoc syntax and the `printf` workaround, which the design's §7 made conditional on a live check before removal. #123 assumed a single failed build would teach it loudly; a live probe on the host (recipe `rcp-60eae850c368`) found the opposite. The recipe built to `status: ready` with a clean log showing `Step 2/2 : RUN <<EOF` collapsed into a single no-op instruction, and a computer booted from that image reported `FILE_MISSING` and `ls: cannot access '/verb/'`. A build that "succeeds" while silently producing a broken verb is exactly the invisible-mechanism case §3 describes, so the line stays and #123 was wrong about that item. Runs after this cut attempted a harder task than the 2026-09-10 runs did, and are not comparable to them.
 - **Two runs were kept and then inspected** (`--keep`), and the kept brains were forked afterwards to measure memory. That happened after each run's verdict was judged, so no postcondition is affected, but those forks are not in the runs' command records.
 
 ## What a run directory holds
