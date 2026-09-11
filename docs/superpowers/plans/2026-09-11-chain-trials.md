@@ -545,8 +545,18 @@ async def test_a_trial_refuses_params_and_runs_together() -> None:
     assert api.calls == []
 ```
 
-Then repair the tests Task 3 broke, in this file and in `tests/unit/test_embryo_turn.py`:
-`Trial(...)` constructor calls take `runs=[{...}]` and `results=[]` instead of `params=` and `result=None`; assertions on `result["stdout"]` become `result["runs"][0]["stdout"]`; `trial.result is not None` becomes `trial.results`. The out-of-time assertion in `test_a_trial_with_no_time_left_makes_no_request` becomes:
+Then repair the tests Task 3 broke. Three files construct the old shape — find every one with
+`grep -rn "params=" tests/unit/test_embryo_trials.py tests/unit/test_embryo_turn.py tests/unit/test_embryo_commands.py`
+and check nothing else does (`uv run mypy` names them all):
+
+- `tests/unit/test_embryo_trials.py`
+- `tests/unit/test_embryo_turn.py`
+- `tests/unit/test_embryo_commands.py` — one call at about line 346, inside the test that pins
+  `list`'s trial projection for the measure's "no undeclared capability" check. It becomes
+  `runs=[{}]` and `results=[]`; its assertion on the listing is unchanged, since `list_state`
+  projects only `id`, `verb`, `status` and `recipe_id`.
+
+In each: `Trial(...)` constructor calls take `runs=[{...}]` and `results=[]` instead of `params=` and `result=None`; assertions on `result["stdout"]` become `result["runs"][0]["stdout"]`; `trial.result is not None` becomes `trial.results`. The out-of-time assertion in `test_a_trial_with_no_time_left_makes_no_request` becomes:
 
 ```python
     assert (await run_trial(api, state.trials["t-1"], remaining=5.0)) == {
@@ -765,15 +775,15 @@ async def poll_trials(api: MshknApi, state: State, *, remaining: float) -> list[
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-uv run pytest tests/unit/test_embryo_trials.py tests/unit/test_embryo_state.py -q
+uv run pytest tests/unit -q && uv run mypy
 ```
 
-Expected: PASS.
+Expected: PASS, and mypy clean. The whole unit tier must be green at the end of this task — it is the task that closes the red window Task 3 opened.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add embryo/membrane/trials.py tests/support_embryo.py tests/unit/test_embryo_trials.py tests/unit/test_embryo_turn.py
+git add embryo/membrane/trials.py tests/support_embryo.py tests/unit/test_embryo_trials.py tests/unit/test_embryo_turn.py tests/unit/test_embryo_commands.py
 git commit -m "feat(embryo): a trial runs its invocations in order on a scratch chain (#118)"
 ```
 
