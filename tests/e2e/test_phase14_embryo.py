@@ -361,7 +361,7 @@ class TestPhase14Embryo:
         log = await doors.client.get(f"/computers/{cid}/exec_log")
         assert log.status_code == 200 and "Example Domain" in log.json()["stdout"]
 
-    async def test_t14_6_counter_chain_has_two_checkpoints(self, doors: Doors) -> None:
+    async def test_t14_6_counter_chain_advances_a_head_per_invocation(self, doors: Doors) -> None:
         await doors.touch()
         audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[9]))
         # #118: the chain verb is trialled twice on a scratch chain first, which is the
@@ -394,18 +394,25 @@ class TestPhase14Embryo:
         assert await doors.approve_verb(pid, "counter") == "ready"
         listing = await doors.wait_ready("counter")
         assert listing["catalog"]["counter"]["status"] == "ready", listing["proposals"]
-        _, one = await doors.public_say(_sign(doors.hatched.key_dir, "count"))
-        _, two = await doors.public_say(_sign(doors.hatched.key_dir, "count"))
+        audit_one, one = await doors.public_say(_sign(doors.hatched.key_dir, "count"))
+        audit_two, two = await doors.public_say(_sign(doors.hatched.key_dir, "count"))
         assert one.startswith("1") and two.startswith("2"), (one, two)
+        # #139: the head each invocation created, not the label's surviving row count.
+        # #93 retention keeps every label's newest checkpoint and prunes the rest, and
+        # the reaper runs every 60 s, so `len(chain) == 2` here was a race this suite
+        # had been winning by luck: `2026-09-11-turn2-run-1` lost it by nine seconds.
+        first_head = audit_one["tools"][0]["chain_head"]
+        second_head = audit_two["tools"][0]["chain_head"]
+        assert first_head and second_head and first_head != second_head, (audit_one, audit_two)
         chain = (await doors.client.get("/checkpoints", params={"label": "verb/counter"})).json()
-        assert len(chain) == 2
+        assert second_head in {c["id"] for c in chain}  # the head is never pruned
 
     async def test_t14_7_postconditions_and_the_audit_outside_the_brain(self, doors: Doors) -> None:
         await doors.touch()
         listing = await doors.listing()
         assert set(listing["catalog"]) == {"verify_ssh", "page_title", "counter"}
         assert all(e["status"] == "ready" for e in listing["catalog"].values())
-        assert listing["catalog"]["counter"]["chain_length"] == 2
+        assert listing["catalog"]["counter"]["chain_head"] is not None
         assert listing["principals"] == ["ssh:mike"]
         assert listing["door"]["status"] == "open"
         # §10.1: public input never becomes root. The liturgy knocks nine times on the

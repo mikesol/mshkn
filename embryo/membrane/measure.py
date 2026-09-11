@@ -807,23 +807,41 @@ def verdict(
     # Every invocation across the counted turns, not one per turn (#117): a model
     # that calls its own counter twice to prove the state crossed the chain is doing
     # more than the minimum, and the postcondition is that the counter is monotonic
-    # and the chain grows once per invocation.
+    # and every invocation left a new head on the chain.
+    #
+    # The head, not the chain's length (#139). #93 retention keeps every label's
+    # newest checkpoint forever and prunes the rest, so a chain's history is not
+    # ours to count: `2026-09-11-turn2-run-1` invoked twice, read 1 then 2, and the
+    # reaper collected the first invocation's checkpoint nine seconds later. Each
+    # call reports the checkpoint it created (`verbs.py`, `chain_head`), recorded in
+    # the audit line as it happens, so a head per call is durable evidence of the
+    # same property and is not racing a sweep.
     counts: list[int | None] = []
     computer_ids: list[str] = []
-    chain_lengths: list[int] = []
+    chain_heads: list[str | None] = []
     for label in ("9-count-1", "9-count-2"):
         for call in _tool_computers(_by_label(turns, label), chain=True):
             computer_ids.append(call["computer_id"])
             counts.append(_first_int(checks.get(call["computer_id"], {}).get("stdout")))
-            chain_lengths.append(int(catalog.get(call["name"], {}).get("chain_length") or 0))
+            chain_heads.append(call.get("chain_head"))
+    last = _by_label(turns, "9-count-2") or _by_label(turns, "9-count-1")
+    counter_name = next((c["name"] for c in _tool_computers(last, chain=True)), None)
+    final_head = (catalog.get(counter_name or "") or {}).get("chain_head")
+    advanced = (
+        len(chain_heads) == len(counts)
+        and all(head is not None for head in chain_heads)
+        and len(set(chain_heads)) == len(chain_heads)
+    )
     result["counter"] = {
         "ok": bool(counts)
         and counts == list(range(1, len(counts) + 1))
-        and chain_lengths[-1:] == [len(counts)],
+        and advanced
+        and final_head == chain_heads[-1],
         "evidence": {
             "counts": counts,
             "computer_ids": computer_ids,
-            "chain_lengths": chain_lengths,
+            "chain_heads": chain_heads,
+            "final_chain_head": final_head,
         },
     }
 

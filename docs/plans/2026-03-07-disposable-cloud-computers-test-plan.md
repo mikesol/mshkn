@@ -843,11 +843,11 @@ The first agent built on the product, specified in `docs/superpowers/specs/2026-
 
 - A signed turn 9 asks for a verb that counts its calls; the approved declaration is a chain verb, built for the first time.
 - Two invocations: the reply, read from `list`, is 1 and then 2.
-- `GET /checkpoints` for the label `verb/counter` shows two checkpoints.
+- Each invocation reports the checkpoint it created, the two differ, and `GET /checkpoints` for the label `verb/counter` still holds the second: the head is durable, its history is not (#139).
 
 ### T14.7 — The Postconditions, Checked From Outside the Brain
 
-- The catalog holds exactly the three approved verbs, all `ready`, with the counter's chain two long; the only principal is `ssh:mike`, never `root`; the door is open.
+- The catalog holds exactly the three approved verbs, all `ready`, the counter carrying a chain head; the only principal is `ssh:mike`, never `root`; the door is open.
 - No undeclared capability: every recipe the run added to the account belongs to the brain or to an approved proposal.
 - The audit sink is outside the brain: `GET /ingress_rules/{rule_id}/logs` lists every public turn with its `computer_id`, and that computer's `exec_log` begins with the turn's audit line.
 - The turn was a chain of relay-delivered wake-ups: the exec log's second line is the acknowledgement naming a relay job id, and `GET /relay/{job_id}` shows that job delivered to label `brain`.

@@ -227,7 +227,7 @@ Three tiers, plus the measure.
 - Root is unforgeable: no hook, proposal or message has produced `root`.
 - Authorization exists: `anonymous` can invoke nothing; `ssh:mike` can invoke the verbs and propose.
 - `page_title` returns "Example Domain" for `https://example.com` from a self-destructed computer.
-- The counter returns 1 then 2 and its chain has two checkpoints.
+- The counter returns 1 then 2, and each invocation leaves a new head on its chain, the last of which is the catalog's. Not the chain's length: #93 retention keeps every label's newest checkpoint and prunes its history, so a count of surviving rows races the reaper (#139).
 - No undeclared capability exists: the catalog and the tool list contain only approved verbs, and every recipe on the account belongs to the brain or to a proposal.
 - Nothing was written by a human after hatching.
 
