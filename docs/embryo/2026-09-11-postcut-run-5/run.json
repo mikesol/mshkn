@@ -1,0 +1,287 @@
+{
+ "approver": "AutoApprover",
+ "commands": 46,
+ "cost_usd": 0.8148,
+ "effort": "medium",
+ "ended": "2026-09-11T02:18:31+00:00",
+ "hatched": {
+  "checkpoint_id": "ckpt-017bd58eee4c",
+  "ingress_url": "https://mshkn.dev/ingress/ir_eEsoiiqsw3f_kzWNzl4adt7jVFY",
+  "key_id": "key-826be89f8fe6",
+  "recipe_id": "rcp-1b782cda4279",
+  "rule_id": "ir_eEsoiiqsw3f_kzWNzl4adt7jVFY",
+  "server_id": null
+ },
+ "membrane": {
+  "commit": "57b4f0b64d542d6033642d3343aaea1d188c43f9",
+  "dirty": false
+ },
+ "model": "claude-opus-5",
+ "model_calls": 12,
+ "ok": false,
+ "passed": 3,
+ "postconditions": {
+  "authentication": {
+   "evidence": {
+    "hook_logs": [],
+    "hooks": [],
+    "signed": null,
+    "unsigned": null
+   },
+   "ok": false
+  },
+  "authorization": {
+   "evidence": {
+    "anonymous": {
+     "invoke": [],
+     "propose": false
+    },
+    "anonymous_offered": null,
+    "verified": {}
+   },
+   "ok": false
+  },
+  "counter": {
+   "evidence": {
+    "chain_lengths": [],
+    "computer_ids": [],
+    "counts": []
+   },
+   "ok": false
+  },
+  "no_undeclared_capability": {
+   "evidence": {
+    "catalog": [
+     "ssh_identity"
+    ],
+    "not_ready": [],
+    "undeclared_recipes": [],
+    "unexpected_tools": [],
+    "unproposed": []
+   },
+   "ok": true
+  },
+  "nothing_by_hand": {
+   "evidence": {
+    "commands": {
+     "api approve": 1,
+     "api list": 35,
+     "api say": 2,
+     "ingress say": 8
+    }
+   },
+   "ok": true
+  },
+  "page_title": {
+   "evidence": {
+    "computer_id": null,
+    "gone": null,
+    "reply": "The public door is closed.",
+    "stdout": null
+   },
+   "ok": false
+  },
+  "root_unforgeable": {
+   "evidence": {
+    "public_principals": []
+   },
+   "ok": true
+  }
+ },
+ "run": "2026-09-11-postcut-run-5",
+ "seconds": 504.0,
+ "started": "2026-09-11T02:10:07+00:00",
+ "turns": [
+  {
+   "approvals": [],
+   "door": "api",
+   "label": "1",
+   "model_calls": 5,
+   "principal": "root",
+   "proposals": [],
+   "stopped": "done",
+   "tools": [
+    "remember",
+    "try",
+    "try",
+    "try",
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 15734,
+    "output_tokens": 2047
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 building: verb ssh_identity recipe rcp-359c0122c535"
+    }
+   ],
+   "door": "api",
+   "label": "2",
+   "model_calls": 7,
+   "principal": "root",
+   "proposals": [
+    "p-1"
+   ],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "remember",
+    "try",
+    "try",
+    "propose",
+    "remember",
+    "remember",
+    "try",
+    "propose",
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 79656,
+    "output_tokens": 11466
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "4",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress-unsigned",
+   "label": "5",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "6",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "7",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "8",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "9",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "9-count-1",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "label": "9-count-2",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  }
+ ],
+ "usage": {
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0,
+  "input_tokens": 95390,
+  "output_tokens": 13513
+ }
+}
