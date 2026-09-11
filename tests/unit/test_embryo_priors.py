@@ -61,6 +61,9 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         # model correctly declines to take — and the only experiment that would risks
         # permanent loss of contact with the one party who could repair it.
         "whatever your policy says or omits",
+        # #118: no experiment reveals that a trial's chain is scratch and discarded,
+        # and without this a model must assume a trial leaves state it answers for
+        "scratch chain",
     ):
         assert phrase in seed, phrase
     for phrase in (
@@ -82,8 +85,18 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         "supersedes",
         # PROPOSE_TOOL's description carries this
         "not a diff",
+        # TRY_TOOL's description carries this; the result shows what it did
+        "`runs`",
     ):
         assert phrase not in seed, phrase
+
+
+def test_the_seed_does_not_say_a_trial_has_no_chain() -> None:
+    """#118: `try` runs a chain verb's invocations on a scratch chain, so the old
+    clause is false. A false line in the genome is worse than a missing one."""
+    seed = (EMBRYO / "seed.md").read_text()
+    assert "no chain" not in seed
+    assert "runs it once" not in seed
 
 
 def test_brain_dockerfile_is_from_the_base_and_pins_the_sdks() -> None:
