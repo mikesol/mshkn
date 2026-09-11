@@ -696,3 +696,27 @@ async def test_delete_during_a_persist_leaves_no_durable_copy_behind(
     assert not durable.with_name(f"{ckpt.id}.tmp").exists()
     assert not (tmp_path / "staging" / ckpt.id).exists()
     assert await get_checkpoint(db, ckpt.id) is None
+
+
+def test_persist_snapshot_writes_a_sparse_copy_with_the_same_bytes(tmp_path: Path) -> None:
+    """Memory images are 60 to 70 % zero pages on the live host. Persisting
+    them sparse writes a third of the bytes, which is a third of the disk time
+    a checkpoint's drive flush can end up waiting behind; Firecracker reads a
+    hole as zeros, which is what those pages hold."""
+    staging = tmp_path / "staging" / "ckpt-z"
+    staging.mkdir(parents=True)
+    page = 4096
+    image = b"".join((b"\x00" * page if i % 3 else bytes([i % 251]) * page) for i in range(3 * 64))
+    (staging / "memory").write_bytes(image)
+    (staging / "vmstate").write_bytes(b"state")
+    durable = tmp_path / "ckpts" / "ckpt-z"
+    (tmp_path / "ckpts").mkdir()
+
+    mshkn.services.checkpoints._persist_snapshot(staging, durable)
+
+    copy = durable / "memory"
+    assert copy.read_bytes() == image
+    assert copy.stat().st_size == len(image)
+    assert copy.stat().st_blocks * 512 <= len(image) // 2, "two thirds of the pages are holes"
+    assert (durable / "vmstate").read_bytes() == b"state"
+    assert not durable.with_name("ckpt-z.tmp").exists()

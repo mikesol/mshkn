@@ -584,8 +584,45 @@ class CheckpointService:
         )
 
 
+_SPARSE_READ = 1 << 20
+_PAGE = 4096
+_ZERO_PAGE = bytes(_PAGE)
+
+
+def _copy_sparse(source: Path, dest: Path) -> None:
+    """Copy a file, leaving holes where the source holds only zero pages. Blocking.
+
+    A guest's memory image is 60 to 70 % zero pages on the live host, and a
+    hole reads back as zeros, which is exactly what Firecracker needs of
+    those pages. The bytes not written are disk time the next checkpoint's
+    drive flush does not wait behind. Zero pages are skipped at page
+    granularity, coalescing the runs of data between them into one write.
+    """
+    with source.open("rb") as src, dest.open("wb") as dst:
+        while True:
+            chunk = src.read(_SPARSE_READ)
+            if not chunk:
+                break
+            run_start: int | None = None
+            for offset in range(0, len(chunk), _PAGE):
+                page = chunk[offset : offset + _PAGE]
+                if page == _ZERO_PAGE[: len(page)]:
+                    if run_start is not None:
+                        dst.write(chunk[run_start:offset])
+                        run_start = None
+                    dst.seek(len(page), os.SEEK_CUR)
+                elif run_start is None:
+                    run_start = offset
+            if run_start is not None:
+                dst.write(chunk[run_start:])
+        dst.truncate(src.tell())
+        dst.flush()
+        os.fsync(dst.fileno())
+
+
 def _persist_snapshot(staging_dir: Path, durable_dir: Path) -> None:
-    """Copy a snapshot directory into place atomically, written through. Blocking.
+    """Copy a snapshot directory into place atomically, sparse and written
+    through. Blocking.
 
     Every file is fsynced before the rename, so the copy costs the disk its
     bytes now, at one copy's worth of queue, instead of piling up in the page
@@ -593,14 +630,10 @@ def _persist_snapshot(staging_dir: Path, durable_dir: Path) -> None:
     """
     tmp = durable_dir.with_name(f"{durable_dir.name}.tmp")
     shutil.rmtree(tmp, ignore_errors=True)
-    shutil.copytree(staging_dir, tmp)
-    for entry in tmp.iterdir():
+    tmp.mkdir()
+    for entry in sorted(staging_dir.iterdir()):
         if entry.is_file():
-            fd = os.open(entry, os.O_RDONLY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            _copy_sparse(entry, tmp / entry.name)
     tmp.rename(durable_dir)
     dir_fd = os.open(durable_dir.parent, os.O_RDONLY)
     try:
