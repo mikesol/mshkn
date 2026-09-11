@@ -44,7 +44,7 @@ DOOR_CLOSED = "The public door is closed."
 BAD_PAYLOAD = "The payload is not base64."
 MODEL_FAILED = "The model service failed this turn."
 
-REMEMBER_TOOL = {
+REMEMBER_TOOL: dict[str, Any] = {
     "name": "remember",
     "description": "Store a fact in memory with your provenance. Available to authenticated "
     "principals.",
@@ -54,18 +54,25 @@ REMEMBER_TOOL = {
         "required": ["text"],
     },
 }
-TRY_TOOL = {
+TRY_TOOL: dict[str, Any] = {
     "name": "try",
-    "description": "Build a verb declaration and run its entrypoint once on a computer with no "
-    "secrets, no chain and no policy. Returns the build log, stdout, stderr and exit code as "
-    "data. Installs nothing.",
+    "description": "Build a verb declaration and run its entrypoint on a computer with no "
+    "secrets and no policy. Give `params` for one invocation, or `runs` — a list of "
+    "parameter objects — for several, which run in order; a chain verb's invocations "
+    "share one scratch chain, so a second run reads what the first left. Returns the "
+    "build log and every invocation's stdout, stderr and exit code as data. Installs "
+    "nothing.",
     "input_schema": {
         "type": "object",
-        "properties": {"verb": {"type": "object"}, "params": {"type": "object"}},
+        "properties": {
+            "verb": {"type": "object"},
+            "params": {"type": "object"},
+            "runs": {"type": "array", "items": {"type": "object"}},
+        },
         "required": ["verb"],
     },
 }
-PROPOSE_TOOL = {
+PROPOSE_TOOL: dict[str, Any] = {
     "name": "propose",
     "description": "Propose a change to yourself for root to approve: a verb, a full replacement "
     "policy, or a full replacement of your self-description. A whole document, not a diff.",
@@ -169,12 +176,23 @@ def audit_line(**fields: Any) -> str:
     return "audit " + json.dumps(fields, sort_keys=True)
 
 
+RUN_AUDIT_KEYS = ("exit_code", "computer_id", "chain_head", "error")
+TOOL_AUDIT_KEYS = ("exit_code", "computer_id", "chain_head", "id", "trial", "error")
+
+
 def _tool_summary(call: dict[str, Any]) -> dict[str, Any]:
     result = call["result"]
     summary: dict[str, Any] = {"name": call["name"], "status": result.get("status")}
-    for key in ("exit_code", "computer_id", "chain_head", "id", "trial", "error"):
+    for key in TOOL_AUDIT_KEYS:
         if key in result:
             summary[key] = result[key]
+    if isinstance(result.get("runs"), list):
+        # A trial's invocations, each as small as the top level used to be: what it
+        # did and where it left the chain, never what it printed (#118).
+        summary["runs"] = [
+            {"status": run.get("status"), **{k: run[k] for k in RUN_AUDIT_KEYS if k in run}}
+            for run in result["runs"]
+        ]
     return summary
 
 
@@ -195,12 +213,12 @@ def build_tools(ctx: Context, pending: Pending) -> dict[str, Tool]:
         return {"status": "remembered"}
 
     async def do_try(inp: dict[str, Any]) -> dict[str, Any]:
-        params = inp.get("params") or {}
         return await try_verb(
             ctx.api,
             state,
             inp.get("verb"),
-            dict(params),
+            inp.get("params"),
+            runs=inp.get("runs"),
             until=ctx.deadline,
             now=ctx.now,
             sleep=ctx.sleep,

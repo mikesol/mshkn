@@ -25,6 +25,11 @@ POLICY_FIELDS: frozenset[str] = frozenset({"principals", "hooks", "door"})
 VERB_REQUIRED = ("name", "description", "params", "dockerfile", "entrypoint", "effect", "state")
 PROPOSAL_REQUIRED = ("kind", "title", "rationale")
 CHAIN_PREFIX = "verb/"
+# trials.py reserves this prefix for a trial's own scratch chain (#118); a
+# declared chain under it would let an unrelated trial's sweep delete the
+# verb's live chain. Kept as a literal here, not imported from trials.py:
+# declarations.py talks to nothing.
+TRIAL_CHAIN_PREFIX = "verb/trial/"
 TIMEOUT_DEFAULT = 60
 # A verb runs in its own computer under mshkn's 300 s exec budget, but it is
 # awaited inside a turn whose deadline is 240 s; 200 leaves 40 s for the loop
@@ -214,6 +219,11 @@ def parse_verb(doc: object) -> Verb:
         or len(chain) <= len(CHAIN_PREFIX)
     ):
         raise DeclarationError(f"verb.chain must start with {CHAIN_PREFIX!r}")
+    if chain.startswith(TRIAL_CHAIN_PREFIX):
+        raise DeclarationError(
+            f"verb.chain may not start with {TRIAL_CHAIN_PREFIX!r}, which trials use for "
+            f"their own scratch chains; name a chain under {CHAIN_PREFIX!r} instead"
+        )
     asserts = _str(d, "asserts", "verb", required=False)
     if asserts is not None:
         if asserts in RESERVED_NAMESPACES:
@@ -255,6 +265,24 @@ def parse_verb(doc: object) -> Verb:
         allow=_namespaced_principals(d.get("allow"), "verb.allow"),
         requires=_requirements(d.get("requires")),
     )
+
+
+def parse_runs(params: object, runs: object) -> list[dict[str, Any]]:
+    """The invocations of one trial (#118). `params` is one invocation; `runs` is
+    several, in order. A `chain` verb's runs share the trial's scratch chain, so a
+    second entry is how the model sees whether its state persisted."""
+    if params is not None and runs is not None:
+        raise DeclarationError(
+            "give params for one invocation or runs for several, not both; "
+            "runs is a list of parameter objects, one per invocation, in order"
+        )
+    if runs is None:
+        return [dict(_obj(params, "params"))] if params is not None else [{}]
+    if not isinstance(runs, list):
+        raise DeclarationError("runs must be a list of parameter objects, one per invocation")
+    if not runs:
+        raise DeclarationError("runs must name at least one invocation")
+    return [dict(_obj(entry, f"runs[{i}]")) for i, entry in enumerate(runs)]
 
 
 def render_command(verb: Verb, params: dict[str, Any]) -> str:
