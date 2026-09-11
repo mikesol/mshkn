@@ -176,7 +176,7 @@ def audit_line(**fields: Any) -> str:
     return "audit " + json.dumps(fields, sort_keys=True)
 
 
-RUN_AUDIT_KEYS = ("exit_code", "chain_head", "error")
+RUN_AUDIT_KEYS = ("exit_code", "computer_id", "chain_head", "error")
 
 
 def _tool_summary(call: dict[str, Any]) -> dict[str, Any]:

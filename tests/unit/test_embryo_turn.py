@@ -880,9 +880,11 @@ def test_the_try_tool_offers_a_list_of_invocations() -> None:
 
 
 def test_the_audit_summarises_every_run_without_its_output() -> None:
-    """A chain trial's exit_code and chain_head moved from the top level into runs,
-    so without this an audited trial reads as {name, status, trial} and loses every
-    reading. stdout stays out of the audit line, as it always has been."""
+    """A chain trial's exit_code, computer_id and chain_head moved from the top level
+    into runs, so without this an audited trial reads as {name, status, trial} and
+    loses every reading. The computer id is what lets a reader fetch that run's
+    exec_log after the computer is gone (#118); stdout itself stays out of the audit
+    line, as it always has been."""
     summary = _tool_summary(
         {
             "name": "try",
@@ -914,9 +916,10 @@ def test_the_audit_summarises_every_run_without_its_output() -> None:
     assert summary["name"] == "try" and summary["status"] == "done"
     assert summary["trial"] == "t-1"
     assert summary["runs"] == [
-        {"status": "ok", "exit_code": 0, "chain_head": "ckpt-a"},
-        {"status": "ok", "exit_code": 0, "chain_head": "ckpt-b"},
+        {"status": "ok", "exit_code": 0, "computer_id": "comp-1", "chain_head": "ckpt-a"},
+        {"status": "ok", "exit_code": 0, "computer_id": "comp-2", "chain_head": "ckpt-b"},
     ]
+    assert not any("stdout" in r or "stderr" in r for r in summary["runs"])
 
 
 def test_the_audit_keeps_a_runs_error_and_omits_absent_keys() -> None:
