@@ -59,7 +59,7 @@
 - [x] The overlap `asyncio.gather(snapshot, _snap_disk)` was implemented, shipped to the live host, and reverted the same night: the first full run captured empty files in checkpoints, because Firecracker's drive cache is `Unsafe` and its own flush inside `create_snapshot` is what lands guest writes on the volume. `test_create_snaps_the_disk_only_after_the_memory_snapshot_returned` pins the order.
 - [x] Gate, commit.
 
-Live runs: run 1 (12 failed) found the overlap; run 2 was stopped when `/dev/shm` filled because staging copies were held until their upload ended (Task 5 now releases them when the durable copy lands, falls back to disk when tmpfs is full, and start-up persists orphans); run 3 and run 4: `4 failed, 170 passed, 6 skipped`, the #65 set.
+Live runs (nine in one night; PR #153 has the table): run 1 (12 failed) found the overlap; run 2 was stopped when `/dev/shm` filled because staging copies were held until their upload ended (Task 5 now releases them when the durable copy lands, falls back to disk when tmpfs is full, and start-up persists orphans); runs 3 and 5: `4 failed, 170 passed, 6 skipped`, the #65 set; run 7 showed the many-small-files p95 over its gate because ten persisted 256 MiB copies became one write-back burst under the next checkpoint's drive flush, so persists now run one at a time, written through and sparse (memory images are 60 to 70 % zero pages); run 9, on the final commit, is the #65 set plus T6.5 (#156, a listing timeout in the test harness).
 
 ### Task 4: Destroy (#148)
 
