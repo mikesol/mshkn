@@ -224,9 +224,11 @@ documents name.
 - `tests/unit/test_embryo_state.py`: the `Trial` round-trip through `to_doc`/`from_doc`.
 
 **Flow** (`tests/flow/test_embryo_liturgy.py`): the scripted model trials a chain counter
-with two runs before turn 9's proposal, reads `1` then `2`, and the scratch label lists
-zero checkpoints afterwards. This is the deterministic proof of the thing run 6 could not
-do.
+with two runs before turn 9's proposal. The audit deliberately carries no `stdout`, so
+the test asserts on what it does carry: two clean exit codes, two distinct `chain_head`s
+(proof the second run saw what the first left), that the counter command actually ran
+twice, and that the scratch label lists zero checkpoints once the trial ends. This is the
+deterministic proof of the thing run 6 could not do.
 
 **E2E** (`tests/e2e/test_phase14_embryo.py`): the trial happens inside turn 9, whose audit
 line T14.6 already reads, so the tier gains assertions rather than a test. T14.6 becomes:

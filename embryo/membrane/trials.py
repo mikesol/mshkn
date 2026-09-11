@@ -44,6 +44,10 @@ async def _one_run(
         if verb.state == "chain" and trial.chain is not None:
             forked = await api.fork_label(label=trial.chain, command=command, timeout=remaining)
             if isinstance(forked, Deferred):
+                # Deliberately "error", not verbs.invoke's "deferred" (#118): a trial's
+                # sequence must stop on a deferral, and only an "error" status stops it,
+                # whereas a catalogued verb's invocation legitimately reports a deferral
+                # as its own outcome.
                 return {"status": "error", "error": f"deferred {forked.deferred_id}"}
             run = forked
         else:

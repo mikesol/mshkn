@@ -44,7 +44,7 @@ DOOR_CLOSED = "The public door is closed."
 BAD_PAYLOAD = "The payload is not base64."
 MODEL_FAILED = "The model service failed this turn."
 
-REMEMBER_TOOL = {
+REMEMBER_TOOL: dict[str, Any] = {
     "name": "remember",
     "description": "Store a fact in memory with your provenance. Available to authenticated "
     "principals.",
@@ -72,7 +72,7 @@ TRY_TOOL: dict[str, Any] = {
         "required": ["verb"],
     },
 }
-PROPOSE_TOOL = {
+PROPOSE_TOOL: dict[str, Any] = {
     "name": "propose",
     "description": "Propose a change to yourself for root to approve: a verb, a full replacement "
     "policy, or a full replacement of your self-description. A whole document, not a diff.",
@@ -177,12 +177,13 @@ def audit_line(**fields: Any) -> str:
 
 
 RUN_AUDIT_KEYS = ("exit_code", "computer_id", "chain_head", "error")
+TOOL_AUDIT_KEYS = ("exit_code", "computer_id", "chain_head", "id", "trial", "error")
 
 
 def _tool_summary(call: dict[str, Any]) -> dict[str, Any]:
     result = call["result"]
     summary: dict[str, Any] = {"name": call["name"], "status": result.get("status")}
-    for key in ("exit_code", "computer_id", "chain_head", "id", "trial", "error"):
+    for key in TOOL_AUDIT_KEYS:
         if key in result:
             summary[key] = result[key]
     if isinstance(result.get("runs"), list):
