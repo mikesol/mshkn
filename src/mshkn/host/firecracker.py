@@ -47,7 +47,14 @@ async def _host_errors(what: str) -> AsyncIterator[None]:
         raise HostError(f"{what}: {type(exc).__name__}: {exc}") from exc
 
 
-BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/init root=/dev/vda rw"
+# quiet/loglevel/show_status: the emulated serial console costs a VM exit per
+# byte written, so the kernel and systemd say as little as possible on a cold
+# boot; the console stays so a guest that fails to boot can still be read.
+# random.trust_cpu=on: sshd does not wait on the entropy pool at first start (#149).
+BOOT_ARGS = (
+    "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/init root=/dev/vda rw "
+    "quiet loglevel=3 systemd.show_status=0 random.trust_cpu=on"
+)
 
 # Staging slot constants — must match the vmstate baked into templates
 STAGING_SLOT = 254

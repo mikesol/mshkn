@@ -101,3 +101,19 @@ async def test_a_non_2xx_put_raises_http_status_error() -> None:
     with pytest.raises(httpx.HTTPStatusError):
         await client.create_snapshot("/s/vmstate", "/s/memory")
     await client.close()
+
+
+def test_boot_args_keep_the_cold_boot_quiet() -> None:
+    """The emulated serial console costs a VM exit per byte, so the kernel and
+    systemd are told to stay quiet (#149); the console itself stays for a guest
+    that fails to boot. `random.trust_cpu=on` keeps sshd from waiting on the
+    entropy pool at first start.
+    """
+    for arg in (
+        "console=ttyS0",
+        "quiet",
+        "loglevel=3",
+        "systemd.show_status=0",
+        "random.trust_cpu=on",
+    ):
+        assert arg in BOOT_ARGS.split(), arg

@@ -55,6 +55,17 @@ _DOCKER_BUILD_TIMEOUT_SECONDS = 600
 
 BASE_IMAGE = "mshkn-base"
 
+# systemd units masked in every rootfs (#149): periodic jobs a disposable VM
+# never wants, and which a clock jump on restore would fire all at once.
+_MASKED_UNITS = (
+    "apt-daily.timer",
+    "apt-daily-upgrade.timer",
+    "dpkg-db-backup.timer",
+    "e2scrub_all.timer",
+    "fstrim.timer",
+    "motd-news.timer",
+)
+
 # `FROM [--flag=value ...] <image> [AS <name>]`, any case; the image is the first
 # token that is not a flag.
 _FROM_RE = re.compile(r"^FROM\s+(?:--\S+\s+)*(\S+)", re.IGNORECASE)
@@ -447,7 +458,32 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
             sshd_config,
         )
 
+    # UsePAM no: sshd's post-auth PAM pass (pam_motd running /etc/update-motd.d,
+    # pam_loginuid, pam_limits, ...) cost 50 ms on the first session of every
+    # connection on the live host (#143). Pubkey root login needs none of it.
+    if "UsePAM" not in sshd_config:
+        sshd_config += "UsePAM no\n"
+    else:
+        sshd_config = re.sub(r"#?UsePAM\s+\S+", "UsePAM no", sshd_config)
+
     sshd_config_path.write_text(sshd_config)
+
+    # Nothing left for pam_motd to run should PAM ever come back.
+    motd_dir = mp / "etc" / "update-motd.d"
+    if motd_dir.is_dir():
+        for entry in motd_dir.iterdir():
+            entry.unlink()
+
+    # Mask the periodic timers. They cost boot time, and a restored guest whose
+    # clock `date -s` moves forward by days would fire them all at once inside
+    # a user's exec (#149).
+    units_dir = mp / "etc" / "systemd" / "system"
+    units_dir.mkdir(parents=True, exist_ok=True)
+    for unit in _MASKED_UNITS:
+        mask = units_dir / unit
+        if mask.is_symlink() or mask.exists():
+            mask.unlink()
+        mask.symlink_to("/dev/null")
 
     # Create /sbin/init symlink
     sbin = mp / "sbin"
