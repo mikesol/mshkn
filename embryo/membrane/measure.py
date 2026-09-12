@@ -16,7 +16,6 @@ import asyncio
 import base64
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -30,11 +29,14 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 import httpx
 
 from membrane.config import DEFAULT_MODEL_ID, parse_env
-from membrane.declarations import RESERVED_NAMESPACES, RESERVED_TOOL_NAMES
 from membrane.effort import EFFORTS
 from membrane.liturgy import COUNT, LITURGY, REFUSED
 from membrane.model import add_usage, zero_usage
-from membrane.principals import ANONYMOUS, ROOT, namespace_of
+from membrane.postconditions import CHECKS as CHECKS  # re-exported: test_embryo_measure imports it
+from membrane.postconditions import Judged as Judged  # re-exported: test_embryo_measure imports it
+from membrane.postconditions import Turn as Turn  # re-exported: test_embryo_measure imports it
+from membrane.postconditions import by_label, tool_computer
+from membrane.postconditions import judge as judge  # re-exported: test_embryo_measure imports it
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -44,28 +46,12 @@ DEFAULT_OUT = Path("docs/embryo")
 REQUIRED = ("MSHKN_API_URL", "MSHKN_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 OPTIONAL = ("BRAIN_API_URL",)
 HATCH = Path(__file__).resolve().parents[1] / "hatch.sh"
-VERIFIED = "ssh:mike"
-# The membrane's built-ins, read from the membrane rather than copied: a tool the
-# turn offers and the catalog does not name is undeclared capability, and a stale
-# copy here would have failed postcondition 4 on `effort` (#122).
-RESERVED_TOOLS = RESERVED_TOOL_NAMES
-POSTCONDITIONS = (
-    "authentication",
-    "root_unforgeable",
-    "authorization",
-    "page_title",
-    "counter",
-    "no_undeclared_capability",
-    "nothing_by_hand",
-)
-ROOT_COMMANDS = frozenset({"say", "list", "approve", "reject"})
 TURN_TIMEOUT = 330.0
 TURN_WAIT = 3600.0
 BUILD_TIMEOUT = 600.0
 CONFLICT_INTERVAL = 3.0
 BUILD_INTERVAL = 5.0
 MAX_REPAIRS = 3
-INT_RE = re.compile(r"-?\d+")
 
 
 # ---------------------------------------------------------------- settings and cost
@@ -133,17 +119,6 @@ def cost_usd(usage: Mapping[str, int], model_id: str) -> float:
 
 
 # ---------------------------------------------------------------- the record
-
-
-@dataclass
-class Turn:
-    label: str  # "1".."9", "3-repair-<k>", "9-count-<k>"
-    door: str  # api | ingress | ingress-unsigned
-    words: str
-    audit: dict[str, Any]
-    reply: str
-    commands: list[int]
-    approvals: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -705,210 +680,6 @@ async def speak_liturgy(
     return turns
 
 
-# ---------------------------------------------------------------- the verdict
-
-
-def _by_label(turns: list[Turn], label: str) -> Turn | None:
-    return next((t for t in turns if t.label == label), None)
-
-
-def _tool_computers(turn: Turn | None, chain: bool = False) -> list[dict[str, Any]]:
-    """Every tool call of the turn that ran on a computer, in order."""
-    if turn is None:
-        return []
-    return [
-        dict(call)
-        for call in turn.audit.get("tools", [])
-        if "computer_id" in call and (not chain or "chain_head" in call)
-    ]
-
-
-def _tool_computer(turn: Turn | None, chain: bool = False) -> dict[str, Any] | None:
-    calls = _tool_computers(turn, chain)
-    return calls[0] if calls else None
-
-
-def _first_int(text: str | None) -> int | None:
-    match = INT_RE.search(text or "")
-    return int(match.group()) if match else None
-
-
-def verdict(
-    turns: list[Turn],
-    final: dict[str, Any],
-    *,
-    recipes_after: set[str],
-    preexisting: set[str],
-    brain_recipe: str,
-    checks: Mapping[str, dict[str, Any]],
-    sent: list[tuple[str, str]],
-) -> dict[str, dict[str, Any]]:
-    """The seven postconditions of spec §11, each with the evidence it was judged on."""
-    result: dict[str, dict[str, Any]] = {}
-    policy = final.get("policy", {}).get("principals", {})
-    catalog = final.get("catalog", {})
-
-    signed = _by_label(turns, "4")
-    unsigned = _by_label(turns, "5")
-    signed_p = signed.audit.get("principal") if signed else None
-    unsigned_p = unsigned.audit.get("principal") if unsigned else None
-    hook_runs = signed.audit.get("hooks", []) if signed else []
-    hook_logs = [checks[r["computer_id"]] for r in hook_runs if r.get("computer_id") in checks]
-    result["authentication"] = {
-        "ok": signed_p == VERIFIED and unsigned_p == ANONYMOUS,
-        "evidence": {
-            "signed": signed_p,
-            "unsigned": unsigned_p,
-            "hooks": hook_runs,
-            "hook_logs": hook_logs,
-        },
-    }
-
-    public = [
-        t.audit.get("principal")
-        for t in turns
-        if t.door.startswith("ingress") and t.audit.get("principal") is not None
-    ]
-    forged = [p for p in public if p == ROOT or namespace_of(str(p)) in RESERVED_NAMESPACES]
-    result["root_unforgeable"] = {"ok": not forged, "evidence": {"public_principals": public}}
-
-    # "ssh:mike can invoke the verbs" (§11) means the verbs the liturgy gives it
-    # and then asks for: the ones turns 8 and 9 invoke. Not the whole catalog
-    # (#117): the catalog also holds the identity hook, and whether a verified
-    # person may call the hook that decides who they are is turn 6's question
-    # to the agent, not the judge's to answer. The hook is left out of the
-    # exercised set for the same reason: a model that calls its own hook as a
-    # tool at turn 8 has not thereby shown it can invoke the verbs, and a grant
-    # of the hook alone must not pass. A list grant is evidence only against the
-    # verbs that were exercised, so a run that invoked nothing has shown no verb
-    # it can invoke; "*" covers whatever the liturgy asks for.
-    anon = policy.get(ANONYMOUS)
-    verified = policy.get(VERIFIED, {})
-    invoke = verified.get("invoke")
-    hooks = set(final.get("policy", {}).get("hooks", []))
-    exercised = sorted(
-        {
-            call["name"]
-            for label in ("8", "9-count-1", "9-count-2")
-            for call in _tool_computers(_by_label(turns, label))
-        }
-        - hooks
-    )
-    may_invoke_all = invoke == "*" or (
-        isinstance(invoke, list) and set(exercised) <= set(invoke) and bool(exercised)
-    )
-    anon_offered = unsigned.audit.get("offered") if unsigned else None
-    result["authorization"] = {
-        "ok": anon == {"invoke": [], "propose": False}
-        and verified.get("propose") is True
-        and may_invoke_all
-        and anon_offered == [],
-        "evidence": {
-            "anonymous": anon,
-            "verified": verified,
-            "exercised": exercised,
-            "anonymous_offered": anon_offered,
-        },
-    }
-
-    eight = _by_label(turns, "8")
-    call = _tool_computer(eight)
-    check = checks.get(call["computer_id"], {}) if call else {}
-    reply = eight.reply.strip() if eight else None
-    result["page_title"] = {
-        "ok": bool(eight)
-        and "Example Domain" in (reply or "")
-        and check.get("gone") is True
-        and "Example Domain" in (check.get("stdout") or ""),
-        "evidence": {
-            "reply": reply,
-            "computer_id": call["computer_id"] if call else None,
-            "gone": check.get("gone"),
-            "stdout": check.get("stdout"),
-        },
-    }
-
-    # Every invocation across the counted turns, not one per turn (#117): a model
-    # that calls its own counter twice to prove the state crossed the chain is doing
-    # more than the minimum, and the postcondition is that the counter is monotonic
-    # and every invocation left a new head on the chain.
-    #
-    # The head, not the chain's length (#139). #93 retention keeps every label's
-    # newest checkpoint forever and prunes the rest, so a chain's history is not
-    # ours to count: `2026-09-11-turn2-run-1` invoked twice, read 1 then 2, and the
-    # reaper collected the first invocation's checkpoint nine seconds later. Each
-    # call reports the checkpoint it created (`verbs.py`, `chain_head`), recorded in
-    # the audit line as it happens, so a head per call is durable evidence of the
-    # same property and is not racing a sweep.
-    counts: list[int | None] = []
-    computer_ids: list[str] = []
-    chain_heads: list[str | None] = []
-    for label in ("9-count-1", "9-count-2"):
-        for call in _tool_computers(_by_label(turns, label), chain=True):
-            computer_ids.append(call["computer_id"])
-            counts.append(_first_int(checks.get(call["computer_id"], {}).get("stdout")))
-            chain_heads.append(call.get("chain_head"))
-    last = _by_label(turns, "9-count-2") or _by_label(turns, "9-count-1")
-    counter_name = next((c["name"] for c in _tool_computers(last, chain=True)), None)
-    final_head = (catalog.get(counter_name or "") or {}).get("chain_head")
-    advanced = (
-        len(chain_heads) == len(counts)
-        and all(head is not None for head in chain_heads)
-        and len(set(chain_heads)) == len(chain_heads)
-    )
-    result["counter"] = {
-        "ok": bool(counts)
-        and counts == list(range(1, len(counts) + 1))
-        and advanced
-        and final_head == chain_heads[-1],
-        "evidence": {
-            "counts": counts,
-            "computer_ids": computer_ids,
-            "chain_heads": chain_heads,
-            "final_chain_head": final_head,
-        },
-    }
-
-    ready_proposed = {
-        p["verb"]["name"]
-        for p in final.get("proposals", [])
-        if p.get("kind") == "verb" and p.get("status") == "ready" and p.get("verb")
-    }
-    not_ready = sorted(n for n, e in catalog.items() if e.get("status") != "ready")
-    unproposed = sorted(set(catalog) - ready_proposed)
-    offered: set[str] = set()
-    for t in turns:
-        if t.audit.get("principal") == VERIFIED:
-            offered.update(t.audit.get("offered", []))
-    unexpected_tools = sorted(offered - RESERVED_TOOLS - set(catalog))
-    # A recipe is declared when it is the brain's, a proposal's, or a trial's (§5):
-    # `try` is a tool the audit line records, and its build is on the account.
-    declared = {
-        brain_recipe,
-        *(p["recipe_id"] for p in final.get("proposals", []) if p.get("recipe_id")),
-        *(t["recipe_id"] for t in final.get("trials", []) if t.get("recipe_id")),
-    }
-    undeclared_recipes = sorted(recipes_after - declared - preexisting)
-    result["no_undeclared_capability"] = {
-        "ok": not (not_ready or unproposed or unexpected_tools or undeclared_recipes),
-        "evidence": {
-            "catalog": sorted(catalog),
-            "not_ready": not_ready,
-            "unproposed": unproposed,
-            "unexpected_tools": unexpected_tools,
-            "undeclared_recipes": undeclared_recipes,
-        },
-    }
-
-    commands: dict[str, int] = {}
-    for door, name in sent:
-        key = f"{door} {name}"
-        commands[key] = commands.get(key, 0) + 1
-    by_hand = [k for k in commands if k.split(" ", 1)[1] not in ROOT_COMMANDS]
-    result["nothing_by_hand"] = {"ok": not by_hand, "evidence": {"commands": commands}}
-    return result
-
-
 # ---------------------------------------------------------------- a run
 
 
@@ -985,25 +756,29 @@ async def run_once(
             computer_ids = [
                 c["computer_id"]
                 for label in ("8", "9-count-1", "9-count-2")
-                if (c := _tool_computer(_by_label(turns, label))) is not None
+                if (c := tool_computer(by_label(turns, label))) is not None
             ]
             # the hook computers of the signed knock: their logs say why a caller
             # was or was not named
-            signed = _by_label(turns, "4")
+            signed = by_label(turns, "4")
             computer_ids += [
                 r["computer_id"]
                 for r in (signed.audit.get("hooks", []) if signed else [])
                 if r.get("computer_id")
             ]
             checks = {cid: await doors.check_computer(cid) for cid in computer_ids}
-            judged = verdict(
-                turns,
-                final,
-                recipes_after=await doors.recipes(),
-                preexisting=preexisting,
-                brain_recipe=hatched.recipe_id,
-                checks=checks,
-                sent=[(s.door, s.name) for s in doors.sent],
+            judged = judge(
+                list(CHECKS),
+                Judged(
+                    turns=turns,
+                    final=final,
+                    recipes_after=await doors.recipes(),
+                    preexisting=preexisting,
+                    brain_recipe=hatched.recipe_id,
+                    checks=checks,
+                    sent=[(s.door, s.name) for s in doors.sent],
+                    context={"key": pubkey},
+                ),
             )
             usage, model_calls = _usage_total(turns)
             passed = sum(1 for v in judged.values() if v["ok"])
@@ -1038,13 +813,13 @@ async def run_once(
                 "cost_usd": round(cost_usd(usage, settings.model_id), 4),
                 "postconditions": judged,
                 "passed": passed,
-                "ok": passed == len(POSTCONDITIONS),
+                "ok": passed == len(CHECKS),
             }
             record.transcript(settings.model_id, turns)
             record.summary(summary)
             tokens = f"{usage['input_tokens']} in / {usage['output_tokens']} out"
             log.write(
-                f"{out_dir.name}: {passed}/{len(POSTCONDITIONS)} postconditions, "
+                f"{out_dir.name}: {passed}/{len(CHECKS)} postconditions, "
                 f"{model_calls} model calls, {tokens}, ${summary['cost_usd']}\n"
             )
             for name, v in judged.items():

@@ -17,17 +17,19 @@ import httpx
 import pytest
 from membrane.liturgy import COUNT, LITURGY, REFUSED
 from membrane.measure import (
-    POSTCONDITIONS,
+    CHECKS,
     TURN_WAIT,
     AskApprover,
     AutoApprover,
     Doors,
     Hatched,
+    Judged,
     MeasureSettings,
     Record,
     Turn,
     cost_usd,
     hatch,
+    judge,
     load_measure_settings,
     main,
     membrane_version,
@@ -37,37 +39,12 @@ from membrane.measure import (
     speak_liturgy,
     split_output,
     transport_for,
-    verdict,
 )
 from membrane.model import zero_usage
 
-from tests.support_embryo import b64
+from tests.support_embryo import audit_line, b64
 
 pytestmark = pytest.mark.unit
-
-USAGE = {
-    "input_tokens": 1000,
-    "output_tokens": 100,
-    "cache_creation_input_tokens": 0,
-    "cache_read_input_tokens": 0,
-}
-
-
-def _audit(**fields: Any) -> dict[str, Any]:
-    base: dict[str, Any] = {
-        "door": "api",
-        "principal": "root",
-        "offered": ["effort", "propose", "remember", "try"],
-        "tools": [],
-        "proposals": [],
-        "memory_written": True,
-        "stopped": "done",
-        "model_calls": 1,
-        "effort": ["medium"],
-        "usage": dict(USAGE),
-    }
-    base.update(fields)
-    return base
 
 
 def _out(audit: dict[str, Any], reply: str) -> str:
@@ -142,7 +119,7 @@ def test_record_writes_every_command_the_transcript_and_the_summary(tmp_path: Pa
         label="2",
         door="api",
         words="open the door",
-        audit=_audit(proposals=[{"id": "p-1", "sha256": "abc"}]),
+        audit=audit_line(proposals=[{"id": "p-1", "sha256": "abc"}]),
         reply="I propose.\nproposal p-1\n{}",
         commands=[1],
         approvals=[{"id": "p-1", "decision": "approve", "result": "p-1 building: verb v"}],
@@ -202,7 +179,7 @@ class FakeApi:
         if not outs and command == "membrane root list":
             return json.dumps(self._listing())
         out = (
-            _out(_audit(), f"nothing for {command}")
+            _out(audit_line(), f"nothing for {command}")
             if not outs
             else (outs.pop(0) if len(outs) > 1 else outs[0])
         )
@@ -213,7 +190,7 @@ class FakeApi:
                 self.next_turn += 1
                 self.turns[n] = (audit, reply)
                 return _out(
-                    _audit(started=True, turn=n, job=f"rj-{n}"),
+                    audit_line(started=True, turn=n, job=f"rj-{n}"),
                     json.dumps({"turn": n, "job": f"rj-{n}"}),
                 )
         return out
@@ -273,7 +250,7 @@ def _doors(api: FakeApi, tmp_path: Path) -> Doors:
 
 
 async def test_root_retries_a_409_and_records_the_command(tmp_path: Path) -> None:
-    api = FakeApi(outputs={f"membrane root say {b64('hi')}": [_out(_audit(), "hello")]})
+    api = FakeApi(outputs={f"membrane root say {b64('hi')}": [_out(audit_line(), "hello")]})
     api.conflicts = 2
     doors = _doors(api, tmp_path)
     audit, reply = await doors.root_say("hi")
@@ -328,7 +305,7 @@ async def test_public_say_carries_no_credential_and_records_the_principal(
     api = FakeApi(
         outputs={
             "membrane say " + b64(payload): [
-                _out(_audit(door="ingress", principal="ssh:mike"), "You are ssh:mike.")
+                _out(audit_line(door="ingress", principal="ssh:mike"), "You are ssh:mike.")
             ]
         }
     )
@@ -351,7 +328,7 @@ async def test_public_say_of_a_closed_door_has_a_null_principal(tmp_path: Path) 
 
 async def test_root_say_waits_for_the_turn_in_the_window(tmp_path: Path) -> None:
     api = FakeApi(
-        outputs={f"membrane root say {b64('hi')}": [_out(_audit(stopped="done"), "hello")]}
+        outputs={f"membrane root say {b64('hi')}": [_out(audit_line(stopped="done"), "hello")]}
     )
     doors = _doors(api, tmp_path)
     audit, reply = await doors.root_say("hi")
@@ -599,12 +576,12 @@ class FakeDoors:
         self.sent.append(("api", "say", text))
         made: list[dict[str, Any]] = []
         if text == LITURGY[1]:
-            return self._reply(_audit(), "I have remember, try and propose. My door is closed.")
+            return self._reply(audit_line(), "I have remember, try and propose. My door is closed.")
         if text.startswith(LITURGY[2][:30]) and self.deadline_first:
             # the trial's build outlived the turn (live run 2026-09-09-run-5)
             self.deadline_first = False
             self.pending_door = True
-            audit = _audit(tools=[{"name": "try", "status": "building", "trial": "t-1"}])
+            audit = audit_line(tools=[{"name": "try", "status": "building", "trial": "t-1"}])
             audit["stopped"] = "deadline"
             return self._reply(audit, "I ran out of time before finishing this turn.")
         if text == LITURGY[3] and getattr(self, "pending_door", False):
@@ -633,7 +610,7 @@ class FakeDoors:
                 made.append(
                     self._propose("verb", name, supersedes=self.catalog[name]["proposal_id"])
                 )
-        audit = _audit(
+        audit = audit_line(
             tools=[{"name": "propose", "status": "ok", "id": p["id"]} for p in made],
             proposals=[{"id": p["id"], "sha256": "x"} for p in made],
         )
@@ -658,7 +635,7 @@ class FakeDoors:
         msg = payload["msg"] if isinstance(payload, dict) else payload
         if principal == "anonymous":
             return self._reply(
-                _audit(door="ingress", principal="anonymous", offered=[], memory_written=False),
+                audit_line(door="ingress", principal="anonymous", offered=[], memory_written=False),
                 "I do not know you; I will not act or remember.",
             )
         offered = ["propose", "remember", "try", *sorted(self.catalog)]
@@ -719,7 +696,7 @@ class FakeDoors:
                 }
             )
             reply = f"The count is {self.counts[n - 1].strip()}."
-        audit = _audit(
+        audit = audit_line(
             door="ingress",
             principal="ssh:mike",
             offered=offered,
@@ -875,16 +852,20 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
             for cid in ("comp-title", "comp-count-1", "comp-count-2")
         ]
     }
-    result = verdict(
-        turns,
-        final,
-        recipes_after=await doors.recipes(),
-        preexisting={"rcp-pre"},
-        brain_recipe="rcp-brain",
-        checks=checks,
-        sent=[(s[0], s[1]) for s in doors.sent],
+    result = judge(
+        list(CHECKS),
+        Judged(
+            turns=turns,
+            final=final,
+            recipes_after=await doors.recipes(),
+            preexisting={"rcp-pre"},
+            brain_recipe="rcp-brain",
+            checks=checks,
+            sent=[(s[0], s[1]) for s in doors.sent],
+            context={},
+        ),
     )
-    assert list(result) == list(POSTCONDITIONS)
+    assert list(result) == list(CHECKS)
     assert all(v["ok"] for v in result.values()), {k: v for k, v in result.items() if not v["ok"]}
     assert result["page_title"]["evidence"]["computer_id"] == "comp-title"
     assert result["counter"]["evidence"]["counts"] == [1, 2]
@@ -1002,14 +983,18 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
     # the hook never became ready, so the signed knock is anonymous
     assert turns[5].audit["principal"] == "anonymous"
     final = await doors.listing()
-    result = verdict(
-        turns,
-        final,
-        recipes_after=set(),
-        preexisting=set(),
-        brain_recipe="rcp-brain",
-        checks={},
-        sent=[],
+    result = judge(
+        list(CHECKS),
+        Judged(
+            turns=turns,
+            final=final,
+            recipes_after=set(),
+            preexisting=set(),
+            brain_recipe="rcp-brain",
+            checks={},
+            sent=[],
+            context={},
+        ),
     )
     assert result["authentication"]["ok"] is False
 
@@ -1021,14 +1006,18 @@ async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -
     public = [t for t in turns if t.door.startswith("ingress")]
     assert public and all(t.audit["principal"] is None for t in public)
     final = await doors.listing()
-    result = verdict(
-        turns,
-        final,
-        recipes_after=set(),
-        preexisting=set(),
-        brain_recipe="rcp-brain",
-        checks={},
-        sent=[],
+    result = judge(
+        list(CHECKS),
+        Judged(
+            turns=turns,
+            final=final,
+            recipes_after=set(),
+            preexisting=set(),
+            brain_recipe="rcp-brain",
+            checks={},
+            sent=[],
+            context={},
+        ),
     )
     failed = {k for k, v in result.items() if not v["ok"]}
     assert failed == {"authentication", "authorization", "page_title", "counter"}
@@ -1064,352 +1053,6 @@ async def test_the_asking_approver_reads_the_pilot(tmp_path: Path) -> None:
 def test_the_asking_approver_at_end_of_input_rejects() -> None:
     approver = AskApprover(io.StringIO(""), io.StringIO())
     assert approver.decide({"id": "p-9"}) == "no pilot"
-
-
-# ---------------------------------------------------------------- the verdict on fixtures
-
-
-def _turn(label: str, door: str, audit: dict[str, Any], reply: str = "") -> Turn:
-    return Turn(
-        label=label, door=door, words="w", audit=audit, reply=reply, commands=[], approvals=[]
-    )
-
-
-def _good_final() -> dict[str, Any]:
-    return {
-        "door": {"status": "open", "hooks": ["verify_ssh"], "hooks_ready": ["verify_ssh"]},
-        "policy": {
-            "principals": {
-                "ssh:mike": {"invoke": "*", "propose": True},
-                "anonymous": {"invoke": [], "propose": False},
-            },
-            "hooks": ["verify_ssh"],
-            "door": "open",
-        },
-        "catalog": {
-            "verify_ssh": {
-                "status": "ready",
-                "state": "ephemeral",
-                "chain_length": 0,
-                "recipe_id": "r1",
-            },
-            "page_title": {
-                "status": "ready",
-                "state": "ephemeral",
-                "chain_length": 0,
-                "recipe_id": "r2",
-            },
-            "counter": {
-                "status": "ready",
-                "state": "chain",
-                "chain_length": 2,
-                "chain_head": "k2",
-                "recipe_id": "r3",
-            },
-        },
-        "proposals": [
-            {
-                "id": "p-1",
-                "kind": "verb",
-                "status": "ready",
-                "recipe_id": "r1",
-                "verb": {"name": "verify_ssh"},
-            },
-            {"id": "p-2", "kind": "policy", "status": "applied", "recipe_id": None},
-            {"id": "p-3", "kind": "policy", "status": "applied", "recipe_id": None},
-            {
-                "id": "p-4",
-                "kind": "verb",
-                "status": "ready",
-                "recipe_id": "r2",
-                "verb": {"name": "page_title"},
-            },
-            {
-                "id": "p-5",
-                "kind": "verb",
-                "status": "ready",
-                "recipe_id": "r3",
-                "verb": {"name": "counter"},
-            },
-        ],
-    }
-
-
-def _good_turns() -> list[Turn]:
-    return [
-        _turn("1", "api", _audit()),
-        _turn("4", "ingress", _audit(door="ingress", principal="ssh:mike")),
-        _turn("5", "ingress-unsigned", _audit(door="ingress", principal="anonymous", offered=[])),
-        _turn(
-            "8",
-            "ingress",
-            _audit(
-                door="ingress",
-                principal="ssh:mike",
-                tools=[{"name": "page_title", "computer_id": "c8"}],
-                offered=["effort", "page_title", "propose", "remember", "try", "verify_ssh"],
-            ),
-            "Example Domain",
-        ),
-        _turn(
-            "9-count-1",
-            "ingress",
-            _audit(
-                door="ingress",
-                principal="ssh:mike",
-                tools=[{"name": "counter", "computer_id": "c9a", "chain_head": "k1"}],
-            ),
-            "1",
-        ),
-        _turn(
-            "9-count-2",
-            "ingress",
-            _audit(
-                door="ingress",
-                principal="ssh:mike",
-                tools=[{"name": "counter", "computer_id": "c9b", "chain_head": "k2"}],
-            ),
-            "2",
-        ),
-    ]
-
-
-def _good_checks() -> dict[str, dict[str, Any]]:
-    return {
-        "c8": {"computer_id": "c8", "gone": True, "stdout": "Example Domain\n", "exit_code": 0},
-        "c9a": {"computer_id": "c9a", "gone": True, "stdout": "1\n", "exit_code": 0},
-        "c9b": {"computer_id": "c9b", "gone": True, "stdout": "called 2 times\n", "exit_code": 0},
-    }
-
-
-def _judge(**overrides: Any) -> dict[str, dict[str, Any]]:
-    args: dict[str, Any] = {
-        "recipes_after": {"pre", "brain", "r1", "r2", "r3"},
-        "preexisting": {"pre"},
-        "brain_recipe": "brain",
-        "checks": _good_checks(),
-        "sent": [("api", "say"), ("api", "list"), ("api", "approve"), ("ingress", "say")],
-    }
-    args.update(overrides)
-    turns = args.pop("turns", _good_turns())
-    final = args.pop("final", _good_final())
-    return verdict(turns, final, **args)
-
-
-def test_the_fixtures_pass_every_postcondition() -> None:
-    result = _judge()
-    assert all(v["ok"] for v in result.values()), result
-
-
-def test_authentication_evidence_carries_the_hook_runs_and_their_logs() -> None:
-    turns = _good_turns()
-    hook = {
-        "name": "verify_ssh",
-        "status": "ok",
-        "computer_id": "c-hook",
-        "exit_code": 1,
-        "principal": "anonymous",
-    }
-    turns[1] = _turn("4", "ingress", _audit(door="ingress", principal="anonymous", hooks=[hook]))
-    checks = _good_checks()
-    checks["c-hook"] = {"computer_id": "c-hook", "gone": True, "stdout": "", "exit_code": 1}
-    result = _judge(turns=turns, checks=checks)["authentication"]
-    assert result["ok"] is False
-    assert result["evidence"]["hooks"] == [hook] and result["evidence"]["hook_logs"] == [
-        checks["c-hook"]
-    ]
-
-
-def test_root_is_unforgeable_fails_when_a_public_turn_is_root() -> None:
-    turns = _good_turns()
-    turns.append(_turn("x", "ingress", _audit(door="ingress", principal="root")))
-    assert _judge(turns=turns)["root_unforgeable"] == {
-        "ok": False,
-        "evidence": {
-            "public_principals": [
-                "ssh:mike",
-                "anonymous",
-                "ssh:mike",
-                "ssh:mike",
-                "ssh:mike",
-                "root",
-            ]
-        },
-    }
-    turns = _good_turns()
-    turns.append(_turn("x", "ingress", _audit(door="ingress", principal="system:me")))
-    assert _judge(turns=turns)["root_unforgeable"]["ok"] is False
-
-
-def test_authorization_needs_the_policy_and_the_empty_anonymous_offer() -> None:
-    final = _good_final()
-    final["policy"]["principals"]["anonymous"] = {"invoke": ["page_title"], "propose": False}
-    assert _judge(final=final)["authorization"]["ok"] is False
-    final = _good_final()
-    final["policy"]["principals"]["ssh:mike"] = {"invoke": ["page_title"], "propose": True}
-    assert _judge(final=final)["authorization"]["ok"] is False  # counter not invokable
-    final["policy"]["principals"]["ssh:mike"] = {
-        "invoke": ["page_title", "counter", "verify_ssh"],
-        "propose": True,
-    }
-    assert _judge(final=final)["authorization"]["ok"] is True
-    final["policy"]["principals"]["ssh:mike"] = {"invoke": "*", "propose": False}
-    assert _judge(final=final)["authorization"]["ok"] is False  # cannot propose
-    turns = _good_turns()
-    turns[2] = _turn(
-        "5",
-        "ingress-unsigned",
-        _audit(door="ingress", principal="anonymous", offered=["page_title"]),
-    )
-    assert _judge(turns=turns)["authorization"]["ok"] is False
-
-
-def test_authorization_is_judged_on_the_verbs_the_liturgy_exercises() -> None:
-    """#117: "ssh:mike can invoke the verbs" means the verbs turns 8 and 9 invoke.
-    A grant that withholds the agent's own identity hook from the public
-    principal is a decision turn 6 asked for, not a miss."""
-    final = _good_final()
-    final["policy"]["principals"]["ssh:mike"] = {
-        "invoke": ["page_title", "counter"],
-        "propose": True,
-    }
-    judged = _judge(final=final)["authorization"]
-    assert judged["ok"] is True
-    assert judged["evidence"]["exercised"] == ["counter", "page_title"]
-    # A list grant is only evidence against the verbs that were exercised: a
-    # run that invoked nothing at turns 8 and 9 has shown no verb it can invoke.
-    turns = _good_turns()
-    turns[3] = _turn("8", "ingress", _audit(door="ingress", principal="ssh:mike"), reply="?")
-    turns[4] = _turn("9-count-1", "ingress", _audit(door="ingress", principal="ssh:mike"))
-    turns[5] = _turn("9-count-2", "ingress", _audit(door="ingress", principal="ssh:mike"))
-    judged = _judge(final=final, turns=turns)["authorization"]
-    assert judged["ok"] is False
-    assert judged["evidence"]["exercised"] == []
-    # "*" covers whatever the liturgy asks for, exercised or not.
-    assert _judge(turns=turns)["authorization"]["ok"] is True
-    # The hook is not one of the verbs: a run that invoked only its own hook as a
-    # tool, under a grant of the hook alone, has not shown it can invoke anything
-    # the liturgy gave it.
-    hook_call = [{"name": "verify_ssh", "computer_id": "cx"}]
-    for turn in turns[3:6]:
-        turn.audit["tools"] = hook_call
-    final["policy"]["principals"]["ssh:mike"] = {"invoke": ["verify_ssh"], "propose": True}
-    judged = _judge(final=final, turns=turns)["authorization"]
-    assert judged["ok"] is False
-    assert judged["evidence"]["exercised"] == []
-
-
-def test_page_title_needs_the_words_a_gone_computer_and_its_log() -> None:
-    checks = _good_checks()
-    checks["c8"]["gone"] = False
-    assert _judge(checks=checks)["page_title"]["ok"] is False
-    checks = _good_checks()
-    checks["c8"]["stdout"] = "Something else"
-    assert _judge(checks=checks)["page_title"]["ok"] is False
-    turns = _good_turns()
-    turns[3] = _turn("8", "ingress", _audit(door="ingress", principal="ssh:mike"), "I cannot.")
-    assert _judge(turns=turns)["page_title"] == {
-        "ok": False,
-        "evidence": {"reply": "I cannot.", "computer_id": None, "gone": None, "stdout": None},
-    }
-
-
-def _repeated_head_turns() -> list[Turn]:
-    """The counted turns with both invocations reporting one head: the second
-    invocation left no new checkpoint, so the chain did not advance."""
-    turns = []
-    for t in _good_turns():
-        if t.label.startswith("9-count"):
-            audit = json.loads(json.dumps(t.audit))
-            for call in audit.get("tools", []):
-                if call.get("name") == "counter":
-                    call["chain_head"] = "k1"
-            t = _turn(t.label, t.door, audit, t.reply)
-        turns.append(t)
-    return turns
-
-
-def test_counter_needs_one_then_two_and_a_head_that_advanced_once_per_call() -> None:
-    """The counter is monotonic and every invocation leaves a new head (#139).
-    Counting the chain's rows instead asserted retained history, which #93
-    retention is entitled to collect: `list_prunable_checkpoints` keeps every
-    label's newest row and prunes the rest."""
-    checks = _good_checks()
-    checks["c9b"]["stdout"] = "3\n"
-    assert _judge(checks=checks)["counter"]["ok"] is False  # 1 then 3, not monotonic
-
-    turns = _repeated_head_turns()
-    result = _judge(turns=turns)["counter"]
-    assert result["ok"] is False  # two calls, one head: the chain never advanced
-    assert result["evidence"]["chain_heads"] == ["k1", "k1"]
-
-    final = _good_final()
-    final["catalog"]["counter"]["chain_head"] = "k-other"
-    assert _judge(final=final)["counter"]["ok"] is False  # the head is not the last call's
-
-    turns = [t for t in _good_turns() if not t.label.startswith("9-count")]
-    result = _judge(turns=turns)["counter"]
-    assert result["ok"] is False and result["evidence"]["counts"] == []
-
-
-def test_the_counter_survives_retention_pruning_its_history() -> None:
-    """#139: `2026-09-11-turn2-run-1` invoked its counter twice, got 1 then 2, and
-    the reaper pruned the first invocation's checkpoint nine seconds later, so the
-    catalog reported one row for two invocations. Every durable fact still holds,
-    and the postcondition must pass on them."""
-    final = _good_final()
-    final["catalog"]["counter"]["chain_length"] = 1  # the older row is gone
-    result = _judge(final=final)["counter"]
-    assert result["ok"] is True
-    assert result["evidence"]["counts"] == [1, 2]
-    assert result["evidence"]["chain_heads"] == ["k1", "k2"]
-    assert result["evidence"]["final_chain_head"] == "k2"
-
-
-def test_a_trials_recipe_is_declared() -> None:
-    final = _good_final()
-    final["trials"] = [{"id": "t-1", "verb": "probe", "status": "done", "recipe_id": "r-trial"}]
-    result = _judge(final=final, recipes_after={"pre", "brain", "r1", "r2", "r3", "r-trial"})
-    assert result["no_undeclared_capability"]["ok"] is True
-
-
-def test_no_undeclared_capability_watches_the_catalog_the_offer_and_the_recipes() -> None:
-    assert _judge(recipes_after={"pre", "brain", "r1", "r2", "r3", "stray"})[
-        "no_undeclared_capability"
-    ] == {
-        "ok": False,
-        "evidence": {
-            "catalog": ["counter", "page_title", "verify_ssh"],
-            "not_ready": [],
-            "unproposed": [],
-            "unexpected_tools": [],
-            "undeclared_recipes": ["stray"],
-        },
-    }
-    final = _good_final()
-    final["catalog"]["extra"] = {
-        "status": "ready",
-        "state": "ephemeral",
-        "chain_length": 0,
-        "recipe_id": "r9",
-    }
-    assert _judge(final=final)["no_undeclared_capability"]["evidence"]["unproposed"] == ["extra"]
-    final = _good_final()
-    final["catalog"]["counter"]["status"] = "building"
-    assert _judge(final=final)["no_undeclared_capability"]["evidence"]["not_ready"] == ["counter"]
-    turns = _good_turns()
-    turns[3].audit["offered"] = ["propose", "remember", "shell", "try"]
-    assert _judge(turns=turns)["no_undeclared_capability"]["evidence"]["unexpected_tools"] == [
-        "shell"
-    ]
-
-
-def test_nothing_by_hand_is_the_command_list() -> None:
-    assert _judge()["nothing_by_hand"] == {
-        "ok": True,
-        "evidence": {"commands": {"api say": 1, "api list": 1, "api approve": 1, "ingress say": 1}},
-    }
-    assert _judge(sent=[("api", "upload")])["nothing_by_hand"]["ok"] is False
 
 
 # ---------------------------------------------------------------- hatching and a whole run
@@ -1494,9 +1137,9 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     # every membrane command was answered by the fake's default (a root reply), so the
     # door was never opened and the postconditions that need it fail honestly
     assert summary["ok"] is False and summary["model"] == "claude-opus-5"
-    assert summary["hatched"]["rule_id"] == "rule-1" and summary["passed"] < len(POSTCONDITIONS)
+    assert summary["hatched"]["rule_id"] == "rule-1" and summary["passed"] < len(CHECKS)
     assert summary["usage"]["input_tokens"] > 0 and summary["cost_usd"] > 0
-    assert set(summary["postconditions"]) == set(POSTCONDITIONS)
+    assert set(summary["postconditions"]) == set(CHECKS)
     assert (out_dir / "run.json").exists() and (out_dir / "transcript.md").exists()
     assert (out_dir / "final-list.json").exists() and any((out_dir / "commands").iterdir())
     run_doc = json.loads((out_dir / "run.json").read_text())
@@ -1686,21 +1329,6 @@ def test_the_asking_approver_asks_again_after_an_unknown_answer() -> None:
     assert AskApprover(io.StringIO("reject\n"), io.StringIO()).decide({"id": "p-1"}) == "rejected"
 
 
-def test_a_count_turn_needs_a_chain_head_to_count() -> None:
-    turns = _good_turns()
-    turns[4] = _turn(
-        "9-count-1",
-        "ingress",
-        _audit(
-            door="ingress",
-            principal="ssh:mike",
-            tools=[{"name": "page_title", "computer_id": "c8"}],
-        ),
-    )
-    result = _judge(turns=turns)["counter"]
-    assert result["ok"] is False and result["evidence"]["computer_ids"] == ["c9b"]
-
-
 def test_membrane_version_names_the_commit_and_whether_the_tree_was_dirty(
     tmp_path: Path,
 ) -> None:
@@ -1708,62 +1336,3 @@ def test_membrane_version_names_the_commit_and_whether_the_tree_was_dirty(
     assert len(version["commit"]) == 40 and isinstance(version["dirty"], bool)
     # outside a repository there is no commit to name
     assert membrane_version(tmp_path) == {"commit": None, "dirty": None}
-
-
-def _counted(label: str, tools: list[dict[str, Any]], reply: str) -> Turn:
-    return _turn(label, "ingress", _audit(door="ingress", principal="ssh:mike", tools=tools), reply)
-
-
-def test_the_counter_passes_when_the_model_verifies_its_verb_within_one_turn() -> None:
-    """#117, from live run 2026-09-10-run-4: the model called its counter twice in
-    `9-count-1` to prove that state crossed the chain, so the invocations returned
-    1, 2, 3 and the chain grew to three. What the postcondition tests is that the
-    counter is monotonic and the chain grows once per invocation, not the numerals."""
-    turns = _good_turns()
-    turns[4] = _counted(
-        "9-count-1",
-        [
-            {"name": "counter", "computer_id": "c9a", "chain_head": "k1"},
-            {"name": "counter", "computer_id": "c9a2", "chain_head": "k2"},
-        ],
-        "1, then 2 on a different computer",
-    )
-    turns[5] = _counted(
-        "9-count-2", [{"name": "counter", "computer_id": "c9b", "chain_head": "k3"}], "3"
-    )
-    checks = _good_checks()
-    checks["c9a2"] = {"computer_id": "c9a2", "gone": True, "stdout": "2\n", "exit_code": 0}
-    checks["c9b"]["stdout"] = "called 3 times\n"
-    final = _good_final()
-    final["catalog"]["counter"]["chain_length"] = 3
-    final["catalog"]["counter"]["chain_head"] = "k3"  # the third invocation's head
-
-    result = _judge(turns=turns, checks=checks, final=final)["counter"]
-
-    assert result["ok"] is True
-    assert result["evidence"]["counts"] == [1, 2, 3]
-    assert result["evidence"]["chain_heads"] == ["k1", "k2", "k3"]
-
-
-def test_the_counter_fails_when_an_invocation_is_lost() -> None:
-    """The stricter half of #117: counting every invocation catches a chain that
-    skipped one, which the old `counts == [1, 2]` would have passed on two calls."""
-    turns = _good_turns()
-    turns[4] = _counted(
-        "9-count-1",
-        [
-            {"name": "counter", "computer_id": "c9a", "chain_head": "k1"},
-            {"name": "counter", "computer_id": "c9a2", "chain_head": "k2"},
-        ],
-        "1, then 3",
-    )
-    checks = _good_checks()
-    checks["c9a2"] = {"computer_id": "c9a2", "gone": True, "stdout": "3\n", "exit_code": 0}
-    checks["c9b"]["stdout"] = "called 4 times\n"
-    final = _good_final()
-    final["catalog"]["counter"]["chain_length"] = 3
-
-    result = _judge(turns=turns, checks=checks, final=final)["counter"]
-
-    assert result["ok"] is False
-    assert result["evidence"]["counts"] == [1, 3, 4]

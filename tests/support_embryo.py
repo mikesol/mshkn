@@ -19,6 +19,29 @@ if TYPE_CHECKING:
 
 HATCH = load(CAPABILITIES / "hatch.md")  # the first capability, read by every tier
 WORDS = HATCH.words  # label -> words; "1", "2", "4", ..., "9-count-2"
+USAGE = {
+    "input_tokens": 1000,
+    "output_tokens": 100,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+}
+
+
+def audit_line(**fields: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "door": "api",
+        "principal": "root",
+        "offered": ["effort", "propose", "remember", "try"],
+        "tools": [],
+        "proposals": [],
+        "memory_written": True,
+        "stopped": "done",
+        "model_calls": 1,
+        "effort": ["medium"],
+        "usage": dict(USAGE),
+    }
+    base.update(fields)
+    return base
 
 
 def text_completion(text: str) -> Completion:
