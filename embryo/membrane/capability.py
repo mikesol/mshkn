@@ -19,7 +19,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import suppress
 from dataclasses import asdict, dataclass
@@ -29,15 +28,11 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
 import httpx
 
-from membrane.capabilities import catalog
+from membrane.capabilities import TEMPLATE_RE, CapabilityError, catalog, order
 from membrane.config import DEFAULT_MODEL_ID, parse_env
 from membrane.effort import EFFORTS
 from membrane.model import add_usage, zero_usage
-from membrane.postconditions import CHECKS as CHECKS  # re-exported: the tests import it
-from membrane.postconditions import Judged as Judged  # re-exported: the tests import it
-from membrane.postconditions import Turn as Turn  # re-exported: the tests import it
-from membrane.postconditions import by_label, tool_computers
-from membrane.postconditions import judge as judge  # re-exported: the tests import it
+from membrane.postconditions import CHECKS, Judged, Turn, by_label, judge, tool_computers
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -46,6 +41,7 @@ if TYPE_CHECKING:
 
 DEFAULT_BRAIN_API_URL = "https://api.mshkn.dev"
 DEFAULT_OUT = Path("docs/embryo")
+KEYS = (".mshkn", "keys")  # under the operator's home; never under the repository
 REQUIRED = ("MSHKN_API_URL", "MSHKN_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 OPTIONAL = ("BRAIN_API_URL",)
 HATCH = Path(__file__).resolve().parents[1] / "hatch.sh"
@@ -243,8 +239,9 @@ PROMOTED_PREFIX = "capability/"
 class Promotion:
     """What `promote` wrote: which run, which membrane, the checkpoint ids under
     each promoted label, and the lineage a dependent reuses (its ingress rule,
-    scoped key and recipes). `started_from` is the promotion this run began on,
-    so records chain back to a hatch."""
+    scoped key, recipes, the hatcher's signing key and the model the brain was
+    hatched with). `started_from` is the promotion this run began on, so records
+    chain back to a hatch."""
 
     capability: str
     run: str
@@ -255,6 +252,10 @@ class Promotion:
     key_id: str
     brain_recipe: str
     recipe_ids: tuple[str, ...]
+    key_dir: str
+    pubkey: str
+    model: str
+    default_effort: str | None
     started_from: str | None
 
 
@@ -294,10 +295,13 @@ def read_promotion(out: Path, name: str) -> Promotion | None:
     if not path.exists():
         return None
     text = path.read_text()
-    block = text.split("```json\n", 1)[1].split("\n```", 1)[0]
-    doc = json.loads(block)
-    doc["recipe_ids"] = tuple(doc["recipe_ids"])
-    return Promotion(**doc)
+    try:
+        block = text.split("```json\n", 1)[1].split("\n```", 1)[0]
+        doc = json.loads(block)
+        doc["recipe_ids"] = tuple(doc["recipe_ids"])
+        return Promotion(**doc)
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"{path} is not a promotion record: {exc}") from exc
 
 
 def ancestry(out: Path, name: str) -> list[str]:
@@ -586,6 +590,15 @@ def new_key(key_dir: Path) -> str:
     return (key_dir / "id.pub").read_text().strip()
 
 
+def load_key(key_dir: Path) -> str:
+    """The public key line already in `key_dir`: what a dependent must sign with,
+    because the promoted identity hook trusts the key its hatch baked in."""
+    path = key_dir / "id.pub"
+    if not path.exists():
+        raise RuntimeError(f"no key in {key_dir}")
+    return path.read_text().strip()
+
+
 def sign(key_dir: Path, message: str) -> dict[str, str]:
     msg = key_dir / "msg"
     msg.write_bytes(message.encode())
@@ -691,11 +704,30 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
     summary = json.loads((run_dir / "run.json").read_text())
     if not summary.get("ok"):
         raise RuntimeError(f"{run_dir.name} is not ok; only a passing run is promoted")
+    try:
+        run = str(run_dir.relative_to(out))
+    except ValueError:
+        raise RuntimeError(
+            f"{run_dir} is not under {out}; promote takes the run's evidence directory under --out"
+        ) from None
+    lacking = [k for k in ("key_dir", "pubkey", "model", "default_effort") if k not in summary]
+    if lacking:
+        raise RuntimeError(
+            f"{run_dir.name}/run.json does not name {', '.join(lacking)}; a promotion carries the "
+            "key its dependents sign with and the model its brain was hatched with, so a run "
+            "recorded without them cannot be promoted"
+        )
     hatched = Hatched(**summary["hatched"])
     final = json.loads((run_dir / "final-list.json").read_text())
     working = await doors.working_labels()
     if "brain" not in working:
         raise RuntimeError("no working brain on the account; was the run kept (--keep)?")
+    head = await doors.head("brain") or {}
+    if head.get("recipe_id") != hatched.recipe_id:
+        raise RuntimeError(
+            f"the brain on the account is from recipe {head.get('recipe_id')}, not "
+            f"{hatched.recipe_id}; is this the run you meant to promote?"
+        )
     labels: dict[str, str] = {}
     try:
         for label in working:
@@ -713,7 +745,7 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
     started = summary.get("started_from")
     record = Promotion(
         capability=name,
-        run=str(run_dir.relative_to(out)),
+        run=run,
         membrane=dict(summary.get("membrane", {})),
         promoted_at=datetime.now(UTC).isoformat(timespec="seconds"),
         labels=labels,
@@ -721,6 +753,10 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
         key_id=hatched.key_id,
         brain_recipe=hatched.recipe_id,
         recipe_ids=tuple(recipe_ids),
+        key_dir=str(summary["key_dir"]),
+        pubkey=str(summary["pubkey"]),
+        model=str(summary["model"]),
+        default_effort=summary["default_effort"],
         started_from=None if started in (None, "hatch") else str(started),
     )
     path = write_promotion(out, record)
@@ -773,6 +809,12 @@ async def speak(
     """The capability's rows in order, each followed by approvals, a wait for
     builds and at most MAX_REPAIRS repair turns. A `root list` row takes the
     listing and is not a turn; the last one taken is returned as the final state."""
+    for row in capability.rows:
+        for name in TEMPLATE_RE.findall(row.words):
+            if name not in context:
+                raise RuntimeError(
+                    f"row {row.label} needs {{{name}}} and the run's context has {sorted(context)}"
+                )
     turns: list[Turn] = []
     final: dict[str, Any] | None = None
 
@@ -922,10 +964,48 @@ async def run_once(
     out: Path,
 ) -> dict[str, Any]:
     """Hatch (or, for a dependent, start from its last dependency's promotion),
-    speak, judge, record, tear down. Returns `run.json`'s document."""
+    speak, judge, record, tear down. Returns `run.json`'s document.
+
+    A dependent signs with its lineage's key and reports its lineage's membrane,
+    model and effort: the promoted hook trusts the key the hatcher's row 2 handed
+    over, and the forked brain runs the wheel and the `/brain/.env` of that hatch,
+    whatever this working tree and this command line say."""
     record = Record(out_dir)
     started = datetime.now(UTC)
     clock = time.monotonic()
+    # Named before hatching: hatch.sh builds the wheel and uploads the priors from
+    # the working tree at this moment, whatever is committed later in the run.
+    version = membrane_version()
+    model_id, default_effort = settings.model_id, settings.default_effort
+    pubkey = ""
+    lineage: Promotion | None = None
+    if capability.depends:
+        # Resolved before the first request: a key that cannot sign for this
+        # lineage must cost neither an API call nor a fork of the promotion.
+        start = capability.depends[-1]
+        lineage = read_promotion(out, start)
+        if lineage is None:
+            raise RuntimeError(
+                f"{capability.name} starts from {start}, which has no promotion; "
+                f"run `capability run {start} --keep` to a passing run, then "
+                f"`capability promote {start} <run-dir>`"
+            )
+        missing = [d for d in capability.depends[:-1] if d not in ancestry(out, start)]
+        if missing:
+            raise RuntimeError(
+                f"{capability.name} depends on {', '.join(missing)}, not in the ancestry of "
+                f"{start}'s promotion ({' <- '.join(ancestry(out, start))})"
+            )
+        key_dir = Path(lineage.key_dir)
+        held = load_key(key_dir)
+        if held != lineage.pubkey:
+            raise RuntimeError(
+                f"{lineage.key_dir} holds a key that is not the one {lineage.run} was hatched "
+                f"with; the promoted hook trusts {lineage.pubkey[:40]}…"
+            )
+        pubkey = lineage.pubkey
+        version = dict(lineage.membrane)
+        model_id, default_effort = lineage.model, lineage.default_effort
     transport = transport_for(settings.api_url)
     async with (
         httpx.AsyncClient(
@@ -942,30 +1022,12 @@ async def run_once(
         if await doors.checkpoints("brain"):
             raise RuntimeError("the account already has a brain; tear it down before measuring")
         preexisting = await doors.recipes()
-        pubkey = new_key(key_dir)
-        # Named before hatching: hatch.sh builds the wheel and uploads the priors from
-        # the working tree at this moment, whatever is committed later in the run.
-        version = membrane_version()
-        lineage: Promotion | None = None
-        if capability.depends:
-            start = capability.depends[-1]
-            lineage = read_promotion(out, start)
-            if lineage is None:
-                raise RuntimeError(
-                    f"{capability.name} starts from {start}, which has no promotion; "
-                    f"run `capability run {start} --keep` to a passing run, then "
-                    f"`capability promote {start} <run-dir>`"
-                )
-            missing = [d for d in capability.depends[:-1] if d not in ancestry(out, start)]
-            if missing:
-                raise RuntimeError(
-                    f"{capability.name} depends on {', '.join(missing)}, not in the ancestry of "
-                    f"{start}'s promotion ({' <- '.join(ancestry(out, start))})"
-                )
+        if lineage is not None:
             log.write(f"starting from {lineage.run} ({lineage.membrane.get('commit')})\n")
             hatched = await start_from(doors, lineage, log=log)
         else:
-            log.write(f"hatching with {settings.model_id} (membrane {version['commit']})\n")
+            pubkey = new_key(key_dir)
+            log.write(f"hatching with {model_id} (membrane {version['commit']})\n")
             hatched = hatch(settings, hatch_script, log=log)
         doors.rule_id = hatched.rule_id
         log.write(f"hatched: {json.dumps(asdict(hatched))}\n")
@@ -981,7 +1043,10 @@ async def run_once(
                     {
                         "run": out_dir.name,
                         "capability": capability.name,
-                        "model": settings.model_id,
+                        "model": model_id,
+                        "default_effort": default_effort,
+                        "key_dir": str(key_dir),
+                        "pubkey": pubkey,
                         "started": started.isoformat(timespec="seconds"),
                         "ended": datetime.now(UTC).isoformat(timespec="seconds"),
                         "membrane": version,
@@ -1025,8 +1090,10 @@ async def run_once(
             summary = {
                 "run": out_dir.name,
                 "capability": capability.name,
-                "model": settings.model_id,
-                "default_effort": settings.default_effort,
+                "model": model_id,
+                "default_effort": default_effort,
+                "key_dir": str(key_dir),
+                "pubkey": pubkey,
                 "membrane": version,
                 "started": started.isoformat(timespec="seconds"),
                 "ended": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -1052,12 +1119,12 @@ async def run_once(
                 "commands": len(doors.sent),
                 "model_calls": model_calls,
                 "usage": usage,
-                "cost_usd": round(cost_usd(usage, settings.model_id), 4),
+                "cost_usd": round(cost_usd(usage, model_id), 4),
                 "postconditions": judged,
                 "passed": passed,
                 "ok": passed == len(capability.postconditions),
             }
-            record.transcript(settings.model_id, turns)
+            record.transcript(model_id, turns)
             record.summary(summary)
             tokens = f"{usage['input_tokens']} in / {usage['output_tokens']} out"
             log.write(
@@ -1098,6 +1165,12 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
         help="the run's default output_config.effort, which a turn may raise (default the API's)",
     )
     run.add_argument("--date", default=datetime.now(UTC).date().isoformat())
+    run.add_argument(
+        "--key-dir",
+        type=Path,
+        default=None,
+        help="where the run's signing key lives (default ~/.mshkn/keys/<capability>/<run>)",
+    )
     run.add_argument("--keep", action="store_true", help="leave the brain on the account")
     run.add_argument("--hatch", type=Path, default=HATCH)
     promote_p = sub.add_parser(
@@ -1133,17 +1206,40 @@ def _promote(args: argparse.Namespace, log: TextIO) -> int:
 
     try:
         asyncio.run(go())
-    except (RuntimeError, OSError, httpx.HTTPError) as exc:
+    except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
         log.write(f"promote failed: {exc}\n")
         return 1
     return 0
 
 
 def _run(args: argparse.Namespace, log: TextIO) -> int:
+    """The graph, the postcondition names and the settings are resolved before the
+    run hatches: a cycle, a dependency that does not exist or a check no one wrote
+    costs nothing but a message (capabilities design §5, "Resolve")."""
+    known = catalog()
     try:
-        capability = catalog()[args.name]
+        capability = known[args.name]
     except KeyError:
-        log.write(f"no capability named {args.name!r}; the files are {sorted(catalog())}\n")
+        log.write(f"no capability named {args.name!r}; the files are {sorted(known)}\n")
+        return 2
+    try:
+        order(known, args.name)
+    except CapabilityError as exc:
+        log.write(f"{exc}\n")
+        return 2
+    unknown = sorted(set(capability.postconditions) - set(CHECKS))
+    if unknown:
+        log.write(
+            f"{capability.name} names postconditions no one wrote: {', '.join(unknown)}; "
+            f"the checks are {sorted(CHECKS)}\n"
+        )
+        return 2
+    if capability.depends and (args.model or args.effort):
+        log.write(
+            f"{capability.name} starts from {capability.depends[-1]}'s promotion, whose brain "
+            "runs the model and effort baked into its /brain/.env at hatch: --model and "
+            "--effort belong to a capability that hatches\n"
+        )
         return 2
     try:
         settings = load_run_settings(args.env, os.environ, model_id=args.model, effort=args.effort)
@@ -1156,8 +1252,11 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
     all_ok = True
     for _ in range(args.runs):
         out_dir = _next_run_dir(args.out / capability.name, args.date)
-        # The hatcher's private key lives in a temp dir, never beside the evidence.
-        key_dir = Path(tempfile.mkdtemp(prefix="capability-keys-"))
+        # The hatcher's private key lives on the operator's machine, never beside the
+        # evidence: a dependent starts from its lineage's promotion and must sign with
+        # the key that hatch's row 2 handed the agent, so the run names its directory.
+        key_dir = args.key_dir or Path.home().joinpath(*KEYS, capability.name, out_dir.name)
+        key_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
             summary = asyncio.run(
                 run_once(

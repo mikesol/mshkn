@@ -187,7 +187,7 @@ role). A capability with dependencies starts from the promotion record of the
 last dependency listed (§4, §5.2): the driver forks `capability/<dep>/brain` to
 `brain` and every `capability/<dep>/verb/<v>` to `verb/<v>` (create from the
 checkpoint, checkpoint under the new label, destroy), and reuses the record's
-`rule_id`, `key_id` and `recipe_ids`. Everything an ancestor grew is already in
+`rule_id`, `key_id` and `recipe_ids`, and signs with the lineage's key (§5.2). Everything an ancestor grew is already in
 that state, because promotion promotes the whole account state the run ended
 with. A run refuses to start if the account has a working `brain`, as today.
 
@@ -215,8 +215,10 @@ every working `verb/<v>` head to `capability/<name>/verb/<v>`, writes
 `docs/embryo/<name>/PROMOTED.md` (the run directory, the membrane commit, the
 checkpoint ids under each promoted label, `rule_id`, `key_id`, `recipe_ids`, the
 date, and `started_from`: the promotion this run began on, so a record's
-ancestry is a chain the driver can walk), and then tears the working labels
-down. A run that is not `ok` cannot be
+ancestry is a chain the driver can walk, and the hatcher's signing key: its
+directory on the operator's machine and its public key line, because the
+promoted identity hook trusts that key and a dependent must sign with it), and
+then tears the working labels down. A run that is not `ok` cannot be
 promoted; the pilot who wants to promote a partial run edits nothing and reruns.
 
 Re-promotion overwrites the labels and the record; git holds the history. A

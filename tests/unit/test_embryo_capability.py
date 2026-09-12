@@ -16,19 +16,16 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 from membrane.capability import (
-    CHECKS,
     TURN_WAIT,
     AskApprover,
     AutoApprover,
     Doors,
     Hatched,
-    Judged,
     Record,
     RunSettings,
-    Turn,
     cost_usd,
     hatch,
-    judge,
+    load_key,
     load_run_settings,
     main,
     membrane_version,
@@ -40,6 +37,7 @@ from membrane.capability import (
     transport_for,
 )
 from membrane.model import zero_usage
+from membrane.postconditions import CHECKS, Judged, Turn, judge
 
 from tests.support_embryo import HATCH, WORDS, audit_line, b64
 
@@ -152,6 +150,10 @@ def test_a_promotion_record_round_trips_and_is_readable_markdown(tmp_path: Path)
         key_id="key-1",
         brain_recipe="rcp-brain",
         recipe_ids=("rcp-brain", "rcp-counter"),
+        key_dir="/home/mike/.mshkn/keys/hatch/2026-09-12-run-1",
+        pubkey="ssh-ed25519 AAAA mike",
+        model="claude-opus-5",
+        default_effort=None,
         started_from=None,
     )
     path = write_promotion(tmp_path, p)
@@ -174,6 +176,10 @@ def test_ancestry_walks_started_from(tmp_path: Path) -> None:
         "key_id": "k",
         "brain_recipe": "rcp",
         "recipe_ids": (),
+        "key_dir": "/keys",
+        "pubkey": "ssh-ed25519 AAAA mike",
+        "model": "claude-opus-5",
+        "default_effort": None,
     }
     write_promotion(
         tmp_path, Promotion(capability="hatch", run="hatch/r1", started_from=None, **base)
@@ -657,6 +663,10 @@ async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_
                     "ingress_url": "u",
                     "server_id": None,
                 },
+                "key_dir": "/keys/hatch",
+                "pubkey": "ssh-ed25519 AAAA mike",
+                "model": "claude-opus-5",
+                "default_effort": None,
                 "started_from": "hatch",
             }
         )
@@ -665,7 +675,7 @@ async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_
         json.dumps({"proposals": [{"recipe_id": "rcp-counter"}, {"recipe_id": None}]})
     )
     checkpoints = [
-        {"id": "ck-b", "label": "brain", "created_at": "t"},
+        {"id": "ck-b", "label": "brain", "created_at": "t", "recipe_id": "rcp-brain"},
         {"id": "ck-c", "label": "verb/counter", "created_at": "t"},
         # a checkpoint from an earlier promotion: not a working label, so the
         # cleanup after copying leaves it alone
@@ -694,6 +704,9 @@ async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_
     assert p.labels == {"brain": "promoted-brain", "verb/counter": "promoted-counter"}
     assert p.recipe_ids == ("rcp-brain", "rcp-counter")
     assert p.rule_id == "ir_1" and p.key_id == "key-1"
+    # the lineage a dependent needs: the hatcher's key, and the model its brain runs
+    assert p.key_dir == "/keys/hatch" and p.pubkey == "ssh-ed25519 AAAA mike"
+    assert p.model == "claude-opus-5" and p.default_effort is None
     assert p.run == "hatch/2026-09-12-run-1" and p.started_from is None
     assert read_promotion(tmp_path, "hatch") == p
     # the working checkpoints went; the key, the rule and the recipes stayed
@@ -725,13 +738,17 @@ async def test_promote_logs_a_delete_that_fails_but_still_returns_the_record(
                     "ingress_url": "u",
                     "server_id": None,
                 },
+                "key_dir": "/keys/hatch",
+                "pubkey": "ssh-ed25519 AAAA mike",
+                "model": "claude-opus-5",
+                "default_effort": None,
                 "started_from": "hatch",
             }
         )
     )
     (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
     checkpoints = [
-        {"id": "ck-b", "label": "brain", "created_at": "t"},
+        {"id": "ck-b", "label": "brain", "created_at": "t", "recipe_id": "rcp-brain"},
         {"id": "ck-c", "label": "verb/counter", "created_at": "t"},
     ]
 
@@ -783,13 +800,17 @@ async def test_promote_reports_which_labels_were_already_copied_when_a_later_one
                     "ingress_url": "u",
                     "server_id": None,
                 },
+                "key_dir": "/keys/hatch",
+                "pubkey": "ssh-ed25519 AAAA mike",
+                "model": "claude-opus-5",
+                "default_effort": None,
                 "started_from": "hatch",
             }
         )
     )
     (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
     checkpoints = [
-        {"id": "ck-b", "label": "brain", "created_at": "t"},
+        {"id": "ck-b", "label": "brain", "created_at": "t", "recipe_id": "rcp-brain"},
         {"id": "ck-c", "label": "verb/counter", "created_at": "t"},
     ]
 
@@ -848,6 +869,10 @@ async def test_promote_refuses_when_the_working_brain_is_gone(tmp_path: Path) ->
                     "checkpoint_id": "c",
                     "ingress_url": "u",
                 },
+                "key_dir": "/keys/hatch",
+                "pubkey": "ssh-ed25519 AAAA mike",
+                "model": "claude-opus-5",
+                "default_effort": None,
             }
         )
     )
@@ -855,6 +880,122 @@ async def test_promote_refuses_when_the_working_brain_is_gone(tmp_path: Path) ->
     doors = _bare_doors(tmp_path, lambda _request: httpx.Response(200, json=[]))
     with pytest.raises(RuntimeError, match="no working brain on the account; was the run kept"):
         await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
+
+
+async def test_promote_refuses_a_run_that_does_not_name_its_key_and_model(tmp_path: Path) -> None:
+    """A run recorded before the lineage carried the hatcher's key cannot be
+    promoted: a dependent started from it would sign with a key the promoted
+    identity hook has never seen."""
+    from membrane.capability import promote
+
+    run_dir = tmp_path / "hatch" / "2026-09-12-run-4"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "membrane": {"commit": "abc", "dirty": False},
+                "hatched": {
+                    "rule_id": "ir_1",
+                    "key_id": "key-1",
+                    "recipe_id": "rcp-brain",
+                    "checkpoint_id": "ck-0",
+                    "ingress_url": "u",
+                    "server_id": None,
+                },
+                "started_from": "hatch",
+            }
+        )
+    )
+    (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
+    checkpoints = [{"id": "ck-b", "label": "brain", "created_at": "t", "recipe_id": "rcp-brain"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            label = request.url.params.get("label")
+            return httpx.Response(
+                200, json=[c for c in checkpoints if not label or c["label"] == label]
+            )
+        raise AssertionError(f"promote copied before it checked: {request.url.path}")
+
+    doors = _bare_doors(tmp_path, handler)
+    with pytest.raises(RuntimeError, match="does not name key_dir, pubkey, model, default_effort"):
+        await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
+
+
+async def test_promote_refuses_a_run_directory_outside_out(tmp_path: Path) -> None:
+    """`--out docs/embryo` and a run directory somewhere else: the record's `run`
+    is the path a dependent resolves against `--out`, so a run from elsewhere is
+    refused before anything is copied."""
+    from membrane.capability import promote
+
+    run_dir = tmp_path / "elsewhere" / "2026-09-12-run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({"ok": True}))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"promote reached the API: {request.url.path}")
+
+    doors = _bare_doors(tmp_path, handler)
+    out = tmp_path / "docs"
+    with pytest.raises(RuntimeError, match=f"{run_dir} is not under {out}; promote takes"):
+        await promote(doors, out, "hatch", run_dir, log=io.StringIO())
+
+
+async def test_promote_refuses_a_brain_that_is_not_this_runs(tmp_path: Path) -> None:
+    """The working `brain` on the account is from another hatch's recipe: promoting
+    it would name this run's evidence over another run's state."""
+    from membrane.capability import promote
+
+    run_dir = tmp_path / "hatch" / "2026-09-12-run-5"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "membrane": {},
+                "hatched": {
+                    "rule_id": "ir_1",
+                    "key_id": "key-1",
+                    "recipe_id": "rcp-brain",
+                    "checkpoint_id": "ck-0",
+                    "ingress_url": "u",
+                    "server_id": None,
+                },
+                "key_dir": "/keys/hatch",
+                "pubkey": "ssh-ed25519 AAAA mike",
+                "model": "claude-opus-5",
+                "default_effort": None,
+                "started_from": "hatch",
+            }
+        )
+    )
+    (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
+    checkpoints = [{"id": "ck-b", "label": "brain", "created_at": "t", "recipe_id": "rcp-other"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            label = request.url.params.get("label")
+            return httpx.Response(
+                200, json=[c for c in checkpoints if not label or c["label"] == label]
+            )
+        raise AssertionError(f"promote copied before it checked: {request.url.path}")
+
+    doors = _bare_doors(tmp_path, handler)
+    with pytest.raises(
+        RuntimeError, match="the brain on the account is from recipe rcp-other, not rcp-brain"
+    ):
+        await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
+
+
+def test_read_promotion_of_a_file_that_is_not_a_promotion_record(tmp_path: Path) -> None:
+    from membrane.capability import promotion_path, read_promotion
+
+    path = promotion_path(tmp_path, "hatch")
+    path.parent.mkdir(parents=True)
+    path.write_text("# Promoted: hatch\n\nSomeone rewrote this by hand.\n")
+    with pytest.raises(RuntimeError, match=f"{path} is not a promotion record"):
+        read_promotion(tmp_path, "hatch")
 
 
 async def test_start_from_forks_the_promoted_labels_into_the_working_ones(tmp_path: Path) -> None:
@@ -870,6 +1011,10 @@ async def test_start_from_forks_the_promoted_labels_into_the_working_ones(tmp_pa
         key_id="key-1",
         brain_recipe="rcp-brain",
         recipe_ids=("rcp-brain",),
+        key_dir="/keys",
+        pubkey="ssh-ed25519 AAAA mike",
+        model="claude-opus-5",
+        default_effort=None,
         started_from=None,
     )
     checkpoints = [
@@ -916,6 +1061,10 @@ async def test_teardown_with_a_lineage_keeps_its_key_rule_and_recipes(tmp_path: 
         key_id="key-1",
         brain_recipe="rcp-brain",
         recipe_ids=("rcp-brain", "rcp-counter"),
+        key_dir="/keys",
+        pubkey="ssh-ed25519 AAAA mike",
+        model="claude-opus-5",
+        default_effort=None,
         started_from=None,
     )
     seen: list[tuple[str, str]] = []
@@ -945,6 +1094,16 @@ async def test_teardown_with_a_lineage_keeps_its_key_rule_and_recipes(tmp_path: 
 
 
 # ---------------------------------------------------------------- keys and signatures
+
+
+def test_load_key_reads_the_line_already_there_and_names_a_directory_without_one(
+    tmp_path: Path,
+) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(RuntimeError, match=f"no key in {empty}"):
+        load_key(empty)
+    assert new_key(tmp_path) == load_key(tmp_path)
 
 
 def test_new_key_names_its_owner_and_sign_verifies(tmp_path: Path) -> None:
@@ -1290,6 +1449,32 @@ def _keys(tmp_path: Path) -> tuple[Path, str]:
     key_dir = tmp_path / "keys"
     key_dir.mkdir()
     return key_dir, new_key(key_dir)
+
+
+async def test_speak_refuses_a_row_whose_template_the_context_cannot_fill(tmp_path: Path) -> None:
+    """`{url}` is a legal template (a capability that serves something to the agent
+    fills it), but this run's context has only `key`: the words would be spoken
+    with a `KeyError` halfway through, so no turn is spoken at all."""
+    from membrane.capabilities import Capability, Row
+
+    doors = FakeDoors()
+    key_dir, pubkey = _keys(tmp_path)
+    cap = Capability(
+        name="serve",
+        depends=(),
+        postconditions=(),
+        rows=(
+            Row("1", "root say", "Hello.", "A reply."),
+            Row("2", "signed", "Read {url}", "The page."),
+        ),
+        repair=HATCH.repair,
+        path=tmp_path / "serve.md",
+    )
+    with pytest.raises(
+        RuntimeError, match=r"row 2 needs \{url\} and the run's context has \['key'\]"
+    ):
+        await speak(cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO())
+    assert doors.sent == []
 
 
 async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> None:
@@ -1845,6 +2030,10 @@ async def test_run_once_refuses_a_dependency_missing_from_the_ancestry(
             key_id="key-1",
             brain_recipe="rcp",
             recipe_ids=(),
+            key_dir="/keys",
+            pubkey="ssh-ed25519 AAAA mike",
+            model="claude-opus-5",
+            default_effort=None,
             started_from=None,
         ),
     )
@@ -1876,15 +2065,21 @@ async def test_run_once_refuses_a_dependency_missing_from_the_ancestry(
         )
 
 
-async def test_run_once_of_a_dependent_starts_from_its_promotion_and_tears_down_with_it(
+async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_its_membrane(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`start_from` is monkeypatched (it has its own test); this test is about
     `run_once` wiring: the summary's `started_from` is the promotion's `run`,
-    and teardown gets the same promotion as its lineage."""
-    from membrane.capabilities import Capability
+    teardown gets the same promotion as its lineage, the words carry the lineage's
+    public key (the promoted identity hook trusts no other), and the membrane,
+    model and effort recorded are the hatch's, not this working tree's and not
+    the defaults of this command line."""
+    from membrane.capabilities import Capability, Row
     from membrane.capability import Promotion, write_promotion
 
+    key_dir = tmp_path / "lineage-keys"
+    key_dir.mkdir()
+    pubkey = new_key(key_dir)
     lineage = Promotion(
         capability="hatch",
         run="hatch/2026-09-12-run-1",
@@ -1895,6 +2090,10 @@ async def test_run_once_of_a_dependent_starts_from_its_promotion_and_tears_down_
         key_id="key-1",
         brain_recipe="rcp-brain",
         recipe_ids=("rcp-brain",),
+        key_dir=str(key_dir),
+        pubkey=pubkey,
+        model="claude-opus-5",
+        default_effort="high",
         started_from=None,
     )
     write_promotion(tmp_path, lineage)
@@ -1902,7 +2101,7 @@ async def test_run_once_of_a_dependent_starts_from_its_promotion_and_tears_down_
         name="security",
         depends=("hatch",),
         postconditions=(),
-        rows=(),
+        rows=(Row("2", "root say", "My public key is {key}", "A reply."),),
         repair=HATCH.repair,
         path=tmp_path / "security.md",
     )
@@ -1927,6 +2126,8 @@ async def test_run_once_of_a_dependent_starts_from_its_promotion_and_tears_down_
         teardown_calls.append((h, listing, lineage))
 
     monkeypatch.setattr(Doors, "teardown", fake_teardown)
+    listing: dict[str, Any] = {"catalog": {}, "proposals": []}
+    spoken: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/checkpoints":
@@ -1934,12 +2135,23 @@ async def test_run_once_of_a_dependent_starts_from_its_promotion_and_tears_down_
         if request.url.path == "/recipes":
             return httpx.Response(200, json=[])
         if request.url.path == "/checkpoints/fork":
+            command = str(json.loads(request.content)["exec"])
+            if command == "membrane root list":
+                return httpx.Response(
+                    200,
+                    json={
+                        "computer_id": "c",
+                        "exec_exit_code": 0,
+                        "exec_stdout": json.dumps(listing),
+                    },
+                )
+            spoken.append(base64.b64decode(command.split()[-1]).decode())
             return httpx.Response(
                 200,
                 json={
                     "computer_id": "c",
                     "exec_exit_code": 0,
-                    "exec_stdout": json.dumps({"catalog": {}, "proposals": []}),
+                    "exec_stdout": _out(audit_line(), "Noted."),
                 },
             )
         raise AssertionError(request.url.path)
@@ -1953,13 +2165,132 @@ async def test_run_once_of_a_dependent_starts_from_its_promotion_and_tears_down_
         tmp_path / "run",
         AutoApprover(),
         hatch_script=tmp_path / "unused.sh",
-        key_dir=tmp_path / "keys",
+        # what `_run` would pass: for a dependent it is the lineage's directory that counts
+        key_dir=tmp_path / "unused-keys",
         keep=False,
         log=io.StringIO(),
         out=tmp_path,
     )
     assert summary["started_from"] == lineage.run
-    assert teardown_calls == [(hatched, {"catalog": {}, "proposals": []}, lineage)]
+    assert teardown_calls == [(hatched, listing, lineage)]
+    assert spoken == [f"My public key is {pubkey}"]
+    assert summary["key_dir"] == str(key_dir) and summary["pubkey"] == pubkey
+    assert summary["membrane"] == {"commit": "abc", "dirty": False}
+    assert summary["model"] == "claude-opus-5" and summary["default_effort"] == "high"
+    assert not (tmp_path / "unused-keys").exists()  # a dependent generates no key
+
+
+async def test_run_once_of_a_dependent_refuses_a_key_that_is_not_the_lineages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key directory holds a key, but not the one row 2 handed the agent: the
+    promoted hook would call every signed row `anonymous`, so the run refuses
+    before it spends an API call."""
+    from membrane.capabilities import Capability
+    from membrane.capability import Promotion, write_promotion
+
+    key_dir = tmp_path / "lineage-keys"
+    key_dir.mkdir()
+    new_key(key_dir)  # a fresh key, not the one the promotion names
+    write_promotion(
+        tmp_path,
+        Promotion(
+            capability="hatch",
+            run="hatch/2026-09-12-run-1",
+            membrane={},
+            promoted_at="t",
+            labels={"brain": "pb"},
+            rule_id="ir_1",
+            key_id="key-1",
+            brain_recipe="rcp-brain",
+            recipe_ids=("rcp-brain",),
+            key_dir=str(key_dir),
+            pubkey="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIthehatchersownkeyline mike",
+            model="claude-opus-5",
+            default_effort=None,
+            started_from=None,
+        ),
+    )
+    cap = Capability(
+        name="security",
+        depends=("hatch",),
+        postconditions=(),
+        rows=(),
+        repair=HATCH.repair,
+        path=tmp_path / "security.md",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"the run reached the API: {request.url.path}")
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    with pytest.raises(
+        RuntimeError, match="holds a key that is not the one hatch/2026-09-12-run-1"
+    ):
+        await run_once(
+            _settings(),
+            cap,
+            tmp_path / "run",
+            AutoApprover(),
+            hatch_script=tmp_path / "unused.sh",
+            key_dir=tmp_path / "unused-keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
+
+
+async def test_run_once_of_a_dependent_names_the_directory_that_has_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from membrane.capabilities import Capability
+    from membrane.capability import Promotion, write_promotion
+
+    write_promotion(
+        tmp_path,
+        Promotion(
+            capability="hatch",
+            run="hatch/r1",
+            membrane={},
+            promoted_at="t",
+            labels={},
+            rule_id="ir_1",
+            key_id="key-1",
+            brain_recipe="rcp",
+            recipe_ids=(),
+            key_dir=str(tmp_path / "gone"),
+            pubkey="ssh-ed25519 AAAA mike",
+            model="claude-opus-5",
+            default_effort=None,
+            started_from=None,
+        ),
+    )
+    cap = Capability(
+        name="security",
+        depends=("hatch",),
+        postconditions=(),
+        rows=(),
+        repair=HATCH.repair,
+        path=tmp_path / "security.md",
+    )
+    monkeypatch.setattr(
+        "membrane.capability.transport_for",
+        lambda _url: httpx.MockTransport(lambda _request: httpx.Response(200, json=[])),
+    )
+    with pytest.raises(RuntimeError, match=f"no key in {tmp_path / 'gone'}"):
+        await run_once(
+            _settings(),
+            cap,
+            tmp_path / "run",
+            AutoApprover(),
+            hatch_script=tmp_path / "unused.sh",
+            key_dir=tmp_path / "unused-keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
 
 
 def test_main_parses_and_runs_n_times(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1989,6 +2320,8 @@ def test_main_parses_and_runs_n_times(tmp_path: Path, monkeypatch: pytest.Monkey
         [
             "run",
             "hatch",
+            "--key-dir",
+            str(tmp_path / "keys"),
             "--runs",
             "2",
             "--env",
@@ -2016,6 +2349,8 @@ def test_main_parses_and_runs_n_times(tmp_path: Path, monkeypatch: pytest.Monkey
         [
             "run",
             "hatch",
+            "--key-dir",
+            str(tmp_path / "keys"),
             "--runs",
             "1",
             "--env",
@@ -2048,6 +2383,115 @@ def test_main_names_an_unknown_capability(tmp_path: Path) -> None:
     assert "no capability named 'nope'" in log.getvalue() and "hatch" in log.getvalue()
 
 
+CAPABILITY = """---
+name: {name}
+depends: {depends}
+postconditions:
+{checks}
+---
+
+# {name}
+
+| Label | Door | Words | Outcome |
+|---|---|---|---|
+| 1 | root say | Hello. | A reply. |
+
+## Repair
+
+- build: `check your build`
+- refused: `check your inbox`
+"""
+
+
+def _capability(directory: Path, name: str, depends: str = "[]", checks: str = "") -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.md").write_text(
+        CAPABILITY.format(name=name, depends=depends, checks=checks or "  - authentication")
+    )
+
+
+def test_main_reports_a_cycle_before_it_hatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from membrane.capabilities import catalog
+
+    caps = tmp_path / "capabilities"
+    _capability(caps, "a", depends="[b]")
+    _capability(caps, "b", depends="[a]")
+    monkeypatch.setattr("membrane.capability.catalog", lambda: catalog(caps))
+    log = io.StringIO()
+    assert main(["run", "a", "--env", str(tmp_path / "none")], log=log) == 2
+    assert "cycle: a -> b -> a" in log.getvalue()
+
+
+def test_main_reports_a_postcondition_no_one_wrote_before_it_hatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from membrane.capabilities import catalog
+
+    caps = tmp_path / "capabilities"
+    _capability(caps, "a", checks="  - authentication\n  - reads_the_mind")
+    monkeypatch.setattr("membrane.capability.catalog", lambda: catalog(caps))
+    log = io.StringIO()
+    assert main(["run", "a", "--env", str(tmp_path / "none")], log=log) == 2
+    assert "a names postconditions no one wrote: reads_the_mind" in log.getvalue()
+    assert "nothing_by_hand" in log.getvalue()
+
+
+def test_main_refuses_a_model_for_a_capability_that_does_not_hatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The brain a dependent forks runs the model and effort of its hatch, written
+    into `/brain/.env` then; a `--model` here would be recorded and never spoken."""
+    from membrane.capabilities import catalog
+
+    caps = tmp_path / "capabilities"
+    _capability(caps, "hatch")
+    _capability(caps, "security", depends="[hatch]")  # the inline list form
+    monkeypatch.setattr("membrane.capability.catalog", lambda: catalog(caps))
+    log = io.StringIO()
+    code = main(
+        ["run", "security", "--model", "claude-sonnet-5", "--env", str(tmp_path / "none")], log=log
+    )
+    assert code == 2
+    assert "security starts from hatch's promotion" in log.getvalue()
+    assert "--model and --effort belong to a capability that hatches" in log.getvalue()
+
+
+def test_main_writes_the_runs_key_where_key_dir_says_and_the_run_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The private key lives on the operator's machine, never under `docs/`: a
+    dependent's `run_once` reads it back from the directory `run.json` names."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    api = FakeApi(recipes=[{"recipe_id": "rcp-pre"}])
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    env = tmp_path / ".env"
+    env.write_text(
+        "MSHKN_API_URL=http://api\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=a\nOPENAI_API_KEY=o\n"
+    )
+    key_dir = tmp_path / "keys"
+    out = tmp_path / "docs"
+    code = main(
+        [
+            *("run", "hatch"),
+            *("--env", str(env)),
+            *("--out", str(out)),
+            *("--date", "2026-09-09"),
+            *("--hatch", str(_stub_hatch(tmp_path))),
+            *("--key-dir", str(key_dir)),
+        ],
+        log=io.StringIO(),
+    )
+    assert code == 1  # the fake answers every command with a root reply; the checks fail honestly
+    assert (key_dir / "id").exists() and (key_dir / "id.pub").exists()
+    run_doc = json.loads((out / "hatch" / "2026-09-09-run-1" / "run.json").read_text())
+    assert run_doc["key_dir"] == str(key_dir)
+    assert run_doc["pubkey"] == (key_dir / "id.pub").read_text().strip()
+
+
 def test_main_promote_reports_missing_settings(tmp_path: Path) -> None:
     log = io.StringIO()
     code = main(
@@ -2078,12 +2522,16 @@ def test_main_promote_runs_through_a_mocked_transport_and_writes_the_record(
                     "ingress_url": "u",
                     "server_id": None,
                 },
+                "key_dir": "/keys/hatch",
+                "pubkey": "ssh-ed25519 AAAA mike",
+                "model": "claude-opus-5",
+                "default_effort": None,
                 "started_from": "hatch",
             }
         )
     )
     (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
-    checkpoints = [{"id": "ck-b", "label": "brain", "created_at": "t"}]
+    checkpoints = [{"id": "ck-b", "label": "brain", "created_at": "t", "recipe_id": "rcp-brain"}]
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/checkpoints":
@@ -2157,6 +2605,10 @@ def test_main_promote_reports_an_api_error_instead_of_a_traceback(
                     "ingress_url": "u",
                     "server_id": None,
                 },
+                "key_dir": "/keys/hatch",
+                "pubkey": "ssh-ed25519 AAAA mike",
+                "model": "claude-opus-5",
+                "default_effort": None,
                 "started_from": "hatch",
             }
         )

@@ -65,8 +65,8 @@ class Capability:
 
 
 def _frontmatter(lines: list[str], path: Path) -> tuple[dict[str, object], int]:
-    """The block between the first two `---` lines: `key: value`, `key: []`, or
-    `key:` followed by `  - item` lines. Returns the values and the index after."""
+    """The block between the first two `---` lines: `key: value`, `key: [a, b]`,
+    or `key:` followed by `  - item` lines. Returns the values and the index after."""
     if not lines or lines[0].strip() != "---":
         raise CapabilityError(f"{path.name}: no frontmatter")
     values: dict[str, object] = {}
@@ -89,7 +89,10 @@ def _frontmatter(lines: list[str], path: Path) -> tuple[dict[str, object], int]:
         if key not in FRONTMATTER_KEYS:
             raise CapabilityError(f"{path.name}: unknown frontmatter key '{key}'")
         value = value.strip()
-        if value == "[]" or value == "":
+        if value.startswith("[") and value.endswith("]"):
+            values[key] = [item.strip() for item in value[1:-1].split(",") if item.strip()]
+            current = key
+        elif value == "":
             values[key] = []
             current = key
         else:

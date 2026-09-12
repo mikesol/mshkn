@@ -77,6 +77,14 @@ def test_depends_accepts_a_bullet_list(tmp_path: Path) -> None:
     assert cap.depends == ("one", "zero")
 
 
+def test_depends_accepts_the_inline_list_form(tmp_path: Path) -> None:
+    """`depends: [hatch]` is what a writer reaches for first; the loader reads it
+    as well as the bullet form, and an empty pair of brackets is no dependency."""
+    assert load(_write(tmp_path, "two", depends="[one]")).depends == ("one",)
+    assert load(_write(tmp_path, "three", depends="[one, zero]")).depends == ("one", "zero")
+    assert load(_write(tmp_path, "four", depends="[]")).depends == ()
+
+
 def test_the_name_must_match_the_file(tmp_path: Path) -> None:
     path = tmp_path / "other.md"
     path.write_text(MINIMAL.format(name="one", depends="[]"))
