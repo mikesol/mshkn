@@ -702,6 +702,122 @@ async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_
     assert ("DELETE", "/checkpoints/ck-old") not in seen  # not a working label: left alone
 
 
+async def test_promote_logs_a_delete_that_fails_but_still_returns_the_record(
+    tmp_path: Path,
+) -> None:
+    """A working checkpoint that will not delete (a 500) does not stop the
+    promotion or the other deletes; it is named in the log so the next run's
+    'already has a brain' is not a mystery."""
+    from membrane.capability import promote, read_promotion
+
+    run_dir = tmp_path / "hatch" / "2026-09-12-run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "membrane": {"commit": "abc", "dirty": False},
+                "hatched": {
+                    "rule_id": "ir_1",
+                    "key_id": "key-1",
+                    "recipe_id": "rcp-brain",
+                    "checkpoint_id": "ck-0",
+                    "ingress_url": "u",
+                    "server_id": None,
+                },
+                "started_from": "hatch",
+            }
+        )
+    )
+    (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
+    checkpoints = [
+        {"id": "ck-b", "label": "brain", "created_at": "t"},
+        {"id": "ck-c", "label": "verb/counter", "created_at": "t"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            label = request.url.params.get("label")
+            rows = [c for c in checkpoints if not label or c["label"] == label]
+            return httpx.Response(200, json=rows)
+        if request.url.path.endswith("/fork"):
+            return httpx.Response(200, json={"computer_id": "comp-1", "checkpoint_id": "x"})
+        if request.url.path == "/computers/comp-1/checkpoint":
+            label = json.loads(request.content)["label"]
+            new_id = f"promoted-{label.rsplit('/', 1)[1]}"
+            return httpx.Response(200, json={"checkpoint_id": new_id})
+        if request.url.path == "/checkpoints/ck-c":
+            return httpx.Response(500, json={"detail": "boom"})
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"status": "deleted"})
+        raise AssertionError(request.url.path)
+
+    doors = _bare_doors(tmp_path, handler)
+    log = io.StringIO()
+    p = await promote(doors, tmp_path, "hatch", run_dir, log=log)
+    assert read_promotion(tmp_path, "hatch") == p
+    assert "could not drop verb/counter" in log.getvalue()
+    assert "dropped brain" in log.getvalue()
+
+
+async def test_promote_reports_which_labels_were_already_copied_when_a_later_one_fails(
+    tmp_path: Path,
+) -> None:
+    """`copy_label` for `verb/counter` (the second working label, alphabetically
+    after `brain`) fails: the labels already copied under `capability/<name>/`
+    are named in the log, the error propagates, and no record is written."""
+    from membrane.capability import promote, promotion_path
+
+    run_dir = tmp_path / "hatch" / "2026-09-12-run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "membrane": {"commit": "abc", "dirty": False},
+                "hatched": {
+                    "rule_id": "ir_1",
+                    "key_id": "key-1",
+                    "recipe_id": "rcp-brain",
+                    "checkpoint_id": "ck-0",
+                    "ingress_url": "u",
+                    "server_id": None,
+                },
+                "started_from": "hatch",
+            }
+        )
+    )
+    (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
+    checkpoints = [
+        {"id": "ck-b", "label": "brain", "created_at": "t"},
+        {"id": "ck-c", "label": "verb/counter", "created_at": "t"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            label = request.url.params.get("label")
+            rows = [c for c in checkpoints if not label or c["label"] == label]
+            return httpx.Response(200, json=rows)
+        if request.url.path == "/checkpoints/ck-c/fork":
+            return httpx.Response(500, json={"detail": "boom"})
+        if request.url.path.endswith("/fork"):
+            return httpx.Response(200, json={"computer_id": "comp-1", "checkpoint_id": "x"})
+        if request.url.path == "/computers/comp-1/checkpoint":
+            label = json.loads(request.content)["label"]
+            new_id = f"promoted-{label.rsplit('/', 1)[1]}"
+            return httpx.Response(200, json={"checkpoint_id": new_id})
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"status": "deleted"})
+        raise AssertionError(request.url.path)
+
+    doors = _bare_doors(tmp_path, handler)
+    log = io.StringIO()
+    with pytest.raises(httpx.HTTPStatusError):
+        await promote(doors, tmp_path, "hatch", run_dir, log=log)
+    assert "promotion of hatch failed after copying brain" in log.getvalue()
+    assert not promotion_path(tmp_path, "hatch").exists()
+
+
 async def test_promote_refuses_a_run_that_is_not_ok(tmp_path: Path) -> None:
     from membrane.capability import promote
 
@@ -2016,6 +2132,49 @@ def test_main_promote_reports_a_failed_promotion(
         ],
         log=log,
     )
+    assert code == 1
+    assert "promote failed" in log.getvalue()
+
+
+def test_main_promote_reports_an_api_error_instead_of_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live `capability promote` that hits a 5xx (or a connection error) must
+    exit 1 with a message, not escape `main` as an unhandled `httpx.HTTPError`."""
+    out = tmp_path / "docs"
+    run_dir = out / "hatch" / "2026-09-12-run-9"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "membrane": {"commit": "abc", "dirty": False},
+                "hatched": {
+                    "rule_id": "ir_1",
+                    "key_id": "key-1",
+                    "recipe_id": "rcp-brain",
+                    "checkpoint_id": "ck-0",
+                    "ingress_url": "u",
+                    "server_id": None,
+                },
+                "started_from": "hatch",
+            }
+        )
+    )
+    (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            return httpx.Response(500, json={"detail": "boom"})
+        raise AssertionError(request.url.path)
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=http://api\nMSHKN_API_KEY=k\n")
+    log = io.StringIO()
+    code = main(["promote", "hatch", str(run_dir), "--env", str(env), "--out", str(out)], log=log)
     assert code == 1
     assert "promote failed" in log.getvalue()
 

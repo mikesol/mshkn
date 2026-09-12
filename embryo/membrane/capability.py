@@ -697,9 +697,16 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
     if "brain" not in working:
         raise RuntimeError("no working brain on the account; was the run kept (--keep)?")
     labels: dict[str, str] = {}
-    for label in working:
-        labels[label] = await doors.copy_label(label, promoted_label(name, label))
-        log.write(f"promoted {label} -> {promoted_label(name, label)} ({labels[label]})\n")
+    try:
+        for label in working:
+            labels[label] = await doors.copy_label(label, promoted_label(name, label))
+            log.write(f"promoted {label} -> {promoted_label(name, label)} ({labels[label]})\n")
+    except Exception:
+        log.write(
+            f"promotion of {name} failed after copying {', '.join(labels)}; "
+            "those promoted labels are on the account and no record names them\n"
+        )
+        raise
     recipe_ids = sorted(
         {hatched.recipe_id, *(p["recipe_id"] for p in final["proposals"] if p.get("recipe_id"))}
     )
@@ -721,8 +728,13 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
     for ckpt in await doors.checkpoints():
         label = ckpt.get("label") or ""
         if label in working:
-            with suppress(httpx.HTTPError):
-                await doors.api.delete(f"/checkpoints/{ckpt['id']}")
+            try:
+                response = await doors.api.delete(f"/checkpoints/{ckpt['id']}")
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                log.write(f"could not drop {label} ({ckpt['id']}): {exc}\n")
+            else:
+                log.write(f"dropped {label} ({ckpt['id']})\n")
     return record
 
 
@@ -1121,7 +1133,7 @@ def _promote(args: argparse.Namespace, log: TextIO) -> int:
 
     try:
         asyncio.run(go())
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, httpx.HTTPError) as exc:
         log.write(f"promote failed: {exc}\n")
         return 1
     return 0
