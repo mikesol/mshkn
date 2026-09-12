@@ -22,7 +22,7 @@ The previous host was a Hetzner AX41-NVMe (Ryzen 5 3600, 64 GB, 2×512 GB NVMe).
 ## A model gateway, for measuring across models (#123 round, spec §11)
 
 Spec §11 says a capability is spoken "across models where useful", and the post-cut round in
-`docs/embryo/README.md` cost about $10.60 for six runs of one model. Both want a second provider.
+`docs/embryo/hatch/README.md` cost about $10.60 for six runs of one model. Both want a second provider.
 
 `embryo/membrane/model.py` speaks one wire format end to end: `compose_request` builds the Anthropic Messages request body
 that `/v1/messages` accepts (`system`, `messages`, `tools`, `output_config.effort`) and `parse_message`
