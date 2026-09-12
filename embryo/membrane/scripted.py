@@ -1,4 +1,4 @@
-"""A model that plays the liturgy (spec §9) deterministically, so the flow and
+"""A model that plays hatch (embryo/capabilities/hatch.md) deterministically, so the flow and
 E2E tiers prove the membrane without a third-party key (§11). It reads the
 words, not the turn number, and emits real declarations that build on the host."""
 
@@ -117,7 +117,7 @@ DECLARATIONS = {"page_title": PAGE_TITLE, "counter": COUNTER}
 
 def OPEN_DOOR_POLICY(principal: str) -> dict[str, Any]:  # noqa: N802
     # Ruling P1: the principal named in the door proposal gets propose rights
-    # too, since liturgy turns 6, 7 and 9 arrive through the public door as
+    # too, since hatch rows 6, 7 and 9 arrive through the public door as
     # ssh:mike and must be able to propose.
     return {
         "principals": {
@@ -153,7 +153,7 @@ def _proposal(
     doc: dict[str, Any] = {
         "kind": kind,
         "title": title,
-        "rationale": f"The liturgy asked for {title}.",
+        "rationale": f"The capability asked for {title}.",
         "supersedes": supersedes,
     }
     doc[kind] = payload

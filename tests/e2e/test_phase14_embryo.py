@@ -1,5 +1,5 @@
 """Phase 14: the embryo on the live host (spec §11 tier 3). hatch.sh hatches it
-with the scripted model; the liturgy is spoken through both doors; the
+with the scripted model; hatch is spoken through both doors; the
 postconditions of §11 are checked against `list` and by invoking the verbs.
 
 Tests run in order and share one hatched embryo; an earlier failure fails the rest.
@@ -22,7 +22,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from tests.support_embryo import LITURGY, b64, split_output
+from tests.support_embryo import HATCH, WORDS, b64, split_output
 
 from .conftest import API_KEY, API_URL, HEADERS
 
@@ -281,7 +281,7 @@ class TestPhase14Embryo:
     async def test_t14_1_turn_1_names_its_tools_and_the_closed_door(self, doors: Doors) -> None:
         await doors.touch()
         assert doors.hatched.ingress_url.endswith(f"/ingress/{doors.hatched.rule_id}")
-        audit, reply = await doors.root_say(LITURGY[1])
+        audit, reply = await doors.root_say(WORDS["1"])
         assert audit["principal"] == "root" and audit["door"] == "api" and audit["tools"] == []
         assert "remember, effort, try and propose" in reply and "door is closed" in reply
         listing = await doors.listing()
@@ -292,7 +292,7 @@ class TestPhase14Embryo:
     ) -> None:
         await doors.touch()
         started = time.monotonic()
-        audit, reply = await doors.root_say(LITURGY[2].format(key=doors.hatched.pubkey))
+        audit, reply = await doors.root_say(WORDS["2"].format(key=doors.hatched.pubkey))
         assert [t["name"] for t in audit["tools"]] == ["try", "propose", "propose"], audit
         pids = [p["id"] for p in audit["proposals"]]
         assert len(pids) == 2
@@ -305,7 +305,7 @@ class TestPhase14Embryo:
         while listing["catalog"]["verify_ssh"]["status"] == "failed":
             # spec §9 turn 3: the log is in the inbox; the model trials a fix and proposes it
             # with supersedes
-            audit, _ = await doors.root_say(LITURGY[3])
+            audit, _ = await doors.root_say(HATCH.repair.build)
             fix = audit["proposals"][0]["id"]
             print(f"T14.2 build failed; fix {fix} proposed")
             assert await doors.approve_verb(fix, "verify_ssh") == "building"
@@ -322,22 +322,22 @@ class TestPhase14Embryo:
 
     async def test_t14_3_signed_is_mike_unsigned_is_anonymous(self, doors: Doors) -> None:
         await doors.touch()
-        audit, reply = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[4]))
+        audit, reply = await doors.public_say(_sign(doors.hatched.key_dir, WORDS["4"]))
         assert audit["principal"] == "ssh:mike", audit
         assert reply.startswith("You are ssh:mike.")
-        audit, reply = await doors.public_say({"msg": LITURGY[4]})
+        audit, reply = await doors.public_say({"msg": WORDS["4"]})
         assert audit["principal"] == "anonymous" and audit["memory_written"] is False
         # §10.7 read from outside the brain: an unsigned knock is offered no tool
         # at all, whatever the model then chose to say
         assert audit["offered"] == [], audit
         assert "will not act or remember" in reply
-        forged = {"msg": LITURGY[4], "sig": _sign(doors.hatched.key_dir, "something else")["sig"]}
+        forged = {"msg": WORDS["4"], "sig": _sign(doors.hatched.key_dir, "something else")["sig"]}
         audit, _ = await doors.public_say(forged)
         assert audit["principal"] == "anonymous"
 
     async def test_t14_4_turn_6_authorization(self, doors: Doors) -> None:
         await doors.touch()
-        audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[6]))
+        audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, WORDS["6"]))
         pid = audit["proposals"][0]["id"]
         assert (await doors.root("approve", pid)).startswith(f"{pid} applied")
         listing = await doors.listing()
@@ -346,7 +346,7 @@ class TestPhase14Embryo:
 
     async def test_t14_5_page_title_from_a_self_destructed_computer(self, doors: Doors) -> None:
         await doors.touch()
-        audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[7]))
+        audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, WORDS["7"]))
         assert [t["name"] for t in audit["tools"]] == ["try", "propose"], audit
         assert audit["tools"][0]["status"] == "done", audit
         pid = audit["proposals"][0]["id"]
@@ -354,7 +354,7 @@ class TestPhase14Embryo:
         assert await doors.approve_verb(pid, "page_title") == "ready"
         listing = await doors.wait_ready("page_title")
         assert listing["catalog"]["page_title"]["status"] == "ready", listing["proposals"]
-        audit, reply = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[8]))
+        audit, reply = await doors.public_say(_sign(doors.hatched.key_dir, WORDS["8"]))
         assert reply.startswith("Example Domain"), reply
         cid = audit["tools"][0]["computer_id"]
         assert (await doors.client.get(f"/computers/{cid}/status")).status_code == 404
@@ -363,7 +363,7 @@ class TestPhase14Embryo:
 
     async def test_t14_6_counter_chain_advances_a_head_per_invocation(self, doors: Doors) -> None:
         await doors.touch()
-        audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, LITURGY[9]))
+        audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, WORDS["9"]))
         # #118: the chain verb is trialled twice on a scratch chain first, which is the
         # only way a trial can show that its disk survived an invocation.
         assert [t["name"] for t in audit["tools"]] == ["try", "propose"], audit
@@ -415,7 +415,7 @@ class TestPhase14Embryo:
         assert listing["catalog"]["counter"]["chain_head"] is not None
         assert listing["principals"] == ["ssh:mike"]
         assert listing["door"]["status"] == "open"
-        # §10.1: public input never becomes root. The liturgy knocks nine times on the
+        # §10.1: public input never becomes root. Hatch knocks nine times on the
         # public door, and no knock was ever granted root, whatever it claimed to be.
         assert len(doors.public_principals) == 9, doors.public_principals
         assert set(doors.public_principals) == {"ssh:mike", "anonymous"}, doors.public_principals

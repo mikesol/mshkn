@@ -9,13 +9,16 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from membrane.liturgy import LITURGY as LITURGY  # re-exported for the tiers
+from membrane.capabilities import CAPABILITIES, load
 from membrane.memory import Provenance, visible_from
 from membrane.model import Completion, Model, ToolCall, zero_usage
 from membrane.mshkn import CheckpointInfo, Deferred, MshknError, RecipeInfo, RelayJob, RunResult
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+HATCH = load(CAPABILITIES / "hatch.md")  # the first capability, read by every tier
+WORDS = HATCH.words  # label -> words; "1", "2", "4", ..., "9-count-2"
 
 
 def text_completion(text: str) -> Completion:

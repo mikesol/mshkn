@@ -1,4 +1,5 @@
-"""The scripted model plays the liturgy (spec §9, §11) from the words, not the turn number."""
+"""The scripted model plays hatch (embryo/capabilities/hatch.md) from the words,
+not the turn number."""
 
 from __future__ import annotations
 

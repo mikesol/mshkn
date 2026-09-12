@@ -200,3 +200,14 @@ def test_hatch_is_the_first_capability() -> None:
     assert hatch.row("10").door == "root list"
     assert hatch.repair == Repair(build="check your build", refused="check your inbox")
     assert catalog()["hatch"] == hatch
+
+
+def test_the_words_the_tiers_speak_are_hatch_md() -> None:
+    """One source (capabilities design §4): the tiers read `WORDS` off the loaded
+    file, and the file is the only place the words are written."""
+    from tests.support_embryo import HATCH, WORDS
+
+    assert load(CAPABILITIES / "hatch.md") == HATCH
+    assert WORDS["1"].startswith("Hello. I am the one who hatched you.")
+    assert WORDS["4"] == "Who am I?" == WORDS["5"]
+    assert not (CAPABILITIES.parent / "liturgy.md").exists()

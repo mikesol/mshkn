@@ -1,5 +1,5 @@
 """The DNA executes end to end (spec §11 tier 2): the membrane in process against
-the real app over the fake host, a scripted model playing the liturgy. A trial,
+the real app over the fake host, a scripted model playing hatch. A trial,
 proposals, approval, builds (one failing first), a pre-turn hook, the door
 opening, an ephemeral verb, and a chain verb trialled twice on a scratch chain
 before it is proposed and then run to two checkpoints of its own."""
@@ -24,7 +24,7 @@ from membrane.scripted import COUNTER, PAGE_TITLE, VERIFY_SSH, ScriptedModel
 from membrane.state import Brain
 
 from mshkn.host import ExecResult
-from tests.support_embryo import LITURGY, b64, scripted_asgi, split_output
+from tests.support_embryo import HATCH, WORDS, b64, scripted_asgi, split_output
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -163,7 +163,7 @@ async def embryo(
 
 async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     # turn 1: root say; the four built-in tools, closed door, no proposals
-    audit, reply = await embryo.root_say(LITURGY[1])
+    audit, reply = await embryo.root_say(WORDS["1"])
     assert audit["principal"] == "root" and audit["tools"] == [] and audit["proposals"] == []
     # spec §9 turn 1's outcome: "a reply naming its tools honestly and that its
     # public door is closed. No proposals." Read as names, never as a count: a count
@@ -177,7 +177,7 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     # turn 2: a trial, a hook proposal and a door proposal; approve both
     hook = VERIFY_SSH(KEY)
     embryo.script_output(hook, {"payload": json.dumps({"msg": "probe", "sig": ""})}, "", code=1)
-    audit, reply = await embryo.root_say(LITURGY[2].format(key=KEY))
+    audit, reply = await embryo.root_say(WORDS["2"].format(key=KEY))
     assert [t["name"] for t in audit["tools"]] == ["try", "propose", "propose"]
     assert audit["tools"][0]["status"] == "failed"  # the hook's first build fails, as scripted
     assert [p["id"] for p in audit["proposals"]] == ["p-1", "p-2"]
@@ -199,7 +199,7 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     listing = await embryo.listing()
     assert listing["catalog"]["verify_ssh"]["status"] == "failed"
     assert (await embryo.public_say({"msg": "early", "sig": "x"}))[0]["principal"] == "anonymous"
-    audit, reply = await embryo.root_say(LITURGY[3])
+    audit, reply = await embryo.root_say(HATCH.repair.build)
     assert audit["tools"][0]["name"] == "propose" and "proposal p-3" in reply
     assert json.loads(reply.split("proposal p-3\n", 1)[1])["supersedes"] == "p-1"
     assert (await embryo.root("approve", "p-3")).startswith("p-3 building")
@@ -208,11 +208,11 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert {p["id"]: p["status"] for p in listing["proposals"]}["p-1"] == "superseded"
 
     # turn 4: signed → ssh:mike; turn 5: unsigned → anonymous, nothing remembered
-    signed = {"msg": LITURGY[4], "sig": "c2ln"}
+    signed = {"msg": WORDS["4"], "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(signed)}, "mike\n")
     audit, reply = await embryo.public_say(signed)
     assert audit["principal"] == "ssh:mike" and reply.startswith("You are ssh:mike.")
-    unsigned = {"msg": LITURGY[4]}
+    unsigned = {"msg": WORDS["4"]}
     embryo.script_output(hook, {"payload": json.dumps(unsigned)}, "", code=1)
     audit, reply = await embryo.public_say(unsigned)
     assert audit["principal"] == "anonymous" and audit["memory_written"] is False
@@ -229,7 +229,7 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     # turn 6: authorization — load-bearing for invocation (spec §9): turns 8 and 9
     # need ssh:mike to be allowed to invoke (propose was granted at turn 2), and
     # anonymous must be allowed nothing.
-    signed6 = {"msg": LITURGY[6], "sig": "c2ln"}
+    signed6 = {"msg": WORDS["6"], "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(signed6)}, "mike\n")
     audit, reply = await embryo.public_say(signed6)
     assert audit["principal"] == "ssh:mike" and audit["proposals"][0]["id"] == "p-4"
@@ -249,7 +249,7 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert audit["offered"] == []
 
     # turn 7: page_title, trialled first, then proposed and approved
-    signed7 = {"msg": LITURGY[7], "sig": "c2ln"}
+    signed7 = {"msg": WORDS["7"], "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(signed7)}, "mike\n")
     embryo.script_output(PAGE_TITLE, {"url": "https://example.com"}, "Example Domain\n")
     audit, reply = await embryo.public_say(signed7)
@@ -262,7 +262,7 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert (await embryo.listing())["catalog"]["page_title"]["status"] == "ready"
 
     # turn 8: Example Domain from a self-destructed computer
-    signed8 = {"msg": LITURGY[8], "sig": "c2ln"}
+    signed8 = {"msg": WORDS["8"], "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(signed8)}, "mike\n")
     audit, reply = await embryo.public_say(signed8)
     assert reply.startswith("Example Domain")
@@ -280,7 +280,7 @@ async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
     assert job.json()["response"]["body"]["stop_reason"] == "end_turn"
 
     # turn 9: a chain verb, trialled on a scratch chain first (#118), then proposed
-    signed9 = {"msg": LITURGY[9], "sig": "c2ln"}
+    signed9 = {"msg": WORDS["9"], "sig": "c2ln"}
     embryo.script_output(hook, {"payload": json.dumps(signed9)}, "mike\n")
     counter_cmd = embryo.script_output(COUNTER, {}, "1\n")
     flow.host.guest.script_sequence[counter_cmd] = [
@@ -382,7 +382,7 @@ async def test_a_say_while_a_turn_is_pending_is_queued_and_runs_next(
         assert code == 0, out
         return split_output(out)[0]
 
-    first = await _raw(["root", "say", b64(LITURGY[1])])
+    first = await _raw(["root", "say", b64(WORDS["1"])])
     assert first["started"] is True and first["turn"] == 1
     # the model is still gated: the relay job cannot have completed, so this
     # second say settles nothing and queues behind the first
