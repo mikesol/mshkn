@@ -30,6 +30,9 @@
 | #149 cold boot | accept boot args and masking the timers; keep `console=ttyS0` | the timers also fire inside restored guests when `date -s` moves the clock |
 | #150 evict | accept, subject to the live run | a 300 ms pause does not break TCP; revert if `ConnectionLost` appears |
 | #151 Caddy | reject | routing redesign with a resolver-cache failure mode; #147 hides the cost |
+| #55 vsock | accept | a `socat` shell listener on guest port 52 in every template and checkpoint; a restore reconfigures the guest through Firecracker's vsock socket with no port wait or SSH handshake; SSH stays for cold boots and for checkpoints from images without the listener. Fork p50 313 to 217 ms E2E |
+| #56 bake network config | reject | what remains is the udev-bound rename shell (35 ms) and the staging lock, a throughput lever |
+| #57 batch shell | reject | spawns cost 0.5 ms; the rest is udev waits batching cannot remove |
 
 ---
 
@@ -59,7 +62,7 @@
 - [x] The overlap `asyncio.gather(snapshot, _snap_disk)` was implemented, shipped to the live host, and reverted the same night: the first full run captured empty files in checkpoints, because Firecracker's drive cache is `Unsafe` and its own flush inside `create_snapshot` is what lands guest writes on the volume. `test_create_snaps_the_disk_only_after_the_memory_snapshot_returned` pins the order.
 - [x] Gate, commit.
 
-Live runs (nine in one night; PR #153 has the table): run 1 (12 failed) found the overlap; run 2 was stopped when `/dev/shm` filled because staging copies were held until their upload ended (Task 5 now releases them when the durable copy lands, falls back to disk when tmpfs is full, and start-up persists orphans); runs 3 and 5: `4 failed, 170 passed, 6 skipped`, the #65 set; run 7 showed the many-small-files p95 over its gate because ten persisted 256 MiB copies became one write-back burst under the next checkpoint's drive flush, so persists now run one at a time, written through and sparse (memory images are 60 to 70 % zero pages); run 9, on the final commit, is the #65 set plus T6.5 (#156, a listing timeout in the test harness).
+Live runs (nine in one night; PR #153 has the table): run 1 (12 failed) found the overlap; run 2 was stopped when `/dev/shm` filled because staging copies were held until their upload ended (Task 5 now releases them when the durable copy lands, falls back to disk when tmpfs is full, and start-up persists orphans); runs 3 and 5: `4 failed, 170 passed, 6 skipped`, the #65 set; run 7 showed the many-small-files p95 over its gate because ten persisted 256 MiB copies became one write-back burst under the next checkpoint's drive flush, so persists now run one at a time, written through and sparse (memory images are 60 to 70 % zero pages); run 9 is the #65 set plus T6.5 (#156, a listing timeout in the test harness); run 10 found that Firecracker turns a host half-close on a vsock connection into a full close (the protocol became line-based with the script's own `exit`); run 11's suite was voided by a client-side network drop; run 12, on the final commit `4b26302`, is `4 failed, 170 passed, 6 skipped`, the #65 set.
 
 ### Task 4: Destroy (#148)
 
