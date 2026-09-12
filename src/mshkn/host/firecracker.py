@@ -288,26 +288,39 @@ _RC_MARKER = "__mshkn_rc="
 
 
 async def vsock_run(
-    uds_path: Path | str, port: int, script: str, *, timeout: float, interval: float = 0.01
+    uds_path: Path | str,
+    port: int,
+    script: str,
+    *,
+    timeout: float,
+    connect_timeout: float | None = None,
+    interval: float = 0.01,
 ) -> tuple[int, str]:
     """Run a shell script in the guest over Firecracker's vsock; (exit status, output).
 
     Firecracker listens on `uds_path`; the host writes `CONNECT <port>` and gets
     `OK <port>` back once the guest listener accepted, then the stream is the
-    guest's socket. The listener (`socat VSOCK-LISTEN:52 EXEC:/bin/sh`) reads
-    the script until the host half-closes, so the exit status is printed by
-    the script itself and parsed here. The socket appears when the device is
-    configured or restored, so a missing file is retried until `timeout`;
-    a connection Firecracker closes without an OK means no guest listener.
+    guest's socket, where `socat VSOCK-LISTEN:52 EXEC:/bin/sh` reads lines.
+    Firecracker turns a host half-close into a full close, so the host never
+    sends EOF: the script ends with the shell's own `exit`, prints its status
+    first, and the host stops reading at that status line rather than waiting
+    for socat to close the connection (it lingers after the shell exits).
+
+    `connect_timeout` bounds how long a missing socket is retried; Firecracker
+    binds it inside boot and load_snapshot, so on a restore a socket that is
+    not there at once belongs to a checkpoint without the device and never
+    appears. A connection Firecracker closes without an OK means no guest
+    listener has bound the port yet.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
+    connect_deadline = loop.time() + (timeout if connect_timeout is None else connect_timeout)
     while True:
         try:
             reader, writer = await asyncio.open_unix_connection(str(uds_path))
             break
         except OSError as exc:
-            if loop.time() >= deadline:
+            if loop.time() >= connect_deadline:
                 raise HostError(f"vsock {uds_path}: {type(exc).__name__}: {exc}") from exc
             await asyncio.sleep(interval)
     try:
@@ -317,18 +330,23 @@ async def vsock_run(
         ack = await asyncio.wait_for(reader.readline(), timeout=remaining)
         if not ack.startswith(b"OK "):
             raise HostError(f"vsock {uds_path}: no OK from port {port} (got {ack!r})")
-        writer.write(f"{script}\necho {_RC_MARKER}$?\n".encode())
+        writer.write(f"{script}\necho {_RC_MARKER}$?\nexit\n".encode())
         await writer.drain()
-        writer.write_eof()
         remaining = max(deadline - loop.time(), 0.05)
-        raw = (await asyncio.wait_for(reader.read(), timeout=remaining)).decode(errors="replace")
+        raw = (
+            await asyncio.wait_for(reader.readuntil(_RC_MARKER.encode()), timeout=remaining)
+        ).decode(errors="replace")
+        remaining = max(deadline - loop.time(), 0.05)
+        status = (await asyncio.wait_for(reader.readline(), timeout=remaining)).decode()
     except TimeoutError as exc:
         raise HostError(f"vsock {uds_path}: timed out after {timeout}s") from exc
+    except asyncio.IncompleteReadError as exc:
+        raise HostError(
+            f"vsock {uds_path}: the script ended without a status: {exc.partial!r}"
+        ) from exc
     finally:
         writer.close()
-    output, marker, status = raw.rpartition(_RC_MARKER)
-    if not marker:
-        raise HostError(f"vsock {uds_path}: the script ended without a status: {raw!r}")
+    output = raw[: -len(_RC_MARKER)]
     try:
         return int(status.strip()), output
     except ValueError as exc:
@@ -366,6 +384,8 @@ class FirecrackerHypervisor:
     # A restored guest answers on vsock within milliseconds; a checkpoint from
     # an image without the listener never does, and falls back to SSH.
     _RESTORE_VSOCK_TIMEOUT = 2.0
+    # The socket is bound inside load_snapshot; a moment is all it can need.
+    _RESTORE_VSOCK_CONNECT_TIMEOUT = 0.2
     _TEMPLATE_VSOCK_TIMEOUT = 10.0
 
     def __init__(
@@ -651,27 +671,38 @@ class FirecrackerHypervisor:
             VSOCK_PORT,
             self._reconfigure_command(final_vm_ip, final_host_ip),
             timeout=self._RESTORE_VSOCK_TIMEOUT,
+            connect_timeout=self._RESTORE_VSOCK_CONNECT_TIMEOUT,
         )
         if rc != 0:
             raise HostError(f"vsock reconfiguration exited {rc}: {output.strip()!r}")
 
     async def _vsock_settle(self) -> None:
         """Have the guest's vsock listener answer once before a template is
-        snapshotted, so every restore from it finds the listener ready. An image
-        without the listener (a recipe built before it existed) logs and goes on;
-        its restores take the SSH path.
+        snapshotted, so every restore from it finds the listener ready. The
+        listener starts after sshd on a cold boot, so a refused connection is
+        asked again until the timeout; an image without the listener (a recipe
+        built before it existed) logs and goes on, and its restores take SSH.
         """
-        try:
-            rc, _ = await vsock_run(
-                STAGING_VSOCK_PATH, VSOCK_PORT, "true", timeout=self._TEMPLATE_VSOCK_TIMEOUT
-            )
-        except HostError as exc:
-            logger.warning(
-                "Template has no working vsock listener (%s); restores will use SSH", exc
-            )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._TEMPLATE_VSOCK_TIMEOUT
+        while True:
+            try:
+                rc, _ = await vsock_run(
+                    STAGING_VSOCK_PATH, VSOCK_PORT, "true", timeout=self._TEMPLATE_VSOCK_TIMEOUT
+                )
+            except HostError as exc:
+                if loop.time() < deadline:
+                    await asyncio.sleep(0.05)
+                    continue
+                logger.warning(
+                    "Template has no working vsock listener (%s); restores will use SSH", exc
+                )
+                return
+            if rc != 0:
+                logger.warning(
+                    "Template vsock listener answered with %d; restores will use SSH", rc
+                )
             return
-        if rc != 0:
-            logger.warning("Template vsock listener answered with %d; restores will use SSH", rc)
 
     async def _ensure_staging_clean(self) -> None:
         """Remove stale staging resources from a previous failed restore, quietly."""

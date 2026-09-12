@@ -571,8 +571,9 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
 
     # The vsock shell listener (#55): the host reconfigures a restored guest
     # through it instead of waiting for sshd and paying an SSH handshake. Each
-    # connection gets a shell reading the script until the host half-closes;
-    # `pipes` is what turns that half-close into EOF on the shell's stdin.
+    # connection gets a shell that reads lines until the script's own `exit`
+    # (Firecracker turns a host half-close into a full close, so EOF is not an
+    # option); `-t 0` closes the connection as soon as the shell exits.
     vsock_unit = mp / "etc" / "systemd" / "system" / "mshkn-vsock.service"
     vsock_unit.write_text(
         "[Unit]\n"
@@ -580,7 +581,7 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
         "After=fcnet.service\n"
         "\n"
         "[Service]\n"
-        "ExecStart=/usr/bin/socat VSOCK-LISTEN:52,reuseaddr,fork EXEC:/bin/sh,pipes,stderr\n"
+        "ExecStart=/usr/bin/socat -t 0 VSOCK-LISTEN:52,reuseaddr,fork EXEC:/bin/sh,pipes,stderr\n"
         "Restart=always\n"
         "RestartSec=1\n"
         "\n"
