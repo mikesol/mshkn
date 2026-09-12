@@ -271,11 +271,11 @@ def test_authorization_is_judged_on_the_verbs_hatch_exercises() -> None:
     judged = _judge(final=final, turns=turns)["authorization"]
     assert judged["ok"] is False
     assert judged["evidence"]["exercised"] == []
-    # "*" covers whatever the liturgy asks for, exercised or not.
+    # "*" covers whatever hatch asks for, exercised or not.
     assert _judge(turns=turns)["authorization"]["ok"] is True
     # The hook is not one of the verbs: a run that invoked only its own hook as a
     # tool, under a grant of the hook alone, has not shown it can invoke anything
-    # the liturgy gave it.
+    # hatch gave it.
     hook_call = [{"name": "verify_ssh", "computer_id": "cx"}]
     for turn in turns[3:6]:
         turn.audit["tools"] = hook_call

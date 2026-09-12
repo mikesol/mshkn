@@ -576,7 +576,7 @@ class Doors:
 
 def new_key(key_dir: Path) -> str:
     """An ed25519 key named `mike`, the way a person's key names its owner;
-    returns the public key line the liturgy's turn 2 carries."""
+    returns the public key line hatch's row 2 carries."""
     key_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "mike", "-f", str(key_dir / "id")],

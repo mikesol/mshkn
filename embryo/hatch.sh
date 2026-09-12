@@ -95,7 +95,7 @@ KEY_ID="$(jq -r .id <<<"$KEY_JSON")"
 BRAIN_KEY="$(jq -r .secret <<<"$KEY_JSON")"
 
 echo "creating the brain" >&2
-# 1GB, not 512MB: measured on a real end-of-liturgy brain (#116), the membrane with
+# 1GB, not 512MB: measured on a real end-of-hatch brain (#116), the membrane with
 # the mem0 stack open is 134 MB resident, the guest reports ~303 MB in use at rest, and
 # 512MB left ~44 MB of headroom for the conversation, the relay's stored response and
 # mem0's extraction. A wake-up fork died there mid-turn with no output.

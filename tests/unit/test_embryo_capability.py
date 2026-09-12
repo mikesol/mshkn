@@ -975,12 +975,12 @@ def test_new_key_names_its_owner_and_sign_verifies(tmp_path: Path) -> None:
     assert verified.returncode == 0, verified.stderr.decode()
 
 
-# ---------------------------------------------------------------- the liturgy over a fake door
+# ---------------------------------------------------------------- hatch over a fake door
 
 
 class FakeDoors:
     """A door whose membrane is a small state machine: proposals are made on the
-    turns the liturgy expects them, approvals move them to building, and each
+    turns hatch expects them, approvals move them to building, and each
     verb becomes ready after `builds_to_ready` polls (a failed build first when
     the verb is in `fail_first`)."""
 

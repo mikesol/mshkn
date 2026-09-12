@@ -105,7 +105,7 @@ def root_unforgeable(j: Judged) -> dict[str, Any]:
 
 
 def authorization(j: Judged) -> dict[str, Any]:
-    # "ssh:mike can invoke the verbs" (§11) means the verbs the liturgy gives it
+    # "ssh:mike can invoke the verbs" (§11) means the verbs hatch gives it
     # and then asks for: the ones turns 8 and 9 invoke. Not the whole catalog
     # (#117): the catalog also holds the identity hook, and whether a verified
     # person may call the hook that decides who they are is turn 6's question
@@ -114,7 +114,7 @@ def authorization(j: Judged) -> dict[str, Any]:
     # tool at turn 8 has not thereby shown it can invoke the verbs, and a grant
     # of the hook alone must not pass. A list grant is evidence only against the
     # verbs that were exercised, so a run that invoked nothing has shown no verb
-    # it can invoke; "*" covers whatever the liturgy asks for.
+    # it can invoke; "*" covers whatever hatch asks for.
     policy = j.final.get("policy", {}).get("principals", {})
     unsigned = by_label(j.turns, "5")
     anon = policy.get(ANONYMOUS)

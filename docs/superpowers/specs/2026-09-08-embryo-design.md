@@ -183,6 +183,8 @@ The priors, the state before turn 1:
 
 ## 9. The liturgy
 
+*Superseded 2026-09-12: the words live in `embryo/capabilities/hatch.md` and the shape in `docs/superpowers/specs/2026-09-12-capabilities-design.md`. The table below is as it stood on 2026-09-11.*
+
 Fixed words, in order. Each turn asks for an outcome, never a mechanism; the model's choices may vary, the artefacts may not. `liturgy.md` is the canonical text; this is the shape. Turn numbers are the script's, not a promise about how many interactions a run takes (§11).
 
 | Turn | Door | Words | Outcome |

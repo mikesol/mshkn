@@ -1,6 +1,6 @@
 # embryo
 
-The embryo is the first real agent: a membrane running inside a disposable "brain" computer, reasoning under a policy that starts closed and grows only by proposal and approval. `docs/superpowers/specs/2026-09-08-embryo-design.md` is the design; this directory holds the priors it hatches from — `seed.md`, `policy.json`, `ingress.star`, `Dockerfile.brain`, `liturgy.md` — and `hatch.sh`, the one script a human runs to bring a brain into existence.
+The embryo is the first real agent: a membrane running inside a disposable "brain" computer, reasoning under a policy that starts closed and grows only by proposal and approval. `docs/superpowers/specs/2026-09-08-embryo-design.md` is the design; this directory holds the priors it hatches from — `seed.md`, `policy.json`, `ingress.star`, `Dockerfile.brain` — and `hatch.sh`, the one script a human runs to bring a brain into existence; the capabilities it grows by are under `embryo/capabilities/`.
 
 ## Hatching
 
@@ -40,16 +40,20 @@ curl -fsS -X POST "$INGRESS_URL" -H 'Content-Type: application/json' \
 
 A 409 from either door means a turn is in progress: retry. A `say` while a turn is already pending is queued instead and runs next.
 
-## Measuring
+## Running a capability
 
-The measure (spec §11) is the liturgy spoken to a real model, N times, with the seven postconditions checked afterwards:
+A capability (`docs/superpowers/specs/2026-09-12-capabilities-design.md`) is a markdown script under `embryo/capabilities/`: rows of words through a door, and the postconditions that judge the result. `hatch.md` is the first.
 
 ```bash
-uv run measure --runs 3           # keys and the API from .env; approvals automatic
-uv run measure --approve ask      # the pilot reads each proposal and answers approve | reject <reason>
+uv run capability run hatch --runs 3           # keys and the API from .env; approvals automatic
+uv run capability run hatch --approve ask      # the pilot reads each proposal and answers approve | reject <reason>
+uv run capability run hatch --keep             # leave the brain on the account, so it can be promoted
+uv run capability promote hatch docs/embryo/hatch/<date>-run-<n>
 ```
 
-`measure` (`embryo/membrane/capability.py`) reads `.env` (the four keys; `BRAIN_API_URL` if the brain dials another address), hatches with `MEMBRANE_MODEL=anthropic`, speaks each turn of `liturgy.md` through its door, approves what is pending, waits for builds, answers a failed build with turn 3 (three times at most), and writes the transcript, every command, the final `list`, the token counts and the verdict to `docs/embryo/<date>-run-<n>/`. It refuses to start if the account already has a `brain`, and tears the brain down at the end unless `--keep`. `--model` picks the model id (`claude-opus-5` by default) and `--effort` the run's default effort, which a turn raises from its own tool list or at the model's request and never lowers (#122). The signing key it speaks with is generated per run, named `mike`, and kept in a temp directory. `docs/embryo/README.md` is the tally.
+`capability run` (`embryo/membrane/capability.py`) reads `.env` (the four keys; `BRAIN_API_URL` if the brain dials another address), hatches with `MEMBRANE_MODEL=anthropic` (or, for a capability with dependencies, forks the last dependency's promoted checkpoints into the working labels), speaks each row through its door, approves what is pending, waits for builds, answers a failed build or a refused approval with the capability's repair phrase (three times in a run at most), judges the named postconditions, and writes the transcript, every command, the final `list`, the token counts and the verdict to `docs/embryo/<name>/<date>-run-<n>/`. It refuses to start if the account already has a `brain`, and tears the brain down at the end unless `--keep`. `--model` picks the model id (`claude-opus-5` by default) and `--effort` the run's default effort, which a turn raises from its own tool list or at the model's request and never lowers (#122). The signing key it speaks with is generated per run, named `mike`, and kept in a temp directory.
+
+`capability promote` takes a kept, passing run, copies its `brain` and every `verb/<name>` head under `capability/<name>/`, writes `docs/embryo/<name>/PROMOTED.md`, and drops the working labels. The run's key, ingress rule and recipes stay: they are the lineage a dependent reuses. `docs/embryo/README.md` is the index.
 
 ## The brain disk
 

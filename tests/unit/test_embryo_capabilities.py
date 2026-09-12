@@ -210,4 +210,6 @@ def test_the_words_the_tiers_speak_are_hatch_md() -> None:
     assert load(CAPABILITIES / "hatch.md") == HATCH
     assert WORDS["1"].startswith("Hello. I am the one who hatched you.")
     assert WORDS["4"] == "Who am I?" == WORDS["5"]
-    assert not (CAPABILITIES.parent / "liturgy.md").exists()
+    # the pre-capabilities single script lived directly under embryo/; only the
+    # priors do now, and every capability's words live under CAPABILITIES instead.
+    assert {p.name for p in CAPABILITIES.parent.glob("*.md")} == {"README.md", "seed.md"}

@@ -1,8 +1,9 @@
-"""The DNA executes end to end (spec §11 tier 2): the membrane in process against
-the real app over the fake host, a scripted model playing hatch. A trial,
-proposals, approval, builds (one failing first), a pre-turn hook, the door
-opening, an ephemeral verb, and a chain verb trialled twice on a scratch chain
-before it is proposed and then run to two checkpoints of its own."""
+"""Each capability's DNA executes end to end (capabilities design §9): the membrane
+in process against the real app over the fake host, a scripted model playing
+the rows. Hatch: a trial, proposals, approval, builds (one failing first), a
+pre-turn hook, the door opening, an ephemeral verb, and a chain verb trialled
+twice on a scratch chain before it is proposed and then run to two checkpoints
+of its own."""
 
 from __future__ import annotations
 
@@ -122,7 +123,7 @@ async def embryo(
     flow: Flow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[Embryo]:
     async def build_image(cmd: str) -> str:
-        # Every build of the hook fails until it carries a supersedes line, so the liturgy's
+        # Every build of the hook fails until it carries a supersedes line, so hatch's
         # "check your build" turn (spec §9 turn 3) runs: the trial fails, the approved build
         # fails, the fix builds. The real service deletes a failed recipe when its text is
         # resubmitted, so the same Dockerfile is built again on approval.
@@ -161,7 +162,10 @@ async def embryo(
     await http.aclose()
 
 
-async def test_the_liturgy(embryo: Embryo, flow: Flow) -> None:
+async def test_hatch(embryo: Embryo, flow: Flow) -> None:
+    assert [r.door for r in HATCH.rows[:2]] == ["root say", "root say"]
+    assert [r.door for r in HATCH.rows[2:10]] == ["signed", "unsigned"] + ["signed"] * 6
+
     # turn 1: root say; the four built-in tools, closed door, no proposals
     audit, reply = await embryo.root_say(WORDS["1"])
     assert audit["principal"] == "root" and audit["tools"] == [] and audit["proposals"] == []
