@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import tempfile
 import uuid
@@ -26,7 +27,7 @@ from mshkn.db import (
     list_checkpoints_by_account,
     list_prunable_checkpoints,
 )
-from mshkn.errors import BadRequest, Conflict, NotFound
+from mshkn.errors import BadRequest, Conflict, HostError, NotFound
 from mshkn.models import Checkpoint, CheckpointTrigger, Computer, checkpoint_volume_name
 from mshkn.observability.metrics import checkpoints_total, timed
 from mshkn.services.merge import (
@@ -53,6 +54,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SYNC_TIMEOUT_SECONDS = 15.0
+# How long the tmpfs copy of a snapshot outlives its upload. A fork resolves
+# its files before it loads them, so a copy must not vanish under a fork that
+# chose it a moment before the durable copy appeared.
+_STAGING_LINGER_SECONDS = 30.0
+# Room the staging filesystem must have before a snapshot is written there:
+# the memory file is the guest's RAM (256 MiB by default, more with custom
+# resources) plus vmstate, and a snapshot that runs out of room costs a
+# failed attempt and a second pause.
+_STAGING_MIN_FREE_BYTES = 2 * 1024**3
+
+
+def _staging_free_bytes(path: Path) -> int:
+    """Free bytes on the filesystem holding path (its nearest existing parent)."""
+    probe = path
+    while not probe.exists():
+        probe = probe.parent
+    return shutil.disk_usage(probe).free
 
 
 @dataclass(frozen=True)
@@ -101,10 +119,22 @@ class CheckpointService:
         # same reason). The exec runs outside the lock. An entry exists only
         # while someone holds or waits for it, so labels do not accumulate.
         self._label_locks: dict[tuple[str, str], _LabelLock] = {}
+        # Uploads go one at a time: several 256 MiB rclone copies at once against
+        # the disk the next checkpoint writes to is what made T1.2 decay (#145).
+        self._upload_slot = asyncio.Semaphore(1)
+        # Persists go one at a time too, and each is written through to disk
+        # before the next starts: ten 256 MiB copies left to the page cache
+        # became one multi-gigabyte write-back burst that Firecracker's drive
+        # flush inside the next create_snapshot queued behind for a second.
+        self._persist_slot = asyncio.Semaphore(1)
 
     @staticmethod
     def upload_task_key(checkpoint_id: str) -> str:
         return f"upload:{checkpoint_id}"
+
+    @staticmethod
+    def staging_clear_task_key(checkpoint_id: str) -> str:
+        return f"stage-clear:{checkpoint_id}"
 
     # -- lookups -------------------------------------------------------------
 
@@ -146,7 +176,19 @@ class CheckpointService:
         trigger: CheckpointTrigger,
     ) -> Checkpoint:
         checkpoint_id = f"ckpt-{uuid.uuid4().hex[:12]}"
-        snapshot_dir = self.config.checkpoint_local_dir / checkpoint_id
+        # Written on tmpfs: Firecracker fsyncs the memory file, and on the
+        # durable disk that alone was 300 ms and more per checkpoint (#144).
+        staging_dir = self.config.checkpoint_staging_dir / checkpoint_id
+        durable_dir = self.config.checkpoint_local_dir / checkpoint_id
+        staged = _staging_free_bytes(self.config.checkpoint_staging_dir) >= _STAGING_MIN_FREE_BYTES
+        if not staged:
+            logger.warning(
+                "Staging filesystem under %s has less than %d MiB free; writing %s to %s",
+                self.config.checkpoint_staging_dir,
+                _STAGING_MIN_FREE_BYTES // 1024**2,
+                checkpoint_id,
+                durable_dir,
+            )
         async with timed("checkpoint"):
             # Flush the guest's page cache to the block device: dm-thin snapshots
             # see only what reached the disk.
@@ -154,15 +196,37 @@ class CheckpointService:
                 self.host.guest.exec(computer.vm_ip, "sync", timeout=10.0),
                 timeout=_SYNC_TIMEOUT_SECONDS,
             )
-            await self.host.hypervisor.snapshot(computer.socket_path, snapshot_dir)
-            # pause/resume breaks the pooled TCP session
-            await self.host.guest.evict(computer.vm_ip)
-            volume_id = await self.allocator.acquire_volume_id()
+            # The disk snap must follow the memory snapshot, not overlap it: the
+            # guest's `sync` does not reach the host disk (Firecracker's drive
+            # cache is Unsafe, so guest flushes are ignored), and it is
+            # Firecracker's own flush inside create_snapshot that lands the
+            # guest's writes on the thin volume. A snap taken alongside the dump
+            # raced that flush and captured empty files (found by the live run
+            # of #147). The pooled SSH session is kept across the pause: a pause
+            # of a few hundred milliseconds does not break a TCP connection, and
+            # the unconditional evict cost the next exec a full handshake (#150).
+            if staged:
+                try:
+                    await self.host.hypervisor.snapshot(computer.socket_path, staging_dir)
+                except HostError:
+                    # The room check above is the identified case; this is the
+                    # one retry for what it did not foresee (tmpfs filling in the
+                    # meantime, say). `snapshot` resumes the guest whatever
+                    # happened, so a second attempt is safe, and the first
+                    # failure is logged with its traceback, not hidden.
+                    logger.warning(
+                        "Snapshot of %s onto %s failed; writing it to %s instead",
+                        computer.id,
+                        staging_dir,
+                        durable_dir,
+                        exc_info=True,
+                    )
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    staged = False
+            if not staged:
+                await self.host.hypervisor.snapshot(computer.socket_path, durable_dir)
             volume_name = checkpoint_volume_name(checkpoint_id)
-            await self.host.blocks.snap(
-                source_volume_id=computer.thin_volume_id, new_volume_id=volume_id
-            )
-            await self.host.blocks.activate(volume_id=volume_id, name=volume_name)
+            volume_id = await self._snap_disk(computer.thin_volume_id, volume_name)
             latest = await get_latest_checkpoint_for_computer(self.db, computer.id)
             if latest is not None:
                 parent_id: str | None = latest.id
@@ -185,7 +249,7 @@ class CheckpointService:
             await insert_checkpoint(self.db, ckpt)
         checkpoints_total.labels(trigger=trigger.value).inc()
         self.tasks.spawn(
-            self._upload(snapshot_dir, ckpt.r2_prefix, checkpoint_id),
+            self._persist_and_upload(checkpoint_id, ckpt.r2_prefix, staged=staged),
             name=self.upload_task_key(checkpoint_id),
             key=self.upload_task_key(checkpoint_id),
         )
@@ -202,22 +266,119 @@ class CheckpointService:
         )
         return ckpt
 
-    async def _upload(self, snapshot_dir: Path, r2_prefix: str, checkpoint_id: str) -> None:
+    async def _snap_disk(self, source_volume_id: int, volume_name: str) -> int:
+        """A new thin volume snapped from the computer's, mapped under volume_name."""
+        volume_id = await self.allocator.acquire_volume_id()
+        await self.host.blocks.snap(source_volume_id=source_volume_id, new_volume_id=volume_id)
+        await self.host.blocks.activate(volume_id=volume_id, name=volume_name)
+        return volume_id
+
+    async def _persist_and_upload(
+        self, checkpoint_id: str, r2_prefix: str, *, staged: bool
+    ) -> None:
+        """Copy the snapshot from tmpfs to the durable directory, release the
+        tmpfs copy after a linger, and upload.
+
+        The durable copy is built under `<id>.tmp` and renamed into place, so
+        it is complete whenever it exists, and the linger starts the moment it
+        does: uploads run one at a time and take tens of seconds each, so a
+        tmpfs copy held until its upload ended would pile up with the others
+        until the tmpfs was full. A copy that fails leaves the tmpfs copy as
+        the only one: it is uploaded from there and kept. `staged` is False
+        when the snapshot was written to the durable directory in the first
+        place, in which case there is nothing to persist or release.
+        """
+        staging_dir = self.config.checkpoint_staging_dir / checkpoint_id
+        durable_dir = self.config.checkpoint_local_dir / checkpoint_id
+        source = durable_dir
+        if staged:
+            try:
+                async with self._persist_slot:
+                    await self._persist(staging_dir, durable_dir)
+            except Exception:
+                logger.warning(
+                    "Could not persist checkpoint %s to %s; keeping the staging copy",
+                    checkpoint_id,
+                    durable_dir,
+                    exc_info=True,
+                )
+                source = staging_dir
+            else:
+                self.tasks.spawn(
+                    self._clear_staging(staging_dir),
+                    name=self.staging_clear_task_key(checkpoint_id),
+                    key=self.staging_clear_task_key(checkpoint_id),
+                )
+        async with self._upload_slot:
+            try:
+                await self.host.objects.upload_dir(source, r2_prefix)
+            except Exception:
+                logger.warning("R2 upload failed for checkpoint %s", checkpoint_id, exc_info=True)
+
+    @staticmethod
+    async def _persist(staging_dir: Path, durable_dir: Path) -> None:
+        """Run the blocking copy in a thread; if cancelled (a delete), wait for
+        the thread anyway and take back whatever it published.
+
+        Cancelling the task does not stop the thread, and delete has already
+        removed the row: a directory the thread renamed into place afterwards
+        would belong to nothing and never be reclaimed.
+        """
+        copy = asyncio.ensure_future(asyncio.to_thread(_persist_snapshot, staging_dir, durable_dir))
         try:
-            await self.host.objects.upload_dir(snapshot_dir, r2_prefix)
-        except Exception:
-            logger.warning("R2 upload failed for checkpoint %s", checkpoint_id, exc_info=True)
+            await asyncio.shield(copy)
+        except asyncio.CancelledError:
+            await asyncio.gather(copy, return_exceptions=True)
+            shutil.rmtree(durable_dir, ignore_errors=True)
+            shutil.rmtree(durable_dir.with_name(f"{durable_dir.name}.tmp"), ignore_errors=True)
+            raise
+
+    async def recover_staging(self) -> int:
+        """Finish what a previous process's persist tasks left in the staging
+        directory: persist every complete copy that has a checkpoint row and no
+        durable twin, then empty the directory. Called once at start-up. Returns how many were
+        persisted; an incomplete copy (a snapshot the process died inside)
+        has nothing worth keeping and is removed with the rest.
+        """
+        staging_root = self.config.checkpoint_staging_dir
+        if not staging_root.is_dir():
+            return 0
+        persisted = 0
+        for entry in sorted(staging_root.iterdir()):
+            durable_dir = self.config.checkpoint_local_dir / entry.name
+            complete = (entry / "vmstate").exists() and (entry / "memory").exists()
+            # Only a checkpoint with a row is worth persisting: a snapshot the
+            # process died between writing and inserting the row for belongs
+            # to nothing, and nothing could ever delete its durable copy.
+            has_row = complete and await get_checkpoint(self.db, entry.name) is not None
+            if has_row and not durable_dir.exists():
+                try:
+                    await asyncio.to_thread(_persist_snapshot, entry, durable_dir)
+                    persisted += 1
+                except Exception:
+                    logger.warning(
+                        "Could not persist staged checkpoint %s", entry.name, exc_info=True
+                    )
+                    continue
+            shutil.rmtree(entry, ignore_errors=True)
+        return persisted
+
+    @staticmethod
+    async def _clear_staging(staging_dir: Path) -> None:
+        await asyncio.sleep(_STAGING_LINGER_SECONDS)
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
     # -- delete / prune ------------------------------------------------------
 
     async def delete(self, checkpoint: Checkpoint) -> None:
         await self.tasks.cancel(self.upload_task_key(checkpoint.id))
+        await self.tasks.cancel(self.staging_clear_task_key(checkpoint.id))
         if checkpoint.thin_volume_id is not None:
             await self.host.blocks.remove(
                 volume_id=checkpoint.thin_volume_id, name=checkpoint.volume_name
             )
-        local_dir = self.config.checkpoint_local_dir / checkpoint.id
-        shutil.rmtree(local_dir, ignore_errors=True)
+        for base in (self.config.checkpoint_local_dir, self.config.checkpoint_staging_dir):
+            shutil.rmtree(base / checkpoint.id, ignore_errors=True)
         await self.host.objects.delete_prefix(checkpoint.r2_prefix)
         await delete_checkpoint(self.db, checkpoint.id)
 
@@ -421,6 +582,64 @@ class CheckpointService:
         return await self.computers.fork(
             account, checkpoint, recipe_id=recipe_id, api_key_id=api_key_id
         )
+
+
+_SPARSE_READ = 1 << 20
+_PAGE = 4096
+_ZERO_PAGE = bytes(_PAGE)
+
+
+def _copy_sparse(source: Path, dest: Path) -> None:
+    """Copy a file, leaving holes where the source holds only zero pages. Blocking.
+
+    A guest's memory image is 60 to 70 % zero pages on the live host, and a
+    hole reads back as zeros, which is exactly what Firecracker needs of
+    those pages. The bytes not written are disk time the next checkpoint's
+    drive flush does not wait behind. Zero pages are skipped at page
+    granularity, coalescing the runs of data between them into one write.
+    """
+    with source.open("rb") as src, dest.open("wb") as dst:
+        while True:
+            chunk = src.read(_SPARSE_READ)
+            if not chunk:
+                break
+            run_start: int | None = None
+            for offset in range(0, len(chunk), _PAGE):
+                page = chunk[offset : offset + _PAGE]
+                if page == _ZERO_PAGE[: len(page)]:
+                    if run_start is not None:
+                        dst.write(chunk[run_start:offset])
+                        run_start = None
+                    dst.seek(len(page), os.SEEK_CUR)
+                elif run_start is None:
+                    run_start = offset
+            if run_start is not None:
+                dst.write(chunk[run_start:])
+        dst.truncate(src.tell())
+        dst.flush()
+        os.fsync(dst.fileno())
+
+
+def _persist_snapshot(staging_dir: Path, durable_dir: Path) -> None:
+    """Copy a snapshot directory into place atomically, sparse and written
+    through. Blocking.
+
+    Every file is fsynced before the rename, so the copy costs the disk its
+    bytes now, at one copy's worth of queue, instead of piling up in the page
+    cache for the flusher to write back in a burst under the next checkpoint.
+    """
+    tmp = durable_dir.with_name(f"{durable_dir.name}.tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    for entry in sorted(staging_dir.iterdir()):
+        if entry.is_file():
+            _copy_sparse(entry, tmp / entry.name)
+    tmp.rename(durable_dir)
+    dir_fd = os.open(durable_dir.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def _merge_into(parent: Path, fork_a: Path, fork_b: Path, output: Path) -> MergeResult:

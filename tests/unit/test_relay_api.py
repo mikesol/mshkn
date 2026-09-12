@@ -41,7 +41,11 @@ async def runtime(db: aiosqlite.Connection, tmp_path: Path) -> AsyncIterator[Run
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"echo": request.url.path})
 
-    config = Config(domain="test.dev", checkpoint_local_dir=tmp_path / "ckpts")
+    config = Config(
+        domain="test.dev",
+        checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
+    )
     host = FakeHost()
     rt = make_runtime(
         db, config=config, host=host, http=httpx.AsyncClient(transport=httpx.MockTransport(handler))

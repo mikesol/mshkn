@@ -24,7 +24,9 @@ class RcloneObjectStore:
         return f"{self._remote}:{self._bucket}/{prefix}/"
 
     async def upload_dir(self, local_dir: Path, prefix: str) -> None:
-        await self._run(f"rclone copy {local_dir}/ {self._url(prefix)}")
+        # Background work: an upload of a 256 MiB memory file runs for tens of
+        # seconds and must yield to the checkpoint and restore in front of it (#145).
+        await self._run(f"nice -n 19 ionice -c 3 rclone copy {local_dir}/ {self._url(prefix)}")
         logger.info("Uploaded %s to %s", local_dir, self._url(prefix))
 
     async def download_dir(self, prefix: str, local_dir: Path) -> None:

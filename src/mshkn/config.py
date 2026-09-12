@@ -34,6 +34,10 @@ class Config:
     migrations_dir: Path = field(default_factory=lambda: Path("migrations"))
     kernel_path: Path = field(default_factory=lambda: Path("/opt/firecracker/vmlinux.bin"))
     checkpoint_local_dir: Path = field(default_factory=lambda: Path("/opt/mshkn/checkpoints"))
+    # Where a checkpoint's snapshot is written first. Firecracker fsyncs the
+    # memory file, which cost 300 ms and more per checkpoint on the durable
+    # disk; on tmpfs the fsync is free and the upload task moves the files (#144).
+    checkpoint_staging_dir: Path = field(default_factory=lambda: Path("/dev/shm/mshkn"))
     ssh_key_path: Path = field(default_factory=lambda: Path("/root/.ssh/id_ed25519"))
 
     # dm-thin

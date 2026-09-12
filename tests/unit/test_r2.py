@@ -24,7 +24,11 @@ async def test_upload_download_delete_commands(tmp_path: Path) -> None:
     await store.download_dir("acct-1/ckpt-1", tmp_path / "dl")
     await store.delete_prefix("acct-1/ckpt-1")
     assert run.calls == [
-        (f"rclone copy {tmp_path / 'ckpt-1'}/ r2:mshkn-checkpoints/acct-1/ckpt-1/", True),
+        (
+            "nice -n 19 ionice -c 3 "
+            f"rclone copy {tmp_path / 'ckpt-1'}/ r2:mshkn-checkpoints/acct-1/ckpt-1/",
+            True,
+        ),
         (f"rclone copy r2:mshkn-checkpoints/acct-1/ckpt-1/ {tmp_path / 'dl'}/", True),
         ("rclone purge r2:mshkn-checkpoints/acct-1/ckpt-1/", False),
     ]
@@ -35,4 +39,4 @@ async def test_custom_remote_name(tmp_path: Path) -> None:
     run = Recorder()
     store = RcloneObjectStore("bucket-x", remote="other-remote", run=run)
     await store.upload_dir(tmp_path / "src", "p")
-    assert run.calls[0][0] == f"rclone copy {tmp_path / 'src'}/ other-remote:bucket-x/p/"
+    assert run.calls[0][0].endswith(f"rclone copy {tmp_path / 'src'}/ other-remote:bucket-x/p/")

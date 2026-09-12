@@ -63,6 +63,10 @@ async def test_prune_honours_retention_and_pin_and_cancels_uploads(
         old = (await flow.client.post(f"/computers/{cid}/checkpoint", json={})).json()[
             "checkpoint_id"
         ]
+        # Their persist-and-upload tasks must be done before the upload is
+        # replaced below, or they would be the ones held at the gate.
+        for done in (pinned, old):
+            await flow.runtime.tasks.wait(f"upload:{done}")
         gate = asyncio.Event()
 
         async def slow_upload(local_dir: Path, prefix: str) -> None:
@@ -86,7 +90,11 @@ async def test_prune_honours_retention_and_pin_and_cancels_uploads(
         assert ids == {pinned, new}
         resp = await flow.client.delete(f"/checkpoints/{new}")
         assert resp.status_code == 200
-        assert len(flow.runtime.tasks) == 0, "the in-flight upload was cancelled, not left to fail"
+        outstanding = flow.runtime.tasks.names()
+        assert not any(n.startswith("upload:") for n in outstanding), (
+            f"the in-flight upload was cancelled, not left to fail: {outstanding}"
+        )
+        assert outstanding <= {f"stage-clear:{pinned}"}, "only the kept checkpoint's linger remains"
         gate.set()
 
 

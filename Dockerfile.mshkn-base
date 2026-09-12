@@ -18,7 +18,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     systemd systemd-sysv dbus udev \
     openssh-server \
-    iproute2 iputils-ping curl ca-certificates \
+    iproute2 iputils-ping curl ca-certificates socat \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # SSH setup — key is injected by build context

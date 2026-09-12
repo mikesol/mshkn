@@ -55,6 +55,17 @@ _DOCKER_BUILD_TIMEOUT_SECONDS = 600
 
 BASE_IMAGE = "mshkn-base"
 
+# systemd units masked in every rootfs (#149): periodic jobs a disposable VM
+# never wants, and which a clock jump on restore would fire all at once.
+_MASKED_UNITS = (
+    "apt-daily.timer",
+    "apt-daily-upgrade.timer",
+    "dpkg-db-backup.timer",
+    "e2scrub_all.timer",
+    "fstrim.timer",
+    "motd-news.timer",
+)
+
 # `FROM [--flag=value ...] <image> [AS <name>]`, any case; the image is the first
 # token that is not a flag.
 _FROM_RE = re.compile(r"^FROM\s+(?:--\S+\s+)*(\S+)", re.IGNORECASE)
@@ -447,7 +458,35 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
             sshd_config,
         )
 
+    # UsePAM no: sshd's post-auth PAM pass (pam_motd running /etc/update-motd.d,
+    # pam_loginuid, pam_limits, ...) cost 50 ms on the first session of every
+    # connection on the live host (#143). Pubkey root login needs none of it.
+    if "UsePAM" not in sshd_config:
+        sshd_config += "UsePAM no\n"
+    else:
+        sshd_config = re.sub(r"#?UsePAM\s+\S+", "UsePAM no", sshd_config)
+
     sshd_config_path.write_text(sshd_config)
+
+    # Nothing left for pam_motd to run should PAM ever come back.
+    motd_dir = mp / "etc" / "update-motd.d"
+    if motd_dir.is_dir():
+        for entry in motd_dir.iterdir():
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+
+    # Mask the periodic timers. They cost boot time, and a restored guest whose
+    # clock `date -s` moves forward by days would fire them all at once inside
+    # a user's exec (#149).
+    units_dir = mp / "etc" / "systemd" / "system"
+    units_dir.mkdir(parents=True, exist_ok=True)
+    for unit in _MASKED_UNITS:
+        mask = units_dir / unit
+        if mask.is_symlink() or mask.exists():
+            mask.unlink()
+        mask.symlink_to("/dev/null")
 
     # Create /sbin/init symlink
     sbin = mp / "sbin"
@@ -529,3 +568,29 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
     fcnet_link = sysinit_wants / "fcnet.service"
     if not fcnet_link.exists():
         fcnet_link.symlink_to("/etc/systemd/system/fcnet.service")
+
+    # The vsock shell listener (#55): the host reconfigures a restored guest
+    # through it instead of waiting for sshd and paying an SSH handshake. Each
+    # connection gets a shell that reads lines until the script's own `exit`
+    # (Firecracker turns a host half-close into a full close, so EOF is not an
+    # option); `-t 0` closes the connection as soon as the shell exits.
+    vsock_unit = mp / "etc" / "systemd" / "system" / "mshkn-vsock.service"
+    vsock_unit.write_text(
+        "[Unit]\n"
+        "Description=mshkn vsock shell listener\n"
+        "After=fcnet.service\n"
+        "\n"
+        "[Service]\n"
+        "ExecStart=/usr/bin/socat -t 0 VSOCK-LISTEN:52,reuseaddr,fork EXEC:/bin/sh,pipes,stderr\n"
+        "Restart=always\n"
+        "RestartSec=1\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+    multi_user_wants = mp / "etc" / "systemd" / "system" / "multi-user.target.wants"
+    multi_user_wants.mkdir(parents=True, exist_ok=True)
+    vsock_link = multi_user_wants / "mshkn-vsock.service"
+    if vsock_link.is_symlink() or vsock_link.exists():
+        vsock_link.unlink()
+    vsock_link.symlink_to("/etc/systemd/system/mshkn-vsock.service")

@@ -38,7 +38,14 @@ async def _account(db: aiosqlite.Connection, api_key: str = "test-key-123") -> N
 async def _app(db: aiosqlite.Connection, tmp_path: Path) -> FastAPI:
     """An app whose runtime uses the production default domain (mshkn.dev)."""
     await _account(db)
-    return make_app(make_runtime(db, config=Config(checkpoint_local_dir=tmp_path / "ckpts")))
+    return make_app(
+        make_runtime(
+            db,
+            config=Config(
+                checkpoint_local_dir=tmp_path / "ckpts", checkpoint_staging_dir=tmp_path / "staging"
+            ),
+        )
+    )
 
 
 _BASE_RULE = IngressRule(

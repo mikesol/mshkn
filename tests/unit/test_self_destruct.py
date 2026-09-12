@@ -142,10 +142,10 @@ async def test_self_destruct_creates_checkpoint_and_destroys(
     assert host.guest.commands == [(ip, "echo done"), (ip, "sync")]
     assert host.hypervisor.snapshots[-1] == (
         computer.socket_path,
-        tmp_path / "ckpts" / checkpoint_id,
+        tmp_path / "staging" / checkpoint_id,
     )
-    # once for the checkpoint's pause/resume, once when the computer is destroyed
-    assert host.guest.evicted == [ip, ip]
+    # once, when the computer is destroyed; the checkpoint's pause keeps the session
+    assert host.guest.evicted == [ip]
 
     # The snapshot files were uploaded to R2 under the checkpoint's prefix
     await rt.tasks.wait(f"upload:{checkpoint_id}")

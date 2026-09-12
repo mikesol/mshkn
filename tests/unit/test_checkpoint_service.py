@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
+import mshkn.services.checkpoints
 from mshkn.config import Config
 from mshkn.db import get_checkpoint, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, Conflict, NotFound
-from mshkn.host import ExecResult
+from mshkn.host import ExecResult, SnapshotFiles
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import Checkpoint, CheckpointTrigger, Computer, ExecSpec
 from mshkn.observability.metrics import checkpoints_total
@@ -22,8 +27,6 @@ from mshkn.services.recipes import RecipeService
 from tests.support import account_row, checkpoint_row
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import aiosqlite
 
 ACCOUNT = account_row(api_key="k")
@@ -41,6 +44,7 @@ async def _services(
     config = Config(
         domain="test.dev",
         checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
         checkpoint_retention_count=retention,
     )
     allocator = SlotAllocator()
@@ -67,15 +71,18 @@ async def test_create_runs_the_five_steps_in_order_and_labels_the_metric(
     ckpt = await checkpoints.create(computer, label="base", pin=True, trigger=CheckpointTrigger.API)
     assert host.guest.commands[-1] == (computer.vm_ip, "sync")
     assert host.hypervisor.snapshots[before_snapshots:] == [
-        (computer.socket_path, tmp_path / "ckpts" / ckpt.id)
-    ]
-    assert host.guest.evicted[-1] == computer.vm_ip
+        (computer.socket_path, tmp_path / "staging" / ckpt.id)
+    ], "Firecracker fsyncs the memory file, so it is written on tmpfs first (#144)"
+    assert host.guest.evicted == [], "a 300 ms pause does not break the pooled session (#150)"
     assert host.blocks.volumes[ckpt.thin_volume_id or -1] == computer.thin_volume_id
     assert host.blocks.active[ckpt.volume_name] == ckpt.thin_volume_id
     assert ckpt.parent_id is None and ckpt.pinned and ckpt.label == "base"
     assert _labelled("api") == before + 1
     await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
     assert sorted(host.objects.prefixes[f"acct-1/{ckpt.id}"]) == ["memory", "vmstate"]
+    durable = tmp_path / "ckpts" / ckpt.id
+    assert (durable / "memory").read_bytes() == b"fake-memory", "persisted before the upload"
+    assert not (tmp_path / "ckpts" / f"{ckpt.id}.tmp").exists(), "the copy landed by rename"
 
 
 async def test_parent_is_latest_then_source_then_none(
@@ -447,3 +454,269 @@ async def test_label_locks_exist_only_while_held(db: aiosqlite.Connection, tmp_p
         ),
     )
     assert checkpoints._label_locks == {}
+
+
+async def test_create_snaps_the_disk_only_after_the_memory_snapshot_returned(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dm-thin snap waits for the memory snapshot; overlapping them is wrong.
+
+    Firecracker's drive cache is Unsafe: the guest's `sync` never reaches the
+    host disk, and it is Firecracker's own flush inside create_snapshot that
+    lands the guest's writes on the thin volume. A snap taken during the dump
+    captured empty files on the live host (the #147 overlap, reverted).
+    """
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    real_snapshot = host.hypervisor.snapshot
+    volumes_during_dump: list[set[int]] = []
+
+    async def slow_snapshot(socket_path: str, dest_dir: Path) -> SnapshotFiles:
+        await asyncio.sleep(0.01)  # the dump takes a while; the snap should land meanwhile
+        volumes_during_dump.append(set(host.blocks.volumes))
+        return await real_snapshot(socket_path, dest_dir)
+
+    monkeypatch.setattr(host.hypervisor, "snapshot", slow_snapshot)
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    assert ckpt.thin_volume_id not in volumes_during_dump[0], (
+        "the disk snap must not run until Firecracker has flushed the drive"
+    )
+    assert ckpt.thin_volume_id in host.blocks.volumes
+
+
+async def test_the_staging_copy_goes_after_a_linger_and_delete_clears_both(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tmpfs copy outlives the upload by a linger, so a fork that resolved
+    the staging path a moment before the durable copy appeared still finds its
+    files; delete clears both copies at once."""
+    monkeypatch.setattr("mshkn.services.checkpoints._STAGING_LINGER_SECONDS", 0.0)
+    checkpoints, computers, _host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    staging = tmp_path / "staging" / ckpt.id
+    assert staging.is_dir()
+    await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
+    await checkpoints.tasks.wait(checkpoints.staging_clear_task_key(ckpt.id))
+    assert not staging.exists(), "the staging copy is released once it is safe"
+    assert (tmp_path / "ckpts" / ckpt.id / "memory").exists()
+    other = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    await checkpoints.tasks.wait(checkpoints.upload_task_key(other.id))
+    await checkpoints.delete(other)
+    assert not (tmp_path / "staging" / other.id).exists()
+    assert not (tmp_path / "ckpts" / other.id).exists()
+    assert checkpoints.staging_clear_task_key(other.id) not in checkpoints.tasks.names(), (
+        "delete cancels the linger too, so nothing of the checkpoint outlives it"
+    )
+
+
+async def test_uploads_run_one_at_a_time(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Uploads of 256 MiB files ran for minutes, several at once, against the
+    same disk the next checkpoint fsyncs to (#145); one at a time bounds that."""
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    in_flight = 0
+    peak = 0
+
+    async def slow_upload(local_dir: Path, prefix: str) -> None:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+
+    monkeypatch.setattr(host.objects, "upload_dir", slow_upload)
+    made = [
+        await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+        for _ in range(3)
+    ]
+    for ckpt in made:
+        await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
+    assert peak == 1
+
+
+async def test_a_failed_persist_still_uploads_from_staging_and_keeps_it(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("mshkn.services.checkpoints._STAGING_LINGER_SECONDS", 0.0)
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    (tmp_path / "ckpts").mkdir(exist_ok=True)
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    # The durable path is unusable: a file sits where the checkpoint's directory goes.
+    (tmp_path / "ckpts" / f"{ckpt.id}.tmp").write_text("in the way")
+    (tmp_path / "ckpts" / ckpt.id).write_text("in the way")
+    await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
+    await checkpoints.tasks.wait(checkpoints.staging_clear_task_key(ckpt.id))
+    assert sorted(host.objects.prefixes[f"acct-1/{ckpt.id}"]) == ["memory", "vmstate"]
+    assert (tmp_path / "staging" / ckpt.id / "memory").exists(), "the only copy is kept"
+
+
+async def test_the_staging_copy_is_released_once_the_durable_copy_exists(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The linger starts when the durable copy lands, not when the upload ends.
+
+    Uploads run one at a time and take tens of seconds each, so freeing tmpfs
+    only after the upload let staging copies pile up until /dev/shm was full
+    and Firecracker failed with ENOSPC on the live host.
+    """
+    monkeypatch.setattr("mshkn.services.checkpoints._STAGING_LINGER_SECONDS", 0.0)
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    upload_started = asyncio.Event()
+    release_upload = asyncio.Event()
+
+    async def blocked_upload(local_dir: Path, prefix: str) -> None:
+        upload_started.set()
+        await release_upload.wait()
+
+    monkeypatch.setattr(host.objects, "upload_dir", blocked_upload)
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    await upload_started.wait()
+    await checkpoints.tasks.wait(checkpoints.staging_clear_task_key(ckpt.id))
+    assert not (tmp_path / "staging" / ckpt.id).exists(), "released while the upload still runs"
+    assert (tmp_path / "ckpts" / ckpt.id / "memory").exists()
+    release_upload.set()
+    await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
+
+
+async def test_create_falls_back_to_the_durable_dir_when_the_staging_write_fails(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """A full tmpfs must not cost the checkpoint: the snapshot is retried onto disk."""
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    host.hypervisor.fail_next("snapshot")
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    assert host.hypervisor.snapshots[-1] == (
+        computer.socket_path,
+        tmp_path / "ckpts" / ckpt.id,
+    ), "the retry wrote straight into the durable directory"
+    assert not (tmp_path / "staging" / ckpt.id).exists()
+    await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
+    assert sorted(host.objects.prefixes[f"acct-1/{ckpt.id}"]) == ["memory", "vmstate"]
+    assert checkpoints.staging_clear_task_key(ckpt.id) not in checkpoints.tasks.names()
+
+
+async def test_create_writes_to_the_durable_dir_when_tmpfs_has_no_room(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The staging filesystem is checked before the snapshot, so a full tmpfs
+    costs no failed attempt and the VM is paused once, not twice."""
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    before = len(host.hypervisor.snapshots)
+    monkeypatch.setattr(
+        "mshkn.services.checkpoints._staging_free_bytes", lambda _path: 100 * 1024 * 1024
+    )
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    assert host.hypervisor.snapshots[before:] == [
+        (computer.socket_path, tmp_path / "ckpts" / ckpt.id)
+    ]
+
+
+async def test_persists_run_one_at_a_time_and_fsync_their_files(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persisted copy is written through to disk before the next one starts.
+
+    Left to the page cache, ten 256 MiB copies became one multi-gigabyte
+    write-back burst, and Firecracker's drive flush inside the next
+    create_snapshot queued behind it for over a second (T1.2 many-small-files
+    p95 1786 ms in run 7 of the branch). One fsynced copy at a time bounds
+    what any flush can wait behind to a single copy.
+    """
+    checkpoints, computers, _host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    synced: list[str] = []
+    real_fsync = os.fsync
+
+    def fsync(fd: int) -> None:
+        synced.append(str(Path(f"/proc/self/fd/{fd}").readlink()))
+        real_fsync(fd)
+
+    in_flight = 0
+    peak = 0
+    real_persist = mshkn.services.checkpoints._persist_snapshot
+
+    def persist(staging_dir: Path, durable_dir: Path) -> None:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        time.sleep(0.01)
+        try:
+            real_persist(staging_dir, durable_dir)
+        finally:
+            in_flight -= 1
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(mshkn.services.checkpoints, "_persist_snapshot", persist)
+    made = [
+        await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+        for _ in range(3)
+    ]
+    for ckpt in made:
+        await checkpoints.tasks.wait(checkpoints.upload_task_key(ckpt.id))
+    assert peak == 1
+    for ckpt in made:
+        durable = tmp_path / "ckpts" / ckpt.id
+        assert str(durable) + ".tmp/memory" in synced or str(durable / "memory") in synced, (
+            f"the memory file of {ckpt.id} was fsynced before the rename"
+        )
+
+
+async def test_delete_during_a_persist_leaves_no_durable_copy_behind(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancelling the upload task does not stop the copy thread; a delete that
+    races it must not end with a published directory nobody can reclaim."""
+    checkpoints, computers, _host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    started = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def slow_persist(staging_dir: Path, durable_dir: Path) -> None:
+        # The copy is done and the rename is about to happen when delete lands.
+        tmp = durable_dir.with_name(f"{durable_dir.name}.tmp")
+        shutil.copytree(staging_dir, tmp)
+        loop.call_soon_threadsafe(started.set)
+        time.sleep(0.2)
+        tmp.rename(durable_dir)
+
+    monkeypatch.setattr(mshkn.services.checkpoints, "_persist_snapshot", slow_persist)
+    ckpt = await checkpoints.create(computer, label=None, trigger=CheckpointTrigger.API)
+    await started.wait()
+    await checkpoints.delete(ckpt)
+    await asyncio.sleep(0.4)  # long enough for an unstoppable thread to have published
+    durable = tmp_path / "ckpts" / ckpt.id
+    assert not durable.exists(), "the copy published after the delete was taken back"
+    assert not durable.with_name(f"{ckpt.id}.tmp").exists()
+    assert not (tmp_path / "staging" / ckpt.id).exists()
+    assert await get_checkpoint(db, ckpt.id) is None
+
+
+def test_persist_snapshot_writes_a_sparse_copy_with_the_same_bytes(tmp_path: Path) -> None:
+    """Memory images are 60 to 70 % zero pages on the live host. Persisting
+    them sparse writes a third of the bytes, which is a third of the disk time
+    a checkpoint's drive flush can end up waiting behind; Firecracker reads a
+    hole as zeros, which is what those pages hold."""
+    staging = tmp_path / "staging" / "ckpt-z"
+    staging.mkdir(parents=True)
+    page = 4096
+    image = b"".join((b"\x00" * page if i % 3 else bytes([i % 251]) * page) for i in range(3 * 64))
+    (staging / "memory").write_bytes(image)
+    (staging / "vmstate").write_bytes(b"state")
+    durable = tmp_path / "ckpts" / "ckpt-z"
+    (tmp_path / "ckpts").mkdir()
+
+    mshkn.services.checkpoints._persist_snapshot(staging, durable)
+
+    copy = durable / "memory"
+    assert copy.read_bytes() == image
+    assert copy.stat().st_size == len(image)
+    assert copy.stat().st_blocks * 512 <= len(image) // 2, "two thirds of the pages are holes"
+    assert (durable / "vmstate").read_bytes() == b"state"
+    assert not durable.with_name("ckpt-z.tmp").exists()
