@@ -236,6 +236,83 @@ class Hatched:
     server_id: str | None = None
 
 
+PROMOTED_PREFIX = "capability/"
+
+
+@dataclass(frozen=True)
+class Promotion:
+    """What `promote` wrote: which run, which membrane, the checkpoint ids under
+    each promoted label, and the lineage a dependent reuses (its ingress rule,
+    scoped key and recipes). `started_from` is the promotion this run began on,
+    so records chain back to a hatch."""
+
+    capability: str
+    run: str
+    membrane: dict[str, Any]
+    promoted_at: str
+    labels: dict[str, str]
+    rule_id: str
+    key_id: str
+    brain_recipe: str
+    recipe_ids: tuple[str, ...]
+    started_from: str | None
+
+
+def promoted_label(name: str, working: str) -> str:
+    return f"{PROMOTED_PREFIX}{name}/{working}"
+
+
+def promotion_path(out: Path, name: str) -> Path:
+    return out / name / "PROMOTED.md"
+
+
+def write_promotion(out: Path, p: Promotion) -> Path:
+    path = promotion_path(out, p.capability)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = {**asdict(p), "recipe_ids": list(p.recipe_ids)}
+    lines = [
+        f"# Promoted: {p.capability}",
+        "",
+        f"Run `{p.run}`, membrane `{p.membrane.get('commit')}`, promoted {p.promoted_at}.",
+        "Dependents start from these labels; `capability promote` overwrites this file.",
+        "",
+        "| Working label | Promoted label | Checkpoint |",
+        "|---|---|---|",
+        *(f"| `{w}` | `{promoted_label(p.capability, w)}` | `{c}` |" for w, c in p.labels.items()),
+        "",
+        "```json",
+        json.dumps(doc, indent=1, sort_keys=True),
+        "```",
+        "",
+    ]
+    path.write_text("\n".join(lines))
+    return path
+
+
+def read_promotion(out: Path, name: str) -> Promotion | None:
+    path = promotion_path(out, name)
+    if not path.exists():
+        return None
+    text = path.read_text()
+    block = text.split("```json\n", 1)[1].split("\n```", 1)[0]
+    doc = json.loads(block)
+    doc["recipe_ids"] = tuple(doc["recipe_ids"])
+    return Promotion(**doc)
+
+
+def ancestry(out: Path, name: str) -> list[str]:
+    """The capability names from `name` back to its hatch, following `started_from`."""
+    chain: list[str] = []
+    current: str | None = name
+    while current is not None and current not in chain:
+        record = read_promotion(out, current)
+        if record is None:
+            break
+        chain.append(current)
+        current = record.started_from.split("/", 1)[0] if record.started_from else None
+    return chain
+
+
 def b64(obj: Any) -> str:
     text = obj if isinstance(obj, str) else json.dumps(obj)
     return base64.b64encode(text.encode()).decode()
@@ -262,7 +339,7 @@ class Doors:
         api: httpx.AsyncClient,
         public: httpx.AsyncClient,
         rule_id: str,
-        record: Record,
+        record: Record | None,
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         now: Callable[[], float] = time.monotonic,
@@ -283,6 +360,8 @@ class Doors:
         computer_id: str | None = None,
         stderr: str = "",
     ) -> int:
+        if self.record is None:
+            return 0
         n = self.record.command(
             door, name, detail, stdout, status, seconds, computer_id=computer_id, stderr=stderr
         )
@@ -414,10 +493,56 @@ class Doors:
         response.raise_for_status()
         return [dict(c) for c in response.json()]
 
-    async def teardown(self, hatched: Hatched, listing: dict[str, Any] | None) -> None:
-        """The account as the run found it, best effort: the scripted model's server
-        (if any), the door, the key, every checkpoint on `brain`, on a verb chain or
-        from a proposal's recipe, then the recipes. A failing delete does not stop
+    async def head(self, label: str) -> dict[str, Any] | None:
+        """The newest checkpoint on a label: what a fork by label would advance."""
+        found = await self.checkpoints(label)
+        if not found:
+            return None
+        return max(found, key=lambda c: str(c.get("created_at", "")))
+
+    async def copy_label(self, src: str, dst: str) -> str:
+        """A new checkpoint under `dst` with the contents of `src`'s head: fork the
+        head into a computer, checkpoint it under the new label, destroy it. The
+        source chain is untouched. Returns the new checkpoint's id."""
+        head = await self.head(src)
+        if head is None:
+            raise RuntimeError(f"no checkpoint on {src}")
+        forked = await self.api.post(f"/checkpoints/{head['id']}/fork", json={})
+        forked.raise_for_status()
+        computer_id = str(forked.json()["computer_id"])
+        try:
+            taken = await self.api.post(f"/computers/{computer_id}/checkpoint", json={"label": dst})
+            taken.raise_for_status()
+            return str(taken.json()["checkpoint_id"])
+        finally:
+            with suppress(httpx.HTTPError):
+                await self.api.delete(f"/computers/{computer_id}")
+
+    async def working_labels(self) -> list[str]:
+        """`brain` and every `verb/<name>` chain on the account, once each, sorted;
+        never a trial's scratch chain and never a promoted label."""
+        labels = {
+            str(c["label"])
+            for c in await self.checkpoints()
+            if c.get("label")
+            and (c["label"] == "brain" or c["label"].startswith("verb/"))
+            and not str(c["label"]).startswith("verb/trial/")
+        }
+        return sorted(labels)
+
+    async def teardown(
+        self,
+        hatched: Hatched,
+        listing: dict[str, Any] | None,
+        *,
+        lineage: Promotion | None = None,
+    ) -> None:
+        """The account as the run found it, best effort. Without a lineage: the
+        scripted model's server (if any), the door, the key, every checkpoint on
+        `brain`, on a verb chain or from a proposal's recipe, then the recipes.
+        With one: only the working checkpoints and the recipes this run added;
+        the lineage's key, rule, recipes and promoted labels stay, since the
+        next run of a dependent starts from them. A failing delete does not stop
         the ones after it."""
 
         async def drop(path: str) -> None:
@@ -427,10 +552,13 @@ class Doors:
         recipes = {hatched.recipe_id}
         if listing:
             recipes.update(p["recipe_id"] for p in listing["proposals"] if p.get("recipe_id"))
+        if lineage is not None:
+            recipes -= set(lineage.recipe_ids)
         if hatched.server_id is not None:
             await drop(f"/computers/{hatched.server_id}")
-        await drop(f"/ingress_rules/{hatched.rule_id}")
-        await drop(f"/keys/{hatched.key_id}")
+        if lineage is None:
+            await drop(f"/ingress_rules/{hatched.rule_id}")
+            await drop(f"/keys/{hatched.key_id}")
         try:
             checkpoints = await self.checkpoints()
         except httpx.HTTPError:
@@ -550,6 +678,72 @@ class AskApprover:
                 return None
             if answer.startswith("reject"):
                 return answer[len("reject") :].strip() or "rejected"
+
+
+# ---------------------------------------------------------------- promotion
+
+
+async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: TextIO) -> Promotion:
+    """A kept, passing run becomes the checkpoint dependents start from: every
+    working head is copied under `capability/<name>/`, the record is written, and
+    the working labels are dropped. The run's key, rule and recipes stay: they are
+    the lineage the record names."""
+    summary = json.loads((run_dir / "run.json").read_text())
+    if not summary.get("ok"):
+        raise RuntimeError(f"{run_dir.name} is not ok; only a passing run is promoted")
+    hatched = Hatched(**summary["hatched"])
+    final = json.loads((run_dir / "final-list.json").read_text())
+    working = await doors.working_labels()
+    if "brain" not in working:
+        raise RuntimeError("no working brain on the account; was the run kept (--keep)?")
+    labels: dict[str, str] = {}
+    for label in working:
+        labels[label] = await doors.copy_label(label, promoted_label(name, label))
+        log.write(f"promoted {label} -> {promoted_label(name, label)} ({labels[label]})\n")
+    recipe_ids = sorted(
+        {hatched.recipe_id, *(p["recipe_id"] for p in final["proposals"] if p.get("recipe_id"))}
+    )
+    started = summary.get("started_from")
+    record = Promotion(
+        capability=name,
+        run=str(run_dir.relative_to(out)),
+        membrane=dict(summary.get("membrane", {})),
+        promoted_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        labels=labels,
+        rule_id=hatched.rule_id,
+        key_id=hatched.key_id,
+        brain_recipe=hatched.recipe_id,
+        recipe_ids=tuple(recipe_ids),
+        started_from=None if started in (None, "hatch") else str(started),
+    )
+    path = write_promotion(out, record)
+    log.write(f"wrote {path}\n")
+    for ckpt in await doors.checkpoints():
+        label = ckpt.get("label") or ""
+        if label in working:
+            with suppress(httpx.HTTPError):
+                await doors.api.delete(f"/checkpoints/{ckpt['id']}")
+    return record
+
+
+async def start_from(doors: Doors, promotion: Promotion, *, log: TextIO) -> Hatched:
+    """The working labels forked from a promotion: `brain` and each verb chain.
+    The lineage's rule, key and brain recipe are reused as they are."""
+    checkpoint_id = ""
+    for working in promotion.labels:
+        src = promoted_label(promotion.capability, working)
+        new = await doors.copy_label(src, working)
+        log.write(f"started {working} from {src} ({new})\n")
+        if working == "brain":
+            checkpoint_id = new
+    return Hatched(
+        ingress_url="",
+        rule_id=promotion.rule_id,
+        key_id=promotion.key_id,
+        recipe_id=promotion.brain_recipe,
+        checkpoint_id=checkpoint_id,
+        server_id=None,
+    )
 
 
 # ---------------------------------------------------------------- speaking a capability
@@ -713,8 +907,10 @@ async def run_once(
     key_dir: Path,
     keep: bool,
     log: TextIO,
+    out: Path,
 ) -> dict[str, Any]:
-    """Hatch, speak, judge, record, tear down. Returns `run.json`'s document."""
+    """Hatch (or, for a dependent, start from its last dependency's promotion),
+    speak, judge, record, tear down. Returns `run.json`'s document."""
     record = Record(out_dir)
     started = datetime.now(UTC)
     clock = time.monotonic()
@@ -738,8 +934,27 @@ async def run_once(
         # Named before hatching: hatch.sh builds the wheel and uploads the priors from
         # the working tree at this moment, whatever is committed later in the run.
         version = membrane_version()
-        log.write(f"hatching with {settings.model_id} (membrane {version['commit']})\n")
-        hatched = hatch(settings, hatch_script, log=log)
+        lineage: Promotion | None = None
+        if capability.depends:
+            start = capability.depends[-1]
+            lineage = read_promotion(out, start)
+            if lineage is None:
+                raise RuntimeError(
+                    f"{capability.name} starts from {start}, which has no promotion; "
+                    f"run `capability run {start} --keep` to a passing run, then "
+                    f"`capability promote {start} <run-dir>`"
+                )
+            missing = [d for d in capability.depends[:-1] if d not in ancestry(out, start)]
+            if missing:
+                raise RuntimeError(
+                    f"{capability.name} depends on {', '.join(missing)}, not in the ancestry of "
+                    f"{start}'s promotion ({' <- '.join(ancestry(out, start))})"
+                )
+            log.write(f"starting from {lineage.run} ({lineage.membrane.get('commit')})\n")
+            hatched = await start_from(doors, lineage, log=log)
+        else:
+            log.write(f"hatching with {settings.model_id} (membrane {version['commit']})\n")
+            hatched = hatch(settings, hatch_script, log=log)
         doors.rule_id = hatched.rule_id
         log.write(f"hatched: {json.dumps(asdict(hatched))}\n")
         final: dict[str, Any] | None = None
@@ -759,7 +974,7 @@ async def run_once(
                         "ended": datetime.now(UTC).isoformat(timespec="seconds"),
                         "membrane": version,
                         "hatched": asdict(hatched),
-                        "started_from": "hatch",
+                        "started_from": lineage.run if lineage else "hatch",
                         "commands": len(doors.sent),
                         "ok": False,
                         "error": str(exc),
@@ -806,7 +1021,7 @@ async def run_once(
                 "seconds": round(time.monotonic() - clock, 1),
                 "approver": type(approver).__name__,
                 "hatched": asdict(hatched),
-                "started_from": "hatch",
+                "started_from": lineage.run if lineage else "hatch",
                 "turns": [
                     {
                         "label": t.label,
@@ -844,7 +1059,7 @@ async def run_once(
             if keep:
                 log.write("keeping the brain (--keep)\n")
             else:
-                await doors.teardown(hatched, final)
+                await doors.teardown(hatched, final, lineage=lineage)
 
 
 def _next_run_dir(out: Path, date: str) -> Path:
@@ -873,8 +1088,43 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
     run.add_argument("--date", default=datetime.now(UTC).date().isoformat())
     run.add_argument("--keep", action="store_true", help="leave the brain on the account")
     run.add_argument("--hatch", type=Path, default=HATCH)
+    promote_p = sub.add_parser(
+        "promote", help="copy a kept, passing run's heads under capability/<name>/"
+    )
+    promote_p.add_argument("name")
+    promote_p.add_argument("run_dir", type=Path, help="the run's evidence directory")
+    promote_p.add_argument("--env", type=Path, default=Path(".env"))
+    promote_p.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args(argv)
+    if args.command == "promote":
+        return _promote(args, log)
     return _run(args, log)
+
+
+def _promote(args: argparse.Namespace, log: TextIO) -> int:
+    values = parse_env(args.env.read_text()) if args.env.exists() else {}
+    values.update({k: v for k, v in os.environ.items() if k in ("MSHKN_API_URL", "MSHKN_API_KEY")})
+    missing = [k for k in ("MSHKN_API_URL", "MSHKN_API_KEY") if not values.get(k)]
+    if missing:
+        log.write(f"missing {', '.join(missing)}: put them in {args.env} or the environment\n")
+        return 2
+
+    async def go() -> Promotion:
+        async with httpx.AsyncClient(
+            base_url=values["MSHKN_API_URL"],
+            headers={"Authorization": f"Bearer {values['MSHKN_API_KEY']}"},
+            timeout=TURN_TIMEOUT,
+            transport=transport_for(values["MSHKN_API_URL"]),
+        ) as api:
+            doors = Doors(api, api, "", None)
+            return await promote(doors, args.out, args.name, args.run_dir, log=log)
+
+    try:
+        asyncio.run(go())
+    except (RuntimeError, OSError) as exc:
+        log.write(f"promote failed: {exc}\n")
+        return 1
+    return 0
 
 
 def _run(args: argparse.Namespace, log: TextIO) -> int:
@@ -907,6 +1157,7 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
                     key_dir=key_dir,
                     keep=args.keep,
                     log=log,
+                    out=args.out,
                 )
             )
         except RuntimeError as exc:

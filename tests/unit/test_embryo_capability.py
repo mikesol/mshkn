@@ -11,7 +11,7 @@ import stat
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -42,6 +42,9 @@ from membrane.capability import (
 from membrane.model import zero_usage
 
 from tests.support_embryo import HATCH, WORDS, audit_line, b64
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 pytestmark = pytest.mark.unit
 
@@ -131,6 +134,61 @@ def test_record_writes_every_command_the_transcript_and_the_summary(tmp_path: Pa
     assert json.loads(record.final_list(listing).read_text()) == listing
     summary = {"ok": False, "postconditions": {}}
     assert json.loads(record.summary(summary).read_text()) == summary
+
+
+# ---------------------------------------------------------------- the promotion record
+
+
+def test_a_promotion_record_round_trips_and_is_readable_markdown(tmp_path: Path) -> None:
+    from membrane.capability import Promotion, promotion_path, read_promotion, write_promotion
+
+    p = Promotion(
+        capability="hatch",
+        run="hatch/2026-09-12-run-1",
+        membrane={"commit": "abc", "dirty": False},
+        promoted_at="2026-09-12T12:00:00+00:00",
+        labels={"brain": "ck-b", "verb/counter": "ck-c"},
+        rule_id="ir_1",
+        key_id="key-1",
+        brain_recipe="rcp-brain",
+        recipe_ids=("rcp-brain", "rcp-counter"),
+        started_from=None,
+    )
+    path = write_promotion(tmp_path, p)
+    assert path == promotion_path(tmp_path, "hatch") == tmp_path / "hatch" / "PROMOTED.md"
+    text = path.read_text()
+    assert text.startswith("# Promoted: hatch\n") and "```json" in text
+    assert "capability/hatch/brain" in text and "ck-b" in text
+    assert read_promotion(tmp_path, "hatch") == p
+    assert read_promotion(tmp_path, "security") is None
+
+
+def test_ancestry_walks_started_from(tmp_path: Path) -> None:
+    from membrane.capability import Promotion, ancestry, write_promotion
+
+    base: dict[str, Any] = {
+        "membrane": {},
+        "promoted_at": "t",
+        "labels": {},
+        "rule_id": "r",
+        "key_id": "k",
+        "brain_recipe": "rcp",
+        "recipe_ids": (),
+    }
+    write_promotion(
+        tmp_path, Promotion(capability="hatch", run="hatch/r1", started_from=None, **base)
+    )
+    write_promotion(
+        tmp_path,
+        Promotion(capability="security", run="security/r1", started_from="hatch/r1", **base),
+    )
+    write_promotion(
+        tmp_path,
+        Promotion(capability="coding", run="coding/r1", started_from="security/r1", **base),
+    )
+    assert ancestry(tmp_path, "coding") == ["coding", "security", "hatch"]
+    assert ancestry(tmp_path, "hatch") == ["hatch"]
+    assert ancestry(tmp_path, "nope") == []
 
 
 # ---------------------------------------------------------------- the doors over HTTP
@@ -258,6 +316,26 @@ async def test_root_retries_a_409_and_records_the_command(tmp_path: Path) -> Non
     assert [s.name for s in doors.sent] == ["say", "list"] and doors.sent[0].detail == "hi"
     assert doors.sent[0].door == "api" and doors.sent[0].stdout.startswith("audit ")
     assert (tmp_path / "run" / "commands" / "001-api-say.json").exists()
+
+
+async def test_a_doors_with_no_record_does_not_write_but_still_works() -> None:
+    """`promote`'s `Doors` carries no `Record` (there is no run directory to write
+    commands under); a turn still succeeds, and nothing is recorded."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"computer_id": "c", "exec_exit_code": 0, "exec_stdout": "ok\n"}
+        )
+
+    transport = httpx.MockTransport(handler)
+    doors = Doors(
+        httpx.AsyncClient(base_url="http://api", transport=transport),
+        httpx.AsyncClient(base_url="http://api", transport=transport),
+        "rule-1",
+        None,
+    )
+    assert await doors.root("list") == "ok\n"
+    assert doors.sent == []
 
 
 async def test_root_gives_up_on_409_after_the_turn_timeout(tmp_path: Path) -> None:
@@ -472,6 +550,282 @@ async def test_teardown_survives_failing_deletes(tmp_path: Path) -> None:
         "/keys/key-1",
         "/recipes/rcp-brain",
     ]
+
+
+# ---------------------------------------------------------------- the door helpers a promotion uses
+
+
+def _bare_doors(tmp_path: Path, handler: Callable[[httpx.Request], httpx.Response]) -> Doors:
+    transport = httpx.MockTransport(handler)
+    api = httpx.AsyncClient(base_url="http://api", transport=transport)
+    public = httpx.AsyncClient(base_url="http://api", transport=transport)
+    return Doors(api, public, "rule", Record(tmp_path / "run"))
+
+
+async def test_head_is_the_newest_checkpoint_on_the_label(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/checkpoints" and request.url.params["label"] == "brain"
+        return httpx.Response(
+            200,
+            json=[
+                {"id": "ck-old", "label": "brain", "created_at": "2026-09-12T10:00:00Z"},
+                {"id": "ck-new", "label": "brain", "created_at": "2026-09-12T11:00:00Z"},
+            ],
+        )
+
+    doors = _bare_doors(tmp_path, handler)
+    head = await doors.head("brain")
+    assert head is not None and head["id"] == "ck-new"
+
+
+async def test_head_of_an_empty_label_is_none(tmp_path: Path) -> None:
+    doors = _bare_doors(tmp_path, lambda _request: httpx.Response(200, json=[]))
+    assert await doors.head("brain") is None
+
+
+async def test_copy_label_forks_the_head_checkpoints_under_the_new_label_and_destroys(
+    tmp_path: Path,
+) -> None:
+    seen: list[tuple[str, str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content) if request.content else None
+        seen.append((request.method, request.url.path, body))
+        if request.url.path == "/checkpoints":
+            return httpx.Response(200, json=[{"id": "ck-1", "label": "brain", "created_at": "t"}])
+        if request.url.path == "/checkpoints/ck-1/fork":
+            return httpx.Response(200, json={"computer_id": "comp-9", "checkpoint_id": "ck-1"})
+        if request.url.path == "/computers/comp-9/checkpoint":
+            return httpx.Response(200, json={"checkpoint_id": "ck-2"})
+        if request.url.path == "/computers/comp-9":
+            return httpx.Response(200, json={"status": "destroyed"})
+        raise AssertionError(request.url.path)
+
+    doors = _bare_doors(tmp_path, handler)
+    assert await doors.copy_label("brain", "capability/hatch/brain") == "ck-2"
+    assert seen[1:] == [
+        ("POST", "/checkpoints/ck-1/fork", {}),
+        ("POST", "/computers/comp-9/checkpoint", {"label": "capability/hatch/brain"}),
+        ("DELETE", "/computers/comp-9", None),
+    ]
+
+
+async def test_copy_label_of_an_empty_label_is_an_error(tmp_path: Path) -> None:
+    doors = _bare_doors(tmp_path, lambda _request: httpx.Response(200, json=[]))
+    with pytest.raises(RuntimeError, match="no checkpoint on brain"):
+        await doors.copy_label("brain", "x")
+
+
+async def test_working_labels_are_brain_and_the_verb_chains_without_trials(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {"id": "a", "label": "brain", "created_at": "t"},
+                {"id": "b", "label": "verb/counter", "created_at": "t"},
+                {"id": "c", "label": "verb/counter", "created_at": "t"},
+                {"id": "d", "label": "verb/trial/t-1", "created_at": "t"},
+                {"id": "e", "label": "capability/hatch/brain", "created_at": "t"},
+                {"id": "f", "label": None, "recipe_id": "rcp-x", "created_at": "t"},
+            ],
+        )
+
+    doors = _bare_doors(tmp_path, handler)
+    assert await doors.working_labels() == ["brain", "verb/counter"]
+
+
+# ---------------------------------------------------------------- promote, start_from, lineage
+
+
+async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_labels(
+    tmp_path: Path,
+) -> None:
+    from membrane.capability import promote, read_promotion
+
+    run_dir = tmp_path / "hatch" / "2026-09-12-run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "membrane": {"commit": "abc", "dirty": False},
+                "hatched": {
+                    "rule_id": "ir_1",
+                    "key_id": "key-1",
+                    "recipe_id": "rcp-brain",
+                    "checkpoint_id": "ck-0",
+                    "ingress_url": "u",
+                    "server_id": None,
+                },
+                "started_from": "hatch",
+            }
+        )
+    )
+    (run_dir / "final-list.json").write_text(
+        json.dumps({"proposals": [{"recipe_id": "rcp-counter"}, {"recipe_id": None}]})
+    )
+    checkpoints = [
+        {"id": "ck-b", "label": "brain", "created_at": "t"},
+        {"id": "ck-c", "label": "verb/counter", "created_at": "t"},
+        # a checkpoint from an earlier promotion: not a working label, so the
+        # cleanup after copying leaves it alone
+        {"id": "ck-old", "label": "capability/other/brain", "created_at": "t"},
+    ]
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path == "/checkpoints":
+            label = request.url.params.get("label")
+            rows = [c for c in checkpoints if not label or c["label"] == label]
+            return httpx.Response(200, json=rows)
+        if request.url.path.endswith("/fork"):
+            return httpx.Response(200, json={"computer_id": "comp-1", "checkpoint_id": "x"})
+        if request.url.path == "/computers/comp-1/checkpoint":
+            label = json.loads(request.content)["label"]
+            new_id = f"promoted-{label.rsplit('/', 1)[1]}"
+            return httpx.Response(200, json={"checkpoint_id": new_id})
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"status": "deleted"})
+        raise AssertionError(request.url.path)
+
+    doors = _bare_doors(tmp_path, handler)
+    p = await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
+    assert p.labels == {"brain": "promoted-brain", "verb/counter": "promoted-counter"}
+    assert p.recipe_ids == ("rcp-brain", "rcp-counter")
+    assert p.rule_id == "ir_1" and p.key_id == "key-1"
+    assert p.run == "hatch/2026-09-12-run-1" and p.started_from is None
+    assert read_promotion(tmp_path, "hatch") == p
+    # the working checkpoints went; the key, the rule and the recipes stayed
+    assert ("DELETE", "/checkpoints/ck-b") in seen and ("DELETE", "/checkpoints/ck-c") in seen
+    assert not any(path.startswith(("/keys", "/ingress_rules", "/recipes")) for _, path in seen)
+    assert ("DELETE", "/checkpoints/ck-old") not in seen  # not a working label: left alone
+
+
+async def test_promote_refuses_a_run_that_is_not_ok(tmp_path: Path) -> None:
+    from membrane.capability import promote
+
+    run_dir = tmp_path / "hatch" / "2026-09-12-run-2"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({"ok": False, "passed": 4}))
+    doors = _bare_doors(tmp_path, lambda _request: httpx.Response(200, json=[]))
+    with pytest.raises(
+        RuntimeError, match="2026-09-12-run-2 is not ok; only a passing run is promoted"
+    ):
+        await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
+
+
+async def test_promote_refuses_when_the_working_brain_is_gone(tmp_path: Path) -> None:
+    from membrane.capability import promote
+
+    run_dir = tmp_path / "hatch" / "2026-09-12-run-3"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "membrane": {},
+                "hatched": {
+                    "rule_id": "r",
+                    "key_id": "k",
+                    "recipe_id": "rcp",
+                    "checkpoint_id": "c",
+                    "ingress_url": "u",
+                },
+            }
+        )
+    )
+    (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
+    doors = _bare_doors(tmp_path, lambda _request: httpx.Response(200, json=[]))
+    with pytest.raises(RuntimeError, match="no working brain on the account; was the run kept"):
+        await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
+
+
+async def test_start_from_forks_the_promoted_labels_into_the_working_ones(tmp_path: Path) -> None:
+    from membrane.capability import Promotion, start_from
+
+    p = Promotion(
+        capability="hatch",
+        run="hatch/r1",
+        membrane={},
+        promoted_at="t",
+        labels={"brain": "pb", "verb/counter": "pc"},
+        rule_id="ir_1",
+        key_id="key-1",
+        brain_recipe="rcp-brain",
+        recipe_ids=("rcp-brain",),
+        started_from=None,
+    )
+    checkpoints = [
+        {"id": "pb", "label": "capability/hatch/brain", "created_at": "t"},
+        {"id": "pc", "label": "capability/hatch/verb/counter", "created_at": "t"},
+    ]
+    copies: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            label = request.url.params.get("label")
+            return httpx.Response(200, json=[c for c in checkpoints if c["label"] == label])
+        if request.url.path.endswith("/fork"):
+            return httpx.Response(200, json={"computer_id": "comp-1", "checkpoint_id": "x"})
+        if request.url.path == "/computers/comp-1/checkpoint":
+            label = json.loads(request.content)["label"]
+            copies.append((request.url.path, label))
+            return httpx.Response(200, json={"checkpoint_id": f"new-{label}"})
+        return httpx.Response(200, json={"status": "deleted"})
+
+    doors = _bare_doors(tmp_path, handler)
+    hatched = await start_from(doors, p, log=io.StringIO())
+    assert [label for _, label in copies] == ["brain", "verb/counter"]
+    assert hatched == Hatched(
+        ingress_url="",
+        rule_id="ir_1",
+        key_id="key-1",
+        recipe_id="rcp-brain",
+        checkpoint_id="new-brain",
+        server_id=None,
+    )
+
+
+async def test_teardown_with_a_lineage_keeps_its_key_rule_and_recipes(tmp_path: Path) -> None:
+    from membrane.capability import Promotion
+
+    p = Promotion(
+        capability="hatch",
+        run="hatch/r1",
+        membrane={},
+        promoted_at="t",
+        labels={"brain": "pb"},
+        rule_id="ir_1",
+        key_id="key-1",
+        brain_recipe="rcp-brain",
+        recipe_ids=("rcp-brain", "rcp-counter"),
+        started_from=None,
+    )
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path == "/checkpoints":
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": "w", "label": "brain", "recipe_id": None},
+                    {"id": "v", "label": "verb/counter", "recipe_id": None},
+                    {"id": "p", "label": "capability/hatch/brain", "recipe_id": None},
+                    {"id": "n", "label": None, "recipe_id": "rcp-new"},
+                ],
+            )
+        return httpx.Response(200, json={"status": "deleted"})
+
+    doors = _bare_doors(tmp_path, handler)
+    hatched = Hatched(
+        ingress_url="", rule_id="ir_1", key_id="key-1", recipe_id="rcp-brain", checkpoint_id="x"
+    )
+    listing = {"proposals": [{"recipe_id": "rcp-counter"}, {"recipe_id": "rcp-new"}]}
+    await doors.teardown(hatched, listing, lineage=p)
+    deleted = [path for method, path in seen if method == "DELETE"]
+    assert deleted == ["/checkpoints/w", "/checkpoints/v", "/checkpoints/n", "/recipes/rcp-new"]
 
 
 # ---------------------------------------------------------------- keys and signatures
@@ -1216,6 +1570,7 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
         key_dir=tmp_path / "keys",
         keep=False,
         log=io.StringIO(),
+        out=tmp_path / "docs",
     )
     # every membrane command was answered by the fake's default (a root reply), so the
     # door was never opened and the postconditions that need it fail honestly
@@ -1254,6 +1609,7 @@ async def test_run_once_refuses_an_account_that_already_has_a_brain(
             key_dir=tmp_path / "keys",
             keep=False,
             log=io.StringIO(),
+            out=tmp_path,
         )
 
 
@@ -1290,6 +1646,7 @@ async def test_an_aborted_run_writes_what_it_had_and_tears_down(
             key_dir=tmp_path / "keys",
             keep=False,
             log=io.StringIO(),
+            out=tmp_path,
         )
     summary = json.loads((out_dir / "run.json").read_text())
     assert summary["ok"] is False and "boom" in summary["error"] and summary["commands"] == 1
@@ -1312,8 +1669,181 @@ async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.Monke
         key_dir=tmp_path / "keys",
         keep=True,
         log=io.StringIO(),
+        out=tmp_path,
     )
     assert not [p for m, p, _ in api.requests if m == "DELETE"]
+
+
+async def test_run_once_of_a_dependent_without_a_promotion_names_both_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No promotion for `hatch` on disk: the message names the run and the
+    promote command that would produce one."""
+    from membrane.capabilities import Capability
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for",
+        lambda _url: httpx.MockTransport(lambda _request: httpx.Response(200, json=[])),
+    )
+    cap = Capability(
+        name="security",
+        depends=("hatch",),
+        postconditions=(),
+        rows=(),
+        repair=HATCH.repair,
+        path=tmp_path / "security.md",
+    )
+    with pytest.raises(
+        RuntimeError, match=r"capability run hatch --keep.*capability promote hatch"
+    ):
+        await run_once(
+            _settings(),
+            cap,
+            tmp_path / "run",
+            AutoApprover(),
+            hatch_script=tmp_path / "unused.sh",
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
+
+
+async def test_run_once_refuses_a_dependency_missing_from_the_ancestry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`coding` depends on `security` then `hatch`, but only `hatch` is promoted
+    (as a hatch, `started_from=None`): `security` is not in its ancestry."""
+    from membrane.capabilities import Capability
+    from membrane.capability import Promotion, write_promotion
+
+    write_promotion(
+        tmp_path,
+        Promotion(
+            capability="hatch",
+            run="hatch/r1",
+            membrane={},
+            promoted_at="t",
+            labels={},
+            rule_id="ir_1",
+            key_id="key-1",
+            brain_recipe="rcp",
+            recipe_ids=(),
+            started_from=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "membrane.capability.transport_for",
+        lambda _url: httpx.MockTransport(lambda _request: httpx.Response(200, json=[])),
+    )
+    cap = Capability(
+        name="coding",
+        depends=("security", "hatch"),
+        postconditions=(),
+        rows=(),
+        repair=HATCH.repair,
+        path=tmp_path / "coding.md",
+    )
+    with pytest.raises(
+        RuntimeError, match="coding depends on security, not in the ancestry of hatch"
+    ):
+        await run_once(
+            _settings(),
+            cap,
+            tmp_path / "run",
+            AutoApprover(),
+            hatch_script=tmp_path / "unused.sh",
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
+
+
+async def test_run_once_of_a_dependent_starts_from_its_promotion_and_tears_down_with_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`start_from` is monkeypatched (it has its own test); this test is about
+    `run_once` wiring: the summary's `started_from` is the promotion's `run`,
+    and teardown gets the same promotion as its lineage."""
+    from membrane.capabilities import Capability
+    from membrane.capability import Promotion, write_promotion
+
+    lineage = Promotion(
+        capability="hatch",
+        run="hatch/2026-09-12-run-1",
+        membrane={"commit": "abc", "dirty": False},
+        promoted_at="t",
+        labels={"brain": "pb"},
+        rule_id="ir_1",
+        key_id="key-1",
+        brain_recipe="rcp-brain",
+        recipe_ids=("rcp-brain",),
+        started_from=None,
+    )
+    write_promotion(tmp_path, lineage)
+    cap = Capability(
+        name="security",
+        depends=("hatch",),
+        postconditions=(),
+        rows=(),
+        repair=HATCH.repair,
+        path=tmp_path / "security.md",
+    )
+    hatched = Hatched(
+        ingress_url="",
+        rule_id="ir_1",
+        key_id="key-1",
+        recipe_id="rcp-brain",
+        checkpoint_id="new-brain",
+    )
+
+    async def fake_start_from(doors: Doors, promotion: Promotion, *, log: Any) -> Hatched:
+        assert promotion == lineage
+        return hatched
+
+    monkeypatch.setattr("membrane.capability.start_from", fake_start_from)
+    teardown_calls: list[tuple[Hatched, Any, Promotion | None]] = []
+
+    async def fake_teardown(
+        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None
+    ) -> None:
+        teardown_calls.append((h, listing, lineage))
+
+    monkeypatch.setattr(Doors, "teardown", fake_teardown)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/recipes":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/checkpoints/fork":
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": "c",
+                    "exec_exit_code": 0,
+                    "exec_stdout": json.dumps({"catalog": {}, "proposals": []}),
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    summary = await run_once(
+        _settings(),
+        cap,
+        tmp_path / "run",
+        AutoApprover(),
+        hatch_script=tmp_path / "unused.sh",
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=io.StringIO(),
+        out=tmp_path,
+    )
+    assert summary["started_from"] == lineage.run
+    assert teardown_calls == [(hatched, {"catalog": {}, "proposals": []}, lineage)]
 
 
 def test_main_parses_and_runs_n_times(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1400,6 +1930,94 @@ def test_main_names_an_unknown_capability(tmp_path: Path) -> None:
     log = io.StringIO()
     assert main(["run", "nope", "--env", str(tmp_path / ".env")], log=log) == 2
     assert "no capability named 'nope'" in log.getvalue() and "hatch" in log.getvalue()
+
+
+def test_main_promote_reports_missing_settings(tmp_path: Path) -> None:
+    log = io.StringIO()
+    code = main(
+        ["promote", "hatch", str(tmp_path / "run"), "--env", str(tmp_path / "none")], log=log
+    )
+    assert code == 2
+    assert "MSHKN_API_URL" in log.getvalue()
+
+
+def test_main_promote_runs_through_a_mocked_transport_and_writes_the_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from membrane.capability import promotion_path
+
+    out = tmp_path / "docs"
+    run_dir = out / "hatch" / "2026-09-12-run-9"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "membrane": {"commit": "abc", "dirty": False},
+                "hatched": {
+                    "rule_id": "ir_1",
+                    "key_id": "key-1",
+                    "recipe_id": "rcp-brain",
+                    "checkpoint_id": "ck-0",
+                    "ingress_url": "u",
+                    "server_id": None,
+                },
+                "started_from": "hatch",
+            }
+        )
+    )
+    (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
+    checkpoints = [{"id": "ck-b", "label": "brain", "created_at": "t"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            label = request.url.params.get("label")
+            return httpx.Response(
+                200, json=[c for c in checkpoints if not label or c["label"] == label]
+            )
+        if request.url.path.endswith("/fork"):
+            return httpx.Response(200, json={"computer_id": "comp-1", "checkpoint_id": "x"})
+        if request.url.path == "/computers/comp-1/checkpoint":
+            return httpx.Response(200, json={"checkpoint_id": "promoted-brain"})
+        return httpx.Response(200, json={"status": "deleted"})
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=http://api\nMSHKN_API_KEY=k\n")
+    log = io.StringIO()
+    code = main(["promote", "hatch", str(run_dir), "--env", str(env), "--out", str(out)], log=log)
+    assert code == 0
+    assert promotion_path(out, "hatch").exists()
+
+
+def test_main_promote_reports_a_failed_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`<run-dir>/run.json` does not exist: `promote` raises (an `OSError`),
+    `_promote` catches it and reports rather than letting it escape `main`."""
+    monkeypatch.setattr(
+        "membrane.capability.transport_for",
+        lambda _url: httpx.MockTransport(lambda _request: httpx.Response(200, json=[])),
+    )
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=http://api\nMSHKN_API_KEY=k\n")
+    log = io.StringIO()
+    code = main(
+        [
+            "promote",
+            "hatch",
+            str(tmp_path / "missing-run"),
+            "--env",
+            str(env),
+            "--out",
+            str(tmp_path / "docs"),
+        ],
+        log=log,
+    )
+    assert code == 1
+    assert "promote failed" in log.getvalue()
 
 
 def test_env_of_this_repository_is_ignored_by_git() -> None:
