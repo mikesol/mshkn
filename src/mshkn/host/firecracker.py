@@ -63,6 +63,13 @@ STAGING_HOST_IP = "172.16.254.1"
 STAGING_VM_IP = "172.16.254.2"
 STAGING_MAC = "06:00:AC:10:FE:02"
 STAGING_DRIVE_NAME = "mshkn-restore-staging"
+# The staging vsock (#55): every template and checkpoint carries a vsock device
+# whose host socket is this path, and a guest listener on VSOCK_PORT that hands
+# each connection to a shell. A restore reconfigures the guest through it the
+# moment the device is back, with no port wait and no SSH handshake.
+STAGING_VSOCK_PATH = "/tmp/fc-staging.vsock"
+VSOCK_GUEST_CID = 3
+VSOCK_PORT = 52
 
 # TCP connect to a VM that was just killed otherwise hangs for the kernel's
 # SYN retry budget, ~2 minutes.
@@ -79,6 +86,7 @@ class FirecrackerConfig:
     vcpu_count: int = 2
     mem_size_mib: int = 256
     boot_args: str = field(default=BOOT_ARGS)
+    vsock_path: str | None = None
 
 
 class FirecrackerClient:
@@ -125,6 +133,8 @@ class FirecrackerClient:
                 "host_dev_name": config.tap_device,
             },
         )
+        if config.vsock_path is not None:
+            await self._put("/vsock", {"guest_cid": VSOCK_GUEST_CID, "uds_path": config.vsock_path})
         await self._put("/actions", {"action_type": "InstanceStart"})
         logger.info("Firecracker VM configured and started via %s", self.socket_path)
 
@@ -274,6 +284,57 @@ async def _wait_for_exit(pid: int, timeout: float) -> bool:
     return True
 
 
+_RC_MARKER = "__mshkn_rc="
+
+
+async def vsock_run(
+    uds_path: Path | str, port: int, script: str, *, timeout: float, interval: float = 0.01
+) -> tuple[int, str]:
+    """Run a shell script in the guest over Firecracker's vsock; (exit status, output).
+
+    Firecracker listens on `uds_path`; the host writes `CONNECT <port>` and gets
+    `OK <port>` back once the guest listener accepted, then the stream is the
+    guest's socket. The listener (`socat VSOCK-LISTEN:52 EXEC:/bin/sh`) reads
+    the script until the host half-closes, so the exit status is printed by
+    the script itself and parsed here. The socket appears when the device is
+    configured or restored, so a missing file is retried until `timeout`;
+    a connection Firecracker closes without an OK means no guest listener.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        try:
+            reader, writer = await asyncio.open_unix_connection(str(uds_path))
+            break
+        except OSError as exc:
+            if loop.time() >= deadline:
+                raise HostError(f"vsock {uds_path}: {type(exc).__name__}: {exc}") from exc
+            await asyncio.sleep(interval)
+    try:
+        writer.write(f"CONNECT {port}\n".encode())
+        await writer.drain()
+        remaining = max(deadline - loop.time(), 0.05)
+        ack = await asyncio.wait_for(reader.readline(), timeout=remaining)
+        if not ack.startswith(b"OK "):
+            raise HostError(f"vsock {uds_path}: no OK from port {port} (got {ack!r})")
+        writer.write(f"{script}\necho {_RC_MARKER}$?\n".encode())
+        await writer.drain()
+        writer.write_eof()
+        remaining = max(deadline - loop.time(), 0.05)
+        raw = (await asyncio.wait_for(reader.read(), timeout=remaining)).decode(errors="replace")
+    except TimeoutError as exc:
+        raise HostError(f"vsock {uds_path}: timed out after {timeout}s") from exc
+    finally:
+        writer.close()
+    output, marker, status = raw.rpartition(_RC_MARKER)
+    if not marker:
+        raise HostError(f"vsock {uds_path}: the script ended without a status: {raw!r}")
+    try:
+        return int(status.strip()), output
+    except ValueError as exc:
+        raise HostError(f"vsock {uds_path}: bad status {status!r}") from exc
+
+
 async def wait_for_port(ip: str, port: int, *, timeout: float, interval: float = 0.01) -> None:
     """Poll until ip:port accepts TCP connections."""
     loop = asyncio.get_running_loop()
@@ -302,6 +363,10 @@ class FirecrackerHypervisor:
 
     _RESTORE_SSH_TIMEOUT = 5.0
     _BOOT_SSH_TIMEOUT = 30.0
+    # A restored guest answers on vsock within milliseconds; a checkpoint from
+    # an image without the listener never does, and falls back to SSH.
+    _RESTORE_VSOCK_TIMEOUT = 2.0
+    _TEMPLATE_VSOCK_TIMEOUT = 10.0
 
     def __init__(
         self,
@@ -341,6 +406,7 @@ class FirecrackerHypervisor:
                     guest_mac=STAGING_MAC,
                     mem_size_mib=resources.mem_mib,
                     vcpu_count=resources.vcpus,
+                    vsock_path=STAGING_VSOCK_PATH,
                 )
             )
 
@@ -351,6 +417,7 @@ class FirecrackerHypervisor:
                 disk_name=disk_name,
                 activate=activate,
                 ssh_timeout=self._BOOT_SSH_TIMEOUT,
+                try_vsock=False,  # a cold boot has to wait for the guest anyway
             )
 
     async def restore(
@@ -366,6 +433,7 @@ class FirecrackerHypervisor:
                 disk_name=disk_name,
                 activate=activate,
                 ssh_timeout=self._RESTORE_SSH_TIMEOUT,
+                try_vsock=True,
             )
 
     async def snapshot(self, socket_path: str, dest_dir: Path) -> SnapshotFiles:
@@ -403,6 +471,7 @@ class FirecrackerHypervisor:
                     )
                     pid = await start_firecracker_process(socket_path)
                     self._sockets[pid] = socket_path
+                    Path(STAGING_VSOCK_PATH).unlink(missing_ok=True)
                     client = FirecrackerClient(socket_path)
                     try:
                         await client.configure_and_boot(
@@ -412,6 +481,7 @@ class FirecrackerHypervisor:
                                 rootfs_path=f"/dev/mapper/{STAGING_DRIVE_NAME}",
                                 tap_device=STAGING_TAP,
                                 guest_mac=STAGING_MAC,
+                                vsock_path=STAGING_VSOCK_PATH,
                             )
                         )
                     finally:
@@ -422,6 +492,7 @@ class FirecrackerHypervisor:
                         STAGING_VM_IP, 22, timeout=self._BOOT_SSH_TIMEOUT, interval=0.025
                     )
                     await self._ssh_settle()
+                    await self._vsock_settle()
                     client = FirecrackerClient(socket_path)
                     try:
                         await client.pause()
@@ -471,6 +542,7 @@ class FirecrackerHypervisor:
         disk_name: str,
         activate: Callable[[FirecrackerClient, str], Awaitable[None]],
         ssh_timeout: float,
+        try_vsock: bool,
     ) -> RunningVM:
         final_host_ip, final_vm_ip = slot_to_ip(slot)
         final_tap = slot_to_tap(slot)
@@ -494,14 +566,15 @@ class FirecrackerHypervisor:
                     raise
                 pid = await fc_task
                 self._sockets[pid] = socket_path
+                # Firecracker binds the vsock socket afresh on boot and on restore.
+                Path(STAGING_VSOCK_PATH).unlink(missing_ok=True)
                 client = FirecrackerClient(socket_path)
                 try:
                     await activate(client, socket_path)
                 finally:
                     await client.close()
-                await wait_for_port(STAGING_VM_IP, 22, timeout=ssh_timeout)
                 await asyncio.gather(
-                    self._ssh_add_ip(final_vm_ip, final_host_ip),
+                    self._reconfigure_guest(final_vm_ip, final_host_ip, ssh_timeout, try_vsock),
                     self._run(f"ip link del {final_tap}", check=False),
                 )
                 await self._run(
@@ -533,8 +606,76 @@ class FirecrackerHypervisor:
             f"/dev/mapper/{self._config.thin_pool_name} {disk_volume_id}'"
         )
 
+    async def _reconfigure_guest(
+        self, final_vm_ip: str, final_host_ip: str, ssh_timeout: float, try_vsock: bool
+    ) -> None:
+        """Give the guest its final address: over vsock when it answers there,
+        else over SSH once port 22 is up.
+
+        vsock first on a restore (#55): the listener is in the memory image, so
+        it answers as soon as the device is back, without the port wait, the
+        handshake and the first-session cost of a fresh SSH connection. A
+        checkpoint taken from an image without the listener gets no OK from
+        Firecracker and takes the SSH path, as every restore did before.
+        """
+        if try_vsock:
+            try:
+                await self._vsock_reconfigure(final_vm_ip, final_host_ip)
+            except HostError as exc:
+                logger.info("vsock reconfiguration unavailable (%s); using SSH", exc)
+            else:
+                return
+        await wait_for_port(STAGING_VM_IP, 22, timeout=ssh_timeout)
+        await self._ssh_add_ip(final_vm_ip, final_host_ip)
+
+    def _reconfigure_command(self, final_vm_ip: str, final_host_ip: str) -> str:
+        """The guest-side script: clock first, then the final address and route.
+
+        The clock is set first because a restored snapshot keeps the time it
+        was taken at; it is separated from the rest by `;`, not `&&`, because
+        setting the clock is best-effort and must never cost the guest its
+        address. `ip addr add` may fail with EEXIST when a fork reuses the
+        parent's slot. The epoch is read immediately before the command runs.
+        """
+        now = int(self._clock())
+        return (
+            f"date -u -s @{now} >/dev/null 2>&1; "
+            f"ip addr add {final_vm_ip}/30 dev eth0 2>/dev/null; "
+            f"ip route replace default via {final_host_ip} && "
+            f"ip neigh flush dev eth0"
+        )
+
+    async def _vsock_reconfigure(self, final_vm_ip: str, final_host_ip: str) -> None:
+        rc, output = await vsock_run(
+            STAGING_VSOCK_PATH,
+            VSOCK_PORT,
+            self._reconfigure_command(final_vm_ip, final_host_ip),
+            timeout=self._RESTORE_VSOCK_TIMEOUT,
+        )
+        if rc != 0:
+            raise HostError(f"vsock reconfiguration exited {rc}: {output.strip()!r}")
+
+    async def _vsock_settle(self) -> None:
+        """Have the guest's vsock listener answer once before a template is
+        snapshotted, so every restore from it finds the listener ready. An image
+        without the listener (a recipe built before it existed) logs and goes on;
+        its restores take the SSH path.
+        """
+        try:
+            rc, _ = await vsock_run(
+                STAGING_VSOCK_PATH, VSOCK_PORT, "true", timeout=self._TEMPLATE_VSOCK_TIMEOUT
+            )
+        except HostError as exc:
+            logger.warning(
+                "Template has no working vsock listener (%s); restores will use SSH", exc
+            )
+            return
+        if rc != 0:
+            logger.warning("Template vsock listener answered with %d; restores will use SSH", rc)
+
     async def _ensure_staging_clean(self) -> None:
         """Remove stale staging resources from a previous failed restore, quietly."""
+        Path(STAGING_VSOCK_PATH).unlink(missing_ok=True)
         try:
             await destroy_tap(STAGING_SLOT, run=self._run)
         except Exception:
@@ -605,11 +746,4 @@ class FirecrackerHypervisor:
             timeout=CONNECT_TIMEOUT_SECONDS,
         )
         async with conn:
-            now = int(self._clock())
-            await conn.run(
-                f"date -u -s @{now} >/dev/null 2>&1; "
-                f"ip addr add {final_vm_ip}/30 dev eth0 2>/dev/null; "
-                f"ip route replace default via {final_host_ip} && "
-                f"ip neigh flush dev eth0",
-                check=True,
-            )
+            await conn.run(self._reconfigure_command(final_vm_ip, final_host_ip), check=True)

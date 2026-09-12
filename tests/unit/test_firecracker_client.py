@@ -117,3 +117,24 @@ def test_boot_args_keep_the_cold_boot_quiet() -> None:
         "random.trust_cpu=on",
     ):
         assert arg in BOOT_ARGS.split(), arg
+
+
+async def test_configure_and_boot_adds_the_vsock_device_before_starting() -> None:
+    """The staging vsock is what a restore reconfigures the guest through (#55);
+    Firecracker only accepts the device before InstanceStart."""
+    transport, seen = _recording_transport()
+    client = FirecrackerClient("/tmp/x.socket", transport=transport)
+    await client.configure_and_boot(
+        FirecrackerConfig(
+            socket_path="/tmp/x.socket",
+            kernel_path="/k",
+            rootfs_path="/dev/mapper/d",
+            tap_device="tap254",
+            guest_mac="06:00:AC:10:FE:02",
+            vsock_path="/tmp/fc-staging.vsock",
+        )
+    )
+    await client.close()
+    paths = [p for _, p, _ in seen]
+    assert paths.index("/vsock") < paths.index("/actions")
+    assert seen[paths.index("/vsock")][2] == {"guest_cid": 3, "uds_path": "/tmp/fc-staging.vsock"}

@@ -136,7 +136,24 @@ def staged(monkeypatch: pytest.MonkeyPatch) -> Staged:
         timeline.append(f"settle:{STAGING_VM_IP}")
 
     monkeypatch.setattr(hv, "_ssh_settle", ssh_settle, raising=False)
+
+    async def vsock_reconfigure(final_vm_ip: str, final_host_ip: str) -> None:
+        if VsockFake.fail:
+            timeline.append(f"vsock-failed:{final_vm_ip}")
+            raise HostError("vsock: no OK")
+        timeline.append(f"vsock:{final_vm_ip}:{final_host_ip}")
+
+    async def vsock_settle() -> None:
+        timeline.append("vsock-settle")
+
+    VsockFake.fail = False
+    monkeypatch.setattr(hv, "_vsock_reconfigure", vsock_reconfigure, raising=False)
+    monkeypatch.setattr(hv, "_vsock_settle", vsock_settle, raising=False)
     return hv, run, timeline
+
+
+class VsockFake:
+    fail: ClassVar[bool] = False
 
 
 def _lifecycle(timeline: list[str]) -> list[str]:
@@ -230,7 +247,11 @@ async def test_boot_runs_the_staging_chain_in_order(staged: Staged) -> None:
     )
 
 
-async def test_restore_loads_the_snapshot_with_the_short_ssh_timeout(staged: Staged) -> None:
+async def test_restore_reconfigures_the_guest_over_vsock_without_waiting_for_sshd(
+    staged: Staged,
+) -> None:
+    """A restored guest is reachable over vsock the moment the device is back,
+    so the port wait, the SSH handshake and the first-session cost go (#55)."""
     hv, run, timeline = staged
     files = SnapshotFiles(vmstate=Path("/c/vmstate"), memory=Path("/c/memory"))
     vm = await hv.restore(slot=9, disk_volume_id=7, disk_name="mshkn-comp-a", snapshot=files)
@@ -242,6 +263,24 @@ async def test_restore_loads_the_snapshot_with_the_short_ssh_timeout(staged: Sta
         f"start:{SOCKET}",
         f"load:{SOCKET}",
         f"close:{SOCKET}",
+        "vsock:172.16.9.2:172.16.9.1",
+    ]
+    assert _rename_chain(9) in [c for c, _ in run.calls]
+
+
+async def test_restore_falls_back_to_ssh_when_the_guest_has_no_vsock_listener(
+    staged: Staged,
+) -> None:
+    """A checkpoint taken from an image without the listener still restores."""
+    hv, run, timeline = staged
+    VsockFake.fail = True
+    files = SnapshotFiles(vmstate=Path("/c/vmstate"), memory=Path("/c/memory"))
+    await hv.restore(slot=9, disk_volume_id=7, disk_name="mshkn-comp-a", snapshot=files)
+    assert _lifecycle(timeline) == [
+        f"start:{SOCKET}",
+        f"load:{SOCKET}",
+        f"close:{SOCKET}",
+        "vsock-failed:172.16.9.2",
         f"wait:{STAGING_VM_IP}:22:5.0",
         "ssh:172.16.9.2:172.16.9.1",
     ]
@@ -308,6 +347,7 @@ async def test_build_template_boots_snapshots_and_tears_down_staging(
         f"close:{template}",
         f"wait:{STAGING_VM_IP}:22:30.0",
         f"settle:{STAGING_VM_IP}",
+        "vsock-settle",
         f"pause:{template}",
         f"snapshot:{template}",
         f"close:{template}",
@@ -553,3 +593,11 @@ async def test_snapshot_resumes_the_vm_when_the_write_fails(staged: Staged, tmp_
     (client,) = FakeClient.instances
     assert [n for n, _ in client.calls] == ["pause", "resume"], "resumed despite the failure"
     assert client.closed
+
+
+async def test_boot_and_template_configure_the_staging_vsock_device(staged: Staged) -> None:
+    hv, _run, _ = staged
+    await hv.boot(slot=3, disk_volume_id=7, disk_name="mshkn-comp-a", resources=Resources())
+    (client,) = FakeClient.instances
+    (_name, config) = client.calls[0]
+    assert config.vsock_path == fc.STAGING_VSOCK_PATH

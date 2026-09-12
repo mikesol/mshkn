@@ -131,3 +131,23 @@ async def test_post_process_adds_use_pam_no_when_the_directive_is_absent(tmp_pat
     root = host.blocks.mounts["mshkn-base"]
     assert "UsePAM no" in (root / "etc" / "ssh" / "sshd_config").read_text()
     host.close()
+
+
+async def test_post_process_installs_the_vsock_shell_listener(tmp_path: Path) -> None:
+    """The guest answers the host's reconfiguration over vsock (#55): a socat
+    listener on port 52 handing each connection to a shell, enabled at boot so
+    every template and checkpoint carries it."""
+    host = FakeHost()
+    await host.blocks.activate(volume_id=0, name="mshkn-base")
+    config = Config(ssh_key_path=tmp_path / "id_ed25519")
+    (tmp_path / "id_ed25519.pub").write_text("ssh-ed25519 AAAA test\n")
+    await inject_tar(
+        FakeShell(), host.blocks, config, volume_name="mshkn-base", tar_path=tmp_path / "r.tar"
+    )
+    root = host.blocks.mounts["mshkn-base"]
+    unit = root / "etc" / "systemd" / "system" / "mshkn-vsock.service"
+    text = unit.read_text()
+    assert "socat" in text and "VSOCK-LISTEN:52" in text and "/bin/sh" in text
+    link = root / "etc" / "systemd" / "system" / "multi-user.target.wants" / "mshkn-vsock.service"
+    assert link.is_symlink()
+    host.close()

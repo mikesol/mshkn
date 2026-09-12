@@ -568,3 +568,28 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
     fcnet_link = sysinit_wants / "fcnet.service"
     if not fcnet_link.exists():
         fcnet_link.symlink_to("/etc/systemd/system/fcnet.service")
+
+    # The vsock shell listener (#55): the host reconfigures a restored guest
+    # through it instead of waiting for sshd and paying an SSH handshake. Each
+    # connection gets a shell reading the script until the host half-closes;
+    # `pipes` is what turns that half-close into EOF on the shell's stdin.
+    vsock_unit = mp / "etc" / "systemd" / "system" / "mshkn-vsock.service"
+    vsock_unit.write_text(
+        "[Unit]\n"
+        "Description=mshkn vsock shell listener\n"
+        "After=fcnet.service\n"
+        "\n"
+        "[Service]\n"
+        "ExecStart=/usr/bin/socat VSOCK-LISTEN:52,reuseaddr,fork EXEC:/bin/sh,pipes,stderr\n"
+        "Restart=always\n"
+        "RestartSec=1\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+    multi_user_wants = mp / "etc" / "systemd" / "system" / "multi-user.target.wants"
+    multi_user_wants.mkdir(parents=True, exist_ok=True)
+    vsock_link = multi_user_wants / "mshkn-vsock.service"
+    if vsock_link.is_symlink() or vsock_link.exists():
+        vsock_link.unlink()
+    vsock_link.symlink_to("/etc/systemd/system/mshkn-vsock.service")
