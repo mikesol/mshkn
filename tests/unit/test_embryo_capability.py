@@ -1,5 +1,5 @@
-"""The measure (spec §11, #101): settings from .env, the doors over HTTP, the
-liturgy spoken turn by turn with approvals and repairs, the seven
+"""The measure (spec §11, #101): settings from .env, the doors over HTTP, a
+capability spoken row by row with approvals and repairs, the seven
 postconditions, the evidence written under docs/embryo/, and the cost."""
 
 from __future__ import annotations
@@ -15,8 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
-from membrane.liturgy import COUNT, LITURGY, REFUSED
-from membrane.measure import (
+from membrane.capability import (
     CHECKS,
     TURN_WAIT,
     AskApprover,
@@ -24,25 +23,25 @@ from membrane.measure import (
     Doors,
     Hatched,
     Judged,
-    MeasureSettings,
     Record,
+    RunSettings,
     Turn,
     cost_usd,
     hatch,
     judge,
-    load_measure_settings,
+    load_run_settings,
     main,
     membrane_version,
     new_key,
     run_once,
     sign,
-    speak_liturgy,
+    speak,
     split_output,
     transport_for,
 )
 from membrane.model import zero_usage
 
-from tests.support_embryo import audit_line, b64
+from tests.support_embryo import HATCH, WORDS, audit_line, b64
 
 pytestmark = pytest.mark.unit
 
@@ -60,8 +59,8 @@ def test_settings_come_from_the_env_file_and_the_environment_wins(tmp_path: Path
         "MSHKN_API_URL=http://file:8000\nMSHKN_API_KEY=file-key\n"
         "ANTHROPIC_API_KEY='sk-file'\nOPENAI_API_KEY=oa-file\n"
     )
-    settings = load_measure_settings(env, {"MSHKN_API_KEY": "env-key", "HOME": "/x"})
-    assert settings == MeasureSettings(
+    settings = load_run_settings(env, {"MSHKN_API_KEY": "env-key", "HOME": "/x"})
+    assert settings == RunSettings(
         api_url="http://file:8000",
         api_key="env-key",
         brain_api_url="https://api.mshkn.dev",
@@ -69,7 +68,7 @@ def test_settings_come_from_the_env_file_and_the_environment_wins(tmp_path: Path
         openai_api_key="oa-file",
         model_id="claude-opus-5",
     )
-    with_brain = load_measure_settings(
+    with_brain = load_run_settings(
         env, {"BRAIN_API_URL": "http://10.0.0.1:8000"}, model_id="claude-sonnet-5", effort="medium"
     )
     assert with_brain.brain_api_url == "http://10.0.0.1:8000"
@@ -81,9 +80,9 @@ def test_a_missing_key_is_named(tmp_path: Path) -> None:
     env = tmp_path / ".env"
     env.write_text("MSHKN_API_URL=http://file:8000\nOPENAI_API_KEY=\n")
     with pytest.raises(ValueError, match="MSHKN_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY"):
-        load_measure_settings(env, {})
+        load_run_settings(env, {})
     with pytest.raises(ValueError, match=str(tmp_path / "absent")):
-        load_measure_settings(tmp_path / "absent", {})
+        load_run_settings(tmp_path / "absent", {})
 
 
 def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
@@ -105,7 +104,7 @@ def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
 
 def test_record_writes_every_command_the_transcript_and_the_summary(tmp_path: Path) -> None:
     record = Record(tmp_path / "run")
-    n = record.command("api", "say", LITURGY[1], "audit {}\nhi\n", 200, 1.5)
+    n = record.command("api", "say", WORDS["1"], "audit {}\nhi\n", 200, 1.5)
     m = record.command(
         "ingress", "say", {"msg": "Who am I?", "sig": "x"}, "audit {}\nyou\n", 200, 2.0
     )
@@ -575,19 +574,19 @@ class FakeDoors:
     async def root_say(self, text: str) -> tuple[dict[str, Any], str]:
         self.sent.append(("api", "say", text))
         made: list[dict[str, Any]] = []
-        if text == LITURGY[1]:
+        if text == WORDS["1"]:
             return self._reply(audit_line(), "I have remember, try and propose. My door is closed.")
-        if text.startswith(LITURGY[2][:30]) and self.deadline_first:
+        if text.startswith(WORDS["2"][:30]) and self.deadline_first:
             # the trial's build outlived the turn (live run 2026-09-09-run-5)
             self.deadline_first = False
             self.pending_door = True
             audit = audit_line(tools=[{"name": "try", "status": "building", "trial": "t-1"}])
             audit["stopped"] = "deadline"
             return self._reply(audit, "I ran out of time before finishing this turn.")
-        if text == LITURGY[3] and getattr(self, "pending_door", False):
+        if text == HATCH.repair.build and getattr(self, "pending_door", False):
             self.pending_door = False
-            text = LITURGY[2]  # the check of the trial ends in the two proposals
-        if text.startswith(LITURGY[2][:30]):
+            text = WORDS["2"]  # the check of the trial ends in the two proposals
+        if text.startswith(WORDS["2"][:30]):
             door_policy = {
                 "principals": {
                     "ssh:mike": {"invoke": [], "propose": True},
@@ -602,7 +601,7 @@ class FakeDoors:
             else:
                 made.append(self._propose("verb", "verify_ssh", asserts="ssh"))
                 made.append(self._propose("policy", "door", policy=door_policy))
-        elif text == LITURGY[3]:
+        elif text == HATCH.repair.build:
             self.repairs += 1
             failed = [n for n, e in self.catalog.items() if e["status"] == "failed"]
             for name in failed:
@@ -642,7 +641,7 @@ class FakeDoors:
         made: list[dict[str, Any]] = []
         tools: list[dict[str, Any]] = []
         reply = "You are ssh:mike."
-        if msg == LITURGY[6]:
+        if msg == WORDS["6"]:
             made.append(
                 self._propose(
                     "policy",
@@ -658,11 +657,11 @@ class FakeDoors:
                 )
             )
             reply = "Recorded."
-        elif msg == LITURGY[7]:
+        elif msg == WORDS["7"]:
             tools.append({"name": "try", "status": "done", "trial": "t-1"})
             made.append(self._propose("verb", "page_title"))
             reply = "Proposed page_title."
-        elif msg == LITURGY[8]:
+        elif msg == WORDS["8"]:
             if "page_title" in self.catalog:
                 tools.append(
                     {
@@ -675,15 +674,15 @@ class FakeDoors:
                 reply = self.title_reply
             else:
                 reply = "I have no such verb."
-        elif msg == LITURGY[9]:
+        elif msg == WORDS["9"]:
             made.append(self._propose("verb", "counter", state="chain"))
             reply = "Proposed counter."
-        elif msg == COUNT:
+        elif msg == WORDS["9-count-1"]:
             n = len(
                 [
                     s
                     for s in self.sent
-                    if s[2] and isinstance(s[2], dict) and s[2].get("msg") == COUNT
+                    if s[2] and isinstance(s[2], dict) and s[2].get("msg") == WORDS["9-count-1"]
                 ]
             )
             tools.append(
@@ -756,7 +755,10 @@ class FakeDoors:
                 proposal["log"] = "apt: package nope not found"
             else:
                 entry["status"] = proposal["status"] = "ready"
-        counts = len([s for s in self.sent if isinstance(s[2], dict) and s[2].get("msg") == COUNT])
+        count_word = WORDS["9-count-1"]
+        counts = len(
+            [s for s in self.sent if isinstance(s[2], dict) and s[2].get("msg") == count_word]
+        )
         if "counter" in self.catalog:
             # What `list_state` reports: the newest checkpoint on the label, which is
             # the head the last invocation created (`verbs.py`, `chain_head`).
@@ -824,7 +826,7 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
     doors = FakeDoors()
     key_dir, pubkey = _keys(tmp_path)
     log = io.StringIO()
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=log)
+    turns, final = await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log)
     labels = [t.label for t in turns]
     assert labels == ["1", "2", "4", "5", "6", "7", "8", "9", "9-count-1", "9-count-2"]
     assert turns[1].approvals == [
@@ -843,7 +845,7 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
     assert turns[2].audit["principal"] == "ssh:mike" and turns[3].audit["principal"] == "anonymous"
     # the unsigned turn is exactly {"msg": ...}, the signed ones carry a signature
     public = [s for s in doors.sent if s[0] == "ingress"]
-    assert set(public[0][2]) == {"msg", "sig"} and public[1][2] == {"msg": LITURGY[4]}
+    assert set(public[0][2]) == {"msg", "sig"} and public[1][2] == {"msg": WORDS["4"]}
     final = await doors.listing()
     checks = {
         c["computer_id"]: c
@@ -872,13 +874,77 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
     assert "Turn 8" in log.getvalue()
 
 
+async def test_speak_walks_the_rows_in_order_and_takes_the_final_list(tmp_path: Path) -> None:
+    from membrane.capabilities import Capability, Row
+
+    cap = Capability(
+        name="tiny",
+        depends=(),
+        postconditions=("root_unforgeable",),
+        rows=(
+            Row("1", "root say", WORDS["1"], ""),
+            Row("2", "root say", WORDS["2"], ""),
+            Row("4", "signed", "Who am I?", ""),
+            Row("5", "unsigned", "Who am I?", ""),
+            Row("10", "root list", "", ""),
+        ),
+        repair=HATCH.repair,
+        path=tmp_path / "tiny.md",
+    )
+    doors = FakeDoors()
+    key_dir, pubkey = _keys(tmp_path)
+    turns, final = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert [t.label for t in turns] == ["1", "2", "4", "5"]
+    assert [t.door for t in turns] == ["api", "api", "ingress", "ingress-unsigned"]
+    assert turns[1].words.endswith(pubkey)  # the template was filled
+    assert final is not None and final["door"]["status"] == "open"
+    # a root list row is not a turn, but it is a command
+    assert ("api", "list", ()) in doors.sent
+
+
+async def test_speak_without_a_root_list_row_returns_no_final(tmp_path: Path) -> None:
+    from membrane.capabilities import Capability, Row
+
+    cap = Capability(
+        name="tiny",
+        depends=(),
+        postconditions=(),
+        rows=(Row("1", "root say", WORDS["1"], ""),),
+        repair=HATCH.repair,
+        path=tmp_path / "tiny.md",
+    )
+    key_dir, pubkey = _keys(tmp_path)
+    turns, final = await speak(
+        cap, FakeDoors(), key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert [t.label for t in turns] == ["1"] and final is None
+
+
+async def test_every_row_settles_so_a_failed_build_after_a_signed_row_is_repaired(
+    tmp_path: Path,
+) -> None:
+    """Capabilities design §4: no per-row settle flag. FakeDoors fails page_title's
+    first build; row 7 is a signed row, and the repair runs after it."""
+    doors = FakeDoors(fail_first={"page_title"})
+    key_dir, pubkey = _keys(tmp_path)
+    log = io.StringIO()
+    turns, _ = await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log)
+    labels = [t.label for t in turns]
+    assert "3-repair-1" in labels and labels.index("3-repair-1") > labels.index("7")
+    assert "build failed for page_title; repair 1" in log.getvalue()
+
+
 async def test_verbs_are_approved_before_the_policies_that_name_them(tmp_path: Path) -> None:
     """Live run 2026-09-09-run-5: the model proposed the door policy as p-1 and the
     hook as p-2; approving in id order had the policy refused ("hook ... is not a
     verb in the catalog") and the door stayed closed until the next pass."""
     doors = FakeDoors(policy_first=True)
     key_dir, pubkey = _keys(tmp_path)
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    turns, _final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
     assert [a["id"] for a in turns[1].approvals] == ["p-2", "p-1"]
     assert all("refused" not in a["result"] for a in turns[1].approvals), turns[1].approvals
     assert turns[2].audit["principal"] == "ssh:mike"
@@ -900,7 +966,9 @@ async def test_a_proposal_refused_before_its_build_is_approved_again_after_it(
 
     doors.root = refuse_once  # type: ignore[method-assign]
     key_dir, pubkey = _keys(tmp_path)
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    turns, _final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
     results = [(a["id"], a["result"][:14]) for a in turns[1].approvals]
     assert results == [
         ("p-2", "p-2 building: "),
@@ -913,7 +981,9 @@ async def test_a_proposal_refused_before_its_build_is_approved_again_after_it(
 async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) -> None:
     doors = FakeDoors(deadline_first=True)
     key_dir, pubkey = _keys(tmp_path)
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    turns, _final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
     assert [t.label for t in turns][:4] == ["1", "2", "3-repair-1", "4"]
     assert turns[1].audit["stopped"] == "deadline" and turns[1].approvals == []
     assert [a["id"] for a in turns[2].approvals] == ["p-1", "p-2"]
@@ -930,11 +1000,13 @@ async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
     window there is."""
     doors = FakeDoors(refuse={"p-1"})
     key_dir, pubkey = _keys(tmp_path)
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    turns, _final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
     labels = [t.label for t in turns]
     assert "3-repair-1" in labels, labels
     repair = turns[labels.index("3-repair-1")]
-    assert repair.words == REFUSED == "check your inbox"
+    assert repair.words == HATCH.repair.refused == "check your inbox"
 
 
 async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Path) -> None:
@@ -945,7 +1017,9 @@ async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Pat
     while it did exactly that)."""
     doors = FakeDoors(refuse={"p-1"})
     key_dir, pubkey = _keys(tmp_path)
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    turns, _final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
     repairs = [t.label for t in turns if t.label.startswith("3-repair-")]
     assert repairs == ["3-repair-1"], repairs
 
@@ -953,11 +1027,13 @@ async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Pat
 async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
     doors = FakeDoors(fail_first={"verify_ssh"})
     key_dir, pubkey = _keys(tmp_path)
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    turns, _final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
     labels = [t.label for t in turns]
     assert labels[:4] == ["1", "2", "3-repair-1", "4"]
     repair = turns[2]
-    assert repair.words == LITURGY[3] and repair.door == "api"
+    assert repair.words == HATCH.repair.build and repair.door == "api"
     assert (
         repair.approvals[0]["id"] == "p-3"
         and "building: verb verify_ssh" in repair.approvals[0]["result"]
@@ -977,7 +1053,9 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
 
     doors.root_say = stubborn  # type: ignore[method-assign]
     key_dir, pubkey = _keys(tmp_path)
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    turns, final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
     labels = [t.label for t in turns]
     assert labels[:6] == ["1", "2", "3-repair-1", "3-repair-2", "3-repair-3", "4"]
     # the hook never became ready, so the signed knock is anonymous
@@ -1002,7 +1080,9 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
 async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -> None:
     doors = FakeDoors(open_door=False)
     key_dir, pubkey = _keys(tmp_path)
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    turns, final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
     public = [t for t in turns if t.door.startswith("ingress")]
     assert public and all(t.audit["principal"] is None for t in public)
     final = await doors.listing()
@@ -1027,7 +1107,9 @@ async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -
 async def test_a_refused_approval_is_recorded_and_the_verdict_sees_it(tmp_path: Path) -> None:
     doors = FakeDoors(refuse={"p-2"})
     key_dir, pubkey = _keys(tmp_path)
-    turns = await speak_liturgy(doors, key_dir, pubkey, AutoApprover(), log=io.StringIO())
+    turns, _final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
     assert turns[1].approvals[1]["result"].startswith("p-2 refused")
     assert doors.policy["door"] == "closed"
 
@@ -1037,8 +1119,8 @@ async def test_the_asking_approver_reads_the_pilot(tmp_path: Path) -> None:
     key_dir, pubkey = _keys(tmp_path)
     stdin = io.StringIO("approve\nreject not like this\napprove\napprove\napprove\n")
     stdout = io.StringIO()
-    turns = await speak_liturgy(
-        doors, key_dir, pubkey, AskApprover(stdin, stdout), log=io.StringIO()
+    turns, _final = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AskApprover(stdin, stdout), log=io.StringIO()
     )
     assert turns[1].approvals[1] == {
         "id": "p-2",
@@ -1085,8 +1167,8 @@ def _stub_hatch(tmp_path: Path, *, fail: bool = False) -> Path:
     return script
 
 
-def _settings() -> MeasureSettings:
-    return MeasureSettings(
+def _settings() -> RunSettings:
+    return RunSettings(
         api_url="http://api",
         api_key="k",
         brain_api_url="https://api.mshkn.dev",
@@ -1123,10 +1205,11 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
     api = FakeApi(recipes=[{"recipe_id": "rcp-pre"}])
     transport = httpx.MockTransport(api.handler)
-    monkeypatch.setattr("membrane.measure.transport_for", lambda _url: transport)
+    monkeypatch.setattr("membrane.capability.transport_for", lambda _url: transport)
     out_dir = tmp_path / "docs" / "2026-09-09-run-1"
     summary = await run_once(
         _settings(),
+        HATCH,
         out_dir,
         AutoApprover(),
         hatch_script=_stub_hatch(tmp_path),
@@ -1140,6 +1223,7 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     assert summary["hatched"]["rule_id"] == "rule-1" and summary["passed"] < len(CHECKS)
     assert summary["usage"]["input_tokens"] > 0 and summary["cost_usd"] > 0
     assert set(summary["postconditions"]) == set(CHECKS)
+    assert summary["capability"] == "hatch" and summary["started_from"] == "hatch"
     assert (out_dir / "run.json").exists() and (out_dir / "transcript.md").exists()
     assert (out_dir / "final-list.json").exists() and any((out_dir / "commands").iterdir())
     run_doc = json.loads((out_dir / "run.json").read_text())
@@ -1158,11 +1242,12 @@ async def test_run_once_refuses_an_account_that_already_has_a_brain(
 ) -> None:
     api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": "r"}])
     monkeypatch.setattr(
-        "membrane.measure.transport_for", lambda _url: httpx.MockTransport(api.handler)
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
     with pytest.raises(RuntimeError, match="already has a brain"):
         await run_once(
             _settings(),
+            HATCH,
             tmp_path / "run",
             AutoApprover(),
             hatch_script=_stub_hatch(tmp_path),
@@ -1191,11 +1276,14 @@ async def test_an_aborted_run_writes_what_it_had_and_tears_down(
             )
         return httpx.Response(200, json=[])
 
-    monkeypatch.setattr("membrane.measure.transport_for", lambda _url: httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
     out_dir = tmp_path / "run"
     with pytest.raises(RuntimeError, match="boom"):
         await run_once(
             _settings(),
+            HATCH,
             out_dir,
             AutoApprover(),
             hatch_script=_stub_hatch(tmp_path),
@@ -1213,10 +1301,11 @@ async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
     api = FakeApi()
     monkeypatch.setattr(
-        "membrane.measure.transport_for", lambda _url: httpx.MockTransport(api.handler)
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
     await run_once(
         _settings(),
+        HATCH,
         tmp_path / "run",
         AutoApprover(),
         hatch_script=_stub_hatch(tmp_path),
@@ -1235,10 +1324,13 @@ def test_main_parses_and_runs_n_times(tmp_path: Path, monkeypatch: pytest.Monkey
     calls: list[tuple[Path, str, bool]] = []
 
     async def fake_run_once(
-        settings: MeasureSettings, out_dir: Path, approver: Any, **kwargs: Any
+        settings: RunSettings, capability: Any, out_dir: Path, approver: Any, **kwargs: Any
     ) -> dict[str, Any]:
         calls.append((out_dir, type(approver).__name__, kwargs["keep"]))
         out_dir.mkdir(parents=True)
+        (out_dir / "run.json").write_text(
+            json.dumps({"capability": capability.name, "started_from": "hatch"})
+        )
         return {
             "ok": len(calls) == 1,
             "passed": 7 if len(calls) == 1 else 5,
@@ -1246,9 +1338,11 @@ def test_main_parses_and_runs_n_times(tmp_path: Path, monkeypatch: pytest.Monkey
             "model": settings.model_id,
         }
 
-    monkeypatch.setattr("membrane.measure.run_once", fake_run_once)
+    monkeypatch.setattr("membrane.capability.run_once", fake_run_once)
     code = main(
         [
+            "run",
+            "hatch",
             "--runs",
             "2",
             "--env",
@@ -1262,13 +1356,20 @@ def test_main_parses_and_runs_n_times(tmp_path: Path, monkeypatch: pytest.Monkey
         log=io.StringIO(),
     )
     assert code == 1  # not every run reached every postcondition
-    assert [c[0].name for c in calls] == ["2026-09-09-run-1", "2026-09-09-run-2"]
+    assert [c[0] for c in calls] == [
+        tmp_path / "docs" / "hatch" / "2026-09-09-run-1",
+        tmp_path / "docs" / "hatch" / "2026-09-09-run-2",
+    ]
     assert calls[0][1] == "AutoApprover" and calls[0][2] is True
+    run_doc = json.loads((calls[0][0] / "run.json").read_text())
+    assert run_doc["capability"] == "hatch" and run_doc["started_from"] == "hatch"
     # a third invocation numbers itself after the directories that exist
-    monkeypatch.setattr("membrane.measure.run_once", fake_run_once)
+    monkeypatch.setattr("membrane.capability.run_once", fake_run_once)
     calls.clear()
     code = main(
         [
+            "run",
+            "hatch",
             "--runs",
             "1",
             "--env",
@@ -1282,13 +1383,23 @@ def test_main_parses_and_runs_n_times(tmp_path: Path, monkeypatch: pytest.Monkey
         ],
         log=io.StringIO(),
     )
-    assert code == 0 and calls[0][0].name == "2026-09-09-run-3" and calls[0][1] == "AskApprover"
+    assert (
+        code == 0
+        and calls[0][0] == tmp_path / "docs" / "hatch" / "2026-09-09-run-3"
+        and calls[0][1] == "AskApprover"
+    )
 
 
 def test_main_reports_missing_settings(tmp_path: Path) -> None:
     log = io.StringIO()
-    assert main(["--env", str(tmp_path / "none")], log=log) == 2
+    assert main(["run", "hatch", "--env", str(tmp_path / "none")], log=log) == 2
     assert "MSHKN_API_URL" in log.getvalue()
+
+
+def test_main_names_an_unknown_capability(tmp_path: Path) -> None:
+    log = io.StringIO()
+    assert main(["run", "nope", "--env", str(tmp_path / ".env")], log=log) == 2
+    assert "no capability named 'nope'" in log.getvalue() and "hatch" in log.getvalue()
 
 
 def test_env_of_this_repository_is_ignored_by_git() -> None:

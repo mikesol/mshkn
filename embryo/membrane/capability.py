@@ -1,12 +1,13 @@
 """The measure of the first real agent (spec §11, #101).
 
 Root's tool, run on the operator's machine and never in the brain: hatch with a
-real model, speak the liturgy through both doors, approve what root would
-approve, check the seven postconditions against `list` and the verbs, write the
-transcript, every command and the verdict under `docs/embryo/`, tear down.
+real model, speak a capability's rows through both doors, approve what root
+would approve, check the postconditions it names against `list` and the
+verbs, write the transcript, every command and the verdict under
+`docs/embryo/`, tear down.
 
-    uv run measure --runs 3            # keys and the API from .env
-    uv run measure --approve ask       # the pilot reads each proposal on stdin
+    uv run capability run hatch --runs 3       # keys and the API from .env
+    uv run capability run hatch --approve ask  # the pilot reads each proposal on stdin
 """
 
 from __future__ import annotations
@@ -28,18 +29,20 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
 import httpx
 
+from membrane.capabilities import catalog
 from membrane.config import DEFAULT_MODEL_ID, parse_env
 from membrane.effort import EFFORTS
-from membrane.liturgy import COUNT, LITURGY, REFUSED
 from membrane.model import add_usage, zero_usage
-from membrane.postconditions import CHECKS as CHECKS  # re-exported: test_embryo_measure imports it
-from membrane.postconditions import Judged as Judged  # re-exported: test_embryo_measure imports it
-from membrane.postconditions import Turn as Turn  # re-exported: test_embryo_measure imports it
-from membrane.postconditions import by_label, tool_computer
-from membrane.postconditions import judge as judge  # re-exported: test_embryo_measure imports it
+from membrane.postconditions import CHECKS as CHECKS  # re-exported: the tests import it
+from membrane.postconditions import Judged as Judged  # re-exported: the tests import it
+from membrane.postconditions import Turn as Turn  # re-exported: the tests import it
+from membrane.postconditions import by_label, tool_computers
+from membrane.postconditions import judge as judge  # re-exported: the tests import it
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
+
+    from membrane.capabilities import Capability
 
 DEFAULT_BRAIN_API_URL = "https://api.mshkn.dev"
 DEFAULT_OUT = Path("docs/embryo")
@@ -58,7 +61,7 @@ MAX_REPAIRS = 3
 
 
 @dataclass(frozen=True)
-class MeasureSettings:
+class RunSettings:
     api_url: str
     api_key: str
     brain_api_url: str
@@ -70,13 +73,13 @@ class MeasureSettings:
     default_effort: str | None = None
 
 
-def load_measure_settings(
+def load_run_settings(
     env_file: Path,
     environ: Mapping[str, str],
     *,
     model_id: str | None = None,
     effort: str | None = None,
-) -> MeasureSettings:
+) -> RunSettings:
     """The operator's `.env` (git-ignored) under the environment: the four
     required keys, `BRAIN_API_URL` if the brain dials a different address."""
     values = parse_env(env_file.read_text()) if env_file.exists() else {}
@@ -84,7 +87,7 @@ def load_measure_settings(
     missing = [name for name in REQUIRED if not values.get(name)]
     if missing:
         raise ValueError(f"missing {', '.join(missing)}: put them in {env_file} or the environment")
-    return MeasureSettings(
+    return RunSettings(
         api_url=values["MSHKN_API_URL"],
         api_key=values["MSHKN_API_KEY"],
         brain_api_url=values.get("BRAIN_API_URL") or DEFAULT_BRAIN_API_URL,
@@ -494,7 +497,7 @@ def membrane_version(where: Path | None = None) -> dict[str, Any]:
     return {"commit": commit, "dirty": bool(status.strip())}
 
 
-def hatch(settings: MeasureSettings, script: Path, *, log: TextIO) -> Hatched:
+def hatch(settings: RunSettings, script: Path, *, log: TextIO) -> Hatched:
     """`embryo/hatch.sh` with the real model; the keys reach only the brain's `.env`."""
     env = {
         **os.environ,
@@ -549,15 +552,23 @@ class AskApprover:
                 return answer[len("reject") :].strip() or "rejected"
 
 
-# ---------------------------------------------------------------- the liturgy
+# ---------------------------------------------------------------- speaking a capability
 
 
-async def speak_liturgy(
-    doors: DoorsApi, key_dir: Path, pubkey: str, approver: Approver, *, log: TextIO
-) -> list[Turn]:
-    """The ten turns of spec §9, each followed by approvals, a wait for builds
-    and at most MAX_REPAIRS rounds of turn 3 when a build fails."""
+async def speak(
+    capability: Capability,
+    doors: DoorsApi,
+    key_dir: Path,
+    context: Mapping[str, str],
+    approver: Approver,
+    *,
+    log: TextIO,
+) -> tuple[list[Turn], dict[str, Any] | None]:
+    """The capability's rows in order, each followed by approvals, a wait for
+    builds and at most MAX_REPAIRS repair turns. A `root list` row takes the
+    listing and is not a turn; the last one taken is returned as the final state."""
     turns: list[Turn] = []
+    final: dict[str, Any] | None = None
 
     def mark() -> int:
         return len(doors.sent)
@@ -601,29 +612,30 @@ async def speak_liturgy(
 
     def unfinished(turn: Turn) -> bool:
         """Ended on the deadline, the cap or the token budget without proposing: the
-        trial it started is in the inbox, and turn 3 lets it finish (liturgy turn 3)."""
+        trial it started is in the inbox, and a repair turn lets it finish."""
         stopped = turn.audit.get("stopped")
         return stopped in ("deadline", "cap", "max_tokens") and not turn.audit.get("proposals")
 
     repaired: set[str] = set()
+    repairs = 0
 
     async def settle(turn: Turn) -> None:
-        """Approvals, builds, and at most MAX_REPAIRS rounds of turn 3 for a failed
-        build, a refused approval, or a turn that ran out before proposing.
+        """Approvals, builds, and at most MAX_REPAIRS repair turns in the whole run
+        for a failed build, a refused approval, or a turn that ran out before
+        proposing (capabilities design §4: every row settles).
 
         A refusal leaves its proposal `pending` with the reason on its `log`, and
         the catalog untouched, so a build-only trigger walks straight past it
-        (2026-09-10-postcut-run-2). Turns 4 onward all arrive through the public
-        door, so turn 3 is the only window in which the model can read what the
-        membrane told it and supersede."""
+        (2026-09-10-postcut-run-2). A repair is spoken through root's door, so it
+        reaches the model whatever door the row used."""
+        nonlocal repairs
         listing = await approve_pending(turn)
         current = turn
-        repairs = 0
         while repairs < MAX_REPAIRS:
             failed = sorted(n for n, e in listing["catalog"].items() if e["status"] == "failed")
             # Once per refusal, not once per settle: a proposal the model never
             # repairs stays pending with its reason forever, and every later
-            # settle would otherwise buy it three more turns of the model's time
+            # settle would otherwise buy it more turns of the model's time
             # (2026-09-10-postcut-run-3).
             refused = sorted(
                 p["id"]
@@ -636,13 +648,13 @@ async def speak_liturgy(
                 return
             repairs += 1
             if failed:
-                why, words = f"build failed for {', '.join(failed)}", LITURGY[3]
+                why, words = f"build failed for {', '.join(failed)}", capability.repair.build
             elif refused:
                 repaired.update(refused)
-                why, words = f"approval refused for {', '.join(refused)}", REFUSED
+                why, words = f"approval refused for {', '.join(refused)}", capability.repair.refused
             else:
-                why, words = "the turn ran out", LITURGY[3]
-            log.write(f"  {why}; turn 3, repair {repairs}\n")
+                why, words = "the turn ran out", capability.repair.build
+            log.write(f"  {why}; repair {repairs}\n")
             current = await root_turn(f"3-repair-{repairs}", words)
             listing = await approve_pending(current)
 
@@ -667,17 +679,16 @@ async def speak_liturgy(
         log.write(f"  principal {audit.get('principal')}; {reply.strip()[:120]}\n")
         return turn
 
-    await settle(await root_turn("1", LITURGY[1]))
-    await settle(await root_turn("2", LITURGY[2].format(key=pubkey)))
-    await public_turn("4", LITURGY[4], signed=True)
-    await public_turn("5", LITURGY[4], signed=False)
-    await settle(await public_turn("6", LITURGY[6], signed=True))
-    await settle(await public_turn("7", LITURGY[7], signed=True))
-    await public_turn("8", LITURGY[8], signed=True)
-    await settle(await public_turn("9", LITURGY[9], signed=True))
-    await public_turn("9-count-1", COUNT, signed=True)
-    await public_turn("9-count-2", COUNT, signed=True)
-    return turns
+    for row in capability.rows:
+        words = row.words.format(**context)
+        if row.door == "root list":
+            log.write(f"Turn {row.label} (root): list\n")
+            final = await doors.listing()
+        elif row.door == "root say":
+            await settle(await root_turn(row.label, words))
+        else:
+            await settle(await public_turn(row.label, words, signed=row.door == "signed"))
+    return turns, final
 
 
 # ---------------------------------------------------------------- a run
@@ -693,7 +704,8 @@ def _usage_total(turns: list[Turn]) -> tuple[dict[str, int], int]:
 
 
 async def run_once(
-    settings: MeasureSettings,
+    settings: RunSettings,
+    capability: Capability,
     out_dir: Path,
     approver: Approver,
     *,
@@ -733,31 +745,32 @@ async def run_once(
         final: dict[str, Any] | None = None
         try:
             try:
-                turns = await speak_liturgy(doors, key_dir, pubkey, approver, log=log)
+                turns, final = await speak(
+                    capability, doors, key_dir, {"key": pubkey}, approver, log=log
+                )
             except Exception as exc:
                 # An aborted run is evidence too: what was hatched, how far it got, why.
                 record.summary(
                     {
                         "run": out_dir.name,
+                        "capability": capability.name,
                         "model": settings.model_id,
                         "started": started.isoformat(timespec="seconds"),
                         "ended": datetime.now(UTC).isoformat(timespec="seconds"),
                         "membrane": version,
                         "hatched": asdict(hatched),
+                        "started_from": "hatch",
                         "commands": len(doors.sent),
                         "ok": False,
                         "error": str(exc),
                     }
                 )
                 raise
-            log.write("Turn 10 (root): list\n")
-            final = await doors.listing()
+            # A capability without a `root list` row still gets judged on the end state.
+            if final is None:
+                final = await doors.listing()
             record.final_list(final)
-            computer_ids = [
-                c["computer_id"]
-                for label in ("8", "9-count-1", "9-count-2")
-                if (c := tool_computer(by_label(turns, label))) is not None
-            ]
+            computer_ids = [c["computer_id"] for t in turns for c in tool_computers(t)]
             # the hook computers of the signed knock: their logs say why a caller
             # was or was not named
             signed = by_label(turns, "4")
@@ -768,7 +781,7 @@ async def run_once(
             ]
             checks = {cid: await doors.check_computer(cid) for cid in computer_ids}
             judged = judge(
-                list(CHECKS),
+                capability.postconditions,
                 Judged(
                     turns=turns,
                     final=final,
@@ -784,6 +797,7 @@ async def run_once(
             passed = sum(1 for v in judged.values() if v["ok"])
             summary = {
                 "run": out_dir.name,
+                "capability": capability.name,
                 "model": settings.model_id,
                 "default_effort": settings.default_effort,
                 "membrane": version,
@@ -792,6 +806,7 @@ async def run_once(
                 "seconds": round(time.monotonic() - clock, 1),
                 "approver": type(approver).__name__,
                 "hatched": asdict(hatched),
+                "started_from": "hatch",
                 "turns": [
                     {
                         "label": t.label,
@@ -813,13 +828,13 @@ async def run_once(
                 "cost_usd": round(cost_usd(usage, settings.model_id), 4),
                 "postconditions": judged,
                 "passed": passed,
-                "ok": passed == len(CHECKS),
+                "ok": passed == len(capability.postconditions),
             }
             record.transcript(settings.model_id, turns)
             record.summary(summary)
             tokens = f"{usage['input_tokens']} in / {usage['output_tokens']} out"
             log.write(
-                f"{out_dir.name}: {passed}/{len(CHECKS)} postconditions, "
+                f"{out_dir.name}: {passed}/{len(capability.postconditions)} postconditions, "
                 f"{model_calls} model calls, {tokens}, ${summary['cost_usd']}\n"
             )
             for name, v in judged.items():
@@ -840,26 +855,36 @@ def _next_run_dir(out: Path, date: str) -> Path:
 
 
 def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
-    parser = argparse.ArgumentParser(prog="measure", description=__doc__)
-    parser.add_argument("--runs", type=int, default=1)
-    parser.add_argument("--approve", choices=("auto", "ask"), default="auto")
-    parser.add_argument("--env", type=Path, default=Path(".env"))
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    parser.add_argument("--model", default=None, help=f"model id (default {DEFAULT_MODEL_ID})")
-    parser.add_argument(
+    parser = argparse.ArgumentParser(prog="capability", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    run = sub.add_parser("run", help="speak a capability to a real model and judge it")
+    run.add_argument("name", help="a file under embryo/capabilities/, without .md")
+    run.add_argument("--runs", type=int, default=1)
+    run.add_argument("--approve", choices=("auto", "ask"), default="auto")
+    run.add_argument("--env", type=Path, default=Path(".env"))
+    run.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    run.add_argument("--model", default=None, help=f"model id (default {DEFAULT_MODEL_ID})")
+    run.add_argument(
         "--effort",
         choices=EFFORTS,
         default=None,
         help="the run's default output_config.effort, which a turn may raise (default the API's)",
     )
-    parser.add_argument("--date", default=datetime.now(UTC).date().isoformat())
-    parser.add_argument("--keep", action="store_true", help="leave the brain on the account")
-    parser.add_argument("--hatch", type=Path, default=HATCH)
+    run.add_argument("--date", default=datetime.now(UTC).date().isoformat())
+    run.add_argument("--keep", action="store_true", help="leave the brain on the account")
+    run.add_argument("--hatch", type=Path, default=HATCH)
     args = parser.parse_args(argv)
+    return _run(args, log)
+
+
+def _run(args: argparse.Namespace, log: TextIO) -> int:
     try:
-        settings = load_measure_settings(
-            args.env, os.environ, model_id=args.model, effort=args.effort
-        )
+        capability = catalog()[args.name]
+    except KeyError:
+        log.write(f"no capability named {args.name!r}; the files are {sorted(catalog())}\n")
+        return 2
+    try:
+        settings = load_run_settings(args.env, os.environ, model_id=args.model, effort=args.effort)
     except ValueError as exc:
         log.write(f"{exc}\n")
         return 2
@@ -868,13 +893,14 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
     )
     all_ok = True
     for _ in range(args.runs):
-        out_dir = _next_run_dir(args.out, args.date)
+        out_dir = _next_run_dir(args.out / capability.name, args.date)
         # The hatcher's private key lives in a temp dir, never beside the evidence.
-        key_dir = Path(tempfile.mkdtemp(prefix="measure-keys-"))
+        key_dir = Path(tempfile.mkdtemp(prefix="capability-keys-"))
         try:
             summary = asyncio.run(
                 run_once(
                     settings,
+                    capability,
                     out_dir,
                     approver,
                     hatch_script=args.hatch,
@@ -884,8 +910,6 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
                 )
             )
         except RuntimeError as exc:
-            # The run's directory holds what it had (run.json names the error); the
-            # brain was torn down; the next run is a new embryo.
             log.write(f"{out_dir.name} aborted: {str(exc)[:300]}\n")
             all_ok = False
             continue
