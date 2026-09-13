@@ -17,17 +17,20 @@ from membrane.loop import CAP_REACHED, OUT_OF_TOKENS
 from membrane.memory import Provenance
 from membrane.model import CACHE_CONTROL, system_text, zero_usage
 from membrane.mshkn import MshknError, RelayJob
+from membrane.offering import offered_names
 from membrane.principals import ROOT
 from membrane.proposals import approve, propose
-from membrane.state import Brain, CatalogEntry, Exchange, InboxItem, State
+from membrane.state import Brain, CatalogEntry, Exchange, InboxItem, Pending, State
 from membrane.turn import (
     BAD_PAYLOAD,
     DOOR_CLOSED,
     MODEL_FAILED,
+    TRY_ONE_OF,
     TRY_TOOL,
     Context,
     Door,
     _tool_summary,
+    build_tools,
     compose_input,
     decode_payload,
     history_from,
@@ -52,6 +55,7 @@ from tests.support_embryo import (
 )
 from tests.unit.test_embryo_declarations import VERB
 from tests.unit.test_embryo_proposals import CLOSED, HOOK
+from tests.unit.test_embryo_trials import RUN_4_POLICY, SSH_AUTH, WIDENED_POLICY
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1088,7 +1092,9 @@ async def test_a_second_request_cannot_walk_the_effort_back_down(tmp_path: Path)
 def test_the_try_tool_offers_a_list_of_invocations() -> None:
     props = TRY_TOOL["input_schema"]["properties"]
     assert props["runs"]["type"] == "array" and props["runs"]["items"]["type"] == "object"
-    assert TRY_TOOL["input_schema"]["required"] == ["verb"]
+    # nothing is required: since #171 the call names a verb or a policy, and the
+    # handler, not the schema, says which (a schema refusal would teach nothing)
+    assert "required" not in TRY_TOOL["input_schema"]
     # the seed says nothing about runs; this description is where the model learns it
     assert "runs" in TRY_TOOL["description"] and "scratch chain" in TRY_TOOL["description"]
 
@@ -1205,3 +1211,127 @@ async def test_a_turn_the_model_never_answered_is_not_checked(tmp_path: Path) ->
     audit, reply = split_output(out)
     assert audit["stopped"] == "error" and "p-7" in reply
     assert audit["references"] == [] and ctx.state.inbox == []
+
+
+# --- trying a policy through the tool (#171) -------------------------------------
+
+
+def _ready(ctx: Context, doc: dict[str, Any], proposal_id: str) -> None:
+    verb = parse_verb(doc)
+    ctx.state.catalog[verb.name] = CatalogEntry(
+        verb=verb, status="ready", recipe_id=f"rec-{verb.name}", proposal_id=proposal_id
+    )
+
+
+def _tool_results(ctx: Context) -> list[dict[str, Any]]:
+    """Every tool_result the turn sent back, parsed: what the model was told."""
+    return [
+        json.loads(block["content"])
+        for message in _posted(ctx)["messages"]
+        if isinstance(message["content"], list)
+        for block in message["content"]
+        if block.get("type") == "tool_result"
+    ]
+
+
+def _pending(principal: str) -> Pending:
+    return Pending(
+        turn=1,
+        principal=principal,
+        door="ingress",
+        message="m",
+        payload="m",
+        messages=[],
+        offered=[],
+        job="rj-1",
+    )
+
+
+def test_offered_names_is_exactly_what_build_tools_builds(tmp_path: Path) -> None:
+    """#171: the dry run and the live path are one computation, so they cannot
+    drift. `pending.offered` is `sorted(tools)`, which is what `offered_names`
+    returns for the same principal, policy and catalog."""
+    ctx = _ctx(tmp_path, policy=WIDENED_POLICY)
+    _ready(ctx, SSH_AUTH, "p-1")
+    _ready(ctx, VERB, "p-2")
+    # a verb still building is offered to nobody, live or in a dry run
+    ctx.state.catalog["counter"] = CatalogEntry(
+        verb=parse_verb({**VERB, "name": "counter"}),
+        status="building",
+        recipe_id=None,
+        proposal_id="p-3",
+    )
+    policy, catalog = ctx.state.policy, ctx.state.catalog
+    for principal in (ROOT, "ssh:mike", "ssh:stranger", "anonymous"):
+        assert sorted(build_tools(ctx, _pending(principal))) == offered_names(
+            principal, policy, catalog
+        )
+    assert offered_names("ssh:mike", policy, catalog) == [
+        "effort",
+        "page_title",
+        "propose",
+        "remember",
+        "ssh_auth",
+        "try",
+    ]
+    # named by no grant: authenticated, so the two built-ins, and nothing else
+    assert offered_names("ssh:stranger", policy, catalog) == ["effort", "remember"]
+    assert offered_names("anonymous", policy, catalog) == []
+
+
+async def test_the_try_tool_reports_what_a_policy_would_offer_and_installs_nothing(
+    tmp_path: Path,
+) -> None:
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, api=api)
+    _ready(ctx, SSH_AUTH, "p-1")
+    out = await _turn(
+        ctx,
+        "what would this door do?",
+        answers=[
+            message_of(tool_call_completion("try", policy=RUN_4_POLICY)),
+            message_of(text_completion("It would offer ssh:mike nothing.")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert audit["tools"] == [{"name": "try", "status": "tried"}]
+    assert _tool_results(ctx) == [
+        {
+            "status": "tried",
+            "door": "open",
+            "principals": {
+                "anonymous": {"offered": [], "propose": False},
+                "ssh:mike": {"offered": ["effort", "remember"], "propose": False},
+            },
+        }
+    ]
+    # a policy trial is no Trial: nothing on the account, nothing installed
+    assert ctx.state.trials == {} and ctx.state.proposals == {}
+    assert ctx.state.policy.to_doc() == parse_policy(CLOSED).to_doc()
+    assert [c[0] for c in api.calls if c[0] in ("create_recipe", "create_computer")] == []
+
+
+async def test_try_refuses_a_call_that_names_both_a_verb_and_a_policy_or_neither(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    out = await _turn(
+        ctx,
+        "try it",
+        answers=[
+            message_of(tool_call_completion("try", verb=VERB, policy=CLOSED)),
+            message_of(tool_call_completion("try")),
+            message_of(text_completion("Noted.")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert [t["status"] for t in audit["tools"]] == ["invalid", "invalid"]
+    assert _tool_results(ctx) == [{"status": "invalid", "error": TRY_ONE_OF}] * 2
+    assert ctx.state.trials == {}
+
+
+def test_the_try_tool_takes_a_verb_or_a_policy_and_requires_neither() -> None:
+    properties = TRY_TOOL["input_schema"]["properties"]
+    assert properties["policy"] == {"type": "object"} and properties["verb"] == {"type": "object"}
+    assert "required" not in TRY_TOOL["input_schema"]
+    assert "policy" in TRY_TOOL["description"]
