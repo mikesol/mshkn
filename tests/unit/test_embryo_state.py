@@ -74,6 +74,35 @@ def test_state_round_trips_through_json(tmp_path: Path) -> None:
     assert loaded.ready_verbs() == {"page_title": verb}
 
 
+def test_a_catalog_entry_carries_what_root_has_provided() -> None:
+    """Spec §7.2: a verb with `requires` is approved and built; `provided` is the
+    membrane's record of which names root has placed. A document written before
+    the field existed loads with none provided."""
+    from membrane.declarations import parse_verb
+    from membrane.state import CatalogEntry
+
+    verb = parse_verb(
+        {
+            "name": "secret_page",
+            "description": "d",
+            "params": {"type": "object", "properties": {}},
+            "dockerfile": "FROM mshkn-base",
+            "entrypoint": "/verb/read.sh",
+            "effect": "read",
+            "state": "chain",
+            "requires": [{"kind": "secret", "name": "page_token"}],
+        }
+    )
+    entry = CatalogEntry(verb=verb, status="ready", recipe_id="rcp-1", proposal_id="p-1")
+    assert entry.provided == []
+    entry.provided.append("page_token")
+    doc = entry.to_doc()
+    assert doc["provided"] == ["page_token"]
+    assert CatalogEntry.from_doc(doc).provided == ["page_token"]
+    del doc["provided"]
+    assert CatalogEntry.from_doc(doc).provided == []
+
+
 def test_policy_and_self_live_in_state_json(tmp_path: Path) -> None:
     """#100: the policy and the self-description are fields of the one state
     document, so an approval commits them and its bookkeeping together."""

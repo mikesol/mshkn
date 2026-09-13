@@ -252,17 +252,70 @@ async def test_a_wrong_base_fails_immediately_with_the_detail_as_log(tmp_path: P
     assert "mshkn-base" in state.inbox[0].text
 
 
-async def test_requires_blocks_until_the_vault_exists(tmp_path: Path) -> None:
+async def test_a_requires_verb_is_approved_and_built_with_nothing_provided(tmp_path: Path) -> None:
+    """Spec §7.2: approval of a verb with a non-empty `requires` proceeds; the
+    catalog entry carries `provided: []`. The block at approval (#91) is gone."""
     api, state = FakeMshkn(), _brain(tmp_path).state()
     p = propose(
         state,
-        _verb_proposal({**VERB, "requires": [{"kind": "secret", "name": "gh", "scope": "repo"}]}),
+        _verb_proposal(
+            {
+                **VERB,
+                "state": "chain",
+                "requires": [{"kind": "secret", "name": "gh", "scope": "repo"}],
+            }
+        ),
     )
     line = await approve(api, state, p.id)
-    assert line.startswith("p-1 blocked") and "gh" in line and p.status == "blocked"
-    assert api.calls == [] and state.catalog == {}
-    assert [i.kind for i in state.inbox] == ["refusal"]
-    assert "gh" in state.inbox[0].text
+    recipe_id = state.catalog[VERB["name"]].recipe_id
+    assert line == f"p-1 building: verb {VERB['name']} recipe {recipe_id}"
+    assert p.status == "building" and state.catalog[VERB["name"]].provided == []
+    assert [c[0] for c in api.calls] == ["create_recipe"]
+    assert state.inbox == []
+
+
+async def test_provide_adds_a_name_takes_no_value_and_tells_the_model(tmp_path: Path) -> None:
+    from membrane.proposals import provide
+
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    p = propose(
+        state,
+        _verb_proposal(
+            {
+                **VERB,
+                "state": "chain",
+                "requires": [{"kind": "secret", "name": "gh"}, {"kind": "secret", "name": "tok"}],
+            }
+        ),
+    )
+    await approve(api, state, p.id)
+    name = VERB["name"]
+    assert provide(state, "nope", "gh") == "no verb nope"
+    assert (
+        provide(state, name, "other") == f"{name} does not require other; it requires ['gh', 'tok']"
+    )
+    assert provide(state, name, "gh") == f"{name}: gh provided (1/2)"
+    assert provide(state, name, "gh") == f"{name}: gh already provided"
+    assert provide(state, name, "tok") == f"{name}: tok provided (2/2)"
+    assert state.catalog[name].provided == ["gh", "tok"]
+    assert [i.kind for i in state.inbox] == ["provide", "provide"]
+    assert state.inbox[0].text == f"verb {name}: root provided gh; still requires ['tok']"
+    assert state.inbox[1].text == f"verb {name}: root provided tok; every requirement is provided"
+
+
+async def test_a_superseding_verb_starts_with_nothing_provided(tmp_path: Path) -> None:
+    """Decision 4 of the security plan: the chain survives a supersede, the
+    membrane's gate does not."""
+    from membrane.proposals import provide
+
+    api, state = FakeMshkn(), _brain(tmp_path).state()
+    decl = {**VERB, "state": "chain", "requires": [{"kind": "secret", "name": "gh"}]}
+    p = propose(state, _verb_proposal(decl))
+    await approve(api, state, p.id)
+    provide(state, VERB["name"], "gh")
+    again = propose(state, {**_verb_proposal({**decl, "description": "v2"}), "supersedes": p.id})
+    await approve(api, state, again.id)
+    assert state.catalog[VERB["name"]].provided == []
 
 
 async def test_a_refusal_reaches_the_next_turn_the_way_a_build_log_does(
@@ -587,11 +640,11 @@ async def test_reject_refuses_anything_not_pending_or_blocked(tmp_path: Path) ->
     assert pol.status == "applied" and state.inbox == []
 
 
-async def test_reject_accepts_a_blocked_proposal(tmp_path: Path) -> None:
-    """Finding 4: a blocked proposal (unmet requires) can still be rejected."""
+async def test_reject_accepts_a_refused_proposal(tmp_path: Path) -> None:
+    """Finding 4: a proposal a refused effect leaves pending can still be rejected."""
     api, state = FakeMshkn(), _brain(tmp_path).state()
-    p = propose(state, _verb_proposal({**VERB, "requires": [{"kind": "secret", "name": "gh"}]}))
+    p = propose(state, _verb_proposal({**VERB, "effect": "administer"}))
     await approve(api, state, p.id)
-    assert p.status == "blocked"
+    assert p.status == "pending"
     assert reject(state, p.id, "not needed") == "p-1 rejected: not needed"
     assert p.status == "rejected"

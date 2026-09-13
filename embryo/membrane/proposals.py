@@ -1,5 +1,6 @@
-"""Proposals (spec §5): propose, approve, reject, disable, revert. Approval
-executes the declaration exactly as written, with the brain's scoped key."""
+"""Proposals (spec §5): propose, approve, reject, disable, revert, provide.
+Approval executes the declaration exactly as written, with the brain's scoped
+key."""
 
 from __future__ import annotations
 
@@ -107,17 +108,6 @@ async def approve(api: MshknApi, state: State, proposal_id: str) -> str:
     if proposal.kind == "verb":
         verb = proposal.verb
         assert verb is not None
-        if verb.requires:
-            missing = ", ".join(
-                f"{r.kind} {r.name}" + (f" ({r.scope})" if r.scope else "") for r in verb.requires
-            )
-            proposal.status = "blocked"
-            return _tell_the_model(
-                state,
-                proposal,
-                "refusal",
-                f"blocked: requires {missing}; the embryo has no vault (#91)",
-            )
         try:
             info = await submit_recipe(api, verb.dockerfile)
         except MshknError as exc:
@@ -172,6 +162,28 @@ def reject(state: State, proposal_id: str, reason: str) -> str:
         )
     )
     return f"{proposal.id} rejected: {reason}"
+
+
+def provide(state: State, verb_name: str, name: str) -> str:
+    """Root has placed what a verb requires (spec §7.2). Takes no value: where
+    the thing went is on the verb's chain, put there outside every door, and
+    the membrane only records that root said so. The model reads the change
+    from its inbox the way it reads a build."""
+    entry = state.catalog.get(verb_name)
+    if entry is None:
+        return f"no verb {verb_name}"
+    required = [r.name for r in entry.verb.requires]
+    if name not in required:
+        return f"{verb_name} does not require {name}; it requires {required}"
+    if name in entry.provided:
+        return f"{verb_name}: {name} already provided"
+    entry.provided.append(name)
+    left = [n for n in required if n not in entry.provided]
+    rest = f"still requires {left}" if left else "every requirement is provided"
+    state.inbox.append(
+        InboxItem(kind="provide", text=f"verb {verb_name}: root provided {name}; {rest}")
+    )
+    return f"{verb_name}: {name} provided ({len(entry.provided)}/{len(required)})"
 
 
 def disable(state: State, verb_name: str) -> str:
