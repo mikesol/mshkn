@@ -89,7 +89,7 @@ means: something the agent has acquired. The Nix capability layer and the ingres
 
 `embryo/capabilities/<name>.md`:
 
-```markdown
+````markdown
 ---
 name: hatch
 depends: []
@@ -107,23 +107,47 @@ postconditions:
 
 Prose for the human: what this capability grows and why.
 
-| Label | Door | Words | Outcome |
-|---|---|---|---|
-| 1 | root say | Hello. I am the one who hatched you. … | A reply naming its tools … |
-| 2 | root say | Your public door is closed … My public key is {key} | … |
-| 4 | signed | Who am I? | The hook names `ssh:mike` … |
-| 5 | unsigned | Who am I? | `anonymous` … |
-| … | | | |
-| 9 | signed | Give yourself a verb that counts … | A `chain`, `local` verb … |
-| 9-count-1 | signed | count | 1 |
-| 9-count-2 | signed | count | 2 |
-| 10 | root list | | The final state. |
+### 1 · root say
+
+```
+Hello. I am the one who hatched you. …
+```
+
+A reply naming its tools …
+
+### 2 · root say
+
+```
+Your public door is closed … My public key is {key}
+```
+
+A verb proposal that verifies a signature …
+
+### 4 · signed
+
+```
+Who am I?
+```
+
+The hook names `ssh:mike` …
+
+### 9-count-1 · signed
+
+```
+count
+```
+
+1, and a new head on the verb's chain.
+
+### 10 · root list
+
+The final state.
 
 ## Repair
 
 - build failed, or the turn ran out: `check your build`
 - an approval was refused: `check your inbox`
-```
+````
 
 - **Frontmatter.** `name` (matches the file name), `depends` (capability names,
   ordered), `postconditions` (check names, §6). Nothing else; a field the loader
@@ -137,15 +161,21 @@ Prose for the human: what this capability grows and why.
   coding]` therefore means "coding, promoted from a run that started from
   security's promotion". The driver refuses otherwise and names the missing
   ancestor. The DAG is a DAG of intent; the promotions form a tree.
-- **Label** is the row's identity. Checks refer to rows by label, so every
-  invocation is its own row. Labels are unique within a file.
-- **Door** is one of `root say`, `root list`, `signed`, `unsigned`. The driver
-  signs with the run's key (`new_key()` today). `root list` carries no words.
-- **Words** may contain `{name}` templates filled from the run's context. The
+- **Label** is the row's identity: the text before the ` · ` in the row's `###`
+  heading. Checks refer to rows by label, so every invocation is its own row.
+  Labels are unique within a file.
+- **Door** is the text after the ` · `, one of `root say`, `root list`, `signed`,
+  `unsigned`. The driver signs with the run's key (`new_key()` today).
+- **Words** are the row's one fenced block, opened and closed by a line of three
+  backticks alone (no info string, no `~~~`), taken verbatim with the trailing
+  newline stripped and every internal newline kept. A speaking row without a block, a `root list`
+  row with one, and a second block in one row are all errors that name the row.
+  The words may contain `{name}` templates filled from the run's context. The
   context has `key` (the hatcher's public key line) and, for capabilities that
   serve something to the agent, `url` (§7). An unknown template name is an error
   at load time, not at the turn.
-- **Outcome** is prose for the human and the transcript. The driver never reads it.
+- **Outcome** is the rest of the section: prose for the human and the transcript,
+  and the driver never reads it, so a long one is written as paragraphs.
 - **Repair** is a section, not a row: the loop the driver runs after any turn
   that settles (`MAX_REPAIRS` times, as today). The two phrases are the
   capability's; the trigger logic is the driver's.
@@ -165,9 +195,9 @@ dict[str, Capability]`, and `order(catalog, name) -> list[Capability]`, the
 dependencies in topological order, which fails on a cycle or an unknown name.
 The parser is deliberately small: a YAML frontmatter block (the project already
 depends on nothing that parses YAML; the block is three keys, so a hand parser of
-`key: value` and `- item` lines is enough and adds no dependency), one pipe table,
-and a `## Repair` section of two bullets. Anything else in the file is prose and
-ignored.
+`key: value` and `- item` lines is enough and adds no dependency), a `###`
+section per row with one fenced block each, and a `## Repair` section of two
+bullets. Anything else in the file is prose and ignored.
 
 ## 5. The driver
 
@@ -406,7 +436,8 @@ untouched. `uv run measure` becomes `uv run capability run`.
 
 - **Unit.** The loader: frontmatter keys, unknown keys, the four doors and an
   unknown one, duplicate labels, templates with an unknown name, the Repair
-  section, `order` on a cycle and on an unknown dependency. The promotion record:
+  section, a row without a words block, a `root list` row with one, two blocks in
+  one row, `order` on a cycle and on an unknown dependency. The promotion record:
   written, read back, refused for a run that is not `ok`. The relay scope: the
   map form validates, the list form is a 422, headers never appear in any key
   response. The header swap: a job's `x-api-key` is replaced, a forward's

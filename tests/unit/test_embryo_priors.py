@@ -158,7 +158,8 @@ def test_hatch_script_makes_the_calls_the_spec_lists() -> None:
     assert scopes.relay_targets == ("https://example.com/",)
     assert scopes.relay_deliver == RelayDelivery(label="brain", exec="membrane resume")
     assert "set -euo pipefail" in script
-    assert (EMBRYO / "capabilities" / "hatch.md").read_text().count("| ") > 20
+    # the words the script hatches the brain to hear: one headed section per row
+    assert (EMBRYO / "capabilities" / "hatch.md").read_text().count("\n### ") == 11
 
 
 def test_turn_two_states_the_facts_only_the_sender_can_state() -> None:

@@ -1,5 +1,6 @@
-"""Capability files (capabilities design §4): frontmatter, a turn table and a
-Repair section, loaded into a frozen document the driver speaks from."""
+"""Capability files (capabilities design §4): frontmatter, a headed section per
+row with its words in a fenced block, and a Repair section, loaded into a frozen
+document the driver speaks from."""
 
 from __future__ import annotations
 
@@ -33,12 +34,39 @@ postconditions:
 
 # {name}
 
-| Label | Door | Words | Outcome |
-|---|---|---|---|
-| 1 | root say | Hello {{key}} | A reply. |
-| 2 | signed | Who am I? | Named. |
-| 3 | unsigned | Who am I? | Anonymous. |
-| 4 | root list | | The end. |
+Prose for the human, and a block of it that is not a row's words:
+
+```
+not words
+```
+
+### 1 · root say
+
+```
+Hello {{key}}
+```
+
+A reply.
+
+### 2 · signed
+
+```
+Who am I?
+```
+
+Named.
+
+### 3 · unsigned
+
+```
+Who am I?
+```
+
+Anonymous.
+
+### 4 · root list
+
+The end.
 
 ## Repair
 
@@ -51,6 +79,10 @@ def _write(tmp_path: Path, name: str, depends: str = "[]", text: str | None = No
     path = tmp_path / f"{name}.md"
     path.write_text(text or MINIMAL.format(name=name, depends=depends))
     return path
+
+
+def _text(depends: str = "[]") -> str:
+    return MINIMAL.format(name="one", depends=depends)
 
 
 def test_load_reads_frontmatter_rows_and_repair(tmp_path: Path) -> None:
@@ -72,6 +104,16 @@ def test_load_reads_frontmatter_rows_and_repair(tmp_path: Path) -> None:
     assert cap.row("2").door == "signed"
 
 
+def test_a_rows_words_keep_their_line_breaks_and_lose_the_trailing_newline(
+    tmp_path: Path,
+) -> None:
+    """The block is verbatim: what the row speaks is what is between the fences,
+    so a paragraph the writer broke over three lines arrives with its breaks."""
+    text = _text().replace("Hello {key}", "Hello {key}\n\nand hello again")
+    cap = load(_write(tmp_path, "one", text=text))
+    assert cap.row("1").words == "Hello {key}\n\nand hello again"
+
+
 def test_depends_accepts_a_bullet_list(tmp_path: Path) -> None:
     cap = load(_write(tmp_path, "two", depends="\n  - one\n  - zero"))
     assert cap.depends == ("one", "zero")
@@ -87,69 +129,84 @@ def test_depends_accepts_the_inline_list_form(tmp_path: Path) -> None:
 
 def test_the_name_must_match_the_file(tmp_path: Path) -> None:
     path = tmp_path / "other.md"
-    path.write_text(MINIMAL.format(name="one", depends="[]"))
+    path.write_text(_text())
     with pytest.raises(CapabilityError, match=r"name 'one' does not match other\.md"):
         load(path)
 
 
 def test_an_unknown_frontmatter_key_is_an_error(tmp_path: Path) -> None:
-    text = MINIMAL.format(name="one", depends="[]").replace("name: one", "name: one\nowner: me")
+    text = _text().replace("name: one", "name: one\nowner: me")
     with pytest.raises(CapabilityError, match="unknown frontmatter key 'owner'"):
         load(_write(tmp_path, "one", text=text))
 
 
 def test_a_missing_frontmatter_key_is_an_error(tmp_path: Path) -> None:
-    text = MINIMAL.format(name="one", depends="[]").replace("depends: []\n", "")
+    text = _text().replace("depends: []\n", "")
     with pytest.raises(CapabilityError, match="missing frontmatter key 'depends'"):
         load(_write(tmp_path, "one", text=text))
 
 
+def test_a_heading_that_is_not_a_label_and_a_door_is_an_error(tmp_path: Path) -> None:
+    text = _text().replace("### 2 · signed", "### 2 signed")
+    with pytest.raises(
+        CapabilityError, match=r"row heading '### 2 signed' is not '### <label> · <door>'"
+    ):
+        load(_write(tmp_path, "one", text=text))
+
+
 def test_an_unknown_door_is_an_error(tmp_path: Path) -> None:
-    text = MINIMAL.format(name="one", depends="[]").replace("| 2 | signed |", "| 2 | shouted |")
+    text = _text().replace("### 2 · signed", "### 2 · shouted")
     with pytest.raises(CapabilityError, match="row 2: door 'shouted' is not one of"):
         load(_write(tmp_path, "one", text=text))
     assert {"root say", "root list", "signed", "unsigned"} == DOORS
 
 
 def test_a_duplicate_label_is_an_error(tmp_path: Path) -> None:
-    text = MINIMAL.format(name="one", depends="[]").replace("| 3 | unsigned |", "| 2 | unsigned |")
+    text = _text().replace("### 3 · unsigned", "### 2 · unsigned")
     with pytest.raises(CapabilityError, match="row 2 appears twice"):
         load(_write(tmp_path, "one", text=text))
 
 
 def test_a_root_list_row_carries_no_words_and_a_speaking_row_must(tmp_path: Path) -> None:
-    text = MINIMAL.format(name="one", depends="[]").replace(
-        "| 4 | root list | |", "| 4 | root list | bye |"
-    )
+    text = _text().replace("### 4 · root list\n\nThe end.", "### 4 · root list\n\n```\nbye\n```")
     with pytest.raises(CapabilityError, match="row 4: a root list row carries no words"):
         load(_write(tmp_path, "one", text=text))
-    text = MINIMAL.format(name="one", depends="[]").replace(
-        "| 2 | signed | Who am I? |", "| 2 | signed | |"
-    )
+    text = _text().replace("### 2 · signed\n\n```\nWho am I?\n```", "### 2 · signed")
     with pytest.raises(CapabilityError, match="row 2: no words"):
         load(_write(tmp_path, "one", text=text))
 
 
+def test_a_row_with_two_words_blocks_is_an_error(tmp_path: Path) -> None:
+    """One block is the words; a second one leaves the driver to guess which."""
+    text = _text().replace("Named.", "Named.\n\n```\nWho are you?\n```")
+    with pytest.raises(CapabilityError, match="row 2: more than one words block"):
+        load(_write(tmp_path, "one", text=text))
+
+
+def test_a_words_block_that_is_never_closed_is_an_error(tmp_path: Path) -> None:
+    text = _text().replace("Who am I?\n```\n\nNamed.", "Who am I?\n\nNamed.")
+    with pytest.raises(CapabilityError, match="a words block is never closed"):
+        load(_write(tmp_path, "one", text=text))
+
+
+def test_a_file_with_no_rows_is_an_error(tmp_path: Path) -> None:
+    text = _text().split("### 1 · root say")[0] + "## Repair\n\n- build: `b`\n- refused: `r`\n"
+    with pytest.raises(CapabilityError, match="no rows"):
+        load(_write(tmp_path, "one", text=text))
+
+
 def test_an_unknown_template_is_an_error_at_load(tmp_path: Path) -> None:
-    text = MINIMAL.format(name="one", depends="[]").replace("Hello {key}", "Hello {token}")
-    with pytest.raises(CapabilityError, match="row 1: unknown template 'token'"):
+    text = _text().replace("Hello {key}", "Hello {mood}")
+    with pytest.raises(CapabilityError, match="row 1: unknown template 'mood'"):
         load(_write(tmp_path, "one", text=text))
     assert {"key", "url"} == TEMPLATES
 
 
-def test_a_row_with_the_wrong_number_of_cells_is_an_error(tmp_path: Path) -> None:
-    text = MINIMAL.format(name="one", depends="[]").replace(
-        "| 2 | signed | Who am I? | Named. |", "| 2 | signed | Who | am I? | Named. |"
-    )
-    with pytest.raises(CapabilityError, match="row 2: expected 4 cells, found 5"):
-        load(_write(tmp_path, "one", text=text))
-
-
 def test_the_repair_section_is_required_and_has_two_phrases(tmp_path: Path) -> None:
-    text = MINIMAL.format(name="one", depends="[]").split("## Repair")[0]
+    text = _text().split("## Repair")[0]
     with pytest.raises(CapabilityError, match="no '## Repair' section"):
         load(_write(tmp_path, "one", text=text))
-    text = MINIMAL.format(name="one", depends="[]").replace("- refused: `check your inbox`\n", "")
+    text = _text().replace("- refused: `check your inbox`\n", "")
     with pytest.raises(CapabilityError, match="Repair: missing 'refused'"):
         load(_write(tmp_path, "one", text=text))
 
@@ -205,7 +262,7 @@ def test_hatch_is_the_first_capability() -> None:
     assert hatch.row("2").door == "root say" and "{key}" in hatch.row("2").words
     assert hatch.row("5").door == "unsigned" and hatch.row("5").words == hatch.row("4").words
     assert hatch.row("9-count-1").words == "count" == hatch.row("9-count-2").words
-    assert hatch.row("10").door == "root list"
+    assert hatch.row("10").door == "root list" and hatch.row("10").words == ""
     assert hatch.repair == Repair(build="check your build", refused="check your inbox")
     assert catalog()["hatch"] == hatch
 
@@ -218,6 +275,9 @@ def test_the_words_the_tiers_speak_are_hatch_md() -> None:
     assert load(CAPABILITIES / "hatch.md") == HATCH
     assert WORDS["1"].startswith("Hello. I am the one who hatched you.")
     assert WORDS["4"] == "Who am I?" == WORDS["5"]
+    # Row 2 is one paragraph the model reads in one go: the fenced block holds it
+    # on one line, so converting the file did not wrap what root says.
+    assert "\n" not in WORDS["2"] and WORDS["2"].endswith("My public key is {key}")
     # the pre-capabilities single script lived directly under embryo/; only the
     # priors do now, and every capability's words live under CAPABILITIES instead.
     assert {p.name for p in CAPABILITIES.parent.glob("*.md")} == {"README.md", "seed.md"}

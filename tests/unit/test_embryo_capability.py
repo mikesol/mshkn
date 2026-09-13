@@ -2392,9 +2392,13 @@ postconditions:
 
 # {name}
 
-| Label | Door | Words | Outcome |
-|---|---|---|---|
-| 1 | root say | Hello. | A reply. |
+### 1 · root say
+
+```
+Hello.
+```
+
+A reply.
 
 ## Repair
 
