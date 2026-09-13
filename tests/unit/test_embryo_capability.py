@@ -2930,6 +2930,121 @@ async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_i
     assert not (tmp_path / "unused-keys").exists()  # a dependent generates no key
 
 
+async def test_run_once_of_a_dependent_names_its_lineages_base_url_not_the_callers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#127 fix round 1: `model_id` and `default_effort` were already overridden from
+    `lineage` (the test above) because a forked brain runs the /brain/.env of its
+    own hatch, whatever this working tree and command line say. `base_url` and
+    `body_extra` were not: `security` (a dependent, which `_run` correctly refuses
+    `--base-url` for) wrote `settings.base_url` — the direct API default — into
+    its `run.json` even when the hatch it forked from spoke through a gateway.
+    That is silent and it corrupts the one artifact `docs/embryo/README.md`'s
+    "Reading a run spoken through a gateway" section tells a reader to key off."""
+    from membrane.capabilities import Capability, Row
+    from membrane.capability import Promotion, write_promotion
+
+    key_dir = tmp_path / "lineage-keys"
+    key_dir.mkdir()
+    pubkey = new_key(key_dir)
+    lineage = Promotion(
+        capability="hatch",
+        run="hatch/2026-09-12-run-1",
+        membrane={"commit": "abc", "dirty": False},
+        promoted_at="t",
+        labels={"brain": "pb"},
+        rule_id="ir_1",
+        key_id="key-1",
+        brain_recipe="rcp-brain",
+        recipe_ids=("rcp-brain",),
+        key_dir=str(key_dir),
+        pubkey=pubkey,
+        model="claude-opus-5",
+        default_effort=None,
+        started_from=None,
+        base_url="https://ai-gateway.vercel.sh",
+        body_extra='{"providerOptions": {"gateway": {"only": ["anthropic"]}}}',
+    )
+    write_promotion(tmp_path, lineage)
+    cap = Capability(
+        name="security",
+        depends=("hatch",),
+        postconditions=(),
+        rows=(Row("2", "root say", "My public key is {key}", "A reply."),),
+        repair=HATCH.repair,
+        path=tmp_path / "security.md",
+        module=None,
+    )
+    hatched = Hatched(
+        ingress_url="",
+        rule_id="ir_1",
+        key_id="key-1",
+        recipe_id="rcp-brain",
+        checkpoint_id="new-brain",
+    )
+
+    async def fake_start_from(doors: Doors, promotion: Promotion, *, log: Any) -> Hatched:
+        return hatched
+
+    monkeypatch.setattr("membrane.capability.start_from", fake_start_from)
+
+    async def fake_teardown(
+        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(Doors, "teardown", fake_teardown)
+    listing: dict[str, Any] = {"catalog": {}, "proposals": []}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/recipes":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/checkpoints/fork":
+            command = str(json.loads(request.content)["exec"])
+            if command == "membrane root list":
+                return httpx.Response(
+                    200,
+                    json={
+                        "computer_id": "c",
+                        "exec_exit_code": 0,
+                        "exec_stdout": json.dumps(listing),
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": "c",
+                    "exec_exit_code": 0,
+                    "exec_stdout": _out(audit_line(), "Noted."),
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    # `_settings()` defaults to the direct API: the discriminating case is that the
+    # dependent's own settings say one thing and the lineage it forked from says
+    # another, and the recorded evidence must be the lineage's.
+    settings = _settings()
+    assert settings.base_url != lineage.base_url
+    summary = await run_once(
+        settings,
+        cap,
+        tmp_path / "run",
+        AutoApprover(),
+        hatch_script=tmp_path / "unused.sh",
+        key_dir=tmp_path / "unused-keys",
+        keep=False,
+        log=io.StringIO(),
+        out=tmp_path,
+    )
+    assert summary["base_url"] == "https://ai-gateway.vercel.sh"
+    assert summary["body_extra"] == '{"providerOptions": {"gateway": {"only": ["anthropic"]}}}'
+
+
 async def test_run_once_of_a_dependent_refuses_a_key_that_is_not_the_lineages(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

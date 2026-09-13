@@ -25,3 +25,10 @@ and all three are properties of the crossing rather than of the model:
    `embryo/membrane/memory.py` is fixed, so whatever model speaks the liturgy, the facts it
    remembers were extracted by Claude Haiku. Memory shapes every turn after the one that wrote it,
    which makes this the caveat that reaches furthest into a run.
+4. **`cost_usd` may be understated.** It prices a run off the local Anthropic price table
+   (`embryo/membrane/capability.py`'s `PRICES`), which is only the gateway's actual bill under BYOK
+   (`docs/infrastructure.md` marks the operator's Anthropic key in the gateway's BYOK settings
+   optional). Nothing in `run.json` records whether BYOK was on for a given run, so a `cost_usd`
+   from a non-BYOK gateway run sits next to the six direct runs looking comparable and is not. It is
+   recoverable, though: `base_url` names the gateway, so a reader who suspects this can go check the
+   dashboard for the key that ran it, which a run spoken directly never needs.

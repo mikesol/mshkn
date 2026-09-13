@@ -39,10 +39,12 @@ There is no host to rent. What the operator provides:
 | A payment method on the Vercel team | Without one the gateway answers every request `403 customer_verification_required`, and its free credits stay locked. | Checked 2026-09-13. |
 | A spend budget on that key | A brain that loops bills per turn, and the budget is the only stop that does not depend on the organism behaving. | Set in the Vercel dashboard, not in this repository. |
 | The operator's Anthropic key in the gateway's team BYOK settings | Optional. BYOK carries no markup, so a run through the gateway costs what the same run cost directly and stays comparable to the evidence already in `docs/embryo/`. | Optional. |
+| `MEMBRANE_BODY_EXTRA` / `--body-extra` | The reproducibility pin spec §8 calls essential: the gateway may route a model id to more than one upstream, and this opaque JSON object (e.g. `{"providerOptions": {"gateway": {"only": ["anthropic"]}}}`) is merged onto every request body verbatim so a run's evidence names which one it actually spoke to. | Set per run with `uv run capability run <name> --body-extra` or once in the operator's `.env`; recorded in the run's `run.json`. |
+| `--effort off` for a non-Anthropic backend | `output_config.effort` is Anthropic-specific; against a backend with no such field it is a 400 waiting to happen. `off` keeps the field off the wire entirely rather than sniffing the model id for provider knowledge the organism should not have. | Set per run with `uv run capability run <name> --effort off` whenever the base URL points anywhere but Anthropic's own API. |
 
-`ANTHROPIC_BASE_URL` selects it, per run with `capability run --base-url` or once in the operator's
-`.env`. `hatch.sh` bakes it into the brain key's `relay.targets`, so it must not move between hatch
-and run.
+`ANTHROPIC_BASE_URL` selects it, per run with `uv run capability run <name> --base-url` or once in
+the operator's `.env`. `hatch.sh` bakes it into the brain key's `relay.targets`, so it must not move
+between hatch and run.
 
 `OPENAI_API_KEY` is unaffected: mem0's embedder is an OpenAI SDK call that never touches the relay
 or the gateway.

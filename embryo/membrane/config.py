@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from membrane.effort import EFFORTS
+from membrane.model import COMPOSED
 
 DEFAULT_BRAIN = Path("/brain")
 DEFAULT_MODEL_ID = "claude-opus-5"
@@ -99,6 +100,16 @@ def load_settings(brain: Path | None = None) -> Settings:
     if not isinstance(body_extra, dict):
         raise ValueError(
             f"MEMBRANE_BODY_EXTRA must be a JSON object, not {type(body_extra).__name__}"
+        )
+    # Spec §8: "a malformed value fails at load_settings, before a turn is spoken."
+    # A reserved key is as malformed as bad JSON or a non-object, so it is checked
+    # here too, not left to surface mid-turn when `compose_request` merges the body
+    # (which keeps its own copy of this guard: it is the invariant's real home, and
+    # nothing stops a future caller composing a request without going through here).
+    reserved = sorted(set(body_extra) & set(COMPOSED))
+    if reserved:
+        raise ValueError(
+            f"MEMBRANE_BODY_EXTRA may not set {', '.join(reserved)}: the membrane composes it"
         )
     return Settings(
         brain=root,

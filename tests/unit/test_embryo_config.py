@@ -120,3 +120,14 @@ def test_body_extra_is_json_and_fails_at_load_not_at_the_relay(tmp_path: Path) -
     (tmp_path / ".env").write_text(base + 'MEMBRANE_BODY_EXTRA=["a"]\n')
     with pytest.raises(ValueError, match="MEMBRANE_BODY_EXTRA"):
         load_settings(tmp_path)
+
+
+def test_body_extra_rejects_a_reserved_key_at_load_not_mid_turn(tmp_path: Path) -> None:
+    """Spec §8: "a malformed value fails at load_settings, before a turn is spoken."
+    A JSON object that names a key `compose_request` composes (`messages`, say) is
+    valid JSON and a valid object, so it survived to `compose_request` and raised
+    mid-turn (#127 fix round 1). This must fail here instead."""
+    base = "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n"
+    (tmp_path / ".env").write_text(base + 'MEMBRANE_BODY_EXTRA={"messages": []}\n')
+    with pytest.raises(ValueError, match="MEMBRANE_BODY_EXTRA may not set messages"):
+        load_settings(tmp_path)
