@@ -16,7 +16,7 @@ from mshkn.api.keys import router as keys_router
 from mshkn.api.recipes import router as recipes_router
 from mshkn.api.relay import router as relay_router
 from mshkn.api.system import router as system_router
-from mshkn.observability.logging import configure_logging, request_id_var
+from mshkn.observability.logging import configure_logging, install_log_buffer, request_id_var
 from mshkn.runtime import Runtime
 
 if TYPE_CHECKING:
@@ -36,6 +36,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         rt = runtime if runtime is not None else await Runtime.from_env()
         app.state.runtime = rt
+        install_log_buffer(rt.logs)
         try:
             await rt.start()
             yield
@@ -45,6 +46,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     app = FastAPI(title="mshkn", version="0.1.0", lifespan=lifespan)
     if runtime is not None:
         app.state.runtime = runtime
+        install_log_buffer(runtime.logs)
     install_error_handlers(app)
 
     @app.middleware("http")
