@@ -237,7 +237,7 @@ Slot N gives host address `172.16.N.1`, VM address `172.16.N.2`, tap `tapN` and 
 
 ## 12. Observability
 
-Logs are JSON lines (`mshkn.observability.logging.JSONFormatter`) with `timestamp`, `level`, `logger`, `msg`, `request_id`, and structured extras where the service supplies them (`op`, `computer_id`, `checkpoint_id`, `account_id`, `recipe_id`, `trigger`).
+Logs are ECS JSON lines (`mshkn.observability.logging.ECSFormatter`) with `@timestamp`, `log.level`, `log.logger`, `message`, `trace.id`, and structured extras namespaced under `mshkn.*` where the service supplies them (op, computer_id, checkpoint_id, account_id, recipe_id, trigger).
 
 | Metric | Type | Labels | Set by |
 |---|---|---|---|

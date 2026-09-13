@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 import pytest
 from prometheus_client import generate_latest
 
 from mshkn.errors import HostError, NotFound
 from mshkn.host.shell import ShellError
-from mshkn.observability.logging import JSONFormatter, RequestIdFilter, request_id_var
+from mshkn.observability.logging import (
+    ECS_VERSION,
+    ECSFormatter,
+    account_id_var,
+    request_id_var,
+    to_ecs,
+)
 from mshkn.observability.metrics import (
     operation_duration_seconds,
     operation_errors_total,
@@ -16,33 +23,79 @@ from mshkn.observability.metrics import (
 )
 
 
-def _format(record: logging.LogRecord) -> dict[str, object]:
-    RequestIdFilter().filter(record)
-    result: dict[str, object] = json.loads(JSONFormatter().format(record))
-    return result
+def _record(
+    msg: str = "x", args: tuple[object, ...] | None = None, **attrs: object
+) -> logging.LogRecord:
+    record = logging.LogRecord("t", logging.INFO, "f.py", 1, msg, args, None)
+    for key, value in attrs.items():
+        setattr(record, key, value)
+    return record
 
 
-def test_json_formatter_includes_request_id_from_context() -> None:
+def test_the_ecs_envelope_is_present_on_every_record() -> None:
+    entry = to_ecs(_record("hello %s", ("w",)))
+    assert entry["message"] == "hello w"
+    assert entry["log.level"] == "info"
+    assert entry["log.logger"] == "t"
+    assert entry["ecs.version"] == ECS_VERSION
+    assert str(entry["@timestamp"]).endswith("+00:00"), "ECS timestamps are UTC and offset-aware"
+
+
+def test_trace_id_comes_from_the_context_and_is_absent_outside_a_request() -> None:
+    assert "trace.id" not in to_ecs(_record()), "a reaper cycle has no trace"
     token = request_id_var.set("req-123")
     try:
-        record = logging.LogRecord("t", logging.INFO, "f.py", 1, "hello %s", ("w",), None)
-        entry = _format(record)
+        assert to_ecs(_record())["trace.id"] == "req-123"
     finally:
         request_id_var.reset(token)
-    assert entry["msg"] == "hello w"
-    assert entry["request_id"] == "req-123"
-    assert entry["level"] == "info"
 
 
-def test_request_id_defaults_to_dash_outside_a_request() -> None:
-    record = logging.LogRecord("t", logging.INFO, "f.py", 1, "x", None, None)
-    assert _format(record)["request_id"] == "-"
+def test_an_explicit_account_beats_the_context() -> None:
+    """destroy logs the computer's account even when the reaper ran it."""
+    token = account_id_var.set("acct-ctx")
+    try:
+        assert to_ecs(_record())["mshkn.account_id"] == "acct-ctx"
+        assert to_ecs(_record(account_id="acct-row"))["mshkn.account_id"] == "acct-row"
+    finally:
+        account_id_var.reset(token)
+    assert "mshkn.account_id" not in to_ecs(_record())
 
 
-def test_extra_fields_are_emitted() -> None:
-    record = logging.LogRecord("t", logging.INFO, "f.py", 1, "x", None, None)
-    record.computer_id = "comp-1"
-    assert _format(record)["computer_id"] == "comp-1"
+def test_extras_are_namespaced_not_lifted_to_the_top_level() -> None:
+    entry = to_ecs(_record(computer_id="comp-1", op="create"))
+    assert entry["mshkn.computer_id"] == "comp-1"
+    assert entry["mshkn.op"] == "create"
+    assert "computer_id" not in entry, "ECS reserves the top level for itself"
+
+
+def test_an_exception_becomes_three_error_fields() -> None:
+    try:
+        raise NotFound("no such computer")
+    except NotFound:
+        record = logging.LogRecord("t", logging.ERROR, "f.py", 1, "boom", None, sys.exc_info())
+    entry = to_ecs(record)
+    assert entry["error.type"] == "NotFound"
+    assert entry["error.message"] == "no such computer"
+    assert "Traceback" in str(entry["error.stack_trace"])
+    assert "exception" not in entry, "the single blob field is gone"
+
+
+def test_an_oversized_field_is_truncated_and_marked() -> None:
+    value = str(to_ecs(_record(blob="a" * 9000))["mshkn.blob"])
+    assert len(value) < 9000 and value.endswith("[truncated]")
+
+
+def test_scalars_keep_their_type() -> None:
+    entry = to_ecs(_record(slot=7, ok=True, nothing=None))
+    assert entry["mshkn.slot"] == 7, "an int stays an int, not a string"
+    assert entry["mshkn.ok"] is True
+    assert entry["mshkn.nothing"] is None
+
+
+def test_the_formatter_emits_one_json_object_per_record() -> None:
+    line = ECSFormatter().format(_record("hi"))
+    assert "\n" not in line
+    assert json.loads(line)["message"] == "hi"
 
 
 def _sample(metric_text: str, name: str, labels: str) -> float:
