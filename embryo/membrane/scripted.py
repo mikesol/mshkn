@@ -1,4 +1,5 @@
-"""A model that plays hatch (embryo/capabilities/hatch.md) deterministically, so the flow and
+"""A model that plays hatch (embryo/capabilities/hatch.md) and security (spec §7 of
+docs/superpowers/specs/2026-09-12-capabilities-design.md) deterministically, so the flow and
 E2E tiers prove the membrane without a third-party key (§11). It reads the
 words, not the turn number, and emits real declarations that build on the host."""
 
@@ -113,6 +114,61 @@ COUNTER: dict[str, Any] = {
 }
 
 DECLARATIONS = {"page_title": PAGE_TITLE, "counter": COUNTER}
+
+SECRET_PATH = "/verb/token"
+PAGE_URL_RE = re.compile(r"reads the page at (\S+)\.")
+
+
+def _curl_page(url: str) -> str:
+    """The one line that reads the gated page: an empty bearer when the token is
+    not there yet, so a trial (no secrets) sees the page's 401 and `-f` exits 22."""
+    return (
+        'curl -fsS --max-time 20 -H "Authorization: Bearer $(cat /verb/token 2>/dev/null || true)" '
+        f'"{url}"'
+    )
+
+
+def SECRET_PAGE(url: str) -> dict[str, Any]:  # noqa: N802 — a declaration constant with one parameter
+    return {
+        "name": "secret_page",
+        "description": "Reads the page behind the bearer token root placed on this verb's chain.",
+        "params": {"type": "object", "properties": {}},
+        "dockerfile": (
+            "FROM mshkn-base\n"
+            "RUN mkdir -p /verb && "
+            + _script("#!/bin/bash", "set -euo pipefail", _curl_page(url))
+            + " > /verb/read.sh && chmod +x /verb/read.sh\n"
+        ),
+        "entrypoint": "/verb/read.sh",
+        "effect": "read",
+        "state": "chain",
+        "requires": [{"kind": "secret", "name": "page_token"}],
+    }
+
+
+def SECRET_LENGTH(url: str) -> dict[str, Any]:  # noqa: N802
+    """Row 13's scripted answer: a second chain with a second copy of the token."""
+    return {
+        "name": "secret_length",
+        "description": "Reports the byte length of the page behind the token on this verb's chain.",
+        "params": {"type": "object", "properties": {}},
+        "dockerfile": (
+            "FROM mshkn-base\n"
+            "RUN mkdir -p /verb && "
+            + _script("#!/bin/bash", "set -euo pipefail", _curl_page(url) + " | wc -c")
+            + " > /verb/length.sh && chmod +x /verb/length.sh\n"
+        ),
+        "entrypoint": "/verb/length.sh",
+        "effect": "read",
+        "state": "chain",
+        "requires": [{"kind": "secret", "name": "page_token"}],
+    }
+
+
+PLACEMENT = (
+    "The trial got 401 without the token, as it should. Put it at\n\n"
+    f"```\n{SECRET_PATH}\n```\n\nand say provide."
+)
 
 
 def OPEN_DOOR_POLICY(principal: str) -> dict[str, Any]:  # noqa: N802
@@ -246,6 +302,30 @@ class ScriptedModel:
                     return match.group(1)
         return None
 
+    @staticmethod
+    def _find_page_url(messages: list[dict[str, Any]]) -> str | None:
+        for message in messages:
+            if isinstance(message.get("content"), str):
+                match = PAGE_URL_RE.search(message["content"])
+                if match:
+                    return match.group(1)
+        return None
+
+    @staticmethod
+    def _proposed_requires(messages: list[dict[str, Any]], results: list[dict[str, Any]]) -> bool:
+        """Whether the calls these results answer proposed a verb with `requires`."""
+        if len(messages) < 2 or not isinstance(messages[-2].get("content"), list):
+            return False
+        ids = {r.get("tool_use_id") for r in results if isinstance(r, dict)}
+        return any(
+            block.get("type") == "tool_use"
+            and block.get("id") in ids
+            and block.get("name") == "propose"
+            and bool(block.get("input", {}).get("verb", {}).get("requires"))
+            for block in messages[-2]["content"]
+            if isinstance(block, dict)
+        )
+
     async def complete(
         self,
         *,
@@ -269,6 +349,8 @@ class ScriptedModel:
                         "remember", text="Example Domain, from a computer that self-destructed."
                     ),
                 )
+            if self._proposed_requires(messages, last):
+                return self._text(f"{self._summarise(last)}\n\n{PLACEMENT}")
             if "remember" in names:
                 return self._text("Noted.")
             return self._text(self._summarise(last))
@@ -347,6 +429,30 @@ class ScriptedModel:
             if "page_title" not in offered:
                 return self._text("I have no page_title verb yet.")
             return self._calls([self._call("page_title", url=page.group(1))])
+        secret = PAGE_URL_RE.search(message)
+        if secret and "bearer token" in message and can_propose:
+            decl = SECRET_PAGE(secret.group(1))
+            return self._calls(
+                [
+                    self._call("try", verb=decl, params={}),
+                    self._call("propose", **_proposal("verb", "secret_page", decl)),
+                ]
+            )
+        if message == "read the page":
+            if "secret_page" not in offered:
+                return self._text("I have no secret_page verb yet.")
+            return self._calls([self._call("secret_page")])
+        if "second verb that needs the same token" in message and can_propose:
+            url = self._find_page_url(messages)
+            if url is None:
+                return self._text("I have no page to read a second way.")
+            decl = SECRET_LENGTH(url)
+            return self._calls(
+                [
+                    self._call("try", verb=decl, params={}),
+                    self._call("propose", **_proposal("verb", "secret_length", decl)),
+                ]
+            )
         if "counts how many times" in message and can_propose:
             return self._calls(
                 [
