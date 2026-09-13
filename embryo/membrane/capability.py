@@ -33,7 +33,7 @@ from membrane.config import DEFAULT_MODEL_ID, parse_env
 from membrane.declarations import RESERVED_TOOL_NAMES
 from membrane.effort import EFFORTS
 from membrane.model import add_usage, zero_usage
-from membrane.postconditions import CHECKS, Judged, Turn, by_label, judge, tool_computers
+from membrane.postconditions import CHECKS, Judged, Turn, judge, tool_computers
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -1236,14 +1236,15 @@ async def run_once(
                 raise
             record.final_list(final)
             computer_ids = [c["computer_id"] for t in turns for c in tool_computers(t)]
-            # the hook computers of the signed knock: their logs say why a caller
-            # was or was not named
-            signed = by_label(turns, "4")
-            computer_ids += [
-                r["computer_id"]
-                for r in (signed.audit.get("hooks", []) if signed else [])
-                if r.get("computer_id")
-            ]
+            # the hook computers of every turn, not row 4's alone (#167): a
+            # dependent capability's identity hook may run on a row hatch never
+            # had, and its log says why a caller was or was not named just as
+            # hatch's does.
+            for t in turns:
+                for r in t.audit.get("hooks", []):
+                    if r.get("computer_id"):
+                        computer_ids.append(r["computer_id"])
+            computer_ids = list(dict.fromkeys(computer_ids))
             checks = {cid: await doors.check_computer(cid) for cid in computer_ids}
             judged = judge(
                 capability.postconditions,

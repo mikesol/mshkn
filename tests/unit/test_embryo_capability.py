@@ -2359,6 +2359,92 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     )
 
 
+async def test_run_once_checks_hook_computers_from_every_turn_not_only_row_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#167: the driver used to collect hook computers from the turn labelled
+    "4" alone (hatch's signed knock). A dependent capability's identity hook can
+    run on any row of its own, so the collection is every turn's hooks now,
+    deduplicated. This capability has no row "4" at all; the old code would have
+    checked nothing."""
+    from membrane.capabilities import Capability, Row
+
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    cap = Capability(
+        name="two-hooks",
+        depends=(),
+        postconditions=(),
+        rows=(
+            Row("a", "root say", "Say A", "outcome"),
+            Row("b", "root say", "Say B", "outcome"),
+        ),
+        repair=HATCH.repair,
+        path=tmp_path / "two-hooks.md",
+        module=None,
+    )
+    listing: dict[str, Any] = {"catalog": {}, "proposals": [], "policy": {"principals": {}}}
+    checked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "GET" and path == "/checkpoints":
+            return httpx.Response(200, json=[])
+        if request.method == "GET" and path == "/recipes":
+            return httpx.Response(200, json=[])
+        if request.method == "GET" and path.endswith("/status"):
+            checked.append(path.split("/")[2])
+            return httpx.Response(404, json={})
+        if request.method == "GET" and path.endswith("/exec_log"):
+            return httpx.Response(404, json={"detail": "no log"})
+        if request.method == "POST" and path == "/checkpoints/fork":
+            command = str(json.loads(request.content)["exec"])
+            if command == "membrane root list":
+                return httpx.Response(
+                    200,
+                    json={
+                        "computer_id": "c",
+                        "exec_exit_code": 0,
+                        "exec_stdout": json.dumps(listing),
+                    },
+                )
+            text = base64.b64decode(command.split()[-1]).decode()
+            hook_id = "hook-a" if text == "Say A" else "hook-b"
+            audit = audit_line(hooks=[{"name": "identity", "computer_id": hook_id}])
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": "c",
+                    "exec_exit_code": 0,
+                    "exec_stdout": _out(audit, "Noted."),
+                },
+            )
+        raise AssertionError((request.method, path))
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+
+    async def fake_teardown(
+        self: Doors, h: Hatched, listing_arg: Any, *, lineage: Any = None
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(Doors, "teardown", fake_teardown)
+    summary = await run_once(
+        _settings(),
+        cap,
+        tmp_path / "run",
+        AutoApprover(),
+        hatch_script=_stub_hatch(tmp_path),
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=io.StringIO(),
+        out=tmp_path,
+    )
+    assert set(checked) == {"hook-a", "hook-b"}
+    assert summary["ok"] is True  # no postconditions named: 0 passed of 0
+
+
 async def test_run_once_refuses_an_account_that_already_has_a_brain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

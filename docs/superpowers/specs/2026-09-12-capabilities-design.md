@@ -330,6 +330,18 @@ A check may refer to row labels (the counter check reads `9-count-1` and
 check fails with a clear message when they do not, which is the only place the
 knowledge belongs.
 
+The seven split into two kinds. An **invariant** reads no row label and holds
+on any run: `root_unforgeable`, `no_undeclared_capability`, `nothing_by_hand`.
+An **exercise** reads the rows that exercised it and belongs to the capability
+that wrote those rows: hatch's `authentication`, `authorization`, `page_title`
+and `counter` read hatch's labels (`4`, `5`, `8`, `9-count-*`) by name and no
+other capability's rows carry those labels. A dependent capability names the
+invariants and its own exercises; it does not re-run an ancestor's exercises,
+because the promotion is the proof those already passed. A dependent that
+wants to show an inherited verb still works exercises it again in its own
+rows, under its own exercise check, or adds an invariant that reads only the
+final state (#167).
+
 ## 7. The security capability
 
 Two halves. The first is a product change and a hatch change, and is not a turn.
@@ -451,7 +463,8 @@ override the path.)
   when they are exactly the provisioning sequence (create from a `verb/` head,
   upload, checkpoint to the same label, destroy) and there is one such
   sequence per `provide`. Anything else by hand fails as today.
-- hatch's seven, by name, on the grown brain.
+- the three invariants (`root_unforgeable`, `no_undeclared_capability`,
+  `nothing_by_hand`) plus security's own.
 
 ## 8. Process
 
@@ -516,7 +529,8 @@ untouched. `uv run measure` becomes `uv run capability run`.
   scripted model. Hatch is today's test with the rows read from `hatch.md`.
   Security promotes a scripted hatch in the fixture, serves the page from the
   fake host's guest script, scripts the three replies, has the driver provision
-  from the reply, and checks the three new postconditions plus hatch's seven.
+  from the reply, and checks the three new postconditions plus the three
+  invariants.
 - **E2E.** `tests/e2e/test_phase14_embryo.py` becomes the capabilities phase:
   hatch scripted on the live host, promote, security scripted from the
   promotion. The suite's runtime grows by one promotion and two recipe builds;

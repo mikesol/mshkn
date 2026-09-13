@@ -8,7 +8,7 @@ import json
 from typing import Any
 
 import pytest
-from membrane.postconditions import CHECKS, Judged, Turn, judge
+from membrane.postconditions import CHECKS, EXERCISES, INVARIANTS, Judged, Turn, judge
 
 from tests.support_embryo import audit_line
 
@@ -46,6 +46,12 @@ def test_the_registry_holds_the_seven_and_judge_runs_the_named_ones() -> None:
     assert result["root_unforgeable"] == {"ok": True, "evidence": {"public_principals": []}}
     with pytest.raises(KeyError, match="no_such_check"):
         judge(["no_such_check"], judged)
+
+
+def test_invariants_are_a_subset_of_the_checks_and_exercises_are_the_rest() -> None:
+    assert set(CHECKS) >= INVARIANTS
+    assert set(CHECKS) - INVARIANTS == EXERCISES
+    assert {"root_unforgeable", "no_undeclared_capability", "nothing_by_hand"} == INVARIANTS
 
 
 # ---------------------------------------------------------------- the verdict on fixtures
@@ -223,6 +229,32 @@ def test_authentication_evidence_carries_the_hook_runs_and_their_logs() -> None:
     assert result["evidence"]["hooks"] == [hook] and result["evidence"]["hook_logs"] == [
         checks["c-hook"]
     ]
+
+
+def test_invariants_do_not_care_about_labels_but_exercises_do() -> None:
+    """#167: a dependent capability's rows are not labelled 4, 5, 8 and
+    9-count-* the way hatch's are — a security run speaks rows 11 to 14. An
+    invariant reads no label, so relabelling the turns does not change its
+    verdict. An exercise reads hatch's labels by name, so it cannot find its
+    evidence on the relabelled rows and fails regardless of the brain's
+    state — the defect the issue describes, pinned here as a fact."""
+    original = _judge()
+    relabel = {
+        "1": "11",
+        "4": "12",
+        "5": "13",
+        "8": "14",
+        "9-count-1": "14-count-1",
+        "9-count-2": "14-count-2",
+    }
+    relabelled_turns = [
+        _turn(relabel[t.label], t.door, dict(t.audit), t.reply) for t in _good_turns()
+    ]
+    relabelled = _judge(turns=relabelled_turns)
+    for name in INVARIANTS:
+        assert relabelled[name]["ok"] == original[name]["ok"], name
+    assert relabelled["page_title"]["ok"] is False
+    assert relabelled["counter"]["ok"] is False
 
 
 def test_root_is_unforgeable_fails_when_a_public_turn_is_root() -> None:

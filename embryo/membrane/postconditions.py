@@ -271,6 +271,20 @@ CHECKS: dict[str, Callable[[Judged], dict[str, Any]]] = {
     "nothing_by_hand": nothing_by_hand,
 }
 
+# Two kinds of check (capabilities design §6). An invariant reads no row label
+# and holds on any run: root_unforgeable watches every public turn's principal,
+# no_undeclared_capability watches the catalog, the proposals and the recipes,
+# and nothing_by_hand watches the commands sent — none of them looks up a label.
+# An exercise reads the rows that exercised it and belongs to the capability
+# that wrote those rows: authentication reads hatch's rows 4 and 5, authorization
+# and counter read 8 and 9-count-*, page_title reads 8. A dependent capability
+# names the invariants and its own exercises; it does not re-run an ancestor's
+# exercises, because the promotion is the proof those passed (#167).
+INVARIANTS: frozenset[str] = frozenset(
+    {"root_unforgeable", "no_undeclared_capability", "nothing_by_hand"}
+)
+EXERCISES: frozenset[str] = frozenset(CHECKS) - INVARIANTS
+
 
 def judge(names: Sequence[str], judged: Judged) -> dict[str, dict[str, Any]]:
     """The named checks, in the order named, each with its evidence."""
