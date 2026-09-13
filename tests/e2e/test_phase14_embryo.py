@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -21,6 +22,11 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 import pytest_asyncio
+from membrane.capabilities import CAPABILITIES, load, load_module
+from membrane.capability import Doors as DriverDoors
+from membrane.capability import paths_in, promote, read_promotion, start_from
+from membrane.postconditions import CHECKS
+from membrane.scripted import SECRET_PATH
 
 from tests.support_embryo import HATCH, WORDS, b64, split_output
 
@@ -33,6 +39,10 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 EMBRYO = Path(__file__).resolve().parents[2] / "embryo"
+SECURITY = load(CAPABILITIES / "security.md")
+# The live test account also holds the real `capability/hatch/*` promotion, which
+# this module must never touch; its own promotion has a name of its own.
+PROMOTED_AS = "e2e-hatch"
 BRAIN_API_URL = os.environ.get("MSHKN_BRAIN_API_URL", "https://api.mshkn.dev")
 TURN_TIMEOUT = 330.0
 TURN_WAIT = 3600.0
@@ -273,10 +283,37 @@ async def doors(hatched: Hatched) -> AsyncIterator[Doors]:
         await drop(f"/keys/{hatched.key_id}")
         with suppress(Exception):
             for ckpt in (await client.get("/checkpoints")).json():
-                if ckpt["label"] in ("brain", "verb/counter") or ckpt["recipe_id"] in recipes:
+                label = str(ckpt["label"] or "")
+                # T14.8 promotes the hatch under `capability/e2e-hatch/` and T14.9 to
+                # T14.11 add two more verb chains, so the filter covers both; the real
+                # `capability/hatch/*` promotion on this account is left alone.
+                if (
+                    label == "brain"
+                    or label.startswith(("verb/", f"capability/{PROMOTED_AS}/"))
+                    or ckpt["recipe_id"] in recipes
+                ):
                     await drop(f"/checkpoints/{ckpt['id']}")
         for recipe_id in recipes:
             await drop(f"/recipes/{recipe_id}")
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def driver(doors: Doors) -> DriverDoors:
+    """The driver's Doors over the same clients: what `capability run` would use
+    for promotion, the fork from a promotion, and the placement of a secret."""
+    return DriverDoors(doors.client, doors.public, doors.hatched.rule_id, None)
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def page(driver: DriverDoors) -> AsyncIterator[dict[str, str]]:
+    """Security's page server, up for T14.9 to T14.11 and gone at module end,
+    with the module's own inspection run once more as it exits."""
+    security = load_module(SECURITY)
+    assert security is not None
+    async with security.prepare(driver, sys.stderr) as context:
+        yield dict(context)
+    for name in ("no_foreign_credential_on_brain", "secret_page"):
+        CHECKS.pop(name, None)
 
 
 class TestPhase14Embryo:
@@ -445,3 +482,163 @@ class TestPhase14Embryo:
         job = await doors.client.get(f"/relay/{json.loads(first[1])['job']}")
         assert job.status_code == 200 and job.json()["delivery"]["label"] == "brain"
         assert job.json()["delivery"]["status"] == "delivered"
+
+    async def test_t14_8_hatch_is_promoted_and_security_starts_from_it(
+        self, doors: Doors, driver: DriverDoors, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """Spec §5.2 and §5 'Start' on the live host: the kept hatch is promoted under
+        fixed labels, the working labels go, and a dependent forks them back and
+        still signs with the lineage's key. Promoted as `e2e-hatch`: the account
+        also holds the real `capability/hatch/*` promotion, which this must not touch."""
+        await doors.touch()
+        out = tmp_path_factory.mktemp("docs")
+        run_dir = out / PROMOTED_AS / "2026-09-13-run-1"
+        run_dir.mkdir(parents=True)
+        final = await doors.listing()
+        (run_dir / "final-list.json").write_text(json.dumps(final))
+        # T14.1 to T14.7 are the judge; the record names what they verified
+        (run_dir / "run.json").write_text(
+            json.dumps(
+                {
+                    "ok": True,
+                    "hatched": {
+                        "ingress_url": doors.hatched.ingress_url,
+                        "rule_id": doors.hatched.rule_id,
+                        "key_id": doors.hatched.key_id,
+                        "recipe_id": doors.hatched.recipe_id,
+                        "checkpoint_id": doors.hatched.checkpoint_id,
+                        "server_id": doors.hatched.server_id,
+                    },
+                    "key_dir": str(doors.hatched.key_dir),
+                    "pubkey": doors.hatched.pubkey,
+                    "model": "scripted",
+                    "default_effort": None,
+                    "reasks": [],
+                    "membrane": {"commit": None, "dirty": None},
+                    "started_from": "hatch",
+                }
+            )
+        )
+        record = await promote(driver, out, PROMOTED_AS, run_dir, log=sys.stderr)
+        assert set(record.labels) == {"brain", "verb/counter"}
+        for working, promoted in record.labels.items():
+            found = await doors.client.get(
+                "/checkpoints", params={"label": f"capability/{PROMOTED_AS}/{working}"}
+            )
+            assert [c["id"] for c in found.json()] == [promoted], found.text
+        assert (await doors.client.get("/checkpoints", params={"label": "brain"})).json() == []
+        assert read_promotion(out, PROMOTED_AS) == record
+        hatched = await start_from(driver, record, log=sys.stderr)
+        assert hatched.rule_id == doors.hatched.rule_id and hatched.key_id == doors.hatched.key_id
+        assert len((await doors.client.get("/checkpoints", params={"label": "brain"})).json()) == 1
+        counter_chain = await doors.client.get("/checkpoints", params={"label": "verb/counter"})
+        assert len(counter_chain.json()) == 1
+        # the forked brain is the promoted one: the door is open and the lineage's key is trusted
+        audit, reply = await doors.public_say(_sign(doors.hatched.key_dir, WORDS["4"]))
+        assert audit["principal"] == "ssh:mike" and reply.startswith("You are ssh:mike.")
+        listing = await doors.listing()
+        assert set(listing["catalog"]) == {"verify_ssh", "page_title", "counter"}
+        assert listing["catalog"]["counter"]["chain_head"] is not None
+
+    async def test_t14_9_a_secret_verb_is_refused_until_root_places_and_provides(
+        self, doors: Doors, driver: DriverDoors, page: dict[str, str]
+    ) -> None:
+        await doors.touch()
+        words = SECURITY.row("11").words.format(url=page["url"])
+        audit, reply = await doors.public_say(_sign(doors.hatched.key_dir, words))
+        assert [t["name"] for t in audit["tools"]] == ["try", "propose"], audit
+        # the trial has no secrets, so the page answered 401 and curl -f exited 22
+        assert audit["tools"][0]["status"] == "done", audit
+        assert [r["exit_code"] for r in audit["tools"][0]["runs"]] == [22], audit
+        pid = audit["proposals"][0]["id"]
+        assert await doors.approve_verb(pid, "secret_page") == "ready"
+        listing = await doors.wait_ready("secret_page")
+        entry = listing["catalog"]["secret_page"]
+        assert entry["requires"] == [{"kind": "secret", "name": "page_token"}]
+        assert entry["provided"] == []
+        assert paths_in(reply) == [SECRET_PATH], reply
+        # refused until provided, and no computer ran for it
+        audit, reply = await doors.public_say(
+            _sign(doors.hatched.key_dir, SECURITY.row("12").words)
+        )
+        assert audit["tools"][0]["status"] == "error", audit
+        assert audit["tools"][0]["error"] == (
+            "blocked: secret_page requires page_token; root places it and says provide"
+        )
+        assert (
+            await doors.client.get("/checkpoints", params={"label": "verb/secret_page"})
+        ).json() == []
+        # root places it, outside every door, and says provide
+        placed = await driver.provision(
+            "secret_page", entry["chain"], entry["recipe_id"], SECRET_PATH, page["token"]
+        )
+        chain = (
+            await doors.client.get("/checkpoints", params={"label": "verb/secret_page"})
+        ).json()
+        assert [c["id"] for c in chain] == [placed], chain
+        assert await doors.root("provide", "secret_page", "page_token") == (
+            "secret_page: page_token provided (1/1)\n"
+        )
+        assert (await doors.listing())["catalog"]["secret_page"]["provided"] == ["page_token"]
+        page["placed"] = placed
+
+    async def test_t14_10_the_page_is_read_from_the_chain_and_the_token_is_on_no_brain(
+        self, doors: Doors, driver: DriverDoors, page: dict[str, str]
+    ) -> None:
+        await doors.touch()
+        security = load_module(SECURITY)
+        assert security is not None
+        audit, reply = await doors.public_say(
+            _sign(doors.hatched.key_dir, SECURITY.row("12").words)
+        )
+        assert reply.startswith(security.PAGE_BODY.strip()), reply
+        call = audit["tools"][0]
+        assert call["status"] == "ok", audit
+        assert call["chain_head"] and call["chain_head"] != page["placed"], audit
+        assert (
+            await doors.client.get(f"/computers/{call['computer_id']}/status")
+        ).status_code == 404
+        log = await doors.client.get(f"/computers/{call['computer_id']}/exec_log")
+        assert log.status_code == 200 and security.PAGE_BODY.strip() in log.json()["stdout"]
+        chain = {
+            c["id"]: c
+            for c in (
+                await doors.client.get("/checkpoints", params={"label": "verb/secret_page"})
+            ).json()
+        }
+        assert call["chain_head"] in chain  # the head is durable
+        # the token: on the verb's chain and nowhere on the brain
+        found = await security.inspect_brain(driver, page["token"], sys.stderr)
+        assert found["files_with_token"] == [], found
+        assert set(found["env_names"]) <= security.HATCH_ENV, found
+        assert page["token"] not in log.json()["stdout"] and page["token"] not in reply
+
+    async def test_t14_11_a_second_verb_needs_the_same_token_and_the_final_state(
+        self, doors: Doors, driver: DriverDoors, page: dict[str, str]
+    ) -> None:
+        await doors.touch()
+        audit, reply = await doors.public_say(
+            _sign(doors.hatched.key_dir, SECURITY.row("13").words)
+        )
+        assert [t["name"] for t in audit["tools"]] == ["try", "propose"], audit
+        pid = audit["proposals"][0]["id"]
+        assert await doors.approve_verb(pid, "secret_length") == "ready"
+        entry = (await doors.wait_ready("secret_length"))["catalog"]["secret_length"]
+        assert entry["requires"] == [{"kind": "secret", "name": "page_token"}]
+        await driver.provision(
+            "secret_length", entry["chain"], entry["recipe_id"], paths_in(reply)[0], page["token"]
+        )
+        assert (await doors.root("provide", "secret_length", "page_token")).startswith(
+            "secret_length: page_token provided"
+        )
+        listing = await doors.listing()
+        assert set(listing["catalog"]) == {
+            "verify_ssh",
+            "page_title",
+            "counter",
+            "secret_page",
+            "secret_length",
+        }
+        assert all(e["status"] == "ready" for e in listing["catalog"].values())
+        assert listing["catalog"]["secret_length"]["provided"] == ["page_token"]
+        assert set(doors.public_principals) == {"ssh:mike", "anonymous"}, doors.public_principals

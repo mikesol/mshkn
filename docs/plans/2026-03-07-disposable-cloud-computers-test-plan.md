@@ -808,7 +808,7 @@ The ingress mapping layer lets external webhooks trigger disposable computers vi
 
 ## Phase 14: "The Embryo" (The First Real Agent)
 
-The first agent built on the product, specified in `docs/superpowers/specs/2026-09-08-embryo-design.md` §11. A membrane runs inside a `brain` checkpoint chain, holds a scoped key, and grows verbs only by proposal and approval. `embryo/hatch.sh` hatches it, and the fixed liturgy of §9 is spoken to it through both doors. The phase runs the scripted model, so it is deterministic and needs no third-party key; the same words spoken to a real model are the measure recorded afterwards, not a test. Since #110 a turn is a chain of forks: a `say` answers with an acknowledgement, and the reply is read from `membrane root list` once the relay has woken the brain. The seven tests share one hatched embryo and run in order.
+The first agent built on the product, specified in `docs/superpowers/specs/2026-09-08-embryo-design.md` §11. A membrane runs inside a `brain` checkpoint chain, holds a scoped key, and grows verbs only by proposal and approval. `embryo/hatch.sh` hatches it, and the fixed liturgy of §9 is spoken to it through both doors. The phase runs the scripted model, so it is deterministic and needs no third-party key; the same words spoken to a real model are the measure recorded afterwards, not a test. Since #110 a turn is a chain of forks: a `say` answers with an acknowledgement, and the reply is read from `membrane root list` once the relay has woken the brain. The eleven tests share one hatched embryo and run in order.
 
 ### T14.1 — It Hatches and Names What It Is
 
@@ -851,6 +851,27 @@ The first agent built on the product, specified in `docs/superpowers/specs/2026-
 - No undeclared capability: every recipe the run added to the account belongs to the brain or to an approved proposal.
 - The audit sink is outside the brain: `GET /ingress_rules/{rule_id}/logs` lists every public turn with its `computer_id`, and that computer's `exec_log` begins with the turn's audit line.
 - The turn was a chain of relay-delivered wake-ups: the exec log's second line is the acknowledgement naming a relay job id, and `GET /relay/{job_id}` shows that job delivered to label `brain`.
+
+### T14.8 — Hatch Is Promoted and Security Starts From It
+
+- The kept hatch is promoted with `capability promote` under `capability/e2e-hatch/`: every working head is copied under the promoted labels, `PROMOTED.md` names them, and the working labels are gone.
+- A dependent starts from the promotion: `brain` and `verb/counter` are forked back, the lineage's rule and key are reused, and a signed message is still `ssh:mike`.
+
+### T14.9 — A Secret Verb Is Refused Until Root Places and Provides
+
+- Row 11 names the page's URL. The model trials a `chain` verb with `requires` (the trial has no secrets and sees the page's 401), proposes it, and its reply names an absolute path in a code block; root approves and `list` shows `requires` and an empty `provided`.
+- Invoking it is refused with `blocked: secret_page requires page_token; root places it and says provide`, and no computer ran.
+- Root places the token on the verb's chain from outside every door (create, upload to the named path, checkpoint under `verb/secret_page`, destroy) and says `provide`; `list` shows the name provided.
+
+### T14.10 — The Page Is Read From the Chain and the Token Is on No Brain
+
+- Row 12: the reply is the page's fixed body; the verb's computer is gone, its `exec_log` holds the body, and the chain head it created is durable.
+- A fork of the final brain holds the token in no file under `/brain`, and `/brain/.env` names only what `hatch.sh` writes; the token is in no reply and no exec log.
+
+### T14.11 — A Second Verb Needs the Same Token
+
+- Row 13 proposes a second `chain` verb with the same `requires`; root approves, places and provides again.
+- The catalog holds the five verbs, all `ready`, and every public principal was `ssh:mike` or `anonymous`.
 
 ---
 
@@ -897,7 +918,7 @@ The relay (`docs/superpowers/specs/2026-09-09-async-turn-relay-design.md`): a jo
 | The loop (Phase 10) | Recipes build within the cap, broken ones say why, forks diverge, listeners survive, the scripted agent finishes | Any step of the loop that can't complete, or a rebuild no faster than a cold build |
 | Observability (Phase 11) | Metrics accurate within 10% of reality, alerts fire within 1 min, status tool matches shell output, DAG fully reconstructible | Metrics lie, alerts don't fire, status is decorative, or DAG has broken parent pointers |
 | Ingress (Phase 13) | Rule CRUD works, Starlark transforms execute correctly, ingress triggers fork/create, rate limiting enforced, logs recorded | Any CRUD failure, Starlark escape, or silent ingress failure |
-| The embryo (Phase 14) | The liturgy reaches every postcondition of the embryo spec §11 with the scripted model | Any postcondition unmet, or a turn that needs a human to write anything after hatching |
+| The embryo (Phase 14) | The liturgy reaches every postcondition of the embryo spec §11 with the scripted model, and the security rows of `docs/superpowers/specs/2026-09-12-capabilities-design.md` §7 reach theirs | Any postcondition unmet, or a turn that needs a human to write anything after hatching |
 | The relay (Phase 15) | A public target is called and its chain woken; the host is refused; a scoped key is held to its scope; a busy chain defers | Any job that never settles, any wake-up the guard or the scope should have stopped |
 
 ---
