@@ -9,7 +9,6 @@ import io
 import json
 import stat
 import subprocess
-from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -1243,6 +1242,11 @@ def test_new_key_names_its_owner_and_sign_verifies(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- hatch over a fake door
 
 
+GROW = "Grow yourself another verb, and let me use that one."
+GRANT = "Let me use everything you have."
+USE = "Use what I may ask of you."
+
+
 class FakeDoors:
     """A door whose membrane is a small state machine: proposals are made on the
     turns hatch expects them, approvals move them to building, and each
@@ -1262,15 +1266,17 @@ class FakeDoors:
         policy_first: bool = False,
         deadline_first: bool = False,
         grant_late: bool = False,
-        policy_every_turn: bool = False,
+        growing: bool = False,
     ) -> None:
         self.policy_first = policy_first
         self.deadline_first = deadline_first
-        # Two modes in which the policy, not the catalog, is what stops a verb from
-        # being invoked (2026-09-13-run-3): the grant is by name, and a turn that
-        # may not invoke says so and calls nothing.
+        # The policy, not the catalog, is what stops a verb from being invoked
+        # (2026-09-13-run-3): the grant is by name, and a turn that may not invoke
+        # says so and calls nothing.
         self.grant_late = grant_late
-        self.policy_every_turn = policy_every_turn
+        # A membrane that grows a verb and widens the grant to it on every `GROW`.
+        self.growing = growing
+        self.grown = 0
         self.fail_first = fail_first or set()
         self.never_ready = never_ready or set()
         self.open_door = open_door
@@ -1293,18 +1299,26 @@ class FakeDoors:
         self.repairs = 0
         self.count_calls = 0  # invocations of the counter verb, not `count` messages
 
-    def _gated(self) -> bool:
-        """Whether the policy's `invoke` grant decides what a public turn may call."""
-        return self.grant_late or self.policy_every_turn
-
     def _may_invoke(self, name: str) -> bool:
-        if not self._gated():
+        """Whether the policy in force lets `ssh:mike` invoke the verb."""
+        if not self.grant_late:
             return True
         invoke = self.policy["principals"].get("ssh:mike", {}).get("invoke")
         return invoke == "*" or (isinstance(invoke, list) and name in invoke)
 
     def _count(self, n: int) -> str:
         return self.counts[n - 1] if n <= len(self.counts) else f"{n}\n"
+
+    def _grant(self, invoke: list[str]) -> dict[str, Any]:
+        """The policy in force with `ssh:mike`'s invocation grant replaced."""
+        return {
+            "principals": {
+                "ssh:mike": {"invoke": invoke, "propose": True},
+                "anonymous": {"invoke": [], "propose": False},
+            },
+            "hooks": ["verify_ssh"],
+            "door": "open",
+        }
 
     def _widened(self) -> dict[str, Any]:
         """The policy in force, with `ssh:mike` allowed to invoke everything."""
@@ -1413,7 +1427,7 @@ class FakeDoors:
                             # the gated modes widen by name, as run 3 did, so the
                             # verbs proposed later are not yet invocable
                             "ssh:mike": {
-                                "invoke": ["verify_ssh"] if self._gated() else "*",
+                                "invoke": ["verify_ssh"] if self.grant_late else "*",
                                 "propose": True,
                             },
                             "anonymous": {"invoke": [], "propose": False},
@@ -1473,11 +1487,37 @@ class FakeDoors:
                 reply = f"The count is {self._count(n).strip()}."
             else:
                 reply = "I have no such tool in my hands."
-        if self.policy_every_turn and not any(p["kind"] == "policy" for p in made):
-            # every turn records a policy, unchanged: the trigger fires and fires
-            made.append(
-                self._propose("policy", "again", policy=json.loads(json.dumps(self.policy)))
+        elif self.growing and msg == GROW:
+            self.grown += 1
+            name = f"extra{self.grown}"
+            made.append(self._propose("verb", name))
+            made.append(self._propose("policy", "grow", policy=self._grant([name])))
+            reply = f"Proposed {name}, and a grant of it alone."
+        elif self.growing and msg == GRANT:
+            ready = sorted(
+                n
+                for n, e in self.catalog.items()
+                if e["status"] == "ready" and n not in self.policy["hooks"]
             )
+            made.append(self._propose("policy", "grant", policy=self._grant(ready)))
+            reply = "Proposed a grant of every verb I have."
+        elif self.growing and msg == USE:
+            granted = self.policy["principals"]["ssh:mike"]["invoke"]
+            called: str | None = next(
+                (n for n in granted if self.catalog.get(n, {}).get("status") == "ready"), None
+            )
+            if called is None:
+                reply = "I have no such tool in my hands."
+            else:
+                tools.append(
+                    {
+                        "name": called,
+                        "status": "ok",
+                        "exit_code": 0,
+                        "computer_id": f"comp-{called}",
+                    }
+                )
+                reply = f"I called {called}."
         audit = audit_line(
             door="ingress",
             principal="ssh:mike",
@@ -1637,28 +1677,10 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
     )
     labels = [t.label for t in turns]
-    # Turn 6 applies a policy, and rows 4, 5 and 6 all called no verb, so each is
-    # asked again; 6 records the policy again, which is a second policy change and
-    # a second (and last, MAX_REASKS) re-ask of the three.
-    assert labels == [
-        "1",
-        "2",
-        "4",
-        "5",
-        "6",
-        "4-again-1",
-        "5-again-1",
-        "6-again-1",
-        "4-again-2",
-        "5-again-2",
-        "6-again-2",
-        "7",
-        "8",
-        "9",
-        "9-count-1",
-        "9-count-2",
-    ]
-    assert reasks == ["4", "5", "6", "4", "5", "6"]
+    assert labels == ["1", "2", "4", "5", "6", "7", "8", "9", "9-count-1", "9-count-2"]
+    # Turn 6's policy widens `ssh:mike` to "*", but the only ready verb is the door
+    # hook, so it gained nobody anything and no row is asked again.
+    assert reasks == []
     assert turns[1].approvals == [
         {
             "id": "p-1",
@@ -1702,53 +1724,32 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
     assert result["page_title"]["evidence"]["computer_id"] == "comp-title"
     assert result["counter"]["evidence"]["counts"] == [1, 2]
     assert "Turn 8" in log.getvalue()
-    assert "Turn 4-again-1 (re-ask after policy change): Who am I?" in log.getvalue()
+    assert "-again-" not in log.getvalue()
 
 
-async def test_a_policy_change_re_asks_only_the_rows_that_called_no_verb(tmp_path: Path) -> None:
-    """The rows that did call a verb are left alone: 7, 8, 9 and the two counts are
-    spoken once each in the happy path, because the policy that turn 6 applies is
-    the last one of the run and every row after it called the verb it asked for."""
+async def test_a_policy_change_that_gains_only_a_hook_re_asks_nothing(tmp_path: Path) -> None:
+    """The happy path's turn 6 widens `ssh:mike` to `"*"`, but the catalog then holds
+    the door hook and nothing else, and a hook is not a verb the rows came for
+    (#117). Nobody gained an invocation, so no row is asked again: the trigger is
+    what the change made possible, not that a change happened."""
     doors = FakeDoors()
     key_dir, pubkey = _keys(tmp_path)
     turns, _final, reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
-    assert reasks == ["4", "5", "6", "4", "5", "6"]
-    assert [t.label for t in turns if t.label.startswith(("7", "8", "9"))] == [
-        "7",
-        "8",
-        "9",
-        "9-count-1",
-        "9-count-2",
-    ]
-    # the latest attempt is what the checks read, and 4 and 5 still answer as they did
-    four, five = by_label(turns, "4"), by_label(turns, "5")
-    assert four is not None and four.label == "4-again-2"
-    assert five is not None and five.label == "5-again-2"
-    judged = judge(
-        ["authentication"],
-        Judged(
-            turns=turns,
-            final=await doors.listing(),
-            recipes_after=set(),
-            preexisting=set(),
-            brain_recipe="rcp-brain",
-            checks={},
-            sent=[],
-            context={},
-        ),
-    )
-    assert judged["authentication"]["ok"] is True
+    assert doors.policy["principals"]["ssh:mike"]["invoke"] == "*"
+    assert doors.policy["hooks"] == ["verify_ssh"]
+    assert reasks == []
+    assert not [t.label for t in turns if "-again-" in t.label]
 
 
 async def test_a_policy_change_makes_the_driver_re_ask_the_rows_that_called_no_verb(
     tmp_path: Path,
 ) -> None:
     """2026-09-13-run-3, which the driver can now recover from: the agent widens
-    its `invoke` grant verb by verb, so rows 8 and the two counts find no tool in
-    their hands, and the widening comes only at the last row. The re-ask asks each
-    of them once more, now that the answer is possible, and all seven pass."""
+    its `invoke` grant verb by verb, so row 8 and the two counts find no tool in
+    their hands, and the widening comes only at the last row. The re-ask asks those
+    three once more, now that the answer is possible, and all seven pass."""
     doors = FakeDoors(grant_late=True)
     key_dir, pubkey = _keys(tmp_path)
     log = io.StringIO()
@@ -1756,19 +1757,17 @@ async def test_a_policy_change_makes_the_driver_re_ask_the_rows_that_called_no_v
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
     )
     labels = [t.label for t in turns]
-    assert reasks == ["4", "5", "6", "4", "5", "6", "7", "8", "9", "9-count-1", "9-count-2"]
+    assert reasks == ["8", "9-count-1", "9-count-2"]
     assert labels[labels.index("9-count-2") :] == [
         "9-count-2",
-        "7-again-1",
         "8-again-1",
-        "9-again-1",
         "9-count-1-again-1",
         "9-count-2-again-1",
     ]
     eight = by_label(turns, "8")
     assert eight is not None and eight.label == "8-again-1"
     assert [c["name"] for c in eight.audit["tools"]] == ["page_title"]
-    assert "(re-ask after policy change)" in log.getvalue()
+    assert "Turn 8-again-1 (re-ask after policy change)" in log.getvalue()
     final = await doors.listing()
     checks = {
         cid: await doors.check_computer(cid)
@@ -1792,24 +1791,113 @@ async def test_a_policy_change_makes_the_driver_re_ask_the_rows_that_called_no_v
     assert result["counter"]["evidence"]["counts"] == [1, 2]
 
 
-async def test_a_row_is_re_asked_at_most_twice(tmp_path: Path) -> None:
-    """The bound, which is what makes the goto backwards finite: a membrane that
-    records a policy on every turn changes the policy on every settle, and no row
-    is spoken more than twice again."""
-    doors = FakeDoors(policy_every_turn=True)
+async def test_a_row_that_proposed_a_verb_is_not_re_asked(tmp_path: Path) -> None:
+    """Rows 7 and 9 ask for a verb and get one; the grant that follows does not
+    make them answerable, it answers the row after them. A row that proposed a verb
+    was never waiting on the policy, so the widening at the last row re-asks the
+    rows that tried to invoke and leaves the two proposing rows alone."""
+    doors = FakeDoors(grant_late=True)
     key_dir, pubkey = _keys(tmp_path)
     turns, _final, reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     labels = [t.label for t in turns]
-    assert not [label for label in labels if "-again-3" in label], labels
-    counted = Counter(reasks)
-    assert counted and max(counted.values()) == MAX_REASKS
-    assert sorted(counted) == ["4", "5", "6", "7", "8", "9", "9-count-1", "9-count-2"]
+    seven, nine = by_label(turns, "7"), by_label(turns, "9")
+    assert seven is not None and nine is not None
+    # both proposed a verb, and neither called one: only the second fact excuses them
+    assert seven.audit["proposals"] and nine.audit["proposals"]
+    assert "7" not in reasks and "9" not in reasks
+    assert "7-again-1" not in labels and "9-again-1" not in labels
+    assert "8-again-1" in labels and "9-count-1-again-1" in labels
+
+
+def _growth(tmp_path: Path) -> Any:
+    """A capability against a membrane that grows a verb and moves the grant to it
+    alone on every `GROW`: each change gains its principal exactly one verb, and
+    the rows between them show what the trigger does and does not fire on."""
+    from membrane.capabilities import Capability, Row
+
+    return Capability(
+        name="growth",
+        depends=(),
+        postconditions=(),
+        rows=(
+            Row("1", "root say", WORDS["1"], ""),
+            Row("early", "signed", "Anyone there?", ""),  # spoken at a closed door
+            Row("2", "root say", WORDS["2"], ""),
+            Row("ask", "signed", "What can I ask of you?", ""),
+            Row("grow-1", "signed", GROW, ""),
+            Row("use", "signed", USE, ""),
+            Row("grow-2", "signed", GROW, ""),
+            Row("grow-3", "signed", GROW, ""),
+            Row("grant", "signed", GRANT, ""),
+        ),
+        repair=HATCH.repair,
+        path=tmp_path / "growth.md",
+        module=None,
+    )
+
+
+async def test_a_row_is_re_asked_at_most_twice(tmp_path: Path) -> None:
+    """The bound, which is what makes the goto backwards finite: three widenings
+    each gain `ssh:mike` a verb, and the row that asked what it may ask is spoken
+    again after the first two and not after the third.
+
+    The same run shows what the other two conditions exclude: `early` spoke at a
+    closed door and has no principal for a grant to move for, `use` called the verb
+    it was granted, and every `grow` row proposed the verb it was waiting on."""
+    doors = FakeDoors(growing=True)
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, reasks = await speak(
+        _growth(tmp_path), doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    labels = [t.label for t in turns]
+    assert sorted(doors.catalog) == ["extra1", "extra2", "extra3", "verify_ssh"]
+    assert reasks.count("ask") == MAX_REASKS
+    assert not [label for label in labels if "-again-3" in label]
+    assert labels[: labels.index("grant")] == [
+        "1",
+        "early",
+        "2",
+        "ask",
+        "grow-1",
+        "ask-again-1",
+        "use",
+        "grow-2",
+        "ask-again-2",
+        "grow-3",
+    ]
+    assert "early" not in reasks and "use" not in reasks
+    assert not [label for label in reasks if label.startswith("grow")]
+    # the verb the `use` row called is why it was left alone
+    used = by_label(turns, "use")
+    assert used is not None and [c["name"] for c in used.audit["tools"]] == ["extra1"]
     # every re-ask is the row's own words through the row's own door
-    again = [t for t in turns if "-again-" in t.label]
-    assert {t.words for t in again if t.label.startswith("5-")} == {WORDS["5"]}
-    assert [t.door for t in again if t.label.startswith("5-")] == ["ingress-unsigned"] * 2
+    again = [t for t in turns if t.label.startswith("ask-again-")]
+    assert {t.words for t in again} == {"What can I ask of you?"}
+    assert [t.door for t in again] == ["ingress"] * MAX_REASKS
+
+
+async def test_a_re_ask_that_changes_the_policy_again_starts_another_round(
+    tmp_path: Path,
+) -> None:
+    """The last row of the growth capability proposes a grant of everything, which
+    gains back the two verbs the widenings revoked, so it is re-asked — a row that
+    proposed only a policy still qualifies. Its re-ask proposes the same grant
+    again, which settles as another policy change and starts a second round; that
+    round gains nobody anything and re-asks no one, which is where it stops."""
+    doors = FakeDoors(growing=True)
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, reasks = await speak(
+        _growth(tmp_path), doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    labels = [t.label for t in turns]
+    assert reasks == ["ask", "ask", "grant"]
+    assert labels[labels.index("grant") :] == ["grant", "grant-again-1"]
+    grant, again = by_label(turns, "grant"), turns[-1]
+    assert grant is again and again.label == "grant-again-1"
+    assert again.approvals and any(" applied" in a["result"] for a in again.approvals)
+    assert doors.policy["principals"]["ssh:mike"]["invoke"] == ["extra1", "extra2", "extra3"]
 
 
 async def test_speak_walks_the_rows_in_order_and_takes_the_final_list(tmp_path: Path) -> None:

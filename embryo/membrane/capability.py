@@ -831,6 +831,27 @@ async def start_from(doors: Doors, promotion: Promotion, *, log: TextIO) -> Hatc
 # ---------------------------------------------------------------- speaking a capability
 
 
+@dataclass(frozen=True)
+class Settled:
+    """What a row's settle did: whether any approval in it applied a policy, and
+    the listing before the first approval and after the last one, which is where
+    the re-ask reads the policy change and the catalog it changed against."""
+
+    applied: bool
+    before: dict[str, Any]
+    after: dict[str, Any]
+
+
+def granted(policy: Mapping[str, Any], principal: str, ready: set[str]) -> set[str]:
+    """The verbs a policy lets a principal invoke: `"*"` is every ready verb in the
+    catalog, a list is itself, and a principal the policy does not name has none."""
+    entry = policy.get("principals", {}).get(principal) or {}
+    invoke = entry.get("invoke", [])
+    if invoke == "*":
+        return set(ready)
+    return set(invoke) if isinstance(invoke, list) else set()
+
+
 async def speak(
     capability: Capability,
     doors: DoorsApi,
@@ -886,11 +907,12 @@ async def speak(
             )
             log.write(f"  {proposal['id']} {decision}: {result.rstrip()}\n")
 
-    async def approve_pending(turn: Turn) -> dict[str, Any]:
+    async def approve_pending(turn: Turn) -> tuple[dict[str, Any], dict[str, Any]]:
         """Decide every pending proposal, wait for the builds, and give whatever was
-        refused one more chance once the builds are in; returns the listing."""
+        refused one more chance once the builds are in; returns the listing as it
+        was before any of it was approved and as it is after."""
         since = mark()
-        listing = await doors.listing()
+        before = listing = await doors.listing()
         await decide(turn, [p for p in listing["proposals"] if p["status"] == "pending"])
         listing = await doors.wait_builds()
         refused = {a["id"] for a in turn.approvals if "refused" in a["result"]}
@@ -899,7 +921,7 @@ async def speak(
             await decide(turn, again)
             listing = await doors.wait_builds()
         turn.commands += spent(since)
-        return listing
+        return before, listing
 
     def unfinished(turn: Turn) -> bool:
         """Ended on the deadline, the cap or the token budget without proposing: the
@@ -915,19 +937,20 @@ async def speak(
         `p-N applied: policy replaced; effective from the next turn`."""
         return any(" applied" in a["result"] for a in turn.approvals)
 
-    async def settle(turn: Turn) -> bool:
+    async def settle(turn: Turn) -> Settled:
         """Approvals, builds, and at most MAX_REPAIRS repair turns in the whole run
         for a failed build, a refused approval, or a turn that ran out before
         proposing (capabilities design §4: every row settles). Returns whether any
         approval in the settle — the row's own turn or a repair turn — applied a
-        policy, which is what a re-ask round waits for.
+        policy, and the listing as it stood before the settle and after it, which is
+        what a re-ask round reads the policy change out of.
 
         A refusal leaves its proposal `pending` with the reason on its `log`, and
         the catalog untouched, so a build-only trigger walks straight past it
         (2026-09-10-postcut-run-2). A repair is spoken through root's door, so it
         reaches the model whatever door the row used."""
         nonlocal repairs
-        listing = await approve_pending(turn)
+        before, listing = await approve_pending(turn)
         applied = policy_applied(turn)
         current = turn
         while repairs < MAX_REPAIRS:
@@ -944,7 +967,7 @@ async def speak(
                 and p["id"] not in repaired
             )
             if not failed and not refused and not unfinished(current):
-                return applied
+                return Settled(applied, before, listing)
             repairs += 1
             if failed:
                 why, words = f"build failed for {', '.join(failed)}", capability.repair.build
@@ -955,9 +978,9 @@ async def speak(
                 why, words = "the turn ran out", capability.repair.build
             log.write(f"  {why}; repair {repairs}\n")
             current = await root_turn(f"3-repair-{repairs}", words)
-            listing = await approve_pending(current)
+            _, listing = await approve_pending(current)
             applied = applied or policy_applied(current)
-        return applied
+        return Settled(applied, before, listing)
 
     async def root_turn(label: str, words: str) -> Turn:
         since = mark()
@@ -980,23 +1003,46 @@ async def speak(
         log.write(f"  principal {audit.get('principal')}; {reply.strip()[:120]}\n")
         return turn
 
-    def came_up_empty(turn: Turn) -> bool:
-        """The turn called no catalog verb: its tool names are the membrane's
-        built-ins or nothing at all (a closed door records no tools)."""
-        called = {c.get("name") for c in turn.audit.get("tools", [])}
-        return not called - RESERVED_TOOL_NAMES
+    def answerable(turn: Turn, settled: Settled) -> bool:
+        """Whether this policy change is what the turn was missing (#170). Three
+        facts the driver already holds, all state and no reading of the reply:
 
-    async def reask(applied: bool) -> None:
+        the turn called no catalog verb (its tool names are the membrane's built-ins
+        or nothing at all, as a closed door records none); it proposed no verb, so it
+        was not waiting on a build of its own (a turn that proposed only a policy
+        still qualifies — run 3's last count row proposed the widening it needed);
+        and the change gained its principal at least one verb that is not a door
+        hook, which is what makes the row's words answerable now and were not
+        before."""
+        called = {c.get("name") for c in turn.audit.get("tools", [])}
+        if called - RESERVED_TOOL_NAMES:
+            return False
+        kinds = {p["id"]: p.get("kind") for p in settled.after.get("proposals", [])}
+        if any(kinds.get(p.get("id")) == "verb" for p in turn.audit.get("proposals", [])):
+            return False
+        principal = turn.audit.get("principal")
+        if principal is None:  # a closed door named nobody; no grant moved for it
+            return False
+        after = settled.after.get("policy", {})
+        ready = {
+            n for n, e in settled.after.get("catalog", {}).items() if e.get("status") == "ready"
+        }
+        gained = granted(after, principal, ready) - granted(
+            settled.before.get("policy", {}), principal, ready
+        )
+        return bool(gained - set(after.get("hooks", [])))
+
+    async def reask(settled: Settled) -> None:
         """The goto backwards (#170). While a settle has applied a policy, ask again,
         once each and in order, every public row spoken since the previous policy
-        change that came up empty — including the row that proposed the policy, which
-        is the run-3 case: the widening arrived at the last row and nothing came
-        after it. The words are the row's own, through the row's own door; nothing is
-        said about why. MAX_REASKS per label makes the loop finite."""
-        while applied:
-            candidates = [pair for pair in since_policy if came_up_empty(pair[1])]
+        change that the change made answerable — the row that proposed the policy
+        among them, which is the run-3 case: the widening arrived at the last row and
+        nothing came after it. The words are the row's own, through the row's own
+        door; nothing is said about why. MAX_REASKS per label makes the loop finite."""
+        while settled.applied:
+            candidates = [pair for pair in since_policy if answerable(pair[1], settled)]
             since_policy.clear()
-            applied = False
+            nxt: Settled | None = None
             for row, _turn in candidates:
                 if reask_counts.get(row.label, 0) >= MAX_REASKS:
                     continue
@@ -1008,7 +1054,11 @@ async def speak(
                 reasks.append(row.label)
                 # a re-asked turn is itself a row spoken since this policy change
                 since_policy.append((row, again))
-                applied = await settle(again) or applied
+                after = await settle(again)
+                if after.applied:
+                    # another change: the next round runs from the first of them
+                    nxt = Settled(True, nxt.before if nxt else after.before, after.after)
+            settled = nxt or Settled(False, settled.before, settled.after)
 
     for row in capability.rows:
         words = row.words.format(**context)

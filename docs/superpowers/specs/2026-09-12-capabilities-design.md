@@ -248,22 +248,33 @@ then settle. `root list` rows record the listing as the turn's output.
 
 **Re-ask.** A policy change is new information about what is now possible, and
 the driver acts on it without telling the agent anything (#170). After any settle
-in which a policy proposal was applied, every public row (`signed` or `unsigned`)
-spoken since the previous policy change whose turn called no catalog verb — its
-audit's `tools` names minus the membrane's built-ins is empty — is spoken again,
-once each and in order, the same words through the same door, labelled
-`<label>-again-<n>`, and each re-asked turn settles like any row. The row whose
-own turn proposed the policy is one of them: that is the `2026-09-13-run-3` case,
-where the widening arrived at the last row and nothing came after it. A re-asked
-turn is itself a row spoken since the change, so a re-ask that changes the policy
-again starts another round; a row is re-asked at most once per policy change and
-at most twice in a run, which is what makes the goto backwards finite. Root rows
-are never re-asked. The checks read a label's latest attempt (`by_label` returns
-the last turn labelled `<label>` or `<label>-again-<n>`). Nothing is said to the
-agent about why it is being asked again: the trigger is its own act, and it still
-has to notice the tool is in its hands. A row whose outcome is not a verb call at
-all — hatch's 4 and 5, "Who am I?" — is a candidate too, so it is re-asked
-harmlessly and the count says so; if that proves noisy the trigger narrows later.
+in which a policy proposal was applied, a public row (`signed` or `unsigned`)
+spoken since the previous policy change is spoken again if all three of these
+hold of its turn, which are facts the driver already has and none of them a
+reading of the reply:
+
+1. it called no catalog verb — its audit's `tools` names minus the membrane's
+   built-ins is empty, and a closed door records no tools at all;
+2. it proposed no verb, so it was not waiting on a build of its own; a turn that
+   proposed only a policy still qualifies, which is run 3's last count row, the
+   one that proposed the widening it needed;
+3. the change gained its principal at least one verb that is not a door hook:
+   with `p` the turn's principal (a turn that named none is skipped), the grants
+   `policy["principals"][p]["invoke"]` before and after the settle, `"*"` read as
+   every `ready` name in the catalog and an unnamed principal as none, and
+   `(new - old) - hooks` non-empty. A change that gains only the hook — hatch's
+   turn 6, widening to `"*"` when the catalog holds the identity hook and nothing
+   else — is not what any row was waiting for, and re-asks nobody.
+
+The re-asked row is spoken with the same words through the same door, labelled
+`<label>-again-<n>`, and settles like any row. A re-asked turn is itself a row
+spoken since the change, so a re-ask that changes the policy again starts another
+round; a row is re-asked at most once per policy change and at most twice in a
+run, which is what makes the goto backwards finite. Root rows are never
+re-asked. The checks read a label's latest attempt (`by_label` returns the last
+turn labelled `<label>` or `<label>-again-<n>`). Nothing is said to the agent
+about why it is being asked again: the trigger is its own act, and it still has
+to notice the tool is now in its hands.
 
 **Judge.** Each named check runs with the same inputs `verdict()` has today
 (turns, final listing, recipes before and after, the brain recipe, computer
