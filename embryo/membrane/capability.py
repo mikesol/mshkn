@@ -1103,7 +1103,10 @@ async def run_once(
                     brain_recipe=hatched.recipe_id,
                     checks=checks,
                     sent=[(s.door, s.name) for s in doors.sent],
-                    context={"key": pubkey},
+                    # What the rows were spoken with, module and all: a check of a
+                    # capability that served something reads the `url` or `token`
+                    # its module prepared, after that scaffolding is gone.
+                    context=context,
                 ),
             )
             usage, model_calls = _usage_total(turns)
@@ -1250,7 +1253,13 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
         return 2
     # Before the names are validated: a capability's module registers the checks
     # only it needs as it is imported (capabilities design §4).
-    module = load_module(capability)
+    try:
+        module = load_module(capability)
+    except Exception as exc:
+        # Whatever the module raises as it is imported, the pilot gets a line that
+        # names the file and the reason, not a traceback out of `main`.
+        log.write(f"{capability.name}.py could not be imported: {exc}\n")
+        return 2
     unknown = sorted(set(capability.postconditions) - set(CHECKS))
     if unknown:
         log.write(

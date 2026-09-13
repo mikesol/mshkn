@@ -2698,6 +2698,7 @@ name: served
 depends: []
 postconditions:
   - authentication
+  - served_page
 ---
 
 # served
@@ -2728,11 +2729,21 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from membrane.postconditions import CHECKS
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
 FLAG = Path("__FLAG__")
 EXTRA = __EXTRA__
+
+
+def served_page(judged: Any) -> dict[str, Any]:
+    """What the run was spoken with is what this check is judged on."""
+    return {"ok": judged.context.get("url") == "http://page", "evidence": {}}
+
+
+CHECKS["served_page"] = served_page
 
 
 @contextlib.asynccontextmanager
@@ -2786,6 +2797,7 @@ async def test_run_once_speaks_what_the_modules_prepare_yields_and_exits_it(
     from membrane.capabilities import load, load_module
 
     monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    monkeypatch.setitem(CHECKS, "served_page", lambda _judged: {"ok": False, "evidence": {}})
     capability = load(_served(tmp_path, '{"url": "http://page"}'))
     api = FakeApi()
     monkeypatch.setattr(
@@ -2805,9 +2817,10 @@ async def test_run_once_speaks_what_the_modules_prepare_yields_and_exits_it(
         module=load_module(capability),
     )
     assert _said(api) == ["the page is at http://page"]
-    assert summary["capability"] == "served" and set(summary["postconditions"]) == {
-        "authentication"
-    }
+    assert summary["capability"] == "served"
+    assert set(summary["postconditions"]) == {"authentication", "served_page"}
+    # the checks are judged on the context the rows were spoken with, module and all
+    assert summary["postconditions"]["served_page"]["ok"] is True
     assert (tmp_path / "exited").read_text() == "torn down"
     assert "the page is served (0 commands so far)" in log.getvalue()
 
@@ -2820,6 +2833,7 @@ async def test_a_modules_prepare_may_not_take_the_runs_key(
     from membrane.capabilities import load, load_module
 
     monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    monkeypatch.setitem(CHECKS, "served_page", lambda _judged: {"ok": False, "evidence": {}})
     capability = load(_served(tmp_path, '{"url": "http://page", "key": "not mine"}'))
     api = FakeApi()
     monkeypatch.setattr(
@@ -2862,3 +2876,20 @@ def test_main_loads_the_module_before_it_checks_the_postcondition_names(
         CHECKS.pop("secret_page", None)
     assert "postconditions no one wrote" not in log.getvalue()
     assert "MSHKN_API_URL" in log.getvalue()  # it got as far as the settings
+
+
+def test_main_reports_a_module_that_will_not_import_before_it_hatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The module is the operator's own code and it is imported before anything is
+    hatched; what it raises on the way in is a line naming the file, not a
+    traceback out of `main`."""
+    from membrane.capabilities import catalog
+
+    caps = tmp_path / "capabilities"
+    _capability(caps, "a")
+    (caps / "a.py").write_text('raise RuntimeError("boom")\n')
+    monkeypatch.setattr("membrane.capability.catalog", lambda: catalog(caps))
+    log = io.StringIO()
+    assert main(["run", "a", "--env", str(tmp_path / "none")], log=log) == 2
+    assert "a.py could not be imported: boom" in log.getvalue()
