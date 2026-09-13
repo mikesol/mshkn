@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from membrane.config import DEFAULT_BRAIN, load_settings, parse_env
+from membrane.effort import EFFORTS
 
 
 def test_parse_env_reads_key_value_lines_and_ignores_comments() -> None:
@@ -71,6 +72,21 @@ def test_the_default_effort_is_optional_and_validated(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text(base + "MEMBRANE_EFFORT=turbo\n")
     with pytest.raises(ValueError, match="MEMBRANE_EFFORT"):
         load_settings(tmp_path)
+
+
+def test_effort_off_is_not_a_rung_on_the_ladder(tmp_path: Path) -> None:
+    """`output_config.effort` is Anthropic-specific. `off` is the absence of the
+    axis, not the bottom of it, so it stays out of EFFORTS and travels as its own
+    flag — `default_effort=None` already means "the API's default"."""
+    base = "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n"
+    (tmp_path / ".env").write_text(base)
+    settings = load_settings(tmp_path)
+    assert settings.effort_enabled is True and settings.default_effort is None
+
+    (tmp_path / ".env").write_text(base + "MEMBRANE_EFFORT=off\n")
+    off = load_settings(tmp_path)
+    assert off.effort_enabled is False and off.default_effort is None
+    assert "off" not in EFFORTS
 
 
 def test_the_model_base_url_defaults_to_anthropic_and_loses_its_trailing_slash(

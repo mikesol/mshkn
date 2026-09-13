@@ -7,3 +7,21 @@ Each capability (`docs/superpowers/specs/2026-09-12-capabilities-design.md`) has
 | hatch | | `docs/embryo/hatch/` | [`2026-09-13-run-5`](hatch/PROMOTED.md) |
 
 The capability files are under `embryo/capabilities/`. The checks a capability names are in `embryo/membrane/postconditions.py`.
+
+## Reading a run spoken through a gateway
+
+A run whose `run.json` carries a `base_url` other than `https://api.anthropic.com` was spoken
+through a model gateway (#127). Three things about it are not comparable to a run spoken directly,
+and all three are properties of the crossing rather than of the model:
+
+1. **The effort axis is absent, not defaulted.** `output_config.effort` is Anthropic-specific.
+   A run with `"effort_supported": false` sent no such field on any call, so it cannot be read
+   against the 2026-09-10 finding that medium effort beat the API default on cost, time and
+   outcome at once. `MEMBRANE_EFFORT=off` is what puts it in that state.
+2. **Tool-use fidelity varies by backend.** A low score on a cheaper model may be measuring the
+   gateway's translation rather than the organism. Before concluding anything about a model from a
+   failed postcondition, read the turn's `tools` in `run.json` and check the call was well formed.
+3. **A cross-model run is not purely cross-model.** `EXTRACTION_MODEL_ID` in
+   `embryo/membrane/memory.py` is fixed, so whatever model speaks the liturgy, the facts it
+   remembers were extracted by Claude Haiku. Memory shapes every turn after the one that wrote it,
+   which makes this the caveat that reaches furthest into a run.

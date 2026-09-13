@@ -13,7 +13,7 @@ import pytest
 from membrane.config import Settings
 from membrane.declarations import parse_policy, parse_verb, render_command
 from membrane.hooks import principal_for
-from membrane.loop import CAP_REACHED, OUT_OF_TOKENS
+from membrane.loop import CAP_REACHED, OUT_OF_TOKENS, Tool
 from membrane.memory import Provenance
 from membrane.model import CACHE_CONTROL, system_text, zero_usage
 from membrane.mshkn import MshknError, RelayJob
@@ -34,6 +34,7 @@ from membrane.turn import (
     compose_input,
     decode_payload,
     history_from,
+    post_request,
     resume,
     say,
     settle,
@@ -1053,6 +1054,41 @@ async def test_an_irreversible_verb_in_the_tool_list_raises_the_turn_effort(
     assert "send_mail" in audit["offered"]
     assert audit["effort"] == ["high"]
     assert _posted(ctx)["output_config"] == {"effort": "high"}
+
+
+def _tool(name: str, *, effect: str = "local") -> Tool:
+    async def _handler(inp: dict[str, Any]) -> dict[str, Any]:
+        return {"status": "ok", "echo": inp}
+
+    return Tool(
+        definition={"name": name, "description": "d", "input_schema": {"type": "object"}},
+        handler=_handler,
+        effect=effect,
+    )
+
+
+async def test_effort_stays_off_the_wire_entirely_when_the_backend_has_no_such_field(
+    tmp_path: Path,
+) -> None:
+    """An irreversible tool list raises the prior to `high` (#122). Against a backend
+    with no effort axis that must still compose no `output_config` at all, or the
+    first irreversible verb of the run is a 400."""
+    ctx = _ctx(tmp_path, effort_enabled=False)
+    tools = {"pay": _tool("pay", effect="transact")}
+    pending = Pending(
+        turn=1,
+        principal="root",
+        door="api",
+        message="hi",
+        payload="hi",
+        messages=[{"role": "user", "content": "hi"}],
+        offered=["pay"],
+        job="rj-1",
+    )
+    await post_request(ctx, pending, tools)
+    body = _posted(ctx)
+    assert "output_config" not in body
+    assert pending.efforts == [None]
 
 
 async def test_a_request_above_a_low_run_default_is_granted(tmp_path: Path) -> None:

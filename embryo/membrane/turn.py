@@ -320,7 +320,13 @@ def _effort_for(ctx: Context, pending: Pending, tools: dict[str, Tool]) -> str |
     """This call's effort (#122): the run's default, raised by the reversibility of
     what the turn may do and by what the model asked for. The prior reads the tool
     list because the membrane must choose before the call, and what the turn may do
-    is the only proxy it has for what the turn is about to do."""
+    is the only proxy it has for what the turn is about to do.
+
+    None throughout when the backend has no effort axis (#127): the prior and the
+    model's request can both raise an unset default, so "nothing set" is not enough
+    to keep the field off the wire — only the operator's word is."""
+    if not ctx.settings.effort_enabled:
+        return None
     return resolve(
         default=ctx.settings.default_effort,
         prior=prior_for(tool.effect for tool in tools.values()),

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 import httpx
 
 from membrane.capabilities import TEMPLATE_RE, CapabilityError, catalog, load_module, order
-from membrane.config import DEFAULT_ANTHROPIC_BASE_URL, DEFAULT_MODEL_ID, parse_env
+from membrane.config import DEFAULT_ANTHROPIC_BASE_URL, DEFAULT_MODEL_ID, EFFORT_OFF, parse_env
 from membrane.declarations import RESERVED_TOOL_NAMES
 from membrane.effort import EFFORTS
 from membrane.model import add_usage, zero_usage
@@ -1267,6 +1267,7 @@ async def run_once(
                         "model": model_id,
                         "base_url": settings.base_url,
                         "default_effort": default_effort,
+                        "effort_supported": default_effort != EFFORT_OFF,
                         "key_dir": str(key_dir),
                         "pubkey": pubkey,
                         "started": started.isoformat(timespec="seconds"),
@@ -1321,6 +1322,7 @@ async def run_once(
                 "model": model_id,
                 "base_url": settings.base_url,
                 "default_effort": default_effort,
+                "effort_supported": default_effort != EFFORT_OFF,
                 "key_dir": str(key_dir),
                 "pubkey": pubkey,
                 "membrane": version,
@@ -1393,9 +1395,11 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
     run.add_argument("--model", default=None, help=f"model id (default {DEFAULT_MODEL_ID})")
     run.add_argument(
         "--effort",
-        choices=EFFORTS,
+        choices=(EFFORT_OFF, *EFFORTS),
         default=None,
-        help="the run's default output_config.effort, which a turn may raise (default the API's)",
+        help="the run's default output_config.effort, which a turn may raise; "
+        f"{EFFORT_OFF} keeps the field off the wire for a backend that has no such "
+        "parameter (default the API's)",
     )
     run.add_argument(
         "--base-url",
