@@ -727,6 +727,29 @@ async def test_teardown_deletes_the_door_the_key_the_chains_and_the_recipes(
     assert "/checkpoints/ck-other" not in deletes
 
 
+async def test_teardown_never_touches_a_promoted_checkpoint_or_the_recipe_it_names(
+    tmp_path: Path,
+) -> None:
+    """The E2E run of 2026-09-13 lost the real `capability/hatch/brain`: the service
+    dedupes recipes by content, so the scripted hatch was built from the very recipe
+    the promoted brain was built from, `hatched.recipe_id` matched that checkpoint
+    through the recipe clause, and the recipe went after it. A promotion is another
+    run's evidence; the working head beside it still goes."""
+    api = FakeApi(
+        checkpoints=[
+            {"id": "ck-promoted", "label": "capability/hatch/brain", "recipe_id": "rcp-brain"},
+            {"id": "ck-work", "label": "brain", "recipe_id": "rcp-brain"},
+        ]
+    )
+    doors = _doors(api, tmp_path)
+    hatched = Hatched("http://api/ingress/rule-1", "rule-1", "key-1", "rcp-brain", "ck-work")
+    await doors.teardown(hatched, {"proposals": []})
+    deletes = [p for m, p, _ in api.requests if m == "DELETE"]
+    assert "/checkpoints/ck-work" in deletes
+    assert "/checkpoints/ck-promoted" not in deletes
+    assert "/recipes/rcp-brain" not in deletes
+
+
 async def test_teardown_drops_the_scripted_server_first(tmp_path: Path) -> None:
     api = FakeApi()
     doors = _doors(api, tmp_path)

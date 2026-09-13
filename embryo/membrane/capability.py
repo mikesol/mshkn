@@ -768,7 +768,16 @@ class Doors:
         With one: only the working checkpoints and the recipes this run added;
         the lineage's key, rule, recipes and promoted labels stay, since the
         next run of a dependent starts from them. A failing delete does not stop
-        the ones after it."""
+        the ones after it.
+
+        A promoted checkpoint is never dropped, whatever recipe it names, and
+        neither is a recipe one of them was built from. That is not caution: the
+        E2E run of 2026-09-13 lost the real `capability/hatch/brain` to the
+        recipe clause below. The service dedupes recipes by content, so a
+        scripted hatch builds the very recipe the promoted brain was built from;
+        `hatched.recipe_id` then matched that checkpoint and it went, and its
+        recipe with it. Promoted labels are another run's evidence, and this
+        run's leavings are the only thing a teardown may touch."""
 
         async def drop(path: str) -> None:
             with suppress(httpx.HTTPError):
@@ -790,8 +799,15 @@ class Doors:
             checkpoints = []
         for ckpt in checkpoints:
             label = ckpt.get("label") or ""
+            if label.startswith(PROMOTED_PREFIX):
+                continue
             if label == "brain" or label.startswith("verb/") or ckpt.get("recipe_id") in recipes:
                 await drop(f"/checkpoints/{ckpt['id']}")
+        recipes -= {
+            str(ckpt["recipe_id"])
+            for ckpt in checkpoints
+            if str(ckpt.get("label") or "").startswith(PROMOTED_PREFIX) and ckpt.get("recipe_id")
+        }
         for recipe_id in recipes:
             await drop(f"/recipes/{recipe_id}")
 

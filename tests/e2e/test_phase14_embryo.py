@@ -281,20 +281,37 @@ async def doors(hatched: Hatched) -> AsyncIterator[Doors]:
         if hatched.server_id:
             await drop(f"/computers/{hatched.server_id}")
         await drop(f"/keys/{hatched.key_id}")
+        # T14.8 promotes the hatch under `capability/e2e-hatch/` and T14.9 to T14.11 add
+        # two more verb chains, so the label filter covers both. Every other
+        # `capability/*` label is out of reach of the whole teardown, the recipe clause
+        # included: on 2026-09-13 this run deleted the real `capability/hatch/brain`
+        # (ckpt-3d9e33337cff) and its recipe, because the service dedupes recipes by
+        # content and the scripted hatch built the very recipe the promoted brain came
+        # from, so `hatched.recipe_id` matched it. A recipe another promotion's
+        # checkpoint names stays; without the listing we cannot tell, so nothing goes.
+        ours = f"capability/{PROMOTED_AS}/"
         with suppress(Exception):
-            for ckpt in (await client.get("/checkpoints")).json():
+            checkpoints = list((await client.get("/checkpoints")).json())
+            theirs = [
+                c
+                for c in checkpoints
+                if str(c["label"] or "").startswith("capability/")
+                and not str(c["label"] or "").startswith(ours)
+            ]
+            pinned = {c["id"] for c in theirs}
+            for ckpt in checkpoints:
                 label = str(ckpt["label"] or "")
-                # T14.8 promotes the hatch under `capability/e2e-hatch/` and T14.9 to
-                # T14.11 add two more verb chains, so the filter covers both; the real
-                # `capability/hatch/*` promotion on this account is left alone.
+                if ckpt["id"] in pinned:
+                    continue
                 if (
                     label == "brain"
-                    or label.startswith(("verb/", f"capability/{PROMOTED_AS}/"))
+                    or label.startswith(("verb/", ours))
                     or ckpt["recipe_id"] in recipes
                 ):
                     await drop(f"/checkpoints/{ckpt['id']}")
-        for recipe_id in recipes:
-            await drop(f"/recipes/{recipe_id}")
+            recipes -= {c["recipe_id"] for c in theirs if c["recipe_id"]}
+            for recipe_id in recipes:
+                await drop(f"/recipes/{recipe_id}")
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
