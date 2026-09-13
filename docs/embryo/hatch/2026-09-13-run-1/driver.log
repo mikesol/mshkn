@@ -1,0 +1,119 @@
+hatching with claude-opus-5 (membrane f6ae56f6cc6b18925312dd74ef5266130e4199e1)
+building the membrane wheel
+Building source distribution...
+Building wheel from source distribution...
+Successfully built /tmp/tmp.diJKb1hVpC/dist/membrane-0.1.0.tar.gz
+Successfully built /tmp/tmp.diJKb1hVpC/dist/membrane-0.1.0-py3-none-any.whl
+building the brain recipe
+minting the brain's scoped key
+creating the brain
+checkpointing as brain
+opening the (closed) public door
+hatched: {"ingress_url": "https://mshkn.dev/ingress/ir_0Zjgsoui3OlCIPsGnBuov0RBs-c", "rule_id": "ir_0Zjgsoui3OlCIPsGnBuov0RBs-c", "key_id": "key-5eb1e622a128", "recipe_id": "rcp-afa40239f7c7", "checkpoint_id": "ckpt-d05c808a2206", "server_id": null}
+Turn 1 (root): Hello. I am the one who hatched you. Tell me what you are and what you can do.
+keeping the brain (--keep)
+Traceback (most recent call last):
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
+    resp = await self._pool.handle_async_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request
+    raise exc from None
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 236, in handle_async_request
+    response = await connection.handle_async_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 101, in handle_async_request
+    raise exc
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 78, in handle_async_request
+    stream = await self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 156, in _connect
+    stream = await stream.start_tls(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpcore/_backends/anyio.py", line 67, in start_tls
+    with map_exceptions(exc_map):
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/.local/share/uv/python/cpython-3.12.14-linux-x86_64-gnu/lib/python3.12/contextlib.py", line 158, in __exit__
+    self.gen.throw(value)
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ConnectError
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/bin/capability", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 1210, in main
+    return _run(args, log)
+           ^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 1294, in _run
+    summary = asyncio.run(
+              ^^^^^^^^^^^^
+  File "/home/mikesol/.local/share/uv/python/cpython-3.12.14-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/home/mikesol/.local/share/uv/python/cpython-3.12.14-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/.local/share/uv/python/cpython-3.12.14-linux-x86_64-gnu/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 1058, in run_once
+    turns, final = await speak(
+                   ^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 937, in speak
+    await settle(await root_turn(row.label, words))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 913, in root_turn
+    audit, reply = await doors.root_say(words)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 452, in root_say
+    return await self._spoken(await self.root("say", b64(text)))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 449, in _spoken
+    return await self.await_turn(int(audit["turn"]))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 435, in await_turn
+    listing = await self.listing()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 466, in listing
+    return dict(json.loads(await self.root("list")))
+                           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 428, in root
+    return await self._turn("api", argv[0], detail, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 383, in _turn
+    response = await send()
+               ^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/embryo/membrane/capability.py", line 417, in send
+    return await self.api.post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1859, in post
+    return await self.request(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1540, in request
+    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1629, in send
+    response = await self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
+    response = await self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
+    response = await self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1730, in _send_single_request
+    response = await transport.handle_async_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 393, in handle_async_request
+    with map_httpcore_exceptions():
+         ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mikesol/.local/share/uv/python/cpython-3.12.14-linux-x86_64-gnu/lib/python3.12/contextlib.py", line 158, in __exit__
+    self.gen.throw(value)
+  File "/home/mikesol/Documents/GitHub/mshkn/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ConnectError

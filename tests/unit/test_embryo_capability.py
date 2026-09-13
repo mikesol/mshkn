@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 from membrane.capability import (
+    CONFLICT_INTERVAL,
+    TRANSPORT_RETRIES,
     TURN_WAIT,
     AskApprover,
     AutoApprover,
@@ -352,6 +354,57 @@ async def test_root_gives_up_on_409_after_the_turn_timeout(tmp_path: Path) -> No
     doors.now = lambda: float(next(clock))
     with pytest.raises(RuntimeError, match="409"):
         await doors.root("list")
+
+
+async def test_a_transport_error_on_a_poll_is_retried_and_then_succeeds(tmp_path: Path) -> None:
+    """A poll's connection can drop transiently (2026-09-13-run-1): the third
+    `list` poll raised `httpx.ConnectError` with an empty message while the API
+    was healthy before and after. A transport error never got a response, so it
+    is retried, each failed attempt recorded with status 0."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(
+            200, json={"computer_id": "c", "exec_exit_code": 0, "exec_stdout": "ok\n"}
+        )
+
+    doors = _bare_doors(tmp_path, handler)
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    doors.sleep = sleep
+    assert await doors.root("list") == "ok\n"
+    assert calls["n"] == 3
+    assert [s.status for s in doors.sent] == [0, 0, 200]
+    assert all(s.stdout.startswith("ConnectError: boom") for s in doors.sent[:2])
+    assert slept == [CONFLICT_INTERVAL, CONFLICT_INTERVAL]
+
+
+async def test_a_transport_error_that_never_stops_propagates_after_the_retries(
+    tmp_path: Path,
+) -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ConnectError("boom", request=request)
+
+    doors = _bare_doors(tmp_path, handler)
+
+    async def sleep(_seconds: float) -> None:
+        return None
+
+    doors.sleep = sleep
+    with pytest.raises(httpx.ConnectError):
+        await doors.root("list")
+    assert calls["n"] == TRANSPORT_RETRIES + 1
+    assert len(doors.sent) == TRANSPORT_RETRIES + 1
+    assert all(s.status == 0 for s in doors.sent)
 
 
 async def test_a_failed_exec_is_an_error_with_the_output(tmp_path: Path) -> None:
@@ -1958,6 +2011,38 @@ async def test_an_aborted_run_writes_what_it_had_and_tears_down(
     assert "commit" in summary["membrane"]  # an aborted run names its code too
 
 
+async def test_an_aborted_run_names_the_exception_type_when_its_message_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`httpx.ConnectError` can carry no message at all (2026-09-13-run-1); the
+    summary's "error" must still say what happened, not go blank."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+
+    async def fail_speak(*_args: Any, **_kwargs: Any) -> Any:
+        raise httpx.ConnectError("")
+
+    monkeypatch.setattr("membrane.capability.speak", fail_speak)
+    api = FakeApi()
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    out_dir = tmp_path / "run"
+    with pytest.raises(httpx.ConnectError):
+        await run_once(
+            _settings(),
+            HATCH,
+            out_dir,
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
+    summary = json.loads((out_dir / "run.json").read_text())
+    assert summary["ok"] is False and summary["error"] == "ConnectError"
+
+
 async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
     api = FakeApi()
@@ -2377,6 +2462,38 @@ def test_main_parses_and_runs_n_times(tmp_path: Path, monkeypatch: pytest.Monkey
         and calls[0][0] == tmp_path / "docs" / "hatch" / "2026-09-09-run-3"
         and calls[0][1] == "AskApprover"
     )
+
+
+def test_main_reports_an_aborting_transport_error_by_its_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transport error must abort the run instead of escaping `main` as a
+    traceback (2026-09-13-run-1); the log names the exception's type."""
+    env = tmp_path / ".env"
+    env.write_text(
+        "MSHKN_API_URL=http://api\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=a\nOPENAI_API_KEY=o\n"
+    )
+
+    async def fake_run_once(*_args: Any, **_kwargs: Any) -> Any:
+        raise httpx.ConnectError("")
+
+    monkeypatch.setattr("membrane.capability.run_once", fake_run_once)
+    log = io.StringIO()
+    code = main(
+        [
+            "run",
+            "hatch",
+            "--key-dir",
+            str(tmp_path / "keys"),
+            "--env",
+            str(env),
+            "--out",
+            str(tmp_path / "docs"),
+        ],
+        log=log,
+    )
+    assert code == 1
+    assert "aborted: ConnectError" in log.getvalue()
 
 
 def test_main_reports_missing_settings(tmp_path: Path) -> None:
@@ -2930,4 +3047,4 @@ async def test_a_run_that_fails_mid_speak_still_exits_the_modules_prepare(
             module=load_module(capability),
         )
     assert (tmp_path / "exited").read_text() == "torn down"
-    assert json.loads((tmp_path / "run" / "run.json").read_text())["error"] == "boom"
+    assert json.loads((tmp_path / "run" / "run.json").read_text())["error"] == "RuntimeError: boom"

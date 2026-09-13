@@ -4,6 +4,14 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## The result, on the capabilities driver (2026-09-13)
+
+This round is the first runs of `hatch` on the capabilities driver, each written by `uv run capability run hatch`. This row's `run.json` is left exactly as the run recorded it, aborted-run evidence and all.
+
+| Run | Started (UTC) | Membrane | Effort | Outcome | Calls | Tokens in / out | USD | Minutes |
+|---|---|---|---|---|---|---|---|---|
+| `2026-09-13-run-1` | 06:49 | `f6ae56f` | medium | Hatched from `f6ae56f`: the shared checkout had drifted to sibling branch `model-gateway-127`, whose one extra commit is a spec document, so the wheel is byte-for-byte this branch's `0330e3c`. Aborted at turn 1: the third `list` poll raised a transient `httpx.ConnectError`; the API was healthy before and after. Two driver defects, fixed in this PR: a poll's transport error is now retried, and a transport error aborts the run with its type recorded instead of escaping as a traceback. | — | — | — | — |
+
 ## The result, 2026-09-09
 
 Eight runs against `claude-opus-5` at the API's default effort. **No run reached every postcondition; the best reached 3 of 7.** The runs were not one embryo measured eight times: each run found a defect, the defect was fixed, and the next run hatched from the fixed code, so the table names the membrane commit each run hatched from. The exercise was paused after run 8 on the finding that the turn's clock, not any defect, is the limit (below).

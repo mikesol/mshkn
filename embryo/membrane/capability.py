@@ -52,6 +52,7 @@ BUILD_TIMEOUT = 600.0
 CONFLICT_INTERVAL = 3.0
 BUILD_INTERVAL = 5.0
 MAX_REPAIRS = 3
+TRANSPORT_RETRIES = 3
 
 
 # ---------------------------------------------------------------- settings and cost
@@ -376,11 +377,32 @@ class Doors:
     async def _turn(
         self, door: str, name: str, detail: Any, send: Callable[[], Awaitable[httpx.Response]]
     ) -> str:
-        """Send until it is not a 409 (a turn in progress), then require exit 0."""
+        """Send until it is not a 409 (a turn in progress), then require exit 0.
+
+        A transport error on the send itself (a dropped connection, a timeout,
+        ...) never got a response, so it is retried up to TRANSPORT_RETRIES
+        times, each failed attempt recorded with status 0; the last is
+        re-raised once the retries are spent. This is safe for `say` too: the
+        membrane's `say` is a fork by label with `exclusive: error_on_conflict`,
+        so a retry of a `say` that actually reached the server and started a
+        turn comes back 409, which the loop above already handles; a retry of
+        a `say` that never reached the server is simply safe to repeat.
+        """
         deadline = self.now() + TURN_TIMEOUT
         started = self.now()
+        attempt = 0
         while True:
-            response = await send()
+            try:
+                response = await send()
+            except httpx.TransportError as exc:
+                attempt += 1
+                self._record(
+                    door, name, detail, f"{type(exc).__name__}: {exc}", 0, self.now() - started
+                )
+                if attempt > TRANSPORT_RETRIES:
+                    raise
+                await self.sleep(CONFLICT_INTERVAL)
+                continue
             if response.status_code == 409 and self.now() < deadline:
                 await self.sleep(CONFLICT_INTERVAL)
                 continue
@@ -1078,7 +1100,10 @@ async def run_once(
                         "started_from": lineage.run if lineage else "hatch",
                         "commands": len(doors.sent),
                         "ok": False,
-                        "error": str(exc),
+                        # `str(exc)` is empty for some exceptions (an httpx.ConnectError
+                        # with no message, say): naming the type keeps "error" from
+                        # going blank when that happens.
+                        "error": f"{type(exc).__name__}: {exc}".rstrip(": "),
                     }
                 )
                 raise
@@ -1305,8 +1330,8 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
                     module=module,
                 )
             )
-        except RuntimeError as exc:
-            log.write(f"{out_dir.name} aborted: {str(exc)[:300]}\n")
+        except (RuntimeError, httpx.HTTPError) as exc:
+            log.write(f"{out_dir.name} aborted: {type(exc).__name__}: {str(exc)[:300]}\n")
             all_ok = False
             continue
         all_ok = all_ok and bool(summary["ok"])
