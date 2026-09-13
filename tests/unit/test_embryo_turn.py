@@ -1067,7 +1067,7 @@ def _tool(name: str, *, effect: str = "local") -> Tool:
     )
 
 
-def _pending(*, offered: list[str], requested_effort: str | None = None) -> Pending:
+def _effort_pending(*, offered: list[str], requested_effort: str | None = None) -> Pending:
     return Pending(
         turn=1,
         principal="root",
@@ -1097,14 +1097,14 @@ async def test_effort_stays_off_the_wire_entirely_when_the_backend_has_no_such_f
 
     # 1. An irreversible tool list would raise a set default ("medium") to "high".
     irreversible = {"pay": _tool("pay", effect="transact")}
-    by_prior = _pending(offered=["pay"])
+    by_prior = _effort_pending(offered=["pay"])
     await post_request(ctx, by_prior, irreversible)
     assert "output_config" not in _posted(ctx)
     assert by_prior.efforts == [None]
 
     # 2. A model request above IRREVERSIBLE_EFFORT ("max") is not capped by highest();
     # only the operator's word (effort_enabled=False) keeps it off the wire.
-    by_request = _pending(offered=[], requested_effort="max")
+    by_request = _effort_pending(offered=[], requested_effort="max")
     await post_request(ctx, by_request, {})
     assert "output_config" not in _posted(ctx)
     assert by_request.efforts == [None]

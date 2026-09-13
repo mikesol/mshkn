@@ -2961,6 +2961,7 @@ async def test_run_once_of_a_dependent_names_its_lineages_base_url_not_the_calle
         pubkey=pubkey,
         model="claude-opus-5",
         default_effort=None,
+        reasks=0,
         started_from=None,
         base_url="https://ai-gateway.vercel.sh",
         body_extra='{"providerOptions": {"gateway": {"only": ["anthropic"]}}}',
