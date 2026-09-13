@@ -12,6 +12,7 @@ from pathlib import Path
 
 from membrane.declarations import parse_policy
 from membrane.invariants import door_is_open
+from membrane.postconditions import CHECKS
 from sse_starlette.event import ensure_bytes
 
 from mshkn.models import RelayDelivery, parse_scopes
@@ -258,3 +259,19 @@ def test_run_parses_the_exit_code_from_a_real_crlf_sse_stream() -> None:
         check=True,
     )
     assert result.stdout.rstrip(b"\n") == b"0"
+
+
+def test_hatch_writes_only_the_brains_own_names_into_env() -> None:
+    """Spec §7.1: `/brain/.env` names the brain's own keys and nothing else; the
+    security check `no_foreign_credential_on_brain` judges a brain against the
+    names this script writes, so the two must agree."""
+    from membrane.capabilities import CAPABILITIES, load, load_module
+
+    security = load_module(load(CAPABILITIES / "security.md"))
+    assert security is not None
+    script = (EMBRYO / "hatch.sh").read_text()
+    block = script.split('} > "$TMP/env"', 1)[0].rsplit("{\n", 1)[1]
+    written = set(re.findall(r'echo "([A-Z_]+)=', block))
+    assert written == security.HATCH_ENV
+    CHECKS.pop("no_foreign_credential_on_brain", None)
+    CHECKS.pop("secret_page", None)
