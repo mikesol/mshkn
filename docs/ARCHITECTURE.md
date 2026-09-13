@@ -237,7 +237,7 @@ Slot N gives host address `172.16.N.1`, VM address `172.16.N.2`, tap `tapN` and 
 
 ## 12. Observability
 
-Logs are ECS JSON lines (`mshkn.observability.logging.ECSFormatter`) with `@timestamp`, `log.level`, `log.logger`, `message`, `trace.id`, and structured extras namespaced under `mshkn.*` where the service supplies them (op, computer_id, checkpoint_id, account_id, recipe_id, trigger).
+Logs are ECS JSON lines: one mapping, `mshkn.observability.logging.to_ecs`, serialised by `mshkn.observability.logging.ECSFormatter`. Every record carries `@timestamp`, `ecs.version`, `log.level`, `log.logger` and `message`. `trace.id` is present only inside a request — a reaper cycle has no trace, so the field is omitted rather than emitted empty — and so is the account field mshkn.account_id, which is omitted when neither the record nor the request names an account. Structured extras are namespaced under `mshkn.*` where the service supplies them (op, computer_id, checkpoint_id, account_id, recipe_id, trigger). A record with an exception attached adds `error.type`, `error.message` and `error.stack_trace`.
 
 | Metric | Type | Labels | Set by |
 |---|---|---|---|
