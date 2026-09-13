@@ -38,7 +38,7 @@ It's a fun design space, no? By giving an agent quick access to whatever compute
 
 First, the cost. `mshkn` runs on one bare-metal Linux box with KVM (a rented Hetzner-class machine is fine; you can mosey on over to `docs/infrastructure.md` to see the minimum spec), plus an R2 bucket for checkpoints and a wildcard domain for the computers' routes. Setting the box up is as easy as pointing your agent and credit card at `DEPLOY.md`.
 
-Growing an agent costs model tokens: a hatch run is roughly thirty model calls, a few dollars and twenty minutes. If that sounds like a lot for a personal agent, it is, and pushing the cost of discovery down is something I work on a lot.
+Growing an agent costs model tokens: a hatch run is roughly thirty model calls, a few dollars and twenty minutes. Pushing the cost of discovery down is something I work on a lot.
 
 Once the box is up:
 
