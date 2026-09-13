@@ -16,6 +16,7 @@ root sent: the server and the inspection are scaffolding around the run.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import secrets as secrets_module
@@ -35,6 +36,15 @@ TOKEN_FILE = "/tmp/page-token"
 SERVER_FILE = "/tmp/page.py"
 NEEDLE = "/tmp/needle"
 INSPECT = f"grep -rlaF -f {NEEDLE} /brain; echo ---; cut -d= -f1 /brain/.env"
+# The page server is a background process, and the host's idle reaper does not
+# count one as activity: `reap_idle` in `src/mshkn/services/reaper.py` reads
+# `last_exec_at or created_at` against `idle_timeout_seconds` (1800 by default).
+# A run that spans two builds and several turns outlasts that, so the page would
+# be gone halfway through. One trivial command on an interval well under the
+# reaper's window is what keeps it, and it belongs here rather than in a caller:
+# every run of this capability needs it.
+KEEP_ALIVE_INTERVAL = 300.0
+KEEP_ALIVE = "true"
 # Every name hatch.sh may write to /brain/.env (spec §7.1): the brain's own keys
 # and its settings. tests/unit/test_embryo_priors.py holds the two together.
 HATCH_ENV: frozenset[str] = frozenset(
@@ -125,6 +135,22 @@ async def _upload(doors: Any, computer_id: str, path: str, data: bytes) -> None:
     response.raise_for_status()
 
 
+async def keep_alive(doors: Any, computer_id: str, log: TextIO) -> None:
+    """Touch the page server's computer every `KEEP_ALIVE_INTERVAL` seconds so the
+    idle reaper never takes it. The command carries nothing: a failed touch is
+    logged and the next one is tried, and the loop never raises into the run."""
+    while True:
+        await asyncio.sleep(KEEP_ALIVE_INTERVAL)
+        try:
+            touched = await doors.api.post(
+                f"/computers/{computer_id}/exec",
+                json={"command": KEEP_ALIVE, "timeout_seconds": 30},
+            )
+            touched.raise_for_status()
+        except httpx.HTTPError as exc:
+            log.write(f"could not keep {computer_id} alive: {type(exc).__name__}: {exc}\n")
+
+
 async def inspect_brain(doors: Any, token: str, log: TextIO) -> dict[str, Any]:
     """Fork the final brain's head, look for the token anywhere under /brain, and
     read the names (never the values) in /brain/.env."""
@@ -178,7 +204,13 @@ async def prepare(doors: Any, log: TextIO) -> AsyncIterator[Mapping[str, str]]:
         started.raise_for_status()
         url = page_url(created.json())
         log.write(f"the page is at {url} (computer {computer_id})\n")
-        yield {"url": url, "token": token}
+        keeper = asyncio.create_task(keep_alive(doors, computer_id, log))
+        try:
+            yield {"url": url, "token": token}
+        finally:
+            keeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await keeper
     finally:
         with contextlib.suppress(httpx.HTTPError):
             await doors.api.delete(f"/computers/{computer_id}")

@@ -558,9 +558,7 @@ class TestPhase14Embryo:
         assert entry["provided"] == []
         assert paths_in(reply) == [SECRET_PATH], reply
         # refused until provided, and no computer ran for it
-        audit, reply = await doors.public_say(
-            _sign(doors.hatched.key_dir, SECURITY.row("12").words)
-        )
+        audit, _ = await doors.public_say(_sign(doors.hatched.key_dir, SECURITY.row("12").words))
         assert audit["tools"][0]["status"] == "error", audit
         assert audit["tools"][0]["error"] == (
             "blocked: secret_page requires page_token; root places it and says provide"

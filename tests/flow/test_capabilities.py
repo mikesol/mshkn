@@ -3,7 +3,10 @@ in process against the real app over the fake host, a scripted model playing
 the rows. Hatch: a trial, proposals, approval, builds (one failing first), a
 pre-turn hook, the door opening, an ephemeral verb, and a chain verb trialled
 twice on a scratch chain before it is proposed and then run to two checkpoints
-of its own."""
+of its own. Security: hatch's state grown the short way, then the three rows of
+§7.2 — a verb with `requires` refused until root has placed the token on its
+chain at the path the reply named, the page read from a computer that is gone,
+and a second verb needing the same token — judged by the five checks it names."""
 
 from __future__ import annotations
 

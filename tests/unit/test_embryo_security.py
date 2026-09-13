@@ -4,6 +4,7 @@ checks only it needs."""
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 from typing import TYPE_CHECKING, Any
@@ -39,6 +40,7 @@ class PageApi:
         self.requests: list[tuple[str, str]] = []
         self.uploads: dict[tuple[str, str], bytes] = {}
         self.bg: list[tuple[str, str]] = []
+        self.execs: list[tuple[str, str]] = []
         self.deleted: list[str] = []
         self.exec_body = exec_body
         self.fail = fail
@@ -76,6 +78,7 @@ class PageApi:
             self.bg.append((path.split("/")[2], json.loads(request.content)["command"]))
             return httpx.Response(200, json={"pid": 4000})
         if request.method == "POST" and path.endswith("/exec"):
+            self.execs.append((path.split("/")[2], json.loads(request.content)["command"]))
             return httpx.Response(
                 200, text=self.exec_body, headers={"content-type": "text/event-stream"}
             )
@@ -193,6 +196,42 @@ async def test_prepare_starts_the_page_on_the_brains_recipe_and_inspects_on_exit
     # the driver never sees these as by-hand commands: nothing was recorded through the doors
     assert doors.sent == []
     assert "the page is at https://8000-comp-1.test.dev/page" in log.getvalue()
+
+
+async def test_the_page_server_is_touched_while_the_context_is_open_and_never_after(
+    security: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The server is a background process, which the host's idle reaper does not
+    count as activity (`reap_idle` reads `last_exec_at or created_at`), so the
+    page would die mid-run without this. The touch carries nothing but `true`."""
+    monkeypatch.setattr(security, "KEEP_ALIVE_INTERVAL", 0.01)
+    api = PageApi(exec_body=_sse(("stdout", "---"), ("exit", "0")))
+    doors = _doors(api, tmp_path)
+    async with security.prepare(doors, io.StringIO()) as context:
+        await asyncio.sleep(0.1)
+        touches = [r for r in api.requests if r == ("POST", "/computers/comp-1/exec")]
+        assert len(touches) >= 2, api.requests
+        assert {cmd for who, cmd in api.execs if who == "comp-1"} == {"true"}
+        assert all(context["token"] not in cmd for _, cmd in api.execs)
+    # cancelled with the context: the only exec after it is the inspection's, on the fork
+    assert [r for r in api.requests if r == ("POST", "/computers/comp-1/exec")] == touches
+    assert [who for who, _ in api.execs if who != "comp-1"] == ["comp-2"]
+
+
+async def test_a_failed_touch_is_logged_and_the_keep_alive_goes_on(
+    security: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A touch that the host refuses must not raise into the run or stop the loop."""
+    monkeypatch.setattr(security, "KEEP_ALIVE_INTERVAL", 0.01)
+    api = PageApi(exec_body=_sse(("exit", "0")), fail="/computers/comp-1/exec")
+    log = io.StringIO()
+    async with security.prepare(_doors(api, tmp_path), log) as context:
+        await asyncio.sleep(0.1)
+    assert log.getvalue().count("could not keep comp-1 alive: HTTPStatusError") >= 2
+    assert context["token"] not in log.getvalue()
+    # the run itself was untouched: the server went and the inspection still ran
+    assert "/computers/comp-1" in api.deleted
+    assert security.inspection["files_with_token"] == []
 
 
 async def test_prepare_takes_the_server_away_and_records_an_inspection_that_could_not_run(
