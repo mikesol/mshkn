@@ -40,6 +40,7 @@ from membrane.capability import (
     split_output,
     transport_for,
 )
+from membrane.config import EFFORT_OFF
 from membrane.model import zero_usage
 from membrane.postconditions import CHECKS, Judged, Turn, by_label, judge, tool_computers
 
@@ -2444,10 +2445,38 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     # what the run was given, and what each turn's calls actually spent (#122)
     assert run_doc["default_effort"] is None
     assert run_doc["turns"][0]["effort"] == ["medium"]
+    # a run not given `--effort off` supports the axis (#127)
+    assert summary["effort_supported"] is True
     deletes = [p for m, p, _ in api.requests if m == "DELETE"]
     assert (
         deletes[:2] == ["/ingress_rules/rule-1", "/keys/key-1"] and "/recipes/rcp-brain" in deletes
     )
+
+
+async def test_run_once_records_effort_unsupported_when_the_run_was_given_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`effort_supported` names a condition the run was hatched under (#127), not an
+    outcome: `--effort off` makes it False even though nothing else about this run
+    differs from `test_run_once_hatches_speaks_judges_records_and_tears_down`."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    api = FakeApi(recipes=[{"recipe_id": "rcp-pre"}])
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    summary = await run_once(
+        replace(_settings(), default_effort=EFFORT_OFF),
+        HATCH,
+        tmp_path / "docs" / "2026-09-13-run-1",
+        AutoApprover(),
+        hatch_script=_stub_hatch(tmp_path),
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=io.StringIO(),
+        out=tmp_path / "docs",
+    )
+    assert summary["default_effort"] == EFFORT_OFF
+    assert summary["effort_supported"] is False
 
 
 async def test_run_once_refuses_an_account_that_already_has_a_brain(
@@ -2511,6 +2540,8 @@ async def test_an_aborted_run_writes_what_it_had_and_tears_down(
     assert summary["reasks"] == []  # it fell over at turn 1, with nothing re-asked
     assert summary["hatched"]["rule_id"] == "rule-1"
     assert "commit" in summary["membrane"]  # an aborted run names its code too
+    # an aborted run names the conditions it ran under, not only the ones it reached
+    assert summary["effort_supported"] is True
 
 
 async def test_an_aborted_run_names_the_base_url_it_spoke_to(
@@ -2554,6 +2585,48 @@ async def test_an_aborted_run_names_the_base_url_it_spoke_to(
         )
     summary = json.loads((out_dir / "run.json").read_text())
     assert summary["base_url"] == "https://ai-gateway.vercel.sh"
+
+
+async def test_an_aborted_run_names_effort_unsupported_when_it_was_given_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`effort_supported` is fixed at hatch, before the first model call, so an aborted
+    run names it exactly as a passing one would (#127)."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/checkpoints/fork":
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": "c1",
+                    "exec_exit_code": 1,
+                    "exec_stdout": "boom",
+                    "exec_stderr": "boom",
+                },
+            )
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    out_dir = tmp_path / "run"
+    settings = replace(_settings(), default_effort=EFFORT_OFF)
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_once(
+            settings,
+            HATCH,
+            out_dir,
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
+    summary = json.loads((out_dir / "run.json").read_text())
+    assert summary["default_effort"] == EFFORT_OFF
+    assert summary["effort_supported"] is False
 
 
 async def test_an_aborted_run_names_the_exception_type_when_its_message_is_empty(

@@ -1067,28 +1067,47 @@ def _tool(name: str, *, effect: str = "local") -> Tool:
     )
 
 
-async def test_effort_stays_off_the_wire_entirely_when_the_backend_has_no_such_field(
-    tmp_path: Path,
-) -> None:
-    """An irreversible tool list raises the prior to `high` (#122). Against a backend
-    with no effort axis that must still compose no `output_config` at all, or the
-    first irreversible verb of the run is a 400."""
-    ctx = _ctx(tmp_path, effort_enabled=False)
-    tools = {"pay": _tool("pay", effect="transact")}
-    pending = Pending(
+def _pending(*, offered: list[str], requested_effort: str | None = None) -> Pending:
+    return Pending(
         turn=1,
         principal="root",
         door="api",
         message="hi",
         payload="hi",
         messages=[{"role": "user", "content": "hi"}],
-        offered=["pay"],
+        offered=offered,
         job="rj-1",
+        requested_effort=requested_effort,
     )
-    await post_request(ctx, pending, tools)
-    body = _posted(ctx)
-    assert "output_config" not in body
-    assert pending.efforts == [None]
+
+
+async def test_effort_stays_off_the_wire_entirely_when_the_backend_has_no_such_field(
+    tmp_path: Path,
+) -> None:
+    """Against a backend with no effort axis, `output_config` must never reach the wire
+    (#127) -- not even when something would otherwise raise the call above the run's
+    default. A run with an unset default and an irreversible tool list is not a real
+    test of this: `resolve()` floors an unset default at `API_DEFAULT` ("high"), and
+    `prior_for` caps an irreversible tool list at the same `IRREVERSIBLE_EFFORT`
+    ("high"), so `best == floor` and `resolve` returns `None` regardless of the guard.
+    Both cases below give the guard something real to suppress: a set default raised
+    by the prior, and a model request above `IRREVERSIBLE_EFFORT` itself, which
+    `highest()` does not cap."""
+    ctx = _ctx(tmp_path, effort_enabled=False, default_effort="medium")
+
+    # 1. An irreversible tool list would raise a set default ("medium") to "high".
+    irreversible = {"pay": _tool("pay", effect="transact")}
+    by_prior = _pending(offered=["pay"])
+    await post_request(ctx, by_prior, irreversible)
+    assert "output_config" not in _posted(ctx)
+    assert by_prior.efforts == [None]
+
+    # 2. A model request above IRREVERSIBLE_EFFORT ("max") is not capped by highest();
+    # only the operator's word (effort_enabled=False) keeps it off the wire.
+    by_request = _pending(offered=[], requested_effort="max")
+    await post_request(ctx, by_request, {})
+    assert "output_config" not in _posted(ctx)
+    assert by_request.efforts == [None]
 
 
 async def test_a_request_above_a_low_run_default_is_granted(tmp_path: Path) -> None:
