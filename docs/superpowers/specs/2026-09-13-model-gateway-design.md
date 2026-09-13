@@ -130,6 +130,37 @@ whatever `ANTHROPIC_BASE_URL` names. `config.py` and `request_headers` are
 therefore unchanged, and a brain checkpoint never carries a credential for a
 service it cannot reach.
 
+### 5.1 The second Anthropic caller: mem0's extraction LLM
+
+One key in the brain is only true if nothing else in the brain calls Anthropic.
+Something does. `memory.py:119` builds mem0's fact-extraction LLM through
+`extraction_llm` (line 81) with `provider: "anthropic"`, a hardcoded
+`EXTRACTION_MODEL_ID = "claude-haiku-4-5-20251001"`, and
+`settings.anthropic_api_key`. It is an in-process Anthropic SDK client. It never
+touches the relay, it never reads `settings.anthropic_base_url`, and it runs on
+every turn that recalls or writes memory.
+
+Left alone, handing the brain a gateway key under the name `ANTHROPIC_API_KEY`
+breaks every memory operation of every gateway run — the same failure mode as the
+`insufficient_quota` stall recorded in `docs/infrastructure.md`, which cost the
+first attempt at #101.
+
+Extraction is therefore routed through the gateway too. mem0's `AnthropicLLM`
+reads `self.config.anthropic_base_url` before falling back to the environment, so
+`extraction_llm` gains a `base_url` argument and `Mem0Store.open` passes
+`settings.anthropic_base_url`. `EXTRACTION_MODEL_ID` is namespaced by the same
+`bare_model_id` rule in reverse: the gateway needs `anthropic/claude-haiku-…`,
+the direct API needs the bare id, so the id is composed from the base URL rather
+than stored twice.
+
+One key, one budget, one credential for #92 to move. The alternative — a second
+key in `/brain/.env` — was rejected: it doubles what a brain checkpoint carries at
+exactly the moment #91 and #92 are trying to take credentials off it.
+
+mem0's `enable_sampling_parameters` model-family sniffing is unaffected by the
+prefix: `extraction_llm` sets the flag explicitly to `False`, which short-circuits
+the sniff before it parses the name.
+
 `ANTHROPIC_API_KEY` is **not** renamed to something provider-neutral. #91 and #92
 are about to move every model key onto account secrets injected at exec; renaming
 now means touching `hatch.sh`, `config.py`, `capability.py`, the tests and the
@@ -220,10 +251,22 @@ Only then is a second model hatched, with `MEMBRANE_EFFORT=off`.
 - `docs/infrastructure.md`: the "A model gateway" section loses its requirements
   table. There is no host to rent — one API key, a spend budget, and optionally a
   BYOK credential.
-- `docs/embryo/README.md`: beside any cross-provider run, the two caveats #127
-  asked for. That the effort axis is absent (§7), and that tool-use fidelity
-  varies by backend, so a low score on a cheaper model may be measuring the
-  gateway's translation rather than the organism.
+- `docs/embryo/README.md`: beside any cross-provider run, three caveats. The two
+  #127 asked for — that the effort axis is absent (§7), and that tool-use
+  fidelity varies by backend, so a low score on a cheaper model may be measuring
+  the gateway's translation rather than the organism — and a third #127 did not
+  know about.
+
+The third is the larger of them. **A cross-model run is never purely
+cross-model.** `EXTRACTION_MODEL_ID` is fixed at `claude-haiku-4-5-20251001`
+(§5.1), so whatever model speaks the liturgy, the facts it remembers were
+extracted by Claude Haiku. Memory shapes every turn after the one that wrote it,
+so this reaches further into a run than either of the other two caveats, and a
+reader comparing two models across the `docs/embryo/` evidence must know that
+this variable was held constant rather than crossed.
+
+Making the extraction model a parameter is deliberately out of scope here — it is
+a second measurement axis, not a gateway change, and it deserves its own issue.
 
 ## 11. Testing
 
@@ -270,9 +313,15 @@ anything through the gateway.
   API call to a third party, whose shape is not the Messages API and would have to
   be parsed. The price table is already the repo's answer and is wrong only when
   prices move.
-- **Routing the mem0 embedder through the gateway.** It is a direct SDK call
-  (`memory.py:120`), it is not the liturgy, and the OpenAI key it uses is
-  unaffected by any of this.
+- **Routing the mem0 *embedder* through the gateway.** Unlike the extraction LLM
+  of §5.1, it is not a Messages API caller: it is `text-embedding-3-small` over
+  the OpenAI SDK (`memory.py:120`), the gateway's Anthropic skin has nothing to
+  say about it, and the OpenAI key it uses is unaffected by any of this. The
+  embedder stays direct and the `OPENAI_API_KEY` requirement is unchanged.
+- **A second key in `/brain/.env`** to keep mem0's extraction on the direct
+  Anthropic API, per §5.1.
+- **Making `EXTRACTION_MODEL_ID` a parameter**, per §10. A second measurement
+  axis wearing a gateway change's clothes.
 
 ## 14. Facts checked before the plan
 
@@ -293,6 +342,24 @@ anything through the gateway.
   effort. `turn.py:300` calls it per model call and appends to `pending.efforts`.
 - `memory.py:120` builds the embedder with `provider="openai"` and the operator's
   OpenAI key; nothing about the model gateway touches it.
+- `memory.py:119` builds mem0's extraction LLM with `extraction_llm` (line 81):
+  `provider="anthropic"`, `EXTRACTION_MODEL_ID = "claude-haiku-4-5-20251001"`
+  (line 32), `settings.anthropic_api_key`, and `enable_sampling_parameters:
+  False`. It is an in-process SDK client and reads neither the relay nor
+  `settings.anthropic_base_url`. This is the fact that produced §5.1 and it was
+  not known when §5 was first written.
+- mem0's `AnthropicLLM.__init__` resolves `base_url` as
+  `self.config.anthropic_base_url or os.getenv("ANTHROPIC_BASE_URL")` and passes
+  it to `anthropic.Anthropic(**client_kwargs)` only when truthy. The brain's
+  `.env` is parsed by `parse_env`, never exported to `os.environ`, so today that
+  fallback finds nothing and extraction goes direct. Routing it is a config
+  field, not a patch.
+- `AnthropicLLM._enable_sampling_parameters` returns the explicit flag before it
+  parses the model name, so a `provider/` prefix on `EXTRACTION_MODEL_ID` cannot
+  reach the family sniff.
+- The gateway returned `403 customer_verification_required` to a probe with
+  `x-api-key` on 2026-09-13, not `401`: the key and the header form are accepted,
+  and the team needs a card on file before anything else can be measured.
 - `tests/flow/test_capabilities.py:148` writes `ANTHROPIC_BASE_URL=http://model`,
   so the flow tier already has a fake model endpoint to extend.
 - `embryo/membrane/capability.py` does not exist on `origin/main`; it arrives with
