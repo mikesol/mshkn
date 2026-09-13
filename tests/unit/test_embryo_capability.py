@@ -135,6 +135,16 @@ def test_the_base_url_comes_from_the_env_file_too(tmp_path: Path) -> None:
     assert load_run_settings(env, {}).model_api_key == "vck-1"
 
 
+def test_model_api_key_raises_for_a_directly_built_settings_without_a_gateway_key() -> None:
+    """`load_run_settings` refuses this combination, but `RunSettings` is a public frozen
+    dataclass and nothing stops a caller building one directly (as `_stub_hatch`'s callers do
+    with `dataclasses.replace`): the property must not silently hand an Anthropic key to a
+    gateway."""
+    settings = replace(_settings(), base_url="https://ai-gateway.vercel.sh")
+    with pytest.raises(ValueError, match="AI_GATEWAY_API_KEY"):
+        _ = settings.model_api_key
+
+
 def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
     usage = {
         "input_tokens": 1_000_000,
@@ -2501,6 +2511,49 @@ async def test_an_aborted_run_writes_what_it_had_and_tears_down(
     assert summary["reasks"] == []  # it fell over at turn 1, with nothing re-asked
     assert summary["hatched"]["rule_id"] == "rule-1"
     assert "commit" in summary["membrane"]  # an aborted run names its code too
+
+
+async def test_an_aborted_run_names_the_base_url_it_spoke_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partway failure is exactly the case where attributing it to the endpoint matters:
+    the aborted-run record must carry `base_url` too, not only the successful one."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/checkpoints/fork":
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": "c1",
+                    "exec_exit_code": 1,
+                    "exec_stdout": "boom",
+                    "exec_stderr": "boom",
+                },
+            )
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    out_dir = tmp_path / "run"
+    settings = replace(
+        _settings(), base_url="https://ai-gateway.vercel.sh", gateway_api_key="vck-1"
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_once(
+            settings,
+            HATCH,
+            out_dir,
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
+    summary = json.loads((out_dir / "run.json").read_text())
+    assert summary["base_url"] == "https://ai-gateway.vercel.sh"
 
 
 async def test_an_aborted_run_names_the_exception_type_when_its_message_is_empty(

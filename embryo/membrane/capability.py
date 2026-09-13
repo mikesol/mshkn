@@ -82,12 +82,18 @@ class RunSettings:
 
     @property
     def model_api_key(self) -> str:
-        """The one key the brain is handed. `load_run_settings` refuses a non-default
-        base URL without a gateway key, so the fallback below is unreachable and is
-        here only so the type is `str` and not `str | None`."""
+        """The one key the brain is handed, chosen by where `base_url` points.
+
+        A non-default base URL with no gateway key raises rather than falling back:
+        `load_run_settings` refuses that combination, but `RunSettings` is a public
+        frozen dataclass and nothing stops a caller building one directly, and
+        silently handing an Anthropic key to a gateway is the failure this whole
+        two-slot design exists to prevent."""
         if self.base_url == DEFAULT_BASE_URL:
             return self.anthropic_api_key
-        return self.gateway_api_key or self.anthropic_api_key
+        if not self.gateway_api_key:
+            raise ValueError(f"no AI_GATEWAY_API_KEY for base URL {self.base_url}")
+        return self.gateway_api_key
 
 
 def load_run_settings(
@@ -1259,6 +1265,7 @@ async def run_once(
                         "run": out_dir.name,
                         "capability": capability.name,
                         "model": model_id,
+                        "base_url": settings.base_url,
                         "default_effort": default_effort,
                         "key_dir": str(key_dir),
                         "pubkey": pubkey,
