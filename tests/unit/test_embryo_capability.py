@@ -310,6 +310,7 @@ class FakeApi:
     exec_logs: dict[str, dict[str, Any]] = field(default_factory=dict)
     gone: set[str] = field(default_factory=set)
     fail_deletes: bool = False
+    fail_checkpoints: bool = False
     turns: dict[int, tuple[dict[str, Any], str]] = field(default_factory=dict)
     next_turn: int = 1
     computers: list[dict[str, Any]] = field(default_factory=list)
@@ -385,6 +386,8 @@ class FakeApi:
         if request.method == "GET" and path == "/recipes":
             return httpx.Response(200, json=self.recipes)
         if request.method == "GET" and path == "/checkpoints":
+            if self.fail_checkpoints:
+                return httpx.Response(500, json={"detail": "no"})
             label = request.url.params.get("label")
             rows = [c for c in self.checkpoints if label is None or c["label"] == label]
             return httpx.Response(200, json=rows)
@@ -770,6 +773,31 @@ async def test_teardown_survives_failing_deletes(tmp_path: Path) -> None:
         "/keys/key-1",
         "/recipes/rcp-brain",
     ]
+
+
+async def test_teardown_deletes_no_recipe_when_the_checkpoints_cannot_be_listed(
+    tmp_path: Path,
+) -> None:
+    """The recipe set's promoted-checkpoint subtraction reads the very listing
+    that just failed to load, so falling through to the recipe loop below would
+    delete every recipe named by `hatched` or a proposal, promoted or not -- the
+    exact mechanism that destroyed `capability/hatch/brain` on 2026-09-13, since
+    the service dedupes recipes by content and a scripted hatch builds the very
+    recipe a promoted brain was built from. A failed listing must stop before
+    that loop instead."""
+    api = FakeApi(fail_checkpoints=True)
+    doors = _doors(api, tmp_path)
+    hatched = Hatched("u", "rule-1", "key-1", "rcp-brain", "ck-brain")
+    listing = {"proposals": [{"id": "p-1", "recipe_id": "rcp-page"}]}
+    log = io.StringIO()
+    await doors.teardown(hatched, listing, log=log)
+    assert [p for m, p, _ in api.requests if m == "DELETE"] == [
+        "/ingress_rules/rule-1",
+        "/keys/key-1",
+    ]
+    assert not any(p.startswith("/recipes/") for m, p, _ in api.requests if m == "DELETE")
+    assert not any(p.startswith("/checkpoints/") for m, p, _ in api.requests if m == "DELETE")
+    assert "could not list checkpoints" in log.getvalue()
 
 
 # ---------------------------------------------------------------- the door helpers a promotion uses
@@ -2702,7 +2730,7 @@ async def test_run_once_checks_hook_computers_from_every_turn_not_only_row_4(
     )
 
     async def fake_teardown(
-        self: Doors, h: Hatched, listing_arg: Any, *, lineage: Any = None
+        self: Doors, h: Hatched, listing_arg: Any, *, lineage: Any = None, log: Any = None
     ) -> None:
         return None
 
@@ -3134,7 +3162,7 @@ async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_i
     teardown_calls: list[tuple[Hatched, Any, Promotion | None]] = []
 
     async def fake_teardown(
-        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None
+        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None, log: Any = None
     ) -> None:
         teardown_calls.append((h, listing, lineage))
 
@@ -3253,7 +3281,7 @@ async def test_run_once_of_a_dependent_names_its_lineages_base_url_not_the_calle
     monkeypatch.setattr("membrane.capability.start_from", fake_start_from)
 
     async def fake_teardown(
-        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None
+        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None, log: Any = None
     ) -> None:
         return None
 
@@ -4063,11 +4091,8 @@ def test_main_loads_the_module_before_it_checks_the_postcondition_names(
     monkeypatch.setattr("membrane.capability.catalog", lambda: catalog(caps))
     log = io.StringIO()
     assert "secret_page" not in CHECKS
-    try:
-        assert main(["run", "a", "--env", str(tmp_path / "none")], log=log) == 2
-        assert CHECKS["secret_page"].__name__ == "secret_page"
-    finally:
-        CHECKS.pop("secret_page", None)
+    assert main(["run", "a", "--env", str(tmp_path / "none")], log=log) == 2
+    assert CHECKS["secret_page"].__name__ == "secret_page"
     assert "postconditions no one wrote" not in log.getvalue()
     assert "MSHKN_API_URL" in log.getvalue()  # it got as far as the settings
 
@@ -4146,6 +4171,10 @@ def test_paths_in_reads_a_fenced_path_first_and_inline_code_second() -> None:
     trailing = 'I need it.\nproposal p-3\n{"verb": {"entrypoint": "`/verb/run.sh`"}}'
     assert paths_in(trailing) == []
     assert paths_in("no path here") == []
+    # a backtick pair inside a fenced script is shell command substitution, not a
+    # path root should read; the inline fallback must not see it either
+    substitution = "```bash\ncat `/verb/token`\n```"
+    assert paths_in(substitution) == []
 
 
 def test_unprovided_verbs_reads_ready_entries_with_names_root_has_not_provided() -> None:
@@ -4250,6 +4279,36 @@ async def test_provision_destroys_the_computer_when_the_upload_fails(tmp_path: P
         if request.url.path.endswith("/upload"):
             api.requests.append((request.method, request.url.path, None))
             return httpx.Response(500, json={"detail": "no"})
+        return original(request)
+
+    transport = httpx.MockTransport(handler)
+    authed = httpx.AsyncClient(
+        base_url="http://api", headers={"Authorization": "Bearer k"}, transport=transport
+    )
+    doors = Doors(authed, authed, "rule-1", Record(tmp_path / "run"))
+    with pytest.raises(httpx.HTTPStatusError):
+        await doors.provision("secret_page", "verb/secret_page", "rcp-sp", "/verb/token", "t")
+    assert ("DELETE", "/computers/comp-1", None) in api.requests
+    assert [s.name for s in doors.sent] == ["create", "upload", "destroy"]
+
+
+async def test_provision_destroy_failing_does_not_replace_the_uploads_own_exception(
+    tmp_path: Path,
+) -> None:
+    """The destroy in `provision`'s `finally` must be suppressed like
+    `copy_label`'s (Minor 2): unsuppressed, a transport error raised while
+    cleaning up after a failed upload would replace the upload's own
+    `HTTPStatusError` and hide what actually went wrong."""
+    api = FakeApi()
+    original = api.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/upload"):
+            api.requests.append((request.method, request.url.path, None))
+            return httpx.Response(500, json={"detail": "no"})
+        if request.method == "DELETE":
+            api.requests.append((request.method, request.url.path, None))
+            raise httpx.ConnectError("down")
         return original(request)
 
     transport = httpx.MockTransport(handler)

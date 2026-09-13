@@ -12,7 +12,6 @@ from pathlib import Path
 
 from membrane.declarations import parse_policy
 from membrane.invariants import door_is_open
-from membrane.postconditions import CHECKS
 from sse_starlette.event import ensure_bytes
 
 from mshkn.models import RelayDelivery, parse_scopes
@@ -273,5 +272,3 @@ def test_hatch_writes_only_the_brains_own_names_into_env() -> None:
     block = script.split('} > "$TMP/env"', 1)[0].rsplit("{\n", 1)[1]
     written = set(re.findall(r'echo "([A-Z_]+)=', block))
     assert written == security.HATCH_ENV
-    CHECKS.pop("no_foreign_credential_on_brain", None)
-    CHECKS.pop("secret_page", None)

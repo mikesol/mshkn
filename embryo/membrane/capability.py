@@ -77,7 +77,10 @@ def paths_in(reply: str) -> list[str]:
     fenced = [block.strip() for block in FENCED_RE.findall(text)]
     found = [block for block in fenced if ABS_PATH_RE.match(block)]
     if not found:
-        found = INLINE_RE.findall(text)
+        # A fenced block's own backticks are shell command substitution, not a
+        # path root should read (a script that runs `/verb/token` is not asking
+        # for anything): stripped before the inline fallback ever sees them.
+        found = INLINE_RE.findall(FENCED_RE.sub("", text))
     return list(dict.fromkeys(found))
 
 
@@ -731,13 +734,16 @@ class Doors:
             )
         finally:
             started = self.now()
-            dropped = await self.api.delete(f"/computers/{computer_id}")
+            status = 0
+            with suppress(httpx.HTTPError):
+                dropped = await self.api.delete(f"/computers/{computer_id}")
+                status = dropped.status_code
             self._record(
                 "api",
                 PROVISION[3],
                 {"verb": verb},
                 "",
-                dropped.status_code,
+                status,
                 self.now() - started,
                 computer_id=computer_id,
             )
@@ -761,6 +767,7 @@ class Doors:
         listing: dict[str, Any] | None,
         *,
         lineage: Promotion | None = None,
+        log: TextIO = sys.stderr,
     ) -> None:
         """The account as the run found it, best effort. Without a lineage: the
         scripted model's server (if any), the door, the key, every checkpoint on
@@ -777,7 +784,14 @@ class Doors:
         scripted hatch builds the very recipe the promoted brain was built from;
         `hatched.recipe_id` then matched that checkpoint and it went, and its
         recipe with it. Promoted labels are another run's evidence, and this
-        run's leavings are the only thing a teardown may touch."""
+        run's leavings are the only thing a teardown may touch.
+
+        When the checkpoints cannot even be listed, the recipe set built above
+        has had no chance to drop what a promoted checkpoint names (that
+        subtraction reads the very listing that just failed), so deleting by
+        it here would repeat the 2026-09-13 loss for a different reason. Root
+        leaves every checkpoint and every recipe alone and reports the failure
+        instead."""
 
         async def drop(path: str) -> None:
             with suppress(httpx.HTTPError):
@@ -795,8 +809,12 @@ class Doors:
             await drop(f"/keys/{hatched.key_id}")
         try:
             checkpoints = await self.checkpoints()
-        except httpx.HTTPError:
-            checkpoints = []
+        except httpx.HTTPError as exc:
+            log.write(
+                f"teardown: could not list checkpoints ({type(exc).__name__}: {exc}); "
+                "leaving every checkpoint and recipe alone\n"
+            )
+            return
         for ckpt in checkpoints:
             label = ckpt.get("label") or ""
             if label.startswith(PROMOTED_PREFIX):
@@ -1647,7 +1665,7 @@ async def run_once(
             if keep:
                 log.write("keeping the brain (--keep)\n")
             else:
-                await doors.teardown(hatched, final, lineage=lineage)
+                await doors.teardown(hatched, final, lineage=lineage, log=log)
 
 
 def _next_run_dir(out: Path, date: str) -> Path:
