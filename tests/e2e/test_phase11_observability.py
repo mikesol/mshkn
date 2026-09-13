@@ -1,11 +1,16 @@
 """Phase 11: Observability — "Metrics, Logs, and Status"
 
-These tests run against a LIVE server with real Firecracker VMs.
-Nothing here is skipped. Most tests exercise an observability endpoint that
-is already implemented; two (structured JSON logs and the audit log) are not
-implemented yet and fail on purpose via pytest.fail — not implemented is a
-flavor of broken, so they are not silently skipped or given an
-expected-failure marker.
+These tests run against a LIVE server with real Firecracker VMs. Nothing here
+is skipped.
+
+T11.2 still fails as `Not implemented` — the feature exists
+(`src/mshkn/observability/logging.py` formats every record as JSON with a
+timestamp, level, msg and request id) but nothing here reads the server's log
+stream, and this tier only has an HTTP client pointed at a URL.
+
+The audit-log placeholder left on 2026-09-13 and is now #180. It had no code
+behind it at all — no audit table, no audit writer — so it was a feature wearing
+a test's clothes. Its test comes back when the feature does.
 """
 
 from __future__ import annotations
@@ -168,26 +173,6 @@ class TestT116HealthCheck:
         if "subsystems" in body:
             for sub in ["database", "firecracker", "storage"]:
                 assert sub in body["subsystems"], f"Missing subsystem '{sub}' in health check"
-
-
-# ---------------------------------------------------------------------------
-# T11.7 — Audit Log
-# ---------------------------------------------------------------------------
-
-
-class TestT117AuditLog:
-    """Verify that security-relevant operations are audit-logged."""
-
-    async def test_create_destroy_logged(self) -> None:
-        """Create and destroy operations should appear in an audit log.
-
-        The audit log should capture:
-        - Who (API key / account)
-        - What (operation: create, destroy, checkpoint, fork)
-        - When (timestamp)
-        - What resource (computer_id, checkpoint_id)
-        """
-        pytest.fail("Not implemented: audit log for create and destroy operations")
 
 
 # ---------------------------------------------------------------------------
