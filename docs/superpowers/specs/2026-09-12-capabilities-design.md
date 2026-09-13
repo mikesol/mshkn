@@ -379,11 +379,13 @@ lineage's keys and cancels the hatch-time ones:
 2. Place them on the promoted brain by the sequence §7.2 uses for verb secrets,
    on the brain's chain instead of a verb's: create a computer from the head of
    `capability/<name>/brain`, upload the new `/brain/.env`, checkpoint under the
-   same label, destroy. A by-hand act, recorded as one, allowed by
-   `nothing_by_hand` once per rotation the way provisioning is.
-3. Re-promote, so the record and the promoted labels carry the rotated brain.
-   A dependent forked from the old promotion would die on its first model call
-   once step 4 runs.
+   same label, destroy. Rotation happens between runs, never inside one, so
+   `nothing_by_hand`, which judges the commands a run sent, never sees it; its
+   record is the re-promotion in step 3, whose `PROMOTED.md` names the rotation
+   (`rotated_from`: the previous record's run and checkpoint ids).
+3. Re-promote, so the record and the promoted labels carry the rotated brain,
+   and the record says it was rotated. A dependent forked from the old
+   promotion would die on its first model call once step 4 runs.
 4. Cancel the hatch-time keys. Every checkpoint that ever held them, the
    measure rounds' included, is worthless for spend.
 
