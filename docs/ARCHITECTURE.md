@@ -2,6 +2,12 @@
 
 mshkn is one Python process on one Linux host. It owns a SQLite database, a dm-thin pool, a set of Firecracker microVMs, an SSH connection to each VM, an rclone remote for R2, and a Caddy instance for public HTTPS. This document describes how a request moves through it, who owns which state, what happens over a computer's and a checkpoint's life, and what is guaranteed on failure.
 
+## 0. What mshkn is, and is not
+
+mshkn is a substrate: computers you create, exec on, checkpoint, fork, merge and destroy; recipes that build the images they boot from; keys that scope what a caller may touch; ingress that turns a webhook into a fork; and a relay that forwards one HTTP call on a tenant's behalf so the VM that asked can die and be forked back when the answer lands. Every primitive is dumb on purpose: it holds the tenant's bytes and the tenant's headers for as long as the operation needs them and nothing longer, and it decides nothing the tenant could decide.
+
+It is not a platform for any one tenant. The embryo (`embryo/`) is the first agent built on it and it is a tenant like any other; nothing under `src/` knows it exists. A change here is justified for a tenant that has never heard of the embryo or it is not made (`CLAUDE.md`, "The substrate stays dumb"). In particular mshkn never keeps a secret that belongs to a service a tenant talks to, never becomes the party that calls that service in its own name, and never grows a feature whose only consumer is one tenant. When a tenant finds the primitives insufficient, the first question is whether it can do the thing itself, at its own cost, with what it has; the answer is usually yes, and when it is genuinely no the gap is raised as a `spec-change` against this section before anything is built.
+
 Dependency direction is strict: `mshkn.api` → `mshkn.services` → `mshkn.host` and `mshkn.db`. `mshkn.models`, `mshkn.errors`, `mshkn.config`, `mshkn.resources` and `mshkn.observability` are leaves that import nothing from mshkn but `mshkn.errors`. Nothing in `services`, `host` or `db` imports `api`, and nothing in `host` imports `db` or `services`.
 
 ## 1. Request path
