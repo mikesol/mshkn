@@ -41,9 +41,11 @@ First, the cost, because it isn't zero. `mshkn` runs on one bare-metal Linux box
 Then, once the box is up:
 
 ```bash
+# on the host, once: mint an account and choose its key
+ssh root@<host> 'cd /opt/mshkn && .venv/bin/python -m mshkn accounts create --id me --api-key <the key> --vm-limit 20'
+
 # on your machine, in a checkout of this repo
 uv sync
-python -m mshkn accounts create --help          # mint an account and a key on the host, then:
 cat > .env <<'ENV'
 MSHKN_API_URL=https://api.<your-domain>
 MSHKN_API_KEY=<the key>
