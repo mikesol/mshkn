@@ -148,8 +148,8 @@ async def test_abandon_finishes_cleanup_when_cancelled_mid_kill(
     real_teardown = host.hypervisor.teardown_slot
     real_release = service.allocator.release_slot
 
-    async def _slow_kill(pid: int) -> None:
-        await real_kill(pid)  # the signal lands...
+    async def _slow_kill(pid: int, socket_path: str) -> None:
+        await real_kill(pid, socket_path)  # the signal lands...
         killing.set()
         await never.wait()  # ...and this models waiting for the process to reap
 
@@ -381,10 +381,10 @@ async def test_teardown_removes_the_route_while_the_vm_is_being_killed(
     real_kill = host.hypervisor.kill
     real_remove = host.blocks.remove
 
-    async def slow_kill(pid: int) -> None:
+    async def slow_kill(pid: int, socket_path: str) -> None:
         await asyncio.sleep(0.01)
         routes_during_kill.append(dict(host.proxy.routes))
-        await real_kill(pid)
+        await real_kill(pid, socket_path)
 
     async def slow_remove(*, volume_id: int, name: str) -> None:
         await asyncio.sleep(0.01)

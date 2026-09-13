@@ -416,7 +416,7 @@ class ComputerService:
             ("route removal", self.host.proxy.remove_route(computer_id))
         ]
         if vm is not None:
-            first.append(("kill", self.host.hypervisor.kill(vm.pid)))
+            first.append(("kill", self.host.hypervisor.kill(vm.pid, vm.socket_path)))
             first.append(("evict", self.host.guest.evict(vm.vm_ip)))
         await cleanup.steps(*first)
         await cleanup.steps(
@@ -523,9 +523,13 @@ class ComputerService:
             ("route removal", self.host.proxy.remove_route(computer.id))
         ]
         if computer.firecracker_pid is not None:
-            # On a dead VM the process is gone; kill() is what releases the
-            # API socket recorded for it.
-            first.append(("kill", self.host.hypervisor.kill(computer.firecracker_pid)))
+            # On a dead VM the process is gone; kill() is what releases the API
+            # socket. The path comes off the row, so a VM this process never
+            # started — one from before the last service restart — is released
+            # like any other (#67).
+            first.append(
+                ("kill", self.host.hypervisor.kill(computer.firecracker_pid, computer.socket_path))
+            )
         if computer.vm_ip:
             first.append(("evict", self.host.guest.evict(computer.vm_ip)))
         await cleanup.steps(*first)

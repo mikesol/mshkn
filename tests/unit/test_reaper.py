@@ -79,7 +79,7 @@ async def test_dead_vm_is_cleaned_up(db: aiosqlite.Connection, tmp_path: Path) -
     assert host.proxy.routes == {} and host.guest.evicted[-1] == computer.vm_ip
     assert computers.allocator.free_slots == frozenset({computer.slot})
     # kill() on a pid that is already gone is what releases the API socket it left behind.
-    assert host.hypervisor.killed == [computer.firecracker_pid]
+    assert host.hypervisor.killed == [(computer.firecracker_pid, computer.socket_path)]
 
 
 async def test_idle_vm_is_checkpointed_with_trigger_idle_and_its_label_and_drained(

@@ -84,7 +84,7 @@ async def test_destroy_and_cleanup_dead_tear_a_computer_down_once(
 
     gate.release.set()
     await destroy
-    assert host.hypervisor.killed == [computer.firecracker_pid]
+    assert host.hypervisor.killed == [(computer.firecracker_pid, computer.socket_path)]
     assert host.hypervisor.torn_down == [computer.slot]
     assert host.guest.evicted == [computer.vm_ip]
     assert service.allocator.free_slots == frozenset({computer.slot})

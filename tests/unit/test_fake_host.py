@@ -73,7 +73,7 @@ async def test_hypervisor_boots_restores_snapshots_kills(tmp_path: Path) -> None
     assert files.vmstate.exists() and files.memory.exists()
     vm2 = await hv.restore(slot=4, disk_volume_id=101, disk_name="mshkn-comp-b", snapshot=files)
     assert hv.restored == [(101, files)]
-    await hv.kill(vm.pid)
+    await hv.kill(vm.pid, vm.socket_path)
     assert not hv.is_alive(vm.pid) and hv.is_alive(vm2.pid)
     await hv.teardown_slot(3)
     assert 3 in hv.torn_down
