@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import shlex
 import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from membrane.declarations import parse_policy
@@ -250,3 +253,113 @@ def test_run_parses_the_exit_code_from_a_real_crlf_sse_stream() -> None:
         check=True,
     )
     assert result.stdout.rstrip(b"\n") == b"0"
+
+
+def _hatch_function(name: str) -> str:
+    """The real text of a top-level function in hatch.sh, to run as itself."""
+    script = (EMBRYO / "hatch.sh").read_text()
+    match = re.search(rf"^{name}\(\) \{{.*?^\}}$", script, re.M | re.S)
+    assert match is not None, f"hatch.sh has no {name}()"
+    return match.group(0)
+
+
+def _run_unwind(tmp_path: Path, hatched: str) -> tuple[int, list[str], bool]:
+    """hatch.sh's own trap, over a stub `api`. Returns the exit status, the
+    deletes it asked for, and whether the scratch directory survived."""
+    scratch = tmp_path / f"tmp{hatched or 'unfinished'}"
+    scratch.mkdir()
+    log = tmp_path / f"calls{hatched or 'unfinished'}"
+    program = "\n".join(
+        (
+            "set -euo pipefail",
+            f'api() {{ printf \'%s %s\\n\' "$1" "$2" >> {shlex.quote(str(log))}; }}',
+            f"TMP={shlex.quote(str(scratch))}",
+            "CID=c-1",
+            "KEY_ID=k-1",
+            f"HATCHED={hatched}",
+            _hatch_function("unwind"),
+            "trap unwind EXIT",
+            "exit 3",
+        )
+    )
+    result = subprocess.run(["bash", "-c", program], capture_output=True, text=True)
+    calls = log.read_text().splitlines() if log.exists() else []
+    return result.returncode, calls, scratch.exists()
+
+
+def test_a_hatch_that_dies_midway_takes_back_the_computer_and_the_scoped_key(
+    tmp_path: Path,
+) -> None:
+    """The first live run of Phase 14 died after uploading `/brain/.env` and left
+    its scoped key on the account and its computer running until the reaper: the
+    only trap removed the scratch directory (#99). The E2E's teardown cannot
+    cover this — when `hatch.sh` fails the `hatched` fixture never yields — so the
+    script unwinds itself, and still exits on the status it was given."""
+    status, calls, scratch_survived = _run_unwind(tmp_path, "")
+    assert status == 3
+    assert calls == ["DELETE /computers/c-1", "DELETE /keys/k-1"]
+    assert not scratch_survived
+
+
+def test_a_hatch_that_reached_its_final_json_line_unwinds_nothing(tmp_path: Path) -> None:
+    """Everything a finished hatch created belongs to the caller, who is told
+    about it on stdout. Only the scratch directory goes."""
+    status, calls, scratch_survived = _run_unwind(tmp_path, "1")
+    assert status == 3
+    assert calls == []
+    assert not scratch_survived
+
+
+def test_no_curl_in_hatch_carries_the_account_key_in_its_arguments() -> None:
+    """argv is readable by every user on the operator's machine for the life of
+    a call, and a hatch makes dozens (#99). Every curl takes its credentials
+    from stdin instead."""
+    script = (EMBRYO / "hatch.sh").read_text()
+    assert "Authorization" not in script.replace(_hatch_function("auth_config"), "")
+    invocations = [
+        line
+        for line in script.splitlines()
+        if "curl " in line and not line.lstrip().startswith("#")
+    ]
+    assert len(invocations) == 4, invocations
+    for line in invocations:
+        assert "auth_config |" in line and "--config -" in line, line
+
+
+def test_the_authorization_header_curl_reads_from_stdin_is_the_one_it_sends() -> None:
+    """A curl config value that carries a colon must be quoted — curl drops the
+    unquoted form silently, which would send no credentials at all — and a
+    quoted one takes backslash escapes, so the key is escaped on the way in."""
+    received: list[str | None] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            received.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            return None
+
+    key = 'mk-A_b-c9"x\\y'
+    auth_config = _hatch_function("auth_config")
+    with HTTPServer(("127.0.0.1", 0), Handler) as server:
+        # A daemon thread over a server that gives up: a curl that never arrives
+        # must fail this test, not hang the session waiting to be served.
+        server.timeout = 30
+        thread = threading.Thread(target=server.handle_request, daemon=True)
+        thread.start()
+        program = (
+            auth_config
+            + "\nauth_config | curl -fsS --config - -o /dev/null "
+            + f"http://127.0.0.1:{server.server_port}/"
+        )
+        result = subprocess.run(
+            ["bash", "-c", program],
+            env={**os.environ, "MSHKN_API_KEY": key},
+            capture_output=True,
+            text=True,
+        )
+        thread.join(timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert received == [f"Bearer {key}"]
