@@ -135,6 +135,7 @@ async def flow(tmp_path: Path) -> AsyncIterator[Flow]:
     config = Config(
         domain="test.dev",
         checkpoint_local_dir=tmp_path / "checkpoints",
+        checkpoint_staging_dir=tmp_path / "staging",
         idle_timeout_seconds=0,
         ssh_key_path=tmp_path / "id_ed25519",
     )
@@ -152,6 +153,7 @@ def flow_factory(tmp_path: Path) -> Callable[..., AbstractAsyncContextManager[Fl
         config = Config(
             domain="test.dev",
             checkpoint_local_dir=tmp_path / "checkpoints",
+            checkpoint_staging_dir=tmp_path / "staging",
             idle_timeout_seconds=0,
             ssh_key_path=tmp_path / "id_ed25519",
         )

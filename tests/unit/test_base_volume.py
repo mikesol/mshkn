@@ -40,7 +40,11 @@ async def test_clear_bare_template_removes_the_row_and_tolerates_none(
 
 
 def _config(tmp_path: Path, *, with_key: bool = True) -> Config:
-    config = Config(ssh_key_path=tmp_path / "id_ed25519", checkpoint_local_dir=tmp_path / "ckpts")
+    config = Config(
+        ssh_key_path=tmp_path / "id_ed25519",
+        checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
+    )
     if with_key:
         (tmp_path / "id_ed25519.pub").write_text("ssh-ed25519 AAAA test\n")
     return config

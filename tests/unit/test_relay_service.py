@@ -54,7 +54,12 @@ class Relay:
     def __init__(
         self, db: aiosqlite.Connection, tmp_path: Path, handler: Handler, **config: Any
     ) -> None:
-        self.config = Config(domain="test.dev", checkpoint_local_dir=tmp_path / "ckpts", **config)
+        self.config = Config(
+            domain="test.dev",
+            checkpoint_local_dir=tmp_path / "ckpts",
+            checkpoint_staging_dir=tmp_path / "staging",
+            **config,
+        )
         host = FakeHost()
         self.host = host
         allocator = SlotAllocator()

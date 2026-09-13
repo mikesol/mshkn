@@ -38,7 +38,11 @@ def _service(
             raise RuntimeError("docker build failed (rc=1):\nboom")
         return "Successfully built"
 
-    config = Config(ssh_key_path=tmp_path / "id_ed25519", checkpoint_local_dir=tmp_path / "ckpts")
+    config = Config(
+        ssh_key_path=tmp_path / "id_ed25519",
+        checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
+    )
     (tmp_path / "id_ed25519.pub").write_text("ssh-ed25519 AAAA test\n")
     service = RecipeService(
         config,

@@ -84,7 +84,9 @@ async def test_idle_skips_unparseable_timestamps_and_destroys_when_the_checkpoin
     # Naive, as rows written before the timestamps became tz-aware are.
     naive = (datetime.now(UTC) - timedelta(seconds=120)).replace(tzinfo=None).isoformat()
     await db.execute("UPDATE computers SET created_at = ? WHERE id = ?", (naive, stale.id))
-    host.hypervisor.fail_next("snapshot")
+    # The disk snap, not the memory snapshot: a failed memory snapshot is retried
+    # onto the durable directory (a full tmpfs must not cost the checkpoint).
+    host.blocks.fail_next("snap")
 
     assert await reaper.reap_idle() == 1
 

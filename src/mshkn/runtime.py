@@ -203,6 +203,9 @@ class Runtime:
         reaped = await self.reaper.reap_dead()
         if reaped:
             logger.info("Startup: reaped %d dead VM(s)", reaped)
+        persisted = await self.checkpoints.recover_staging()
+        if persisted:
+            logger.info("Startup: persisted %d staged checkpoint(s)", persisted)
         resumed_jobs = await self.relay.resume()
         if resumed_jobs:
             logger.info("Startup: re-running %d unsettled relay job(s)", resumed_jobs)

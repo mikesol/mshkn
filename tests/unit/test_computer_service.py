@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from typing import TYPE_CHECKING
 
 import pytest
 
 from mshkn.config import Config
-from mshkn.db import get_computer, insert_account, insert_checkpoint
+from mshkn.db import get_checkpoint, get_computer, insert_account, insert_checkpoint
 from mshkn.errors import BadRequest, HostError, LimitExceeded, NotFound
-from mshkn.host import ExecResult
+from mshkn.host import ExecResult, RunningVM, SnapshotFiles
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import Checkpoint, ComputerStatus
 from mshkn.observability.metrics import computers_active, operation_errors_total
@@ -17,7 +18,7 @@ from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.computers import ComputerService
 from mshkn.services.recipes import RecipeService
-from tests.support import account_row
+from tests.support import account_row, checkpoint_row
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -36,7 +37,11 @@ async def _service(
 ) -> tuple[ComputerService, FakeHostInstance]:
     await insert_account(db, ACCOUNT)
     host = FakeHost()
-    config = Config(domain="test.dev", checkpoint_local_dir=tmp_path / "ckpts")
+    config = Config(
+        domain="test.dev",
+        checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
+    )
     allocator = SlotAllocator()
     recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, BackgroundTasks())
     return ComputerService(config, db, host, allocator, recipes), host
@@ -339,3 +344,151 @@ async def test_exec_marks_the_computer_busy_and_touches_it_when_the_command_ends
     async for _ in service.stream(computer, "ls"):
         assert service.busy == {computer.id}
     assert service.busy == set()
+
+
+async def test_bring_up_adds_the_route_while_the_ssh_warm_is_in_flight(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """warm and add_route depend on nothing but the VM's address, so they run
+    together: the Caddy reload no longer waits for the SSH handshake (#147)."""
+    service, host = await _service(db, tmp_path)
+    seen_routes: list[dict[str, str]] = []
+    real_warm = host.guest.warm
+
+    async def warm(vm_ip: str) -> None:
+        await asyncio.sleep(0)  # the handshake takes a turn of the loop
+        seen_routes.append(dict(host.proxy.routes))
+        await real_warm(vm_ip)
+
+    monkeypatch.setattr(host.guest, "warm", warm)
+    computer = await service.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    assert seen_routes == [{computer.id: computer.vm_ip}], (
+        "the route was published before the warm finished"
+    )
+    assert host.guest.warmed == [computer.vm_ip]
+
+
+async def test_teardown_removes_the_route_while_the_vm_is_being_killed(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Route removal, and then tap teardown, do not queue behind the steps they
+    are independent of: the Caddy reload overlaps the kill, and the tap delete
+    (67 ms of RCU on the live host) overlaps the volume removal (#148)."""
+    service, host = await _service(db, tmp_path)
+    computer = await service.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    routes_during_kill: list[dict[str, str]] = []
+    taps_during_volume_removal: list[list[int]] = []
+    real_kill = host.hypervisor.kill
+    real_remove = host.blocks.remove
+
+    async def slow_kill(pid: int) -> None:
+        await asyncio.sleep(0.01)
+        routes_during_kill.append(dict(host.proxy.routes))
+        await real_kill(pid)
+
+    async def slow_remove(*, volume_id: int, name: str) -> None:
+        await asyncio.sleep(0.01)
+        taps_during_volume_removal.append(list(host.hypervisor.torn_down))
+        await real_remove(volume_id=volume_id, name=name)
+
+    monkeypatch.setattr(host.hypervisor, "kill", slow_kill)
+    monkeypatch.setattr(host.blocks, "remove", slow_remove)
+    await service.destroy(computer.id)
+    assert routes_during_kill == [{}], "the route went while the kill was in flight"
+    assert taps_during_volume_removal == [[computer.slot]], "the tap went during the volume removal"
+    assert service.allocator.free_slots == frozenset({computer.slot})
+
+
+async def test_fork_restores_from_the_staging_copy_until_the_durable_one_lands(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """A fork right after a checkpoint reads the tmpfs copy; once the durable
+    copy exists it is preferred, so the staging copy can go (#144)."""
+    service, host = await _service(db, tmp_path)
+    await insert_checkpoint(db, checkpoint_row("ckpt-s", thin_volume_id=0))
+    staging = tmp_path / "staging" / "ckpt-s"
+    staging.mkdir(parents=True)
+    (staging / "vmstate").write_bytes(b"v")
+    (staging / "memory").write_bytes(b"m")
+    ckpt = await get_checkpoint(db, "ckpt-s")
+    assert ckpt is not None
+    await service.fork(ACCOUNT, ckpt, recipe_id=None)
+    assert host.hypervisor.restored[-1][1].memory == staging / "memory"
+    durable = tmp_path / "ckpts" / "ckpt-s"
+    durable.mkdir(parents=True)
+    (durable / "vmstate").write_bytes(b"v")
+    (durable / "memory").write_bytes(b"m")
+    await service.fork(ACCOUNT, ckpt, recipe_id=None)
+    assert host.hypervisor.restored[-1][1].memory == durable / "memory"
+
+
+async def test_fork_retries_from_the_durable_copy_when_the_staging_copy_vanished(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fork that resolved the tmpfs copy, then waited on the staging lock past
+    the linger, finds the durable copy on a second try instead of failing."""
+    service, host = await _service(db, tmp_path)
+    await insert_checkpoint(db, checkpoint_row("ckpt-s", thin_volume_id=0))
+    staging = tmp_path / "staging" / "ckpt-s"
+    durable = tmp_path / "ckpts" / "ckpt-s"
+    staging.mkdir(parents=True)
+    (staging / "vmstate").write_bytes(b"v")
+    (staging / "memory").write_bytes(b"m")
+    real_restore = host.hypervisor.restore
+    attempts: list[Path] = []
+
+    async def restore(
+        *, slot: int, disk_volume_id: int, disk_name: str, snapshot: SnapshotFiles
+    ) -> RunningVM:
+        attempts.append(snapshot.memory)
+        if len(attempts) == 1:
+            # The linger ran out while this fork waited for the staging lock.
+            durable.mkdir(parents=True)
+            (durable / "vmstate").write_bytes(b"v")
+            (durable / "memory").write_bytes(b"m")
+            shutil.rmtree(staging)
+            raise HostError("restore: FileNotFoundError: memory")
+        return await real_restore(
+            slot=slot, disk_volume_id=disk_volume_id, disk_name=disk_name, snapshot=snapshot
+        )
+
+    monkeypatch.setattr(host.hypervisor, "restore", restore)
+    ckpt = await get_checkpoint(db, "ckpt-s")
+    assert ckpt is not None
+    computer = await service.fork(ACCOUNT, ckpt, recipe_id=None)
+    assert attempts == [staging / "memory", durable / "memory"]
+    assert computer.status is ComputerStatus.RUNNING
+
+
+async def test_fork_does_not_retry_a_restore_that_failed_with_its_files_still_there(
+    db: aiosqlite.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a vanished snapshot file earns a second restore. Any other failure
+    may have let the guest run and write its disk, and a retry would pair that
+    disk with the old memory image; it is abandoned instead, as before."""
+    service, host = await _service(db, tmp_path)
+    await insert_checkpoint(db, checkpoint_row("ckpt-s", thin_volume_id=0))
+    staging = tmp_path / "staging" / "ckpt-s"
+    staging.mkdir(parents=True)
+    (staging / "vmstate").write_bytes(b"v")
+    (staging / "memory").write_bytes(b"m")
+    durable = tmp_path / "ckpts" / "ckpt-s"
+    durable.mkdir(parents=True)
+    attempts = 0
+
+    async def restore(
+        *, slot: int, disk_volume_id: int, disk_name: str, snapshot: SnapshotFiles
+    ) -> RunningVM:
+        nonlocal attempts
+        attempts += 1
+        (durable / "vmstate").write_bytes(b"v")
+        (durable / "memory").write_bytes(b"m")  # a durable copy appears meanwhile
+        raise HostError("restore: TimeoutError: 172.16.254.2:22 did not become reachable")
+
+    monkeypatch.setattr(host.hypervisor, "restore", restore)
+    ckpt = await get_checkpoint(db, "ckpt-s")
+    assert ckpt is not None
+    with pytest.raises(HostError, match="did not become reachable"):
+        await service.fork(ACCOUNT, ckpt, recipe_id=None)
+    assert attempts == 1
+    assert host.blocks.volumes == {0: None}, "the fork was abandoned and its volume released"

@@ -85,6 +85,19 @@ class _CleanupPass:
         elif self.interrupted is None:
             self.interrupted = outcome
 
+    async def steps(self, *actions: tuple[str, Awaitable[object]]) -> None:
+        """Run independent steps together, each as best-effort as `step`.
+
+        A cancellation lands on every step still in flight, each of which
+        records it and returns; gather then re-raises it once they are all
+        done, so nothing is left running when it is caught here.
+        """
+        try:
+            await asyncio.gather(*(self.step(what, action) for what, action in actions))
+        except asyncio.CancelledError as exc:
+            if self.interrupted is None:
+                self.interrupted = exc
+
 
 class ComputerService:
     def __init__(
@@ -240,10 +253,20 @@ class ComputerService:
         return await self.recipes.ensure_template(recipe)
 
     async def _snapshot_files_for(self, checkpoint: Checkpoint) -> SnapshotFiles | None:
+        """The durable copy, else the tmpfs copy a fresh checkpoint still has, else R2.
+
+        The durable copy appears by rename, so it is complete when it exists;
+        the staging copy lingers past it (#144), so a fork that resolved the
+        staging path a moment earlier still finds its files.
+        """
         ckpt_dir = self.config.checkpoint_local_dir / checkpoint.id
         files = SnapshotFiles(vmstate=ckpt_dir / "vmstate", memory=ckpt_dir / "memory")
         if files.vmstate.exists() and files.memory.exists():
             return files
+        staging_dir = self.config.checkpoint_staging_dir / checkpoint.id
+        staged = SnapshotFiles(vmstate=staging_dir / "vmstate", memory=staging_dir / "memory")
+        if staged.vmstate.exists() and staged.memory.exists():
+            return staged
         if not checkpoint.r2_prefix:
             logger.info("Checkpoint %s has no R2 prefix, will cold-boot", checkpoint.id)
             return None
@@ -267,7 +290,7 @@ class ComputerService:
         files_for: Callable[[], Awaitable[SnapshotFiles | None]],
         api_key_id: str | None,
     ) -> Computer:
-        """Snap the disk, boot or restore, warm SSH, record, route.
+        """Snap the disk, boot or restore, record, then warm SSH and route together.
 
         Everything after the snap is guarded: on any failure the VM (if any)
         is killed, the route removed, the volume removed, the tap torn down,
@@ -288,9 +311,40 @@ class ComputerService:
             # hypervisor failure counts once per op, which is what §10 asks for.
             if files is not None:
                 async with timed("restore"):
-                    vm = await self.host.hypervisor.restore(
-                        slot=slot, disk_volume_id=volume_id, disk_name=volume_name, snapshot=files
-                    )
+                    try:
+                        vm = await self.host.hypervisor.restore(
+                            slot=slot,
+                            disk_volume_id=volume_id,
+                            disk_name=volume_name,
+                            snapshot=files,
+                        )
+                    except HostError:
+                        # The files were resolved before the staging lock was
+                        # taken. A fork that chose a checkpoint's tmpfs copy and
+                        # then waited past its linger finds that copy gone; the
+                        # durable copy exists by then, so resolve once more.
+                        # Only that case is retried: Firecracker opens the files
+                        # before the guest runs, so a missing file means the
+                        # disk is untouched. Any other failure may have let the
+                        # guest write the disk, and pairing it with the old
+                        # memory image again would be wrong.
+                        if files.memory.exists() and files.vmstate.exists():
+                            raise
+                        again = await files_for()
+                        if again is None or again == files:
+                            raise
+                        logger.warning(
+                            "Restore of %s from %s failed; retrying from %s",
+                            computer_id,
+                            files.memory.parent,
+                            again.memory.parent,
+                        )
+                        vm = await self.host.hypervisor.restore(
+                            slot=slot,
+                            disk_volume_id=volume_id,
+                            disk_name=volume_name,
+                            snapshot=again,
+                        )
             else:
                 async with timed("boot"):
                     vm = await self.host.hypervisor.boot(
@@ -299,7 +353,6 @@ class ComputerService:
                         disk_name=volume_name,
                         resources=resources,
                     )
-            await self.host.guest.warm(vm.vm_ip)
             computer = Computer(
                 id=computer_id,
                 account_id=account.id,
@@ -316,7 +369,13 @@ class ComputerService:
                 api_key_id=api_key_id,
             )
             await insert_computer(self.db, computer)
-            await self.host.proxy.add_route(computer_id, vm.vm_ip)
+            # The SSH warm and the Caddy route depend on nothing but the address,
+            # so the route's config reload does not wait for the handshake (#147).
+            # _abandon removes the route whatever happened, so a warm that fails
+            # mid-flight leaves nothing behind.
+            await asyncio.gather(
+                self.host.guest.warm(vm.vm_ip), self.host.proxy.add_route(computer_id, vm.vm_ip)
+            )
         except BaseException as exc:
             await self._abandon(computer_id, slot, volume_id, volume_name, vm)
             if isinstance(exc, MshknError | asyncio.CancelledError):
@@ -353,14 +412,17 @@ class ComputerService:
         """
         logger.warning("Abandoning computer %s after a failed bring-up", computer_id)
         cleanup = _CleanupPass(computer_id)
-        await cleanup.step("route removal", self.host.proxy.remove_route(computer_id))
+        first: list[tuple[str, Awaitable[object]]] = [
+            ("route removal", self.host.proxy.remove_route(computer_id))
+        ]
         if vm is not None:
-            await cleanup.step("kill", self.host.hypervisor.kill(vm.pid))
-            await cleanup.step("evict", self.host.guest.evict(vm.vm_ip))
-        await cleanup.step(
-            "volume removal", self.host.blocks.remove(volume_id=volume_id, name=volume_name)
+            first.append(("kill", self.host.hypervisor.kill(vm.pid)))
+            first.append(("evict", self.host.guest.evict(vm.vm_ip)))
+        await cleanup.steps(*first)
+        await cleanup.steps(
+            ("volume removal", self.host.blocks.remove(volume_id=volume_id, name=volume_name)),
+            ("teardown", self.host.hypervisor.teardown_slot(slot)),
         )
-        await cleanup.step("teardown", self.host.hypervisor.teardown_slot(slot))
         await cleanup.step("status update", self._mark_destroyed(computer_id))
         # The row may already have been inserted, so the gauge has to be reset
         # from the database like every other state change (spec §10).
@@ -453,18 +515,29 @@ class ComputerService:
         on the returned pass for the caller to report.
         """
         cleanup = _CleanupPass(computer.id)
-        await cleanup.step("route removal", self.host.proxy.remove_route(computer.id))
+        # Two phases of independent steps (#148): the route, the process and
+        # the SSH session go together; then the volume and the tap, which both
+        # need the process gone. The Caddy reload and the tap's RCU wait would
+        # otherwise each add their whole length to the pass.
+        first: list[tuple[str, Awaitable[object]]] = [
+            ("route removal", self.host.proxy.remove_route(computer.id))
+        ]
         if computer.firecracker_pid is not None:
             # On a dead VM the process is gone; kill() is what releases the
             # API socket recorded for it.
-            await cleanup.step("kill", self.host.hypervisor.kill(computer.firecracker_pid))
+            first.append(("kill", self.host.hypervisor.kill(computer.firecracker_pid)))
         if computer.vm_ip:
-            await cleanup.step("evict", self.host.guest.evict(computer.vm_ip))
-        await cleanup.step(
-            "volume removal",
-            self.host.blocks.remove(volume_id=computer.thin_volume_id, name=computer.volume_name),
+            first.append(("evict", self.host.guest.evict(computer.vm_ip)))
+        await cleanup.steps(*first)
+        await cleanup.steps(
+            (
+                "volume removal",
+                self.host.blocks.remove(
+                    volume_id=computer.thin_volume_id, name=computer.volume_name
+                ),
+            ),
+            ("teardown", self.host.hypervisor.teardown_slot(computer.slot)),
         )
-        await cleanup.step("teardown", self.host.hypervisor.teardown_slot(computer.slot))
         await cleanup.step(
             "status update",
             update_computer_status(self.db, computer.id, ComputerStatus.DESTROYED),

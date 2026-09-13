@@ -51,3 +51,9 @@ def test_last_from_wins(dockerfile: str, expected: str | None) -> None:
 )
 def test_image_name_strips_tag_and_digest(reference: str, name: str) -> None:
     assert image_name(reference) == name
+
+
+def test_the_base_image_installs_socat_for_the_vsock_listener() -> None:
+    from mshkn.services.base_volume import DEFAULT_DOCKERFILE
+
+    assert "socat" in DEFAULT_DOCKERFILE.read_text(), "the guest's vsock listener is socat (#55)"

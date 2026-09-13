@@ -76,6 +76,7 @@ class FakeClient:
         self._record("resume")
 
     async def create_snapshot(self, vmstate: str, memory: str) -> None:
+        self._maybe_fail("create_snapshot")
         self.calls.append(("create_snapshot", (vmstate, memory)))
         self._record("snapshot")
 
@@ -135,7 +136,24 @@ def staged(monkeypatch: pytest.MonkeyPatch) -> Staged:
         timeline.append(f"settle:{STAGING_VM_IP}")
 
     monkeypatch.setattr(hv, "_ssh_settle", ssh_settle, raising=False)
+
+    async def vsock_reconfigure(final_vm_ip: str, final_host_ip: str) -> None:
+        if VsockFake.fail:
+            timeline.append(f"vsock-failed:{final_vm_ip}")
+            raise HostError("vsock: no OK")
+        timeline.append(f"vsock:{final_vm_ip}:{final_host_ip}")
+
+    async def vsock_settle() -> None:
+        timeline.append("vsock-settle")
+
+    VsockFake.fail = False
+    monkeypatch.setattr(hv, "_vsock_reconfigure", vsock_reconfigure, raising=False)
+    monkeypatch.setattr(hv, "_vsock_settle", vsock_settle, raising=False)
     return hv, run, timeline
+
+
+class VsockFake:
+    fail: ClassVar[bool] = False
 
 
 def _lifecycle(timeline: list[str]) -> list[str]:
@@ -229,7 +247,11 @@ async def test_boot_runs_the_staging_chain_in_order(staged: Staged) -> None:
     )
 
 
-async def test_restore_loads_the_snapshot_with_the_short_ssh_timeout(staged: Staged) -> None:
+async def test_restore_reconfigures_the_guest_over_vsock_without_waiting_for_sshd(
+    staged: Staged,
+) -> None:
+    """A restored guest is reachable over vsock the moment the device is back,
+    so the port wait, the SSH handshake and the first-session cost go (#55)."""
     hv, run, timeline = staged
     files = SnapshotFiles(vmstate=Path("/c/vmstate"), memory=Path("/c/memory"))
     vm = await hv.restore(slot=9, disk_volume_id=7, disk_name="mshkn-comp-a", snapshot=files)
@@ -241,6 +263,24 @@ async def test_restore_loads_the_snapshot_with_the_short_ssh_timeout(staged: Sta
         f"start:{SOCKET}",
         f"load:{SOCKET}",
         f"close:{SOCKET}",
+        "vsock:172.16.9.2:172.16.9.1",
+    ]
+    assert _rename_chain(9) in [c for c, _ in run.calls]
+
+
+async def test_restore_falls_back_to_ssh_when_the_guest_has_no_vsock_listener(
+    staged: Staged,
+) -> None:
+    """A checkpoint taken from an image without the listener still restores."""
+    hv, run, timeline = staged
+    VsockFake.fail = True
+    files = SnapshotFiles(vmstate=Path("/c/vmstate"), memory=Path("/c/memory"))
+    await hv.restore(slot=9, disk_volume_id=7, disk_name="mshkn-comp-a", snapshot=files)
+    assert _lifecycle(timeline) == [
+        f"start:{SOCKET}",
+        f"load:{SOCKET}",
+        f"close:{SOCKET}",
+        "vsock-failed:172.16.9.2",
         f"wait:{STAGING_VM_IP}:22:5.0",
         "ssh:172.16.9.2:172.16.9.1",
     ]
@@ -307,6 +347,7 @@ async def test_build_template_boots_snapshots_and_tears_down_staging(
         f"close:{template}",
         f"wait:{STAGING_VM_IP}:22:30.0",
         f"settle:{STAGING_VM_IP}",
+        "vsock-settle",
         f"pause:{template}",
         f"snapshot:{template}",
         f"close:{template}",
@@ -518,3 +559,45 @@ async def test_ssh_settle_completes_a_session_over_the_staging_address(
 
     assert hosts == [STAGING_VM_IP]
     assert conn.runs == ["true"]
+
+
+async def test_staging_cleanup_runs_once_until_a_stage_fails(staged: Staged) -> None:
+    """The happy path leaves nothing on the staging slot, so only the first stage
+    after start-up and the one after a failure pay for the cleanup (#147).
+
+    On the live host the cleanup was 15 ms of no-op subprocesses per restore.
+    """
+    hv, run, _ = staged
+    remove = f"dmsetup remove {STAGING_DRIVE_NAME}"
+    await hv.boot(slot=1, disk_volume_id=7, disk_name="mshkn-comp-a", resources=Resources())
+    await hv.boot(slot=2, disk_volume_id=8, disk_name="mshkn-comp-b", resources=Resources())
+    cmds = [c for c, _ in run.calls]
+    assert cmds.count(remove) == 1, "the second boot found the slot clean and did not clean it"
+    FakeClient.fail_on = "configure_and_boot"
+    with pytest.raises(HostError):
+        await hv.boot(slot=3, disk_volume_id=9, disk_name="mshkn-comp-c", resources=Resources())
+    before = len(run.calls)
+    await hv.boot(slot=4, disk_volume_id=10, disk_name="mshkn-comp-d", resources=Resources())
+    after_failure = [c for c, _ in run.calls[before:]]
+    assert after_failure.index(remove) < after_failure.index(_staging_table(10)), (
+        "the stage after a failure cleans before it maps"
+    )
+
+
+async def test_snapshot_resumes_the_vm_when_the_write_fails(staged: Staged, tmp_path: Path) -> None:
+    """A snapshot that cannot be written (tmpfs full, say) must not leave the VM paused."""
+    hv, _, _ = staged
+    FakeClient.fail_on = "create_snapshot"
+    with pytest.raises(HostError):
+        await hv.snapshot("/tmp/fc-mshkn-comp-a.socket", tmp_path / "s")
+    (client,) = FakeClient.instances
+    assert [n for n, _ in client.calls] == ["pause", "resume"], "resumed despite the failure"
+    assert client.closed
+
+
+async def test_boot_and_template_configure_the_staging_vsock_device(staged: Staged) -> None:
+    hv, _run, _ = staged
+    await hv.boot(slot=3, disk_volume_id=7, disk_name="mshkn-comp-a", resources=Resources())
+    (client,) = FakeClient.instances
+    (_name, config) = client.calls[0]
+    assert config.vsock_path == fc.STAGING_VSOCK_PATH

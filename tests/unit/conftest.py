@@ -34,7 +34,11 @@ async def db(tmp_path: Path) -> AsyncIterator[aiosqlite.Connection]:
 @pytest.fixture
 def runtime_config(tmp_path: Path) -> Config:
     """A Config whose writable paths live under tmp_path (templates, checkpoints)."""
-    return Config(domain="test.dev", checkpoint_local_dir=tmp_path / "ckpts")
+    return Config(
+        domain="test.dev",
+        checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
+    )
 
 
 def make_runtime(

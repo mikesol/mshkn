@@ -62,7 +62,11 @@ async def _lifecycle(
 ) -> tuple[Lifecycle, ComputerService, CheckpointService, FakeHostInstance, list[dict[str, Any]]]:
     await insert_account(db, ACCOUNT)
     host = FakeHost()
-    config = Config(domain="test.dev", checkpoint_local_dir=tmp_path / "ckpts")
+    config = Config(
+        domain="test.dev",
+        checkpoint_local_dir=tmp_path / "ckpts",
+        checkpoint_staging_dir=tmp_path / "staging",
+    )
     allocator = SlotAllocator()
     tasks = BackgroundTasks()
     recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)

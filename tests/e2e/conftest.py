@@ -47,16 +47,27 @@ def api_key() -> str:
     return API_KEY
 
 
+# uvicorn closes an idle keep-alive connection after 5 s (timeout_keep_alive).
+# A client that reuses one it has held idle for longer loses the race and sees
+# "Server disconnected without sending a response" (T14.5, twice in seven runs
+# of the latency pass); expiring idle connections first avoids the race.
+LIMITS = httpx.Limits(keepalive_expiry=4.0)
+
+
 @pytest.fixture
 async def client() -> AsyncIterator[httpx.AsyncClient]:
-    async with httpx.AsyncClient(base_url=API_URL, headers=HEADERS, timeout=60.0) as c:
+    async with httpx.AsyncClient(
+        base_url=API_URL, headers=HEADERS, timeout=60.0, limits=LIMITS
+    ) as c:
         yield c
 
 
 @pytest.fixture
 async def long_client() -> AsyncIterator[httpx.AsyncClient]:
     """Client with longer timeout for slow operations like fork."""
-    async with httpx.AsyncClient(base_url=API_URL, headers=HEADERS, timeout=120.0) as c:
+    async with httpx.AsyncClient(
+        base_url=API_URL, headers=HEADERS, timeout=120.0, limits=LIMITS
+    ) as c:
         yield c
 
 
