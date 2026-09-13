@@ -7,7 +7,7 @@ import os
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
-from membrane.config import Settings
+from membrane.config import DEFAULT_ANTHROPIC_BASE_URL, Settings
 from membrane.memory import (
     EXTRACTION_MAX_TOKENS,
     EXTRACTION_MODEL_ID,
@@ -15,6 +15,7 @@ from membrane.memory import (
     Mem0Store,
     Provenance,
     extraction_llm,
+    extraction_model_id,
     visible_from,
 )
 
@@ -156,7 +157,7 @@ def test_extraction_sends_no_parameter_the_installed_sdk_rejects() -> None:
     from mem0.configs.llms.anthropic import AnthropicConfig
     from mem0.llms.anthropic import AnthropicLLM
 
-    llm = AnthropicLLM(AnthropicConfig(**extraction_llm("k")["config"]))
+    llm = AnthropicLLM(AnthropicConfig(**extraction_llm("k", DEFAULT_ANTHROPIC_BASE_URL)["config"]))
     sent: dict[str, Any] = {}
 
     def create(**kwargs: Any) -> Any:
@@ -169,3 +170,33 @@ def test_extraction_sends_no_parameter_the_installed_sdk_rejects() -> None:
     accepted = set(inspect.signature(anthropic.Anthropic(api_key="k").messages.create).parameters)
     assert set(sent) - accepted == set()
     assert sent["max_tokens"] == EXTRACTION_MAX_TOKENS and sent["model"] == EXTRACTION_MODEL_ID
+
+
+def test_extraction_goes_direct_when_the_base_url_is_anthropic() -> None:
+    llm = extraction_llm("sk-a", DEFAULT_ANTHROPIC_BASE_URL)
+    assert llm["config"]["model"] == "claude-haiku-4-5-20251001"
+    assert llm["config"]["anthropic_base_url"] == DEFAULT_ANTHROPIC_BASE_URL
+    assert llm["config"]["api_key"] == "sk-a"
+
+
+def test_extraction_follows_the_brain_through_a_gateway() -> None:
+    """mem0's extraction LLM is a second Anthropic caller, in process and off the
+    relay (§5.1). The brain holds one model key, so if the relay goes through a
+    gateway then extraction must too or every memory operation fails."""
+    llm = extraction_llm("vck-1", "https://ai-gateway.vercel.sh")
+    assert llm["config"]["anthropic_base_url"] == "https://ai-gateway.vercel.sh"
+    # The gateway namespaces every id by its provider, including this one.
+    assert llm["config"]["model"] == "anthropic/claude-haiku-4-5-20251001"
+
+
+def test_the_extraction_model_is_namespaced_only_for_a_gateway() -> None:
+    assert extraction_model_id(DEFAULT_ANTHROPIC_BASE_URL) == EXTRACTION_MODEL_ID
+    assert extraction_model_id("https://ai-gateway.vercel.sh") == f"anthropic/{EXTRACTION_MODEL_ID}"
+
+
+def test_sampling_parameters_stay_suppressed_through_the_gateway() -> None:
+    """mem0 sniffs the model family out of the id to decide whether to send
+    `temperature`, and a `provider/` prefix would change what it parses. The explicit
+    flag short-circuits the sniff, so the prefix cannot reach it — pin that."""
+    for url in (DEFAULT_ANTHROPIC_BASE_URL, "https://ai-gateway.vercel.sh"):
+        assert extraction_llm("k", url)["config"]["enable_sampling_parameters"] is False
