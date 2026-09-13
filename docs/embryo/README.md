@@ -11,8 +11,9 @@ The capability files are under `embryo/capabilities/`. The checks a capability n
 ## Reading a run spoken through a gateway
 
 A run whose `run.json` carries a `base_url` other than `https://api.anthropic.com` was spoken
-through a model gateway (#127). Three things about it are not comparable to a run spoken directly,
-and all three are properties of the crossing rather than of the model:
+through a model gateway (#127). Four things about it are not comparable to a run spoken directly.
+The first three are properties of the crossing rather than of the model; the fourth is a property
+of how the crossing was paid for:
 
 1. **The effort axis is absent, not defaulted.** `output_config.effort` is Anthropic-specific.
    A run with `"effort_supported": false` sent no such field on any call, so it cannot be read
