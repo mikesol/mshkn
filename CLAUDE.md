@@ -1,6 +1,6 @@
 # mshkn
 
-Disposable cloud computers for AI agents: Firecracker microVMs you create, exec on, checkpoint, fork, merge and destroy. `README.md` says what exists, `docs/ARCHITECTURE.md` says how it works, `docs/plans/README.md` indexes every plan with its status, and `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` is the definition of done (180 E2E tests).
+Disposable cloud computers for AI agents: Firecracker microVMs you create, exec on, checkpoint, fork, merge and destroy. `docs/what-exists.md` says what exists and what does not, `docs/ARCHITECTURE.md` says how it works, `docs/plans/README.md` indexes every plan with its status, and `docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md` is the definition of done (180 E2E tests).
 
 ## The gate
 
@@ -101,7 +101,7 @@ gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thre
 - **No backwards compatibility or versioning.** This is a pre-alpha research project with zero users. Don't version APIs, don't keep fallback paths, don't create a "v2" beside the old thing; replace it. The one exception is database migrations, which are sequential and additive.
 - **Product behaviour changes need a test that found or pins them**, in the unit or flow tier; the E2E tier proves them on the live host.
 - **One PR per capability, defects fixed inline.** A run of `uv run capability run <name>` that finds a defect in the membrane or the driver fixes it in the capability's PR, with a unit or flow test that pins it, and the capability's README under `docs/embryo/` lists the defect beside the run that found it. Only defects outside the capability (the host, the API) become issues.
-- **An issue that specifies a change opens with what exists.** Before filing or rewriting an issue that says how mshkn should change, read the code it touches (`src/mshkn/api/deps.py` and the routers for auth and routes, `src/mshkn/api/schemas.py` for request fields, `src/mshkn/db/` and `migrations/` for tables, the service for behaviour). The issue's first section is "What exists today", and every claim in it cites a file. Prose in `README.md` and `docs/ARCHITECTURE.md` is accurate but not exhaustive; a mechanism the docs do not name must be read from the code, not inferred. #88, #89 and #93 are the template.
+- **An issue that specifies a change opens with what exists.** Before filing or rewriting an issue that says how mshkn should change, read the code it touches (`src/mshkn/api/deps.py` and the routers for auth and routes, `src/mshkn/api/schemas.py` for request fields, `src/mshkn/db/` and `migrations/` for tables, the service for behaviour). The issue's first section is "What exists today", and every claim in it cites a file. Prose in `docs/what-exists.md` and `docs/ARCHITECTURE.md` is accurate but not exhaustive; a mechanism the docs do not name must be read from the code, not inferred. #88, #89 and #93 are the template.
 - **Infrastructure comes before workarounds.** If a task needs a host or a service the project does not have, write the minimum into `docs/infrastructure.md` and ask for it; do not make the product optional or add indirection to work around missing infrastructure.
 
 ## Deployment
