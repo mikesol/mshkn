@@ -4,6 +4,6 @@ Each capability (`docs/superpowers/specs/2026-09-12-capabilities-design.md`) has
 
 | Capability | Depends on | Directory | Promoted |
 |---|---|---|---|
-| hatch | | `docs/embryo/hatch/` | see `docs/embryo/hatch/README.md` |
+| hatch | | `docs/embryo/hatch/` | [`2026-09-13-run-5`](hatch/PROMOTED.md) |
 
 The capability files are under `embryo/capabilities/`. The checks a capability names are in `embryo/membrane/postconditions.py`.
