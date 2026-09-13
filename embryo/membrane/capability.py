@@ -17,6 +17,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -33,7 +34,7 @@ from membrane.config import DEFAULT_ANTHROPIC_BASE_URL, DEFAULT_MODEL_ID, EFFORT
 from membrane.declarations import RESERVED_TOOL_NAMES
 from membrane.effort import EFFORTS
 from membrane.model import add_usage, zero_usage
-from membrane.postconditions import CHECKS, Judged, Turn, judge, tool_computers
+from membrane.postconditions import CHECKS, PROVISION, Judged, Turn, judge, tool_computers
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -57,6 +58,40 @@ MAX_REPAIRS = 3
 # in a run (#170): the bound is what makes a goto backwards finite.
 MAX_REASKS = 2
 TRANSPORT_RETRIES = 3
+
+FENCED_RE = re.compile(r"```[^\n]*\n(.*?)\n?```", re.S)
+INLINE_RE = re.compile(r"`(/[^\s`]+)`")
+ABS_PATH_RE = re.compile(r"^/[^\s`]+$")
+
+
+# ---------------------------------------------------------------- what a reply names
+
+
+def paths_in(reply: str) -> list[str]:
+    """The absolute paths a reply names, for root to place a secret at (spec
+    §7.2): every fenced block that is one bare path, in order; failing that,
+    every inline code span that is one. Only the model's words are read: the
+    proposal documents the membrane appends after the reply hold an entrypoint,
+    which is not where the agent asked for anything. Duplicates collapse."""
+    text = reply.split("\nproposal p-", 1)[0]
+    fenced = [block.strip() for block in FENCED_RE.findall(text)]
+    found = [block for block in fenced if ABS_PATH_RE.match(block)]
+    if not found:
+        found = INLINE_RE.findall(text)
+    return list(dict.fromkeys(found))
+
+
+def unprovided_verbs(listing: Mapping[str, Any]) -> list[tuple[str, str, str, str]]:
+    """(verb, name, recipe_id, chain) for every name a ready verb requires that
+    root has not provided, in catalog order."""
+    pending: list[tuple[str, str, str, str]] = []
+    for verb, entry in listing["catalog"].items():
+        if entry["status"] != "ready":
+            continue
+        for requirement in entry["requires"]:
+            if requirement["name"] not in entry["provided"]:
+                pending.append((verb, requirement["name"], entry["recipe_id"], entry["chain"]))
+    return pending
 
 
 # ---------------------------------------------------------------- settings and cost
@@ -247,6 +282,13 @@ class Record:
                 lines += ["**Approvals:**", ""]
                 lines += [f"- `{a['id']}` {a['decision']}: {a['result']}" for a in turn.approvals]
                 lines.append("")
+            if turn.provisions:
+                lines += ["**Provided:**", ""]
+                lines += [
+                    f"- {p['verb']} {p['name']} at {p['path']} -> {p['checkpoint']}: {p['result']}"
+                    for p in turn.provisions
+                ]
+                lines.append("")
             commands = ", ".join(f"{n:03d}" for n in turn.commands)
             lines += [f"Commands: {commands}", ""]
         path = self.directory / "transcript.md"
@@ -283,6 +325,10 @@ class DoorsApi(Protocol):
     async def check_computer(self, computer_id: str) -> dict[str, Any]: ...
 
     async def recipes(self) -> set[str]: ...
+
+    async def provision(
+        self, verb: str, chain: str, recipe_id: str, path: str, secret: str
+    ) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -330,6 +376,12 @@ class Promotion:
     started_from: str | None
     base_url: str = DEFAULT_ANTHROPIC_BASE_URL
     body_extra: str = ""
+    # The run and checkpoint the keys of this lineage were rotated from (spec §7.1
+    # step 2): after a capability is promoted, root replaces the model keys its
+    # hatch baked into /brain/.env and cancels the hatch-time ones. Written by hand
+    # into PROMOTED.md until `capability rotate` exists; `read_promotion` carries it
+    # either way, and a record written before it existed simply omits it.
+    rotated_from: str | None = None
 
 
 def promoted_label(name: str, working: str) -> str:
@@ -617,6 +669,80 @@ class Doors:
             with suppress(httpx.HTTPError):
                 await self.api.delete(f"/computers/{computer_id}")
 
+    async def provision(self, verb: str, chain: str, recipe_id: str, path: str, secret: str) -> str:
+        """Root places what a verb requires (spec §7.2), with the account key and
+        outside every door: a computer from the chain's head, or from the verb's
+        recipe when the chain has no head yet; the secret uploaded to the path the
+        agent named; a checkpoint under the chain; the computer destroyed. The
+        four commands are recorded by name, so `nothing_by_hand` can count them
+        against `provide`; the secret is the upload's body and no detail names it."""
+        started = self.now()
+        head = await self.head(chain)
+        if head is None:
+            created = await self.api.post("/computers", json={"recipe_id": recipe_id})
+        else:
+            created = await self.api.post(f"/checkpoints/{head['id']}/fork", json={})
+        created.raise_for_status()
+        computer_id = str(created.json()["computer_id"])
+        self._record(
+            "api",
+            PROVISION[0],
+            {"verb": verb, "from": head["id"] if head else recipe_id},
+            "",
+            created.status_code,
+            self.now() - started,
+            computer_id=computer_id,
+        )
+        try:
+            started = self.now()
+            uploaded = await self.api.post(
+                f"/computers/{computer_id}/upload",
+                params={"path": path},
+                content=secret.encode(),
+                headers={"content-type": "application/octet-stream"},
+            )
+            # Recorded before `raise_for_status`: a failed upload leaves
+            # `create, upload, destroy` in the record, which is not the whole
+            # provisioning sequence, and `nothing_by_hand` rightly calls it by hand.
+            self._record(
+                "api",
+                PROVISION[1],
+                {"verb": verb, "path": path, "bytes": len(secret.encode())},
+                "",
+                uploaded.status_code,
+                self.now() - started,
+                computer_id=computer_id,
+            )
+            uploaded.raise_for_status()
+            started = self.now()
+            taken = await self.api.post(
+                f"/computers/{computer_id}/checkpoint", json={"label": chain}
+            )
+            taken.raise_for_status()
+            checkpoint_id = str(taken.json()["checkpoint_id"])
+            self._record(
+                "api",
+                PROVISION[2],
+                {"verb": verb, "label": chain, "checkpoint_id": checkpoint_id},
+                "",
+                taken.status_code,
+                self.now() - started,
+                computer_id=computer_id,
+            )
+        finally:
+            started = self.now()
+            dropped = await self.api.delete(f"/computers/{computer_id}")
+            self._record(
+                "api",
+                PROVISION[3],
+                {"verb": verb},
+                "",
+                dropped.status_code,
+                self.now() - started,
+                computer_id=computer_id,
+            )
+        return checkpoint_id
+
     async def working_labels(self) -> list[str]:
         """`brain` and every `verb/<name>` chain on the account, once each, sorted;
         never a trial's scratch chain and never a promoted label."""
@@ -764,12 +890,19 @@ class Approver(Protocol):
     def decide(self, proposal: dict[str, Any]) -> str | None:
         """None approves; a string rejects with that reason."""
 
+    def place(self, verb: str, name: str, parsed: str | None) -> str | None:
+        """Where root puts what `verb` requires as `name`: `parsed` is what the
+        reply said, None the path to use, or None again to leave it this settle."""
+
 
 class AutoApprover:
     """Approves every pending proposal; the membrane's invariants are the guard."""
 
     def decide(self, proposal: dict[str, Any]) -> str | None:  # noqa: ARG002
         return None
+
+    def place(self, verb: str, name: str, parsed: str | None) -> str | None:  # noqa: ARG002
+        return parsed
 
 
 class AskApprover:
@@ -791,6 +924,22 @@ class AskApprover:
                 return None
             if answer.startswith("reject"):
                 return answer[len("reject") :].strip() or "rejected"
+
+    def place(self, verb: str, name: str, parsed: str | None) -> str | None:
+        """The pilot reads the reply and can override the path (spec §7.2)."""
+        while True:
+            self.stdout.write(f"provide {verb} {name}: path [{parsed or 'none'}] | skip> ")
+            self.stdout.flush()
+            line = self.stdin.readline()
+            if not line:
+                return None
+            answer = line.strip()
+            if answer == "skip":
+                return None
+            if answer == "":
+                return parsed
+            if answer.startswith("/"):
+                return answer
 
 
 # ---------------------------------------------------------------- promotion
@@ -1001,6 +1150,48 @@ async def speak(
         turn.commands += spent(since)
         return before, listing
 
+    async def provide_pending(
+        turn: Turn, listing: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Root provides (capabilities design §7.2): a rule keyed on the membrane's
+        state, never on a row. Every ready verb with a name root has not provided
+        is paired, in order, with a path the reply named; root places the run's
+        `token` there on the verb's chain, outside every door, and says provide.
+        Returns the listing afterwards and the requirements no path was given for,
+        which the settle answers with the capability's provide phrase."""
+        pending = unprovided_verbs(listing)
+        if not pending:
+            return listing, []
+        secret = context.get("token")
+        if secret is None:
+            owed = ", ".join(f"{verb} requires {name}" for verb, name, _, _ in pending)
+            log.write(f"  {owed}; the run has no token to place\n")
+            return listing, []
+        paths = paths_in(turn.reply)
+        unplaced: list[str] = []
+        placed = False
+        for i, (verb, name, recipe_id, chain) in enumerate(pending):
+            path = approver.place(verb, name, paths[i] if i < len(paths) else None)
+            if path is None:
+                unplaced.append(f"{verb} requires {name}")
+                continue
+            since = mark()
+            checkpoint = await doors.provision(verb, chain, recipe_id, path, secret)
+            result = (await doors.root("provide", verb, name)).rstrip("\n")
+            turn.commands += spent(since)
+            turn.provisions.append(
+                {
+                    "verb": verb,
+                    "name": name,
+                    "path": path,
+                    "checkpoint": checkpoint,
+                    "result": result,
+                }
+            )
+            log.write(f"  provided {name} for {verb} at {path} ({checkpoint}): {result}\n")
+            placed = True
+        return (await doors.listing() if placed else listing), unplaced
+
     def unfinished(turn: Turn) -> bool:
         """Ended on the deadline, the cap or the token budget without proposing: the
         trial it started is in the inbox, and a repair turn lets it finish."""
@@ -1023,12 +1214,13 @@ async def speak(
         )
 
     async def settle(turn: Turn) -> Settled:
-        """Approvals, builds, and at most MAX_REPAIRS repair turns in the whole run
-        for a failed build, a refused approval, or a turn that ran out before
-        proposing (capabilities design §4: every row settles). Returns whether any
-        approval in the settle — the row's own turn or a repair turn — applied a
-        policy, and the listing as it stood before the settle and after it, which is
-        what a re-ask round reads the policy change out of.
+        """Approvals, builds, root's provisions, and at most MAX_REPAIRS repair
+        turns in the whole run for a failed build, a refused approval, a turn that
+        ran out before proposing, or a requirement the reply named no path for
+        (capabilities design §4: every row settles). Returns whether any approval in
+        the settle — the row's own turn or a repair turn — applied a policy, and the
+        listing as it stood before the settle and after it, which is what a re-ask
+        round reads the policy change out of.
 
         A refusal leaves its proposal `pending` with the reason on its `log`, and
         the catalog untouched, so a build-only trigger walks straight past it
@@ -1038,7 +1230,8 @@ async def speak(
         before, listing = await approve_pending(turn)
         applied = policy_applied(turn, listing)
         current = turn
-        while repairs < MAX_REPAIRS:
+        while True:
+            listing, unplaced = await provide_pending(current, listing)
             failed = sorted(n for n, e in listing["catalog"].items() if e["status"] == "failed")
             # Once per refusal, not once per settle: a proposal the model never
             # repairs stays pending with its reason forever, and every later
@@ -1051,21 +1244,30 @@ async def speak(
                 and p.get("log")
                 and p["id"] not in repaired
             )
-            if not failed and not refused and not unfinished(current):
+            if not failed and not refused and not unfinished(current) and not unplaced:
                 return Settled(applied, before, listing)
-            repairs += 1
+            if repairs >= MAX_REPAIRS:
+                return Settled(applied, before, listing)
             if failed:
                 why, words = f"build failed for {', '.join(failed)}", capability.repair.build
             elif refused:
                 repaired.update(refused)
                 why, words = f"approval refused for {', '.join(refused)}", capability.repair.refused
-            else:
+            elif unfinished(current):
                 why, words = "the turn ran out", capability.repair.build
+            elif capability.repair.provide is None:
+                log.write(
+                    f"  no path for {', '.join(unplaced)} and {capability.name} "
+                    "has no provide phrase\n"
+                )
+                return Settled(applied, before, listing)
+            else:
+                why, words = f"no path for {', '.join(unplaced)}", capability.repair.provide
+            repairs += 1
             log.write(f"  {why}; repair {repairs}\n")
             current = await root_turn(f"3-repair-{repairs}", words)
             _, listing = await approve_pending(current)
             applied = applied or policy_applied(current, listing)
-        return Settled(applied, before, listing)
 
     async def root_turn(label: str, words: str) -> Turn:
         since = mark()
@@ -1379,6 +1581,7 @@ async def run_once(
                         "tools": [c.get("name") for c in t.audit.get("tools", [])],
                         "proposals": [p["id"] for p in t.audit.get("proposals", [])],
                         "approvals": t.approvals,
+                        "provisions": t.provisions,
                     }
                     for t in turns
                 ],
