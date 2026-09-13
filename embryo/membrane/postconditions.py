@@ -54,8 +54,10 @@ class Judged:
 def by_label(turns: list[Turn], label: str) -> Turn | None:
     """The row's latest attempt: the last turn labelled `label` or `<label>-again-<n>`,
     which a policy change gives the row (#170). A check judges what the row last
-    answered, not what it answered before the answer was possible. The suffix is
-    matched whole, so `9-count-1` is never an attempt at `9`."""
+    answered, not what it answered before the answer was possible. An attempt's
+    label is built from the row's own label, so matching the `<label>-again-`
+    prefix is enough to tell `9`'s attempts from the row `9-count-1`, which is not
+    one of them."""
     again = f"{label}-again-"
     attempts = [t for t in turns if t.label == label or t.label.startswith(again)]
     return attempts[-1] if attempts else None

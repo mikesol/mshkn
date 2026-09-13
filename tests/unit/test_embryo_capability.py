@@ -1246,6 +1246,7 @@ GROW = "Grow yourself another verb, and let me use that one."
 GRANT = "Let me use everything you have."
 USE = "Use what I may ask of you."
 GHOST = "Let me use a verb you do not have."
+SELF = "Say in your own words what you have become."
 
 
 class FakeDoors:
@@ -1502,6 +1503,9 @@ class FakeDoors:
             )
             made.append(self._propose("policy", "grant", policy=self._grant(ready)))
             reply = "Proposed a grant of every verb I have."
+        elif self.growing and msg == SELF:
+            made.append(self._propose("prompt", "self"))
+            reply = "Proposed a new self-description."
         elif self.growing and msg == GHOST:
             made.append(self._propose("policy", "ghost", policy=self._grant(["nope"])))
             reply = "Proposed a grant of a verb I never grew."
@@ -1546,6 +1550,10 @@ class FakeDoors:
             # inbox (#123), which is how the driver knows a repair turn is owed.
             proposal["log"] = "refused: an effect the embryo does not approve"
             return f"{pid} refused: an effect the embryo does not approve\n"
+        if proposal["kind"] == "prompt":
+            # the self-description: "applied", and nothing about who may invoke what
+            proposal["status"] = "applied"
+            return f"{pid} applied: prompt replaced; effective from the next turn\n"
         if proposal["kind"] == "policy":
             missing = [h for h in proposal["policy"]["hooks"] if h not in self.catalog]
             if missing:  # the membrane's invariant (§10.6): a door needs its hook
@@ -1913,6 +1921,50 @@ async def test_a_grant_of_a_verb_that_is_not_in_the_catalog_re_asks_nothing(
     assert "nope" not in doors.catalog
     assert reasks == []
     assert [t.label for t in turns] == ["1", "2", "ask", "ghost"]
+
+
+async def test_an_applied_prompt_is_not_a_policy_change(tmp_path: Path) -> None:
+    """The membrane answers an approved self-description `p-N applied: prompt
+    replaced…`, the same word it uses for a policy, and a self-description changes
+    nothing about what anyone may invoke. Reading the word rather than the
+    proposal's kind cleared the window at the prompt, and the widening that came
+    after it then had no rows left to ask again."""
+    from membrane.capabilities import Capability, Row
+
+    cap = Capability(
+        name="selfsaid",
+        depends=(),
+        postconditions=(),
+        rows=(
+            Row("1", "root say", WORDS["1"], ""),
+            Row("2", "root say", WORDS["2"], ""),
+            Row("ask", "signed", "What can I ask of you?", ""),
+            Row("self", "signed", SELF, ""),
+            Row("grow-1", "signed", GROW, ""),
+        ),
+        repair=HATCH.repair,
+        path=tmp_path / "selfsaid.md",
+        module=None,
+    )
+    doors = FakeDoors(growing=True)
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    applied = [p for p in doors.proposals if p["kind"] == "prompt"]
+    assert applied and all(p["status"] == "applied" for p in applied)
+    # the prompt re-asked nobody and cost nobody their place in the window: the
+    # widening that follows still reaches the row spoken before the prompt
+    assert reasks == ["ask", "self"]
+    assert [t.label for t in turns] == [
+        "1",
+        "2",
+        "ask",
+        "self",
+        "grow-1",
+        "ask-again-1",
+        "self-again-1",
+    ]
 
 
 async def test_a_re_ask_that_changes_the_policy_again_starts_another_round(
@@ -2365,7 +2417,7 @@ async def test_an_aborted_run_writes_what_it_had_and_tears_down(
         )
     summary = json.loads((out_dir / "run.json").read_text())
     assert summary["ok"] is False and "boom" in summary["error"] and summary["commands"] == 1
-    assert summary["reasks"] == []  # an aborted run counts its re-asks too
+    assert summary["reasks"] == []  # it fell over at turn 1, with nothing re-asked
     assert summary["hatched"]["rule_id"] == "rule-1"
     assert "commit" in summary["membrane"]  # an aborted run names its code too
 
@@ -2400,6 +2452,39 @@ async def test_an_aborted_run_names_the_exception_type_when_its_message_is_empty
         )
     summary = json.loads((out_dir / "run.json").read_text())
     assert summary["ok"] is False and summary["error"] == "ConnectError"
+
+
+async def test_an_aborted_run_keeps_the_re_asks_it_had_already_spoken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reasks` is the driver's own count, and an abort is evidence too: the run
+    that fell over after asking row 8 again says so, rather than reporting none."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+
+    async def speak_then_fail(*_args: Any, **kwargs: Any) -> Any:
+        kwargs["reasks"].append("8")
+        raise RuntimeError("the door went away")
+
+    monkeypatch.setattr("membrane.capability.speak", speak_then_fail)
+    api = FakeApi()
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    out_dir = tmp_path / "run"
+    with pytest.raises(RuntimeError, match="the door went away"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out_dir,
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
+    summary = json.loads((out_dir / "run.json").read_text())
+    assert summary["ok"] is False and summary["reasks"] == ["8"]
 
 
 async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

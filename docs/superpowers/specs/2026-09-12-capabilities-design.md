@@ -300,7 +300,7 @@ says `ok`. It forks the working `brain` head to `capability/<name>/brain` and
 every working `verb/<v>` head to `capability/<name>/verb/<v>`, writes
 `docs/embryo/<name>/PROMOTED.md` (the run directory, the membrane commit, the
 checkpoint ids under each promoted label, `rule_id`, `key_id`, `recipe_ids`, the
-date, `reasks` (how many rows the run had to be asked again, §5), and
+date, `reasks` (how many times a row was asked again, §5), and
 `started_from`: the promotion this run began on, so a record's
 ancestry is a chain the driver can walk, and the hatcher's signing key: its
 directory on the operator's machine and its public key line, because the
