@@ -1409,8 +1409,8 @@ class FakeDoors:
         path_in_reply: str | None = "```\n/verb/token\n```",
     ) -> None:
         # A membrane that grows a verb with a `requires` at row 11 (spec §7.2), and
-        # what its reply says about where root should put the token; `None` is a
-        # reply that names no path at all.
+        # what the replies of rows 11 and 13 say about where root should put the
+        # token; `None` is a reply that names no path at all.
         self.secret = secret
         self.path_in_reply = path_in_reply
         self.provided_at: list[tuple[str, str, str]] = []
@@ -1690,7 +1690,11 @@ class FakeDoors:
                     requires=[{"kind": "secret", "name": "page_token"}],
                 )
             )
-            reply = "Proposed secret_length. Same place:\n```\n/verb/token\n```"
+            reply = "Proposed secret_length." + (
+                f" Same place:\n{self.path_in_reply}"
+                if self.path_in_reply
+                else " Wherever the first one went."
+            )
         elif self.growing and msg == GROW:
             self.grown += 1
             name = f"extra{self.grown}"
@@ -4327,7 +4331,7 @@ async def test_the_pilot_can_override_or_skip_a_placement(tmp_path: Path) -> Non
     # every proposal approved; the first placement overridden, the second skipped
     stdin = io.StringIO("approve\n/verb/secrets/token\napprove\nskip\n")
     stdout = io.StringIO()
-    turns, _, _ = await speak(
+    turns, final, _ = await speak(
         SECURITY,
         doors,
         key_dir,
@@ -4338,6 +4342,35 @@ async def test_the_pilot_can_override_or_skip_a_placement(tmp_path: Path) -> Non
     assert doors.provided_at == [("secret_page", "/verb/secrets/token", "tok-1")]
     assert "provide secret_page page_token: path [/verb/token] | skip> " in stdout.getvalue()
     assert turns[2].provisions == []
+    # A skip is the pilot's answer for the run: no repair turn is spent asking the
+    # agent again, and the pilot is not prompted a second time.
+    assert [t.label for t in turns] == ["11", "12", "13"]
+    assert stdout.getvalue().count("provide secret_length page_token:") == 1
+    assert final is not None and final["catalog"]["secret_length"]["provided"] == []
+
+
+async def test_a_capability_with_no_provide_phrase_says_so_instead_of_repairing(
+    tmp_path: Path,
+) -> None:
+    """`Repair.provide` is None for a capability that provides nothing (hatch's is).
+    A requirement with no path is then logged and left where it is: there are no
+    words to say, so no repair turn is spoken and none of the run's budget goes."""
+    doors = FakeDoors(secret=True, path_in_reply=None)
+    key_dir, pubkey = _keys(tmp_path)
+    await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO())
+    log = io.StringIO()
+    turns, _, _ = await speak(
+        replace(SECURITY, repair=HATCH.repair),
+        doors,
+        key_dir,
+        {"key": pubkey, "url": "https://page/page", "token": "tok-1"},
+        AutoApprover(),
+        log=log,
+    )
+    assert [t.label for t in turns] == ["11", "12", "13"]
+    assert doors.provided_at == []
+    assert "no path for secret_page requires page_token and security" in log.getvalue()
+    assert "has no provide phrase" in log.getvalue()
 
 
 def test_the_asking_approver_places_with_the_parsed_path_by_default() -> None:

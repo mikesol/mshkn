@@ -891,8 +891,11 @@ class Approver(Protocol):
         """None approves; a string rejects with that reason."""
 
     def place(self, verb: str, name: str, parsed: str | None) -> str | None:
-        """Where root puts what `verb` requires as `name`: `parsed` is what the
-        reply said, None the path to use, or None again to leave it this settle."""
+        """Where root puts what `verb` requires as `name`: `parsed` is the path the
+        reply named, or None when it named none. Return the path to use, or None to
+        place nothing. Declining a path that was named leaves the requirement
+        unplaced for the rest of the run and is never asked about again; declining
+        when none was named is the settle's cue to ask the agent where."""
 
 
 class AutoApprover:
@@ -1150,6 +1153,11 @@ async def speak(
         turn.commands += spent(since)
         return before, listing
 
+    # The (verb, name) pairs the approver was offered a path for and declined:
+    # remembered for the rest of the run, so a pilot's `skip` costs one prompt and
+    # no repair instead of spending the run's whole repair budget asking again.
+    skipped: set[tuple[str, str]] = set()
+
     async def provide_pending(
         turn: Turn, listing: dict[str, Any]
     ) -> tuple[dict[str, Any], list[str]]:
@@ -1158,7 +1166,12 @@ async def speak(
         is paired, in order, with a path the reply named; root places the run's
         `token` there on the verb's chain, outside every door, and says provide.
         Returns the listing afterwards and the requirements no path was given for,
-        which the settle answers with the capability's provide phrase."""
+        which the settle answers with the capability's provide phrase.
+
+        The two ways a placement does not happen are not the same. No path in the
+        reply is a question for the agent, and the settle asks it. An approver that
+        declines a path the reply did name has answered for the run: the pair is
+        remembered, earns no repair, and is not prompted for again."""
         pending = unprovided_verbs(listing)
         if not pending:
             return listing, []
@@ -1171,9 +1184,16 @@ async def speak(
         unplaced: list[str] = []
         placed = False
         for i, (verb, name, recipe_id, chain) in enumerate(pending):
-            path = approver.place(verb, name, paths[i] if i < len(paths) else None)
+            if (verb, name) in skipped:
+                continue
+            parsed = paths[i] if i < len(paths) else None
+            path = approver.place(verb, name, parsed)
             if path is None:
-                unplaced.append(f"{verb} requires {name}")
+                if parsed is None:
+                    unplaced.append(f"{verb} requires {name}")
+                else:
+                    skipped.add((verb, name))
+                    log.write(f"  {verb} requires {name} at {parsed}: placed nothing\n")
                 continue
             since = mark()
             checkpoint = await doors.provision(verb, chain, recipe_id, path, secret)
