@@ -81,7 +81,7 @@ means: something the agent has acquired. The Nix capability layer and the ingres
 | 2 | Who interprets it? | One generic Python driver, `uv run capability`, replacing `uv run measure`. Words and outcomes live only in the markdown; checks live only in Python and are named from the markdown. |
 | 3 | What does a dependent start from? | A **promoted run**: a run that reached every postcondition, promoted by hand to fixed labels under `capability/<name>/`. Never the latest run. |
 | 4 | How many at once? | One working brain per account, as today. Concurrency is not designed here. |
-| 5 | Where do secrets go? | Two answers. Bootstrap credentials (the model keys) are swapped in by the relay at the host and never reach the brain. Verb credentials are placed by root on the verb's own chain, where the agent said to put them, and never pass through a door. There is no vault object. |
+| 5 | Where do secrets go? | Two answers, one rule: every credential on a brain is that brain's own, bounded and revocable. Bootstrap credentials (the model keys) are minted for the brain, stored on its disk the dumb way, and rotated; mshkn holds no third-party secret and the relay stays a forwarder. Verb credentials are placed by root on the verb's own chain, where the agent said to put them, and never pass through a door. There is no vault object. |
 | 6 | Where does a run's evidence go? | `docs/embryo/<capability>/`: its runs, a round table, its promotion record. |
 | 7 | How are defects handled? | One PR per capability. Defects the runs find in the membrane or the driver are fixed in that PR with a pinning test and listed in the round table. Only defects outside the capability become issues. |
 
@@ -330,61 +330,71 @@ A check may refer to row labels (the counter check reads `9-count-1` and
 check fails with a clear message when they do not, which is the only place the
 knowledge belongs.
 
+The seven split into two kinds. An **invariant** reads no row label and holds
+on any run: `root_unforgeable`, `no_undeclared_capability`, `nothing_by_hand`.
+An **exercise** reads the rows that exercised it and belongs to the capability
+that wrote those rows: hatch's `authentication`, `authorization`, `page_title`
+and `counter` read hatch's labels (`4`, `5`, `8`, `9-count-*`) by name and no
+other capability's rows carry those labels. A dependent capability names the
+invariants and its own exercises; it does not re-run an ancestor's exercises,
+because the promotion is the proof those already passed. A dependent that
+wants to show an inherited verb still works exercises it again in its own
+rows, under its own exercise check, or adds an invariant that reads only the
+final state (#167).
+
 ## 7. The security capability
 
 Two halves. The first is a product change and a hatch change, and is not a turn.
 The second is three rows.
 
-### 7.1 Bootstrap credentials leave the brain: the relay swaps them in
+### 7.1 Bootstrap credentials are the brain's own, and they rotate
 
-**Scoped key.** The `relay` scope's `targets` becomes a map from a target name to
-`{url, headers}`. `headers` is set at mint time, stored on the key row, and never
-returned by any endpoint. Today's list form goes; there is no compatibility path
-(CLAUDE.md, no versioning).
+The model keys stay on the brain, in `/brain/.env`, written by `hatch.sh` as
+today, and the relay stays what it is: a forwarder that lets a VM die during a
+long call, carries the headers the brain gave it, and forgets them on settle.
+mshkn never holds a third-party credential. An earlier draft of this section
+moved the provider keys into the scoped key's relay scope and had the host swap
+them in on every forward; that made the substrate the keeper of every
+tenant's secrets and the security capability hollow, and it was dropped
+(2026-09-13).
 
-```json
-"relay": {
-  "targets": {
-    "anthropic": {"url": "https://api.anthropic.com/", "headers": {"x-api-key": "sk-ant-…"}},
-    "openai":    {"url": "https://api.openai.com/",    "headers": {"authorization": "Bearer sk-…"}}
-  },
-  "deliver": {"label": "brain", "exec": "membrane resume"}
-}
-```
+What changes is the keys themselves. A brain is hatched with **purpose-built
+keys**: a provider key minted for that brain, budgeted, revocable in one act
+without touching any other key, from the provider's console or from the model
+gateway of #127 once it exists. Never the operator's account keys. The
+operator's environment holds those purpose-built keys when `hatch.sh` runs,
+and nothing else about hatching changes.
 
-**Async job.** `POST /relay` names a target and a path instead of a full URL.
-The worker builds the upstream URL from the target, takes the job's
-`forward_headers`, drops any header the target also sets, and adds the target's
-headers. So the brain's `x-api-key` is ignored if it sends one, and it will not.
+A leaked checkpoint then confers that brain's budget until its key is revoked,
+and nothing more. The Firecracker memory-snapshot question #91 raised gets its
+honest answer: the snapshot holds the brain's keys because the snapshot is the
+brain, and the control is who can read a checkpoint, which is #65's unbuilt
+check that checkpoint blobs are not publicly readable, a property of dumb
+storage.
 
-**Synchronous forward.** `ANY /relay/forward/{target}/{path}` authenticates the
-caller as a scoped key, looks the target up in that key's relay scope, forwards
-the request with the same header swap, and returns the upstream status, headers
-and body. The SSRF guard applies as it does to jobs (#115 is a bug in that
-guard and is not made worse or better here). The caller's key may arrive in
-`Authorization: Bearer` (the OpenAI SDK's slot) or in `x-api-key` (the Anthropic
-SDK's slot); either authenticates, both are stripped before forwarding.
+**Rotation.** After security has been grown on a lineage, root rotates the
+lineage's keys and cancels the hatch-time ones:
 
-**Brain.** `/brain/.env` carries `MSHKN_API_URL`, `MSHKN_API_KEY`,
-`MEMBRANE_MODEL`, the optional model id and effort, and nothing else. The
-membrane's `Settings` loses `anthropic_api_key` and `openai_api_key`;
-`request_headers()` sends no key; the loop posts jobs as `{target: "anthropic",
-path: "/v1/messages", …}`; the memory layer constructs its two SDK clients with
-`base_url = f"{api_url}/relay/forward/anthropic"` and
-`…/relay/forward/openai` and `api_key = settings.api_key` (the brain's own scoped
-key, which the host swaps out). `hatch.sh` mints the key with the two targets
-and their headers from the operator's environment and writes the reduced env
-file.
+1. Mint fresh purpose-built keys.
+2. Place them on the promoted brain by the sequence §7.2 uses for verb secrets,
+   on the brain's chain instead of a verb's: create a computer from the head of
+   `capability/<name>/brain`, upload the new `/brain/.env`, checkpoint under the
+   same label, destroy. Rotation happens between runs, never inside one, so
+   `nothing_by_hand`, which judges the commands a run sent, never sees it; its
+   record is the re-promotion in step 3, whose `PROMOTED.md` names the rotation
+   (`rotated_from`: the previous record's run and checkpoint ids).
+3. Re-promote, so the record and the promoted labels carry the rotated brain,
+   and the record says it was rotated. A dependent forked from the old
+   promotion would die on its first model call once step 4 runs.
+4. Cancel the hatch-time keys. Every checkpoint that ever held them, the
+   measure rounds' included, is worthless for spend.
 
-**Consequence for the DAG.** Security depends on a hatch promoted after this
-change; `no_credential_on_brain` (§7.3) fails on an older promotion and says so.
-There are no long-lived agents yet, so re-hatching is the migration.
+A `capability rotate <name>` subcommand can make steps 2 and 3 mechanical;
+the first rotation is four API calls and a promotion.
 
-**Compatibility with #127.** The gateway is one more target. Nothing here
-prevents pointing `anthropic` at a LiteLLM proxy.
-
-**What this closes in #91.** The Firecracker memory-snapshot question: the key is
-never in the brain's memory, so there is nothing for a snapshot to hold.
+**Consequence for the DAG.** None. Security starts from the current hatch
+promotion; no re-hatch is needed. #127 becomes the natural supplier of
+purpose-built keys rather than a compatibility note.
 
 ### 7.2 Verb credentials are placed where the agent says
 
@@ -440,18 +450,20 @@ override the path.)
 
 ### 7.3 Postconditions
 
-- `no_credential_on_brain`: fork the final `brain` head, run `grep -rF` for
-  every credential the run held (the two provider keys from the operator's
-  environment, the page token) over `/brain`, and search `transcript.md` and
-  the memory store's texts for the same; all absent. Also that `/brain/.env`
-  names no key other than `MSHKN_API_KEY`.
+- `no_foreign_credential_on_brain`: fork the final `brain` head and search
+  `/brain`, `transcript.md` and the memory store's texts for the page token;
+  absent everywhere. Also that `/brain/.env` names no key other than the
+  brain's own: `MSHKN_API_KEY` and the purpose-built provider keys `hatch.sh`
+  wrote (§7.1). A verb's secret on the brain, or a key that is not the
+  brain's, fails it.
 - `secret_page`: the turn labelled `12` produced the page's fixed body, from a
   computer that is gone.
 - `nothing_by_hand` is widened, not replaced: root's by-hand acts are allowed
   when they are exactly the provisioning sequence (create from a `verb/` head,
   upload, checkpoint to the same label, destroy) and there is one such
   sequence per `provide`. Anything else by hand fails as today.
-- hatch's seven, by name, on the grown brain.
+- the three invariants (`root_unforgeable`, `no_undeclared_capability`,
+  `nothing_by_hand`) plus security's own.
 
 ## 8. Process
 
@@ -503,12 +515,7 @@ untouched. `uv run measure` becomes `uv run capability run`.
   section, a row without a words block, a `root list` row with one, two blocks in
   one row, a module beside the file and its `prepare`, `order` on a cycle and on
   an unknown dependency. The promotion record:
-  written, read back, refused for a run that is not `ok`. The relay scope: the
-  map form validates, the list form is a 422, headers never appear in any key
-  response. The header swap: a job's `x-api-key` is replaced, a forward's
-  `Authorization` is replaced, both are absent from the stored row after settle.
-  The synchronous forward: authenticates on either header slot, refuses an
-  unknown target, applies the SSRF guard. `provide`: refuses invocation before,
+  written, read back, refused for a run that is not `ok`. `provide`: refuses invocation before,
   allows it after, takes no value. The seed's clause is in the two-category
   test.
 - **Flow.** `tests/flow/test_embryo_liturgy.py` becomes
@@ -516,7 +523,8 @@ untouched. `uv run measure` becomes `uv run capability run`.
   scripted model. Hatch is today's test with the rows read from `hatch.md`.
   Security promotes a scripted hatch in the fixture, serves the page from the
   fake host's guest script, scripts the three replies, has the driver provision
-  from the reply, and checks the three new postconditions plus hatch's seven.
+  from the reply, and checks the three new postconditions plus the three
+  invariants.
 - **E2E.** `tests/e2e/test_phase14_embryo.py` becomes the capabilities phase:
   hatch scripted on the live host, promote, security scripted from the
   promotion. The suite's runtime grows by one promotion and two recipe builds;
@@ -528,8 +536,9 @@ untouched. `uv run measure` becomes `uv run capability run`.
 ## 10. Declined, and why
 
 - **A vault object** (`POST /secrets`, #91). Three new axioms (an object, a
-  write-only storage class, a permission kind) for a property the relay swap
-  gives bootstrap credentials and chain placement gives verb credentials. Row 13
+  write-only storage class, a permission kind) for a property purpose-built,
+  rotatable keys give bootstrap credentials and chain placement gives verb
+  credentials. Row 13
   exists so that the agent, not this document, says whether a shared store is
   needed.
 - **Always the latest passing run as the start point.** A new hatch run would
