@@ -9,7 +9,7 @@ import io
 import json
 import stat
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -88,6 +88,51 @@ def test_a_missing_key_is_named(tmp_path: Path) -> None:
         load_run_settings(env, {})
     with pytest.raises(ValueError, match=str(tmp_path / "absent")):
         load_run_settings(tmp_path / "absent", {})
+
+
+def test_the_base_url_defaults_to_anthropic_and_the_anthropic_key_travels(
+    tmp_path: Path,
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=u\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=sk-a\nOPENAI_API_KEY=oa\n")
+    settings = load_run_settings(env, {})
+    assert settings.base_url == "https://api.anthropic.com"
+    assert settings.gateway_api_key is None
+    assert settings.model_api_key == "sk-a"
+
+
+def test_a_gateway_base_url_sends_the_gateway_key_instead(tmp_path: Path) -> None:
+    """The operator holds both slots so `--base-url` alone flips a run; the brain is
+    handed one key and never learns which kind it is."""
+    env = tmp_path / ".env"
+    env.write_text(
+        "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=sk-a\nOPENAI_API_KEY=oa\n"
+        "AI_GATEWAY_API_KEY=vck-1\n"
+    )
+    settings = load_run_settings(env, {}, base_url="https://ai-gateway.vercel.sh/")
+    # The trailing slash goes, as it does in the brain's own config (config.py:84).
+    assert settings.base_url == "https://ai-gateway.vercel.sh"
+    assert settings.model_api_key == "vck-1"
+    assert settings.anthropic_api_key == "sk-a"
+
+
+def test_a_gateway_base_url_without_a_gateway_key_is_refused_before_it_hatches(
+    tmp_path: Path,
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=u\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=sk-a\nOPENAI_API_KEY=oa\n")
+    with pytest.raises(ValueError, match="AI_GATEWAY_API_KEY"):
+        load_run_settings(env, {}, base_url="https://ai-gateway.vercel.sh")
+
+
+def test_the_base_url_comes_from_the_env_file_too(tmp_path: Path) -> None:
+    """Today it reaches hatch.sh only by leaking through `**os.environ`."""
+    env = tmp_path / ".env"
+    env.write_text(
+        "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=sk-a\nOPENAI_API_KEY=oa\n"
+        "AI_GATEWAY_API_KEY=vck-1\nANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh\n"
+    )
+    assert load_run_settings(env, {}).model_api_key == "vck-1"
 
 
 def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
@@ -2284,7 +2329,8 @@ def _stub_hatch(tmp_path: Path, *, fail: bool = False) -> Path:
     else:
         body += (
             "env | grep -E '^(MSHKN_API_URL|MSHKN_API_KEY|BRAIN_API_URL|MEMBRANE_MODEL"
-            "|MEMBRANE_MODEL_ID|MEMBRANE_EFFORT|ANTHROPIC_API_KEY|OPENAI_API_KEY)='"
+            "|MEMBRANE_MODEL_ID|MEMBRANE_EFFORT|ANTHROPIC_API_KEY|ANTHROPIC_BASE_URL"
+            "|OPENAI_API_KEY)='"
             ' | sort > "$HATCH_ENV_OUT"\n'
             "echo '"
             + json.dumps(
@@ -2324,7 +2370,8 @@ def test_hatch_runs_the_script_with_the_keys_and_the_real_model(
         "http://api/ingress/rule-1", "rule-1", "key-1", "rcp-brain", "ck-brain"
     )
     assert out.read_text() == (
-        "ANTHROPIC_API_KEY=sk-a\nBRAIN_API_URL=https://api.mshkn.dev\nMEMBRANE_EFFORT=\n"
+        "ANTHROPIC_API_KEY=sk-a\nANTHROPIC_BASE_URL=https://api.anthropic.com\n"
+        "BRAIN_API_URL=https://api.mshkn.dev\nMEMBRANE_EFFORT=\n"
         "MEMBRANE_MODEL=anthropic\nMEMBRANE_MODEL_ID=claude-opus-5\nMSHKN_API_KEY=k\n"
         "MSHKN_API_URL=http://api\nOPENAI_API_KEY=oa\n"
     )
@@ -2333,6 +2380,23 @@ def test_hatch_runs_the_script_with_the_keys_and_the_real_model(
 def test_a_failed_hatch_raises_with_its_stderr(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="boom"):
         hatch(_settings(), _stub_hatch(tmp_path, fail=True), log=io.StringIO())
+
+
+def test_hatch_hands_the_brain_the_gateway_key_under_the_one_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One model key in /brain/.env, whatever kind it is: a brain checkpoint must not
+    carry a credential for a service it cannot reach (#92)."""
+    out = tmp_path / "env.txt"
+    monkeypatch.setenv("HATCH_ENV_OUT", str(out))
+    settings = replace(
+        _settings(), base_url="https://ai-gateway.vercel.sh", gateway_api_key="vck-1"
+    )
+    hatch(settings, _stub_hatch(tmp_path), log=io.StringIO())
+    written = out.read_text()
+    assert "ANTHROPIC_API_KEY=vck-1\n" in written
+    assert "ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh\n" in written
+    assert "sk-a" not in written
 
 
 async def test_run_once_hatches_speaks_judges_records_and_tears_down(
@@ -3049,7 +3113,22 @@ def test_main_refuses_a_model_for_a_capability_that_does_not_hatch(
     )
     assert code == 2
     assert "security starts from hatch's promotion" in log.getvalue()
-    assert "--model and --effort belong to a capability that hatches" in log.getvalue()
+    assert "--model, --effort and --base-url belong to a capability that hatches" in log.getvalue()
+
+    log_base_url = io.StringIO()
+    code = main(
+        [
+            "run",
+            "security",
+            "--base-url",
+            "https://ai-gateway.vercel.sh",
+            "--env",
+            str(tmp_path / "none"),
+        ],
+        log=log_base_url,
+    )
+    assert code == 2
+    assert "security starts from hatch's promotion" in log_base_url.getvalue()
 
 
 def test_main_writes_the_runs_key_where_key_dir_says_and_the_run_names_it(

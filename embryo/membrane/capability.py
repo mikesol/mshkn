@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 import httpx
 
 from membrane.capabilities import TEMPLATE_RE, CapabilityError, catalog, load_module, order
-from membrane.config import DEFAULT_MODEL_ID, parse_env
+from membrane.config import DEFAULT_ANTHROPIC_BASE_URL, DEFAULT_MODEL_ID, parse_env
 from membrane.declarations import RESERVED_TOOL_NAMES
 from membrane.effort import EFFORTS
 from membrane.model import add_usage, zero_usage
@@ -45,7 +45,8 @@ DEFAULT_BRAIN_API_URL = "https://api.mshkn.dev"
 DEFAULT_OUT = Path("docs/embryo")
 KEYS = (".mshkn", "keys")  # under the operator's home; never under the repository
 REQUIRED = ("MSHKN_API_URL", "MSHKN_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
-OPTIONAL = ("BRAIN_API_URL",)
+OPTIONAL = ("BRAIN_API_URL", "ANTHROPIC_BASE_URL", "AI_GATEWAY_API_KEY")
+DEFAULT_BASE_URL = DEFAULT_ANTHROPIC_BASE_URL
 HATCH = Path(__file__).resolve().parents[1] / "hatch.sh"
 TURN_TIMEOUT = 330.0
 TURN_WAIT = 3600.0
@@ -73,6 +74,20 @@ class RunSettings:
     # The floor under every model call of the run, not the effort of any of them:
     # the turn raises it from its tool list and the model's own request (#122).
     default_effort: str | None = None
+    # Where the relay forwards a model call, and the key for whatever it names. The
+    # operator holds both slots so `--base-url` alone flips a run between the direct
+    # API and a gateway; only one of them is ever written into the brain's .env.
+    base_url: str = DEFAULT_BASE_URL
+    gateway_api_key: str | None = None
+
+    @property
+    def model_api_key(self) -> str:
+        """The one key the brain is handed. `load_run_settings` refuses a non-default
+        base URL without a gateway key, so the fallback below is unreachable and is
+        here only so the type is `str` and not `str | None`."""
+        if self.base_url == DEFAULT_BASE_URL:
+            return self.anthropic_api_key
+        return self.gateway_api_key or self.anthropic_api_key
 
 
 def load_run_settings(
@@ -81,6 +96,7 @@ def load_run_settings(
     *,
     model_id: str | None = None,
     effort: str | None = None,
+    base_url: str | None = None,
 ) -> RunSettings:
     """The operator's `.env` (git-ignored) under the environment: the four
     required keys, `BRAIN_API_URL` if the brain dials a different address."""
@@ -89,6 +105,13 @@ def load_run_settings(
     missing = [name for name in REQUIRED if not values.get(name)]
     if missing:
         raise ValueError(f"missing {', '.join(missing)}: put them in {env_file} or the environment")
+    url = (base_url or values.get("ANTHROPIC_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+    gateway_key = values.get("AI_GATEWAY_API_KEY") or None
+    if url != DEFAULT_BASE_URL and not gateway_key:
+        raise ValueError(
+            f"AI_GATEWAY_API_KEY is required when the model base URL is {url}: "
+            f"put it in {env_file} or the environment"
+        )
     return RunSettings(
         api_url=values["MSHKN_API_URL"],
         api_key=values["MSHKN_API_KEY"],
@@ -97,6 +120,8 @@ def load_run_settings(
         openai_api_key=values["OPENAI_API_KEY"],
         model_id=model_id or DEFAULT_MODEL_ID,
         default_effort=effort,
+        base_url=url,
+        gateway_api_key=gateway_key,
     )
 
 
@@ -694,7 +719,11 @@ def hatch(settings: RunSettings, script: Path, *, log: TextIO) -> Hatched:
         "MEMBRANE_MODEL": "anthropic",
         "MEMBRANE_MODEL_ID": settings.model_id,
         "MEMBRANE_EFFORT": settings.default_effort or "",
-        "ANTHROPIC_API_KEY": settings.anthropic_api_key,
+        # Explicit, not inherited: `**os.environ` above happens to carry
+        # ANTHROPIC_BASE_URL when the operator exported it, and a run's model
+        # endpoint should not depend on whether a shell was configured.
+        "ANTHROPIC_API_KEY": settings.model_api_key,
+        "ANTHROPIC_BASE_URL": settings.base_url,
         "OPENAI_API_KEY": settings.openai_api_key,
     }
     proc = subprocess.run(
@@ -1283,6 +1312,7 @@ async def run_once(
                 "run": out_dir.name,
                 "capability": capability.name,
                 "model": model_id,
+                "base_url": settings.base_url,
                 "default_effort": default_effort,
                 "key_dir": str(key_dir),
                 "pubkey": pubkey,
@@ -1359,6 +1389,11 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
         choices=EFFORTS,
         default=None,
         help="the run's default output_config.effort, which a turn may raise (default the API's)",
+    )
+    run.add_argument(
+        "--base-url",
+        default=None,
+        help=f"where the relay forwards a model call (default {DEFAULT_BASE_URL})",
     )
     run.add_argument("--date", default=datetime.now(UTC).date().isoformat())
     run.add_argument(
@@ -1439,15 +1474,21 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
             f"the checks are {sorted(CHECKS)}\n"
         )
         return 2
-    if capability.depends and (args.model or args.effort):
+    if capability.depends and (args.model or args.effort or args.base_url):
         log.write(
             f"{capability.name} starts from {capability.depends[-1]}'s promotion, whose brain "
-            "runs the model and effort baked into its /brain/.env at hatch: --model and "
-            "--effort belong to a capability that hatches\n"
+            "runs the model, effort and base URL baked into its /brain/.env at hatch: "
+            "--model, --effort and --base-url belong to a capability that hatches\n"
         )
         return 2
     try:
-        settings = load_run_settings(args.env, os.environ, model_id=args.model, effort=args.effort)
+        settings = load_run_settings(
+            args.env,
+            os.environ,
+            model_id=args.model,
+            effort=args.effort,
+            base_url=args.base_url,
+        )
     except ValueError as exc:
         log.write(f"{exc}\n")
         return 2

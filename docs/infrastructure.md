@@ -19,30 +19,33 @@ Docker on Ubuntu 24.04 (`docker.io`) ships without the buildx plugin, so `docker
 
 The previous host was a Hetzner AX41-NVMe (Ryzen 5 3600, 64 GB, 2×512 GB NVMe). Anything in that class is comfortable.
 
-## A model gateway, for measuring across models (#123 round, spec §11)
+## A model gateway, for measuring across models (#127, spec §11)
 
-Spec §11 says a capability is spoken "across models where useful", and the post-cut round in
-`docs/embryo/hatch/README.md` cost about $10.60 for six runs of one model. Both want a second provider.
+Spec §11 says a capability is spoken "across models where useful", and the round in
+`docs/embryo/hatch/README.md` cost about $10.60 for six runs of one model. Both want a second
+provider.
 
-`embryo/membrane/model.py` speaks one wire format end to end: `compose_request` builds the Anthropic Messages request body
-that `/v1/messages` accepts (`system`, `messages`, `tools`, `output_config.effort`) and `parse_message`
-reads Anthropic content blocks including `tool_use`. `embryo/hatch.sh:91` scopes the brain's key to
-exactly one relay target, `"$ANTHROPIC_BASE_URL/"`. So the cheapest way to reach another model is a
-gateway that speaks the Anthropic Messages API and fans out behind it — not a second code path in
-the membrane, which would put provider handling inside the organism.
+`embryo/membrane/model.py` speaks one wire format end to end, and it stays that way: mshkn reaches
+a second model through a hosted gateway that speaks the Anthropic Messages API, not through a
+second code path in the membrane. Vercel AI Gateway is what this is written against. It accepts
+`x-api-key` and `anthropic-version`, which is what `request_headers` already sends, and it
+namespaces model ids by provider (`anthropic/claude-opus-5`).
 
-| Requirement | Minimum | Why |
+There is no host to rent. What the operator provides:
+
+| Item | Purpose | Status |
 |---|---|---|
-| A LiteLLM proxy reachable over HTTPS from the mshkn host | One small always-on instance, or a hosted equivalent | The brain relays through the host; the host must reach it. |
-| An Anthropic-compatible `/v1/messages` endpoint on it | Must accept `system`, `messages`, `tools`, and return `tool_use` content blocks | `model.py` composes and parses nothing else; anything less means changing the membrane. |
-| Provider credentials held by the proxy | At least one non-Anthropic provider | The point is a second model; the brain's scoped key never sees these. |
-| A stable base URL | Set as `ANTHROPIC_BASE_URL` at hatch time | `hatch.sh:91` bakes it into the key's `relay.targets`, so it must not move between hatch and run. |
+| `AI_GATEWAY_API_KEY` | The gateway key, sent as `x-api-key` when `ANTHROPIC_BASE_URL` is not the Anthropic API. `hatch.sh` writes it into `/brain/.env` under the name `ANTHROPIC_API_KEY`: the brain is handed one model key and never learns which kind it is. | In the operator's local `.env` beside the other keys; stored nowhere in this repository. |
+| A payment method on the Vercel team | Without one the gateway answers every request `403 customer_verification_required`, and its free credits stay locked. | Checked 2026-09-13. |
+| A spend budget on that key | A brain that loops bills per turn, and the budget is the only stop that does not depend on the organism behaving. | Set in the Vercel dashboard, not in this repository. |
+| The operator's Anthropic key in the gateway's team BYOK settings | Optional. BYOK carries no markup, so a run through the gateway costs what the same run cost directly and stays comparable to the evidence already in `docs/embryo/`. | Optional. |
 
-Two things to record rather than discover: `output_config.effort` is Anthropic-specific and has no
-equivalent elsewhere, so cross-provider runs cannot be compared on the effort axis — which is
-awkward, since the 2026-09-10 round's headline was that medium effort beat the default. And
-tool-use fidelity varies by backend, so a low score on a cheaper model may be measuring the
-gateway's translation rather than the organism.
+`ANTHROPIC_BASE_URL` selects it, per run with `capability run --base-url` or once in the operator's
+`.env`. `hatch.sh` bakes it into the brain key's `relay.targets`, so it must not move between hatch
+and run.
+
+`OPENAI_API_KEY` is unaffected: mem0's embedder is an OpenAI SDK call that never touches the relay
+or the gateway.
 
 ## Accounts and secrets the host setup needs
 
