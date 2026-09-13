@@ -3,6 +3,7 @@ Messages API, posted to the relay, and the final message parsed back."""
 
 from __future__ import annotations
 
+import pytest
 from membrane.model import (
     ANTHROPIC_VERSION,
     CACHE_CONTROL,
@@ -62,6 +63,36 @@ def test_compose_request_marks_the_prefix_and_the_settled_tail_cacheable() -> No
     # The default five minutes: the calls of a turn are seconds apart, every read
     # refreshes the entry, and the one-hour TTL would only double the write price.
     assert CACHE_CONTROL == {"type": "ephemeral"}
+
+
+def test_compose_request_merges_the_operators_body_extra_without_reading_it() -> None:
+    """The gateway may route one model id to several upstreams, which differ on beta
+    fields and on caching. Pinning it is the operator's sentence, copied onto the
+    body: a typed `provider` field would be the organism knowing what a provider is."""
+    body = compose_request(
+        model_id="anthropic/claude-opus-5",
+        system="s",
+        messages=[],
+        tools=[],
+        effort=None,
+        body_extra={"providerOptions": {"gateway": {"only": ["anthropic"]}}},
+    )
+    assert body["providerOptions"] == {"gateway": {"only": ["anthropic"]}}
+    assert body["model"] == "anthropic/claude-opus-5"
+
+
+def test_body_extra_cannot_quietly_replace_what_the_membrane_composed() -> None:
+    """An operator who sets `messages` in MEMBRANE_BODY_EXTRA has made a mistake, and
+    a silently truncated conversation is the most expensive way to find out."""
+    with pytest.raises(ValueError, match="messages"):
+        compose_request(
+            model_id="m",
+            system="s",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+            effort=None,
+            body_extra={"messages": []},
+        )
 
 
 def test_system_text_reads_the_prompt_back_out_of_the_cacheable_blocks() -> None:

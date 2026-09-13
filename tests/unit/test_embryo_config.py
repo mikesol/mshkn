@@ -99,3 +99,24 @@ def test_the_model_base_url_defaults_to_anthropic_and_loses_its_trailing_slash(
         "ANTHROPIC_BASE_URL=https://8000-comp-1.mshkn.dev/\n"
     )
     assert load_settings(tmp_path).anthropic_base_url == "https://8000-comp-1.mshkn.dev"
+
+
+def test_body_extra_is_json_and_fails_at_load_not_at_the_relay(tmp_path: Path) -> None:
+    base = "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n"
+    (tmp_path / ".env").write_text(base)
+    assert load_settings(tmp_path).body_extra == {}
+
+    (tmp_path / ".env").write_text(
+        base + 'MEMBRANE_BODY_EXTRA={"providerOptions": {"gateway": {"only": ["anthropic"]}}}\n'
+    )
+    assert load_settings(tmp_path).body_extra == {
+        "providerOptions": {"gateway": {"only": ["anthropic"]}}
+    }
+
+    (tmp_path / ".env").write_text(base + "MEMBRANE_BODY_EXTRA={not json\n")
+    with pytest.raises(ValueError, match="MEMBRANE_BODY_EXTRA"):
+        load_settings(tmp_path)
+
+    (tmp_path / ".env").write_text(base + 'MEMBRANE_BODY_EXTRA=["a"]\n')
+    with pytest.raises(ValueError, match="MEMBRANE_BODY_EXTRA"):
+        load_settings(tmp_path)

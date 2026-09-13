@@ -3,10 +3,11 @@ URL, which model to run and, until #92, the two model keys."""
 
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from membrane.effort import EFFORTS
 
@@ -44,6 +45,10 @@ class Settings:
     # Where the relay forwards a model call (spec relay design §4): the real
     # Anthropic API by default, overridden in the measure to point at a fake.
     anthropic_base_url: str = DEFAULT_ANTHROPIC_BASE_URL
+    # Merged onto the request body verbatim and never read (#127): a gateway may route
+    # one model id to several upstreams, and pinning which is the operator's sentence,
+    # not the organism's knowledge of what an upstream is.
+    body_extra: dict[str, Any] = field(default_factory=dict)
 
 
 def parse_env(text: str) -> dict[str, str]:
@@ -86,6 +91,15 @@ def load_settings(brain: Path | None = None) -> Settings:
         for name, value in (("ANTHROPIC_API_KEY", anthropic_key), ("OPENAI_API_KEY", openai_key)):
             if value is None:
                 raise ValueError(f"{name} is required when MEMBRANE_MODEL=anthropic")
+    raw = env.get("MEMBRANE_BODY_EXTRA") or "{}"
+    try:
+        body_extra = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"MEMBRANE_BODY_EXTRA must be one line of JSON: {exc}") from exc
+    if not isinstance(body_extra, dict):
+        raise ValueError(
+            f"MEMBRANE_BODY_EXTRA must be a JSON object, not {type(body_extra).__name__}"
+        )
     return Settings(
         brain=root,
         api_url=env["MSHKN_API_URL"],
@@ -97,4 +111,5 @@ def load_settings(brain: Path | None = None) -> Settings:
         default_effort=effort,
         effort_enabled=effort_enabled,
         anthropic_base_url=env.get("ANTHROPIC_BASE_URL", DEFAULT_ANTHROPIC_BASE_URL).rstrip("/"),
+        body_extra=body_extra,
     )

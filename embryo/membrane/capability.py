@@ -45,7 +45,7 @@ DEFAULT_BRAIN_API_URL = "https://api.mshkn.dev"
 DEFAULT_OUT = Path("docs/embryo")
 KEYS = (".mshkn", "keys")  # under the operator's home; never under the repository
 REQUIRED = ("MSHKN_API_URL", "MSHKN_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
-OPTIONAL = ("BRAIN_API_URL", "ANTHROPIC_BASE_URL", "AI_GATEWAY_API_KEY")
+OPTIONAL = ("BRAIN_API_URL", "ANTHROPIC_BASE_URL", "AI_GATEWAY_API_KEY", "MEMBRANE_BODY_EXTRA")
 DEFAULT_BASE_URL = DEFAULT_ANTHROPIC_BASE_URL
 HATCH = Path(__file__).resolve().parents[1] / "hatch.sh"
 TURN_TIMEOUT = 330.0
@@ -79,6 +79,10 @@ class RunSettings:
     # API and a gateway; only one of them is ever written into the brain's .env.
     base_url: str = DEFAULT_BASE_URL
     gateway_api_key: str | None = None
+    # One line of JSON, unparsed on the operator's side (#127): the driver has no use
+    # for its contents and only needs to pass it through to `hatch.sh`, which writes
+    # it into the brain's `.env` for `membrane.config.load_settings` to parse.
+    body_extra: str = ""
 
     @property
     def model_api_key(self) -> str:
@@ -103,6 +107,7 @@ def load_run_settings(
     model_id: str | None = None,
     effort: str | None = None,
     base_url: str | None = None,
+    body_extra: str | None = None,
 ) -> RunSettings:
     """The operator's `.env` (git-ignored) under the environment: the four
     required keys, `BRAIN_API_URL` if the brain dials a different address."""
@@ -128,6 +133,7 @@ def load_run_settings(
         default_effort=effort,
         base_url=url,
         gateway_api_key=gateway_key,
+        body_extra=body_extra or values.get("MEMBRANE_BODY_EXTRA") or "",
     )
 
 
@@ -731,6 +737,7 @@ def hatch(settings: RunSettings, script: Path, *, log: TextIO) -> Hatched:
         "ANTHROPIC_API_KEY": settings.model_api_key,
         "ANTHROPIC_BASE_URL": settings.base_url,
         "OPENAI_API_KEY": settings.openai_api_key,
+        "MEMBRANE_BODY_EXTRA": settings.body_extra,
     }
     proc = subprocess.run(
         [str(script)], env=env, capture_output=True, text=True, timeout=900, check=False
@@ -1266,6 +1273,7 @@ async def run_once(
                         "capability": capability.name,
                         "model": model_id,
                         "base_url": settings.base_url,
+                        "body_extra": settings.body_extra,
                         "default_effort": default_effort,
                         "effort_supported": default_effort != EFFORT_OFF,
                         "key_dir": str(key_dir),
@@ -1321,6 +1329,7 @@ async def run_once(
                 "capability": capability.name,
                 "model": model_id,
                 "base_url": settings.base_url,
+                "body_extra": settings.body_extra,
                 "default_effort": default_effort,
                 "effort_supported": default_effort != EFFORT_OFF,
                 "key_dir": str(key_dir),
@@ -1405,6 +1414,12 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
         "--base-url",
         default=None,
         help=f"where the relay forwards a model call (default {DEFAULT_BASE_URL})",
+    )
+    run.add_argument(
+        "--body-extra",
+        default=None,
+        help="one line of JSON merged onto every request body, e.g. "
+        '\'{"providerOptions": {"gateway": {"only": ["anthropic"]}}}\'',
     )
     run.add_argument("--date", default=datetime.now(UTC).date().isoformat())
     run.add_argument(
@@ -1499,6 +1514,7 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
             model_id=args.model,
             effort=args.effort,
             base_url=args.base_url,
+            body_extra=args.body_extra,
         )
     except ValueError as exc:
         log.write(f"{exc}\n")

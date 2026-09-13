@@ -2340,8 +2340,8 @@ def _stub_hatch(tmp_path: Path, *, fail: bool = False) -> Path:
     else:
         body += (
             "env | grep -E '^(MSHKN_API_URL|MSHKN_API_KEY|BRAIN_API_URL|MEMBRANE_MODEL"
-            "|MEMBRANE_MODEL_ID|MEMBRANE_EFFORT|ANTHROPIC_API_KEY|ANTHROPIC_BASE_URL"
-            "|OPENAI_API_KEY)='"
+            "|MEMBRANE_MODEL_ID|MEMBRANE_EFFORT|MEMBRANE_BODY_EXTRA|ANTHROPIC_API_KEY"
+            "|ANTHROPIC_BASE_URL|OPENAI_API_KEY)='"
             ' | sort > "$HATCH_ENV_OUT"\n'
             "echo '"
             + json.dumps(
@@ -2382,7 +2382,7 @@ def test_hatch_runs_the_script_with_the_keys_and_the_real_model(
     )
     assert out.read_text() == (
         "ANTHROPIC_API_KEY=sk-a\nANTHROPIC_BASE_URL=https://api.anthropic.com\n"
-        "BRAIN_API_URL=https://api.mshkn.dev\nMEMBRANE_EFFORT=\n"
+        "BRAIN_API_URL=https://api.mshkn.dev\nMEMBRANE_BODY_EXTRA=\nMEMBRANE_EFFORT=\n"
         "MEMBRANE_MODEL=anthropic\nMEMBRANE_MODEL_ID=claude-opus-5\nMSHKN_API_KEY=k\n"
         "MSHKN_API_URL=http://api\nOPENAI_API_KEY=oa\n"
     )
@@ -2401,12 +2401,18 @@ def test_hatch_hands_the_brain_the_gateway_key_under_the_one_name(
     out = tmp_path / "env.txt"
     monkeypatch.setenv("HATCH_ENV_OUT", str(out))
     settings = replace(
-        _settings(), base_url="https://ai-gateway.vercel.sh", gateway_api_key="vck-1"
+        _settings(),
+        base_url="https://ai-gateway.vercel.sh",
+        gateway_api_key="vck-1",
+        body_extra='{"providerOptions": {"gateway": {"only": ["anthropic"]}}}',
     )
     hatch(settings, _stub_hatch(tmp_path), log=io.StringIO())
     written = out.read_text()
     assert "ANTHROPIC_API_KEY=vck-1\n" in written
     assert "ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh\n" in written
+    assert (
+        'MEMBRANE_BODY_EXTRA={"providerOptions": {"gateway": {"only": ["anthropic"]}}}\n' in written
+    )
     assert "sk-a" not in written
 
 

@@ -349,6 +349,7 @@ async def post_request(ctx: Context, pending: Pending, tools: dict[str, Tool]) -
         messages=list(pending.messages),
         tools=[t.definition for t in tools.values()],
         effort=effort,
+        body_extra=settings.body_extra,
     )
     pending.job = await ctx.api.create_relay_job(
         target=f"{settings.anthropic_base_url}/v1/messages",
