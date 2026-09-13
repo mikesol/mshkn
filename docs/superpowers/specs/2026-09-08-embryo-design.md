@@ -152,7 +152,7 @@ Every interaction is a fork of the head of `brain` whose exec is a membrane comm
 
 ### A `say` turn
 
-Rewritten by `docs/superpowers/specs/2026-09-09-async-turn-relay-design.md` §6 (#110): a turn is a chain of forks. `say` runs the principal, the builds, the input and the tools, posts the model request to the host's relay with its own wake-up as the delivery, records the pending turn in `state.json`, and answers with an acknowledgement. `membrane resume <job_id>` continues it. Every command settles a pending turn first; a `say` while one is pending is queued and runs next. The reply and the closing audit line are read from `list`.
+Rewritten by `docs/superpowers/specs/2026-09-09-async-turn-relay-design.md` §6 (#110): a turn is a chain of forks. `say` runs the principal, the builds, the input and the tools, posts the model request to the host's relay with its own wake-up as the delivery, records the pending turn in `state.json`, and answers with an acknowledgement. `membrane resume <job_id>` continues it. Every command settles a pending turn first; a `say` while one is pending is queued and runs next. The reply and the closing audit line are read from `list`. The reply is every text block the model produced in the turn, in order, not only the last response's (2026-09-13-run-2).
 
 What the brain cannot do in a turn, by construction: read or write a file, run a command, reach the network, see a key, change its tools, act with any authority beyond its scoped key, make the host call anything but the prefixes its key names, or make the host run anything on `brain` but its own `resume`.
 

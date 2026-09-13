@@ -270,6 +270,10 @@ async def test_hatch(embryo: Embryo, flow: Flow) -> None:
     embryo.script_output(hook, {"payload": json.dumps(signed8)}, "mike\n")
     audit, reply = await embryo.public_say(signed8)
     assert reply.startswith("Example Domain")
+    # #124 (2026-09-13-run-2): the script now says something before it
+    # remembers, and the turn's reply carries both -- every text block the
+    # model said, not only the last response's.
+    assert "Example Domain" in reply and "Noted." in reply
     cid = audit["tools"][0]["computer_id"]
     assert (await flow.client.get(f"/computers/{cid}/status")).status_code == 404
     log = await flow.client.get(f"/computers/{cid}/exec_log")

@@ -57,6 +57,20 @@ def tool_call_completion(name: str, **input: Any) -> Completion:  # noqa: A002
     )
 
 
+def text_and_call_completion(said: str, name: str, **input: Any) -> Completion:  # noqa: A002
+    """A response whose text rides with a tool call (#124): the shape the
+    membrane used to drop the text of on the way to `close_turn`."""
+    call = ToolCall(id=f"tu_{name}", name=name, input=input)
+    return Completion(
+        text=said,
+        calls=(call,),
+        content=[
+            {"type": "text", "text": said},
+            {"type": "tool_use", "id": call.id, "name": name, "input": input},
+        ],
+    )
+
+
 def b64(obj: Any) -> str:
     """A `say` payload: a string is used as-is, anything else is JSON first."""
     text = obj if isinstance(obj, str) else json.dumps(obj)

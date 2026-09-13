@@ -46,6 +46,7 @@ from tests.support_embryo import (
     in_progress_job,
     message_of,
     split_output,
+    text_and_call_completion,
     text_completion,
     tool_call_completion,
 )
@@ -378,6 +379,66 @@ async def test_max_tokens_and_the_cap_end_the_turn_honestly(tmp_path: Path) -> N
     audit, reply = split_output(out)
     assert audit["stopped"] == "cap" and reply.startswith(CAP_REACHED)
     assert len(audit["tools"]) == 20 and audit["forks"] == 21
+
+
+async def test_a_turns_reply_is_every_text_block_it_said_not_only_the_last(
+    tmp_path: Path,
+) -> None:
+    """#124 (2026-09-13-run-2): a text block that rode with a tool call was
+    remembered in `pending.messages` for the model but never reached
+    `close_turn`, so the asker never saw it."""
+    ctx = _ctx(
+        tmp_path,
+        answers=[
+            message_of(
+                text_and_call_completion(
+                    "The title is Example Domain.", "remember", text="Example Domain"
+                )
+            ),
+            message_of(text_completion("Stored.")),
+        ],
+    )
+    await say(ctx, payload_b64=b64("go"), door="api")
+    await resume(ctx, "rj-1")
+    out = await resume(ctx, "rj-2")
+    audit, reply = split_output(out)
+    assert reply == "The title is Example Domain.\n\nStored.\n"
+    assert audit["stopped"] == "done"
+    entry = ctx.state.window[-1]
+    assert entry.reply == "The title is Example Domain.\n\nStored."
+    assert entry.output == "The title is Example Domain.\n\nStored.\n"
+
+
+async def test_a_turn_with_only_text_and_no_call_replies_with_exactly_that_text(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path, answers=[message_of(text_completion("Just this, nothing else."))])
+    await say(ctx, payload_b64=b64("go"), door="api")
+    audit, reply = split_output(await resume(ctx, "rj-1"))
+    assert reply == "Just this, nothing else.\n"
+    assert audit["stopped"] == "done"
+
+
+async def test_max_tokens_reply_includes_every_text_block_said_so_far(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(
+        tmp_path,
+        answers=[
+            message_of(
+                text_and_call_completion(
+                    "The title is Example Domain.", "remember", text="Example Domain"
+                )
+            ),
+            message_of(text_completion("Second text"), stop_reason="max_tokens"),
+        ],
+    )
+    await say(ctx, payload_b64=b64("go"), door="api")
+    await resume(ctx, "rj-1")
+    audit, reply = split_output(await resume(ctx, "rj-2"))
+    assert audit["stopped"] == "max_tokens"
+    assert reply.startswith(OUT_OF_TOKENS)
+    assert "The title is Example Domain." in reply and "Second text" in reply
 
 
 async def test_a_job_the_relay_has_forgotten_ends_the_turn_instead_of_stranding_it(

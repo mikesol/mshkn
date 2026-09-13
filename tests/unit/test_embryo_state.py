@@ -162,6 +162,7 @@ def test_pending_queue_and_the_windows_audit_round_trip(tmp_path: Path) -> None:
         forks=2,
         started_at="2026-09-09T10:00:00+00:00",
         write_memory=True,
+        said=["The title is Example Domain.", "Stored."],
     )
     state.queue.append(
         Queued(
@@ -187,6 +188,7 @@ def test_pending_queue_and_the_windows_audit_round_trip(tmp_path: Path) -> None:
     loaded = Brain(tmp_path).state()
     assert loaded == state
     assert loaded.pending is not None and loaded.pending.job == "rj-1"
+    assert loaded.pending.said == ["The title is Example Domain.", "Stored."]
     # the hooks that named the queued message's principal survive the save: the
     # fork that starts that turn is not the one that ran them.
     assert loaded.queue[0].hooks == [
@@ -198,6 +200,23 @@ def test_a_fresh_state_has_no_pending_turn_and_an_empty_queue() -> None:
     state = State()
     assert state.pending is None and state.queue == []
     assert State.from_doc(state.to_doc()) == state
+
+
+def test_a_pending_document_without_said_loads_as_empty() -> None:
+    """A turn saved before #124 has no `said` field; it reads back as no text
+    said yet, not a missing-key crash."""
+    doc = Pending(
+        turn=1,
+        principal="root",
+        door="api",
+        message="hi",
+        payload="hi",
+        messages=[],
+        offered=[],
+        job="rj-1",
+    ).to_doc()
+    del doc["said"]
+    assert Pending.from_doc(doc).said == []
 
 
 def test_a_trial_round_trips_its_runs_chain_and_sweep() -> None:

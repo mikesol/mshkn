@@ -180,6 +180,37 @@ class ScriptedModel:
         return Completion(text="", calls=tuple(calls), content=content)
 
     @staticmethod
+    def _text_and_call(text: str, call: ToolCall) -> Completion:
+        """A response whose text rides with a tool call (turn 8, #124): the
+        script says something, then remembers, so the fix -- a turn's reply is
+        every text block it said, not only the last response's -- has something
+        real to prove itself against."""
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": text},
+            {"type": "tool_use", "id": call.id, "name": call.name, "input": call.input},
+        ]
+        return Completion(text=text, calls=(call,), content=content)
+
+    @staticmethod
+    def _names_called(messages: list[dict[str, Any]], results: list[dict[str, Any]]) -> set[str]:
+        """The tool names behind a tool_result list: matched by id against the
+        assistant message that made the calls, so one fork's result can be told
+        apart from another's."""
+        if len(messages) < 2:
+            return set()
+        prior = messages[-2].get("content")
+        if not isinstance(prior, list):
+            return set()
+        ids = {r.get("tool_use_id") for r in results if isinstance(r, dict)}
+        return {
+            block["name"]
+            for block in prior
+            if isinstance(block, dict)
+            and block.get("type") == "tool_use"
+            and block.get("id") in ids
+        }
+
+    @staticmethod
     def _summarise(results: list[dict[str, Any]]) -> str:
         # Ruling P7: tool_result content is always the loop's json.dumps, so a
         # non-JSON block is a bug and must raise, not be swallowed. A finished
@@ -220,6 +251,20 @@ class ScriptedModel:
         del system, timeout
         last = messages[-1]["content"] if messages else ""
         if isinstance(last, list):
+            names = self._names_called(messages, last)
+            if "page_title" in names:
+                # Turn 8 (#124, 2026-09-13-run-2): the script now says something
+                # before it remembers, so a turn's reply carries both -- not only
+                # the last response's text -- and proves the fix rather than
+                # merely failing to trip it.
+                return self._text_and_call(
+                    "Example Domain — from a computer that is gone.",
+                    self._call(
+                        "remember", text="Example Domain, from a computer that self-destructed."
+                    ),
+                )
+            if "remember" in names:
+                return self._text("Noted.")
             return self._text(self._summarise(last))
         principal, message = parse_input(last)
         offered = {t["name"] for t in tools}

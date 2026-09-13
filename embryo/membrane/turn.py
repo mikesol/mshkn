@@ -518,18 +518,28 @@ async def finish(ctx: Context, job: RelayJob) -> str:
     return await continue_turn(ctx, job.response_body)
 
 
+def _said(pending: Pending) -> str:
+    """A turn's reply (§6): every text block the model said, in the order it
+    said them, joined with a blank line. One that rode with tool calls is
+    remembered in `pending.messages` but was never delivered (#124) until
+    this joined it with the rest."""
+    return "\n\n".join(t for t in pending.said if t.strip())
+
+
 async def continue_turn(ctx: Context, message: dict[str, Any]) -> str:
     pending = ctx.state.pending
     assert pending is not None
     completion = parse_message(message)
     pending.usage = add_usage(pending.usage, completion.usage)
+    if completion.text.strip():
+        pending.said.append(completion.text)
     if completion.stop_reason == "max_tokens":
         # The budget ran out mid-response: whatever calls arrived are not run.
         return await close_turn(
-            ctx, text=f"{OUT_OF_TOKENS} {completion.text}".strip(), stopped="max_tokens"
+            ctx, text=f"{OUT_OF_TOKENS} {_said(pending)}".strip(), stopped="max_tokens"
         )
     if not completion.calls:
-        return await close_turn(ctx, text=completion.text, stopped="done")
+        return await close_turn(ctx, text=_said(pending), stopped="done")
     pending.messages.append({"role": "assistant", "content": completion.content})
     tools = build_tools(ctx, pending)
     before = len(pending.calls)
@@ -537,7 +547,7 @@ async def continue_turn(ctx: Context, message: dict[str, Any]) -> str:
         completion, tools, pending, deadline=ctx.deadline, now=ctx.now
     )
     if outcome == "cap":
-        return await close_turn(ctx, text=f"{CAP_REACHED} {completion.text}".strip(), stopped="cap")
+        return await close_turn(ctx, text=f"{CAP_REACHED} {_said(pending)}".strip(), stopped="cap")
     pending.messages.append({"role": "user", "content": results})
     previous = pending.job
     pending.forks += 1
