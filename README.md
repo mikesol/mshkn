@@ -26,9 +26,9 @@ But first, why am I doing this?
 
 I've built ~10 production agents for various companies, using harnesses like [OpenClaw](https://github.com/openclaw/openclaw), [Hermes](https://github.com/NousResearch/hermes-agent), [Grok Bot](https://x.ai/bot), and my own [`cc-disco`](https://github.com/mikesol/cc-disco). You sort of get the same thing every time — a super capable back-office worker with many different faces (Discord, countless _ad hoc_ dashboards, an email account) that acts as a lubricant and accelerant for the stuff you need to get done on a given day.
 
-At the same time, you have a gaggle of companies in YC and beyond trying to solve the "personal agent" problem, meaning an agent that _feels_ more like yours and _gets_ you. Some are reinventing the whole model training stack to solve this problem. Others are operating at the harness level. This project explores the latter.
+At the same time, you have a gaggle of companies in YC and beyond trying to solve the "personal agent" problem, meaning an agent that _feels_ more like yours and _gets_ you. Some are reinventing the whole model training stack to solve this problem. Others are operating at the harness level. This project is an example of the latter.
 
-My belief is that current open-weight models like Qwen 3.8 Flash are plenty smart to _get_ anyone, and the only thing you need to do is, as Uncle Bob suggests, get out of the agent's way and let it do its thing.
+My belief is that current open-weight models like Qwen 3.8 Flash are plenty smart to adapt to any individual's way of working, and the only thing you need to do is, as Uncle Bob suggests, get out of the agent's way and let it do its thing.
 
 What does this mean in practice? The agent starts off not knowing anyone and with the sole ability to propose stuff that its overlord approves. As it doesn't know anything about its environment, it can only propose a few basic things, but propositions lead to knowledge which lead to more propositions which lead to more knowledge, and pretty soon, you have a sweet little agent. Trying and failing at things is what keeps this flywheel going. Like Myst and Monkey Island, the aagent slowly grows its inventory through discovery, which unblocks it in successive challenges until it can basically do anything.
 
