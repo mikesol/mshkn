@@ -294,6 +294,38 @@ async def test_merge_copies_the_result_onto_the_output_volume_in_mount_order(
     host.close()
 
 
+async def test_merge_copies_back_under_a_path_the_parent_held_as_a_file(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """Both forks replaced the parent's file with a directory (#80).
+
+    The output volume is snapped from the parent, so it still holds the file,
+    and it stands above every entry the merge produced under that path. Left in
+    place the copy-back raised FileExistsError on `mkdir` and the merge 500'd.
+    """
+    checkpoints, computers, host = await _services(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    parent = await checkpoints.create(computer, label="p", trigger=CheckpointTrigger.API)
+    fork_a = await computers.fork(ACCOUNT, parent, recipe_id=None)
+    fork_b = await computers.fork(ACCOUNT, parent, recipe_id=None)
+    a = await checkpoints.create(fork_a, label="a", trigger=CheckpointTrigger.API)
+    b = await checkpoints.create(fork_b, label="b", trigger=CheckpointTrigger.API)
+    async with host.blocks.mounted(parent.volume_name) as mp:
+        (mp / "srv").write_text("a file in the parent")
+    for volume_name in (a.volume_name, b.volume_name):
+        async with host.blocks.mounted(volume_name) as m:
+            (m / "srv").mkdir()
+            (m / "srv" / "app.py").write_text("print('hi')")
+
+    outcome = await checkpoints.merge(ACCOUNT, parent.id, a.id, b.id)
+
+    out = host.blocks.mounts[outcome.checkpoint.volume_name]
+    assert outcome.conflicts == []
+    assert (out / "srv").is_dir()
+    assert (out / "srv" / "app.py").read_text() == "print('hi')"
+    host.close()
+
+
 async def _chain(
     checkpoints: CheckpointService, computers: ComputerService, *labels: str
 ) -> list[Checkpoint]:

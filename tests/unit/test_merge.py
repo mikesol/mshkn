@@ -235,3 +235,65 @@ def test_the_mirror_case_a_holds_the_link_and_the_host_is_still_untouched(
     assert (out / "usr" / "sbin").is_symlink()
     assert (out / "usr" / "sbin").readlink() == hostroot
     assert [c.path for c in result.conflicts] == ["usr/sbin/init"]
+
+
+def test_a_directory_replaced_by_a_file_is_a_conflict_not_a_FileExistsError(  # noqa: N802
+    tmp_path: Path,
+) -> None:
+    """A regular file shadows a directory exactly as a symlink does (#80).
+
+    `usr/sbin` as a file in fork B makes `usr/sbin/init` unreachable in B, and
+    unreachable in an output that already took B's file. Writing it anyway
+    meant `mkdir` through a regular file: FileExistsError, and a 500 out of
+    `POST /checkpoints/{id}/merge`.
+    """
+    parent, fork_a, fork_b = _dirs(tmp_path)
+    for d, content in ((parent, "guest init"), (fork_a, "A init")):
+        (d / "usr" / "sbin").mkdir(parents=True)
+        (d / "usr" / "sbin" / "init").write_text(content)
+    (fork_b / "usr").mkdir()
+    (fork_b / "usr" / "sbin").write_text("B took the path")
+
+    result = three_way_merge(parent, fork_a, fork_b)
+    out = result.merged_dir
+    assert (out / "usr" / "sbin").is_file()
+    assert (out / "usr" / "sbin").read_text() == "B took the path"
+    assert [c.path for c in result.conflicts] == ["usr/sbin/init"]
+
+
+def test_the_mirror_case_a_holds_the_file_that_shadows_the_directory(tmp_path: Path) -> None:
+    """The same shape with the file in fork A, which also wins the conflict default."""
+    parent, fork_a, fork_b = _dirs(tmp_path)
+    for d, content in ((parent, "guest init"), (fork_b, "B init")):
+        (d / "usr" / "sbin").mkdir(parents=True)
+        (d / "usr" / "sbin" / "init").write_text(content)
+    (fork_a / "usr").mkdir()
+    (fork_a / "usr" / "sbin").write_text("A took the path")
+
+    result = three_way_merge(parent, fork_a, fork_b)
+    out = result.merged_dir
+    assert (out / "usr" / "sbin").is_file()
+    assert (out / "usr" / "sbin").read_text() == "A took the path"
+    assert [c.path for c in result.conflicts] == ["usr/sbin/init"]
+
+
+def test_a_file_the_forks_replaced_with_a_directory_does_not_block_its_children(
+    tmp_path: Path,
+) -> None:
+    """The other orientation: the parent's file is a directory in both forks.
+
+    Nothing stands above `usr/sbin/init` in the output, which starts empty, so
+    the directory's children are copied and the parent's file is simply gone.
+    """
+    parent, fork_a, fork_b = _dirs(tmp_path)
+    (parent / "usr").mkdir()
+    (parent / "usr" / "sbin").write_text("the parent's file")
+    for d in (fork_a, fork_b):
+        (d / "usr" / "sbin").mkdir(parents=True)
+        (d / "usr" / "sbin" / "init").write_text("init")
+
+    result = three_way_merge(parent, fork_a, fork_b)
+    out = result.merged_dir
+    assert result.conflicts == []
+    assert (out / "usr" / "sbin").is_dir()
+    assert (out / "usr" / "sbin" / "init").read_text() == "init"
