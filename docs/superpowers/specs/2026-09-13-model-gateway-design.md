@@ -73,12 +73,12 @@ rather than accepted reluctantly.
   `.env`: `REQUIRED` (line 46) is `MSHKN_API_URL`, `MSHKN_API_KEY`,
   `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`; `OPTIONAL` (line 47) is `BRAIN_API_URL`.
   `ANTHROPIC_BASE_URL` is in neither.
-- `capability.py:642` (`hatch`) builds the subprocess environment from
+- `capability.py:664` (`hatch`) builds the subprocess environment from
   `**os.environ` plus eight explicit names. `ANTHROPIC_BASE_URL` is not among
   them, so today it reaches `hatch.sh` only by leaking through `**os.environ`.
-- `capability.py:106` is `PRICES = {"claude-opus-5": Price(input=5.0,
-  output=25.0)}`; `cost_usd` (line 111) does `PRICES[model_id]` and is called at
-  line 1146 while assembling `summary`, after the run has finished spending.
+- `capability.py:107` is `PRICES = {"claude-opus-5": Price(input=5.0,
+  output=25.0)}`; `cost_usd` (line 112) does `PRICES[model_id]` and is called at
+  line 1171 while assembling `summary`, after the run has finished spending.
 - `embryo/membrane/effort.py:21` is `API_DEFAULT = "high"`; `resolve` (line 53)
   floors the run's default at it and lets `prior_for` and the model's own
   `effort` tool raise it. `turn.py:300` (`_effort_for`) calls it per model call.
@@ -133,8 +133,8 @@ service it cannot reach.
 ### 5.1 The second Anthropic caller: mem0's extraction LLM
 
 One key in the brain is only true if nothing else in the brain calls Anthropic.
-Something does. `memory.py:119` builds mem0's fact-extraction LLM through
-`extraction_llm` (line 81) with `provider: "anthropic"`, a hardcoded
+Something does. `memory.py:124` builds mem0's fact-extraction LLM through
+`extraction_llm` (line 83) with `provider: "anthropic"`, a hardcoded
 `EXTRACTION_MODEL_ID = "claude-haiku-4-5-20251001"`, and
 `settings.anthropic_api_key`. It is an in-process Anthropic SDK client. It never
 touches the relay, it never reads `settings.anthropic_base_url`, and it runs on
@@ -177,7 +177,7 @@ Two changes to `cost_usd`:
 2. Return `None` on an unknown model instead of raising. The run records
    `cost_usd: null` and keeps its evidence.
 
-The second is the point, not collateral. `cost_usd` runs at `capability.py:1146`
+The second is the point, not collateral. `cost_usd` runs at `capability.py:1171`
 while `summary` is being assembled — after every turn has been spoken and paid
 for, and before `record.summary(summary)` writes anything. A `KeyError` there
 destroys the whole run record of a run that has already cost money.
@@ -273,7 +273,7 @@ a second measurement axis, not a gateway change, and it deserves its own issue.
 - Unit: `load_run_settings` reads the base URL and the gateway key from `.env`
   and rejects a non-default base URL without one; `cost_usd` normalises a
   `provider/` prefix and returns `None` for an unknown id (inverting
-  `test_embryo_capability.py:100`); `_effort_for` returns `None` under
+  `test_embryo_capability.py:102`); `_effort_for` returns `None` under
   `MEMBRANE_EFFORT=off` even when `prior_for` argues for `high`;
   `compose_request` merges `body_extra` onto the body and an unparseable
   `MEMBRANE_BODY_EXTRA` fails `load_settings` rather than a turn.
@@ -332,17 +332,17 @@ anything through the gateway.
 - `hatch.sh:75`, `:92` and `:115` already default, pin and persist
   `ANTHROPIC_BASE_URL`; `config.py:84` already reads it.
 - `capability.py:46-47`: `ANTHROPIC_BASE_URL` is in neither `REQUIRED` nor
-  `OPTIONAL`. `capability.py:642`: `hatch()` does not pass it explicitly.
-- `capability.py:106` is a one-entry `PRICES`; `cost_usd` at line 111 subscripts
+  `OPTIONAL`. `capability.py:664`: `hatch()` does not pass it explicitly.
+- `capability.py:107` is a one-entry `PRICES`; `cost_usd` at line 111 subscripts
   it directly; line 1146 calls it after the run has spent.
-  `tests/unit/test_embryo_capability.py:97-100` pins both the arithmetic and the
+  `tests/unit/test_embryo_capability.py:99-102` pins both the arithmetic and the
   `KeyError`.
 - `effort.py:21` `API_DEFAULT = "high"`; `resolve` (line 53) returns `None` only
   when the default is unset *and* neither the prior nor the request names an
   effort. `turn.py:300` calls it per model call and appends to `pending.efforts`.
 - `memory.py:120` builds the embedder with `provider="openai"` and the operator's
   OpenAI key; nothing about the model gateway touches it.
-- `memory.py:119` builds mem0's extraction LLM with `extraction_llm` (line 81):
+- `memory.py:124` builds mem0's extraction LLM with `extraction_llm` (line 83):
   `provider="anthropic"`, `EXTRACTION_MODEL_ID = "claude-haiku-4-5-20251001"`
   (line 32), `settings.anthropic_api_key`, and `enable_sampling_parameters:
   False`. It is an in-process SDK client and reads neither the relay nor

@@ -135,16 +135,16 @@ git commit -m "The gateway probe: what survives the crossing, measured not assum
 Spec §6. Independent of every other task; do it first among the code tasks because it is the smallest and it unblocks reading any gateway run's evidence.
 
 **Files:**
-- Modify: `embryo/membrane/capability.py:106-120`
-- Modify: `embryo/membrane/capability.py:1146` and the log line at `:1153-1157`
-- Test: `tests/unit/test_embryo_capability.py:89-100`
+- Modify: `embryo/membrane/capability.py:107-121`
+- Modify: `embryo/membrane/capability.py:1171` and the log line at `:1153-1157`
+- Test: `tests/unit/test_embryo_capability.py:91-102`
 
 **Interfaces:**
 - Produces: `membrane.capability.bare_model_id(model_id: str) -> str`; `membrane.capability.cost_usd(usage: Mapping[str, int], model_id: str) -> float | None` (was `-> float`, raised `KeyError`).
 
 - [ ] **Step 1: Write the failing tests**
 
-Replace the body of `test_cost_uses_the_price_table_and_the_cache_multipliers` in `tests/unit/test_embryo_capability.py` (line 89) and add two tests after it:
+Replace the body of `test_cost_uses_the_price_table_and_the_cache_multipliers` in `tests/unit/test_embryo_capability.py` (line 91) and add two tests after it:
 
 ```python
 def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
@@ -186,7 +186,7 @@ Expected: FAIL — `ImportError: cannot import name 'bare_model_id'`.
 
 - [ ] **Step 3: Write the implementation**
 
-In `embryo/membrane/capability.py`, replace `cost_usd` (line 111) and add `bare_model_id` above it:
+In `embryo/membrane/capability.py`, replace `cost_usd` (line 112) and add `bare_model_id` above it:
 
 ```python
 def bare_model_id(model_id: str) -> str:
@@ -216,7 +216,7 @@ def cost_usd(usage: Mapping[str, int], model_id: str) -> float | None:
 
 - [ ] **Step 4: Teach the two call sites that `None` is a price**
 
-At `embryo/membrane/capability.py:1146`, replace the `"cost_usd"` entry. Insert above the `summary = {` literal:
+At `embryo/membrane/capability.py:1171`, replace the `"cost_usd"` entry. Insert above the `summary = {` literal:
 
 ```python
             cost = cost_usd(usage, model_id)
@@ -243,7 +243,7 @@ Then the log line below the literal (currently `f"{model_calls} model calls, {to
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_embryo_capability.py -v`
-Expected: PASS, all of them. If `test_run_once_hatches_speaks_judges_records_and_tears_down` (line 1860) fails on `summary["cost_usd"] > 0`, the stub model id it uses is unpriced — that is a real signal, not a flake: give the stub `claude-opus-5`.
+Expected: PASS, all of them. If `test_run_once_hatches_speaks_judges_records_and_tears_down` (line 1913) fails on `summary["cost_usd"] > 0`, the stub model id it uses is unpriced — that is a real signal, not a flake: give the stub `claude-opus-5`.
 
 - [ ] **Step 6: Commit**
 
@@ -259,9 +259,9 @@ git commit -m "A namespaced model id prices as the model it names, and an unpric
 Spec §5. Does not depend on Task 2.
 
 **Files:**
-- Modify: `embryo/membrane/capability.py:46-47` (`REQUIRED`, `OPTIONAL`), `:58-95` (`RunSettings`, `load_run_settings`), `:642-660` (`hatch`), `:1184` (the CLI)
+- Modify: `embryo/membrane/capability.py:46-47` (`REQUIRED`, `OPTIONAL`), `:62-96` (`RunSettings`, `load_run_settings`), `:664-682` (`hatch`), `:1209` (the CLI)
 - Modify: `docs/infrastructure.md` (the "A model gateway" section)
-- Test: `tests/unit/test_embryo_capability.py:57-87`, and `_settings`/`_stub_hatch` helpers
+- Test: `tests/unit/test_embryo_capability.py:59-89`, and `_settings`/`_stub_hatch` helpers
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
@@ -269,7 +269,7 @@ Spec §5. Does not depend on Task 2.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/unit/test_embryo_capability.py`, after `test_a_missing_key_is_named`:
+Add to `tests/unit/test_embryo_capability.py`, after `test_a_missing_key_is_named` (line 82):
 
 ```python
 def test_the_base_url_defaults_to_anthropic_and_the_anthropic_key_travels(
@@ -393,7 +393,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Write the failing test for the hatch environment**
 
-In `tests/unit/test_embryo_capability.py`, extend `_stub_hatch`'s grep (line ~1810) to capture the new variable:
+In `tests/unit/test_embryo_capability.py`, extend `_stub_hatch`'s grep (line ~1854) to capture the new variable:
 
 ```python
             "env | grep -E '^(MSHKN_API_URL|MSHKN_API_KEY|BRAIN_API_URL|MEMBRANE_MODEL"
@@ -401,7 +401,7 @@ In `tests/unit/test_embryo_capability.py`, extend `_stub_hatch`'s grep (line ~18
             "|OPENAI_API_KEY)='"
 ```
 
-and update `test_hatch_runs_the_script_with_the_keys_and_the_real_model` (line 1839) so the expected text carries the base URL — note the sort order, `ANTHROPIC_BASE_URL` follows `ANTHROPIC_API_KEY`:
+and update `test_hatch_runs_the_script_with_the_keys_and_the_real_model` (line 1892) so the expected text carries the base URL — note the sort order, `ANTHROPIC_BASE_URL` follows `ANTHROPIC_API_KEY`:
 
 ```python
     assert out.read_text() == (
@@ -441,7 +441,7 @@ Expected: FAIL — the written env has no `ANTHROPIC_BASE_URL` line, and `ANTHRO
 
 - [ ] **Step 7: Pass the base URL and the resolved key from `hatch`**
 
-In `embryo/membrane/capability.py:642`, change two entries of the `env` dict:
+In `embryo/membrane/capability.py:664`, change two entries of the `env` dict:
 
 ```python
         "ANTHROPIC_API_KEY": settings.model_api_key,
@@ -457,7 +457,7 @@ Expected: PASS.
 
 - [ ] **Step 9: Add `--base-url` to the CLI**
 
-In `main` (`embryo/membrane/capability.py:1184`), after `--model`:
+In `main` (`embryo/membrane/capability.py:1209`), after `--model`:
 
 ```python
     run.add_argument(
@@ -467,7 +467,7 @@ In `main` (`embryo/membrane/capability.py:1184`), after `--model`:
     )
 ```
 
-In `_run`, extend the existing refusal at line 1270 so a dependent capability rejects `--base-url` alongside `--model` and `--effort` — it starts from a promotion whose brain has the URL baked into its `/brain/.env`:
+In `_run`, extend the existing refusal at line 1295 so a dependent capability rejects `--base-url` alongside `--model` and `--effort` — it starts from a promotion whose brain has the URL baked into its `/brain/.env`:
 
 ```python
     if capability.depends and (args.model or args.effort or args.base_url):
@@ -488,11 +488,11 @@ and pass it through:
         )
 ```
 
-Update `test_main_refuses_a_model_for_a_capability_that_does_not_hatch` (line 2453) to also assert the `--base-url` case.
+Update `test_main_refuses_a_model_for_a_capability_that_does_not_hatch` (line 2570) to also assert the `--base-url` case.
 
 - [ ] **Step 10: Record the base URL in the run's evidence**
 
-In the `summary` literal (`capability.py:~1117`), after `"model": model_id,`:
+In the `summary` literal (`capability.py:~1142`), after `"model": model_id,`:
 
 ```python
                 "base_url": settings.base_url,
@@ -553,7 +553,7 @@ git commit -m "The model base URL and its key are a run's choice, and reach hatc
 Spec §5.1. **Do not skip this task or reorder it after Task 8.** Without it, Task 3 has handed the brain a gateway key under the name `ANTHROPIC_API_KEY`, and mem0's in-process Anthropic client will send that key to `api.anthropic.com` and fail on every turn that touches memory.
 
 **Files:**
-- Modify: `embryo/membrane/memory.py:32`, `:81-97`, `:119`
+- Modify: `embryo/membrane/memory.py:32`, `:83-97`, `:124`
 - Test: `tests/unit/test_embryo_memory.py`
 
 **Interfaces:**
@@ -604,7 +604,7 @@ Expected: FAIL — `ImportError: cannot import name 'extraction_model_id'`.
 
 - [ ] **Step 3: Write the implementation**
 
-In `embryo/membrane/memory.py`, add above `extraction_llm` (line 81):
+In `embryo/membrane/memory.py`, add above `extraction_llm` (line 83):
 
 ```python
 def extraction_model_id(base_url: str) -> str:
@@ -644,7 +644,7 @@ Import `DEFAULT_ANTHROPIC_BASE_URL` from `membrane.config` at the top of the mod
 
 - [ ] **Step 4: Update the one caller**
 
-`embryo/membrane/memory.py:119`:
+`embryo/membrane/memory.py:124`:
 
 ```python
             llm = extraction_llm(settings.anthropic_api_key, settings.anthropic_base_url)
@@ -805,7 +805,7 @@ Expected: PASS.
 
 - [ ] **Step 9: Carry `off` through the driver and the hatch script**
 
-In `embryo/membrane/capability.py`, the `--effort` argument (line 1186) gains the sentinel:
+In `embryo/membrane/capability.py`, the `--effort` argument (line 1211) gains the sentinel:
 
 ```python
     run.add_argument(
