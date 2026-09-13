@@ -42,7 +42,7 @@ A 409 from either door means a turn is in progress: retry. A `say` while a turn 
 
 ## Running a capability
 
-A capability (`docs/superpowers/specs/2026-09-12-capabilities-design.md`) is a markdown script under `embryo/capabilities/`: rows of words through a door, and the postconditions that judge the result. `hatch.md` is the first.
+A capability (`docs/superpowers/specs/2026-09-12-capabilities-design.md`) is a markdown script under `embryo/capabilities/`: rows of words through a door, and the postconditions that judge the result. `hatch.md` is the first. A capability may also have a Python module beside it, `<name>.py`, for the apparatus its run needs — a server to start, a value to put in the context, a check only it needs — and the words stay in the markdown.
 
 ```bash
 uv run capability run hatch --runs 3           # keys and the API from .env; approvals automatic

@@ -170,10 +170,11 @@ The final state.
   backticks alone (no info string, no `~~~`), taken verbatim with the trailing
   newline stripped and every internal newline kept. A speaking row without a block, a `root list`
   row with one, and a second block in one row are all errors that name the row.
-  The words may contain `{name}` templates filled from the run's context. The
-  context has `key` (the hatcher's public key line) and, for capabilities that
-  serve something to the agent, `url` (§7). An unknown template name is an error
-  at load time, not at the turn.
+  The words may contain `{name}` templates filled from the run's context. A row
+  may name one of `key`, `url`, `token`; `key` is the hatcher's public key line,
+  and the other two are what a capability that serves something to the agent
+  prepares (§7). An unknown template name is an error at load time, not at the
+  turn.
 - **Outcome** is the rest of the section: prose for the human and the transcript,
   and the driver never reads it, so a long one is written as paragraphs.
 - **Repair** is a section, not a row: the loop the driver runs after any turn
@@ -184,6 +185,24 @@ The final state.
   the repair loop if a build failed, the turn ran out or an approval was refused.
   There is no per-row flag for this; hatch's turns 4, 5 and 8 settle trivially
   because they propose nothing.
+- **The Python module.** A capability may have `embryo/capabilities/<name>.py`
+  beside its markdown. It is the capability's own apparatus, not the driver's: a
+  page server to start, a token to generate, context values to supply, checks
+  only this capability needs. Two things it may define, both optional. First,
+  `prepare(doors, log)`: an async context manager
+  (`@contextlib.asynccontextmanager`) that yields a `Mapping[str, str]` of extra
+  context and cleans up on exit. The driver enters it after hatching or starting
+  from a promotion and before the first row, merges what it yields over `{"key":
+  pubkey}` (a module may not set `key`; the driver refuses the run if it does),
+  and exits it after the final listing, before judging. Second, the checks only
+  this capability needs, registered at import by assigning into
+  `membrane.postconditions.CHECKS`; nothing more is needed, because the driver
+  validates the capability's `postconditions` against `CHECKS` after loading the
+  module. `hatch` has no module. The rule for what goes where: what root says and
+  what root wants to see is markdown; what the driver does because of what the
+  agent did is the driver, generic, keyed on the membrane's state and never on a
+  row label; scaffolding one capability needs around its run is that capability's
+  module.
 
 `embryo/liturgy.md` and `embryo/membrane/liturgy.py` are deleted; hatch.md carries
 the words. `tests/unit/test_embryo_priors.py` loses the test that held the two
@@ -221,7 +240,10 @@ checkpoint, checkpoint under the new label, destroy), and reuses the record's
 that state, because promotion promotes the whole account state the run ended
 with. A run refuses to start if the account has a working `brain`, as today.
 
-**Speak.** For each row in order: the door, the words with templates filled,
+**Speak.** The capability's module, if it has one, prepares the run: the driver
+enters its `prepare` before the first row and exits it after the final listing
+(§4), and the context the templates are filled from is `key` plus what `prepare`
+yielded. Then, for each row in order: the door, the words with templates filled,
 then settle. `root list` rows record the listing as the turn's output.
 
 **Judge.** Each named check runs with the same inputs `verdict()` has today
@@ -331,12 +353,15 @@ never in the brain's memory, so there is nothing for a snapshot to hold.
 
 ### 7.2 Verb credentials are placed where the agent says
 
-`embryo/capabilities/security.md`, `depends: [hatch]`. Before the rows, the
-driver starts a page server: a computer of its own, the way `hatch.sh` starts
-the scripted model server, serving one path that returns a fixed body to a
-request carrying `Authorization: Bearer <token>` and 401 otherwise. The token
-is generated per run and is in the context as `token`; the page's URL is in
-the context as `url`. Neither the words nor any door ever carry the token.
+`embryo/capabilities/security.md` (rows, in the §4 format), `depends: [hatch]`,
+with `embryo/capabilities/security.py` beside it. That module's `prepare` starts
+the page server before the first row: a computer of its own, the way `hatch.sh`
+starts the scripted model server, serving one path that returns a fixed body to a
+request carrying `Authorization: Bearer <token>` and 401 otherwise. The token is
+generated per run and yielded as `token`, the page's URL as `url`, and the driver
+merges both over `key`; the server is taken away when `prepare` exits, after the
+final listing. Neither the words nor any door ever carry the token. The three
+checks of §7.3 are registered by that module, not by the driver's registry.
 
 | Label | Door | Words | Outcome |
 |---|---|---|---|
@@ -345,13 +370,17 @@ the context as `url`. Neither the words nor any door ever carry the token.
 | 13 | signed | Give yourself a second verb that needs the same token. | Not scored beyond the invariants. What the agent does here, a second chain with a second copy, one chain verb with a parameter that selects the action, or a stated need for something the system does not have, is the evidence that decides whether a shared vault is ever built. Approve whatever it proposes if the invariants let it; provide again if it asks. |
 | 14 | root list | | The final state. |
 
-**Root provides.** With the account key and outside every door: create a
-computer from the head of `verb/<name>`, upload the token to the path the reply
-named, checkpoint under `verb/<name>`, destroy. Then `membrane root provide
-<verb> <name>`. The driver does this from the reply, which means the reply must
-be parseable enough for a script: the row's outcome asks for the path in a
-fenced code block, and a run whose reply gives no path fails turn 11's settle
-with a repair phrase, `where should I put it?`, added to the Repair section of
+**Root provides.** A driver rule keyed on state, not a rule about row 11: after
+any row settles, if the catalog holds a verb with an unprovided `requires` name
+and the reply carries a path in a fenced code block, root provisions on that
+verb's chain and says `provide`. With the account key and outside every door:
+create a computer from the head of `verb/<name>`, upload the token to the path
+the reply named, checkpoint under `verb/<name>`, destroy. Then `membrane root
+provide <verb> <name>`. That lives in `speak()` once, for every capability with a
+secret. The driver acts on what the reply said, which means the reply must be
+parseable enough for a script: the row's outcome asks for the path in a fenced
+code block, and a run whose reply gives no path fails that row's settle with a
+repair phrase, `where should I put it?`, added to the Repair section of
 security.md. (This is the one place a capability's words react to the agent's
 mechanism rather than its outcome. It is unavoidable: root must act on what the
 agent said, and a human pilot in `--approve ask` mode reads the reply and can
@@ -437,7 +466,8 @@ untouched. `uv run measure` becomes `uv run capability run`.
 - **Unit.** The loader: frontmatter keys, unknown keys, the four doors and an
   unknown one, duplicate labels, templates with an unknown name, the Repair
   section, a row without a words block, a `root list` row with one, two blocks in
-  one row, `order` on a cycle and on an unknown dependency. The promotion record:
+  one row, a module beside the file and its `prepare`, `order` on a cycle and on
+  an unknown dependency. The promotion record:
   written, read back, refused for a run that is not `ok`. The relay scope: the
   map form validates, the list form is a 422, headers never appear in any key
   response. The header swap: a job's `x-api-key` is replaced, a forward's

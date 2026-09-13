@@ -4,6 +4,7 @@ document the driver speaks from."""
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -17,8 +18,10 @@ from membrane.capabilities import (
     Row,
     catalog,
     load,
+    load_module,
     order,
 )
+from membrane.postconditions import CHECKS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -99,6 +102,7 @@ def test_load_reads_frontmatter_rows_and_repair(tmp_path: Path) -> None:
         ),
         repair=Repair(build="check your build", refused="check your inbox"),
         path=tmp_path / "one.md",
+        module=None,
     )
     assert cap.words == {"1": "Hello {key}", "2": "Who am I?", "3": "Who am I?", "4": ""}
     assert cap.row("2").door == "signed"
@@ -199,7 +203,6 @@ def test_an_unknown_template_is_an_error_at_load(tmp_path: Path) -> None:
     text = _text().replace("Hello {key}", "Hello {mood}")
     with pytest.raises(CapabilityError, match="row 1: unknown template 'mood'"):
         load(_write(tmp_path, "one", text=text))
-    assert {"key", "url"} == TEMPLATES
 
 
 def test_the_repair_section_is_required_and_has_two_phrases(tmp_path: Path) -> None:
@@ -281,3 +284,62 @@ def test_the_words_the_tiers_speak_are_hatch_md() -> None:
     # the pre-capabilities single script lived directly under embryo/; only the
     # priors do now, and every capability's words live under CAPABILITIES instead.
     assert {p.name for p in CAPABILITIES.parent.glob("*.md")} == {"README.md", "seed.md"}
+
+
+MODULE = '''"""A capability's own apparatus, beside its markdown."""
+
+from __future__ import annotations
+
+import contextlib
+from typing import TYPE_CHECKING, Any
+
+from membrane.postconditions import CHECKS
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Mapping
+
+
+def secret_page(judged: Any) -> dict[str, Any]:
+    return {"ok": True, "evidence": "the page was read"}
+
+
+CHECKS["secret_page"] = secret_page
+
+
+@contextlib.asynccontextmanager
+async def prepare(doors: Any, log: Any) -> AsyncIterator[Mapping[str, str]]:
+    yield {"url": "http://page"}
+'''
+
+
+def test_load_records_the_python_module_beside_the_file(tmp_path: Path) -> None:
+    """A capability may pair with `<name>.py`: the scaffolding its run needs
+    (capabilities design §4). The markdown alone is the common case."""
+    alone = load(_write(tmp_path, "one"))
+    assert alone.module is None
+    (tmp_path / "two.py").write_text(MODULE)
+    paired = load(_write(tmp_path, "two"))
+    assert paired.module == tmp_path / "two.py"
+    assert load_module(alone) is None
+
+
+def test_load_module_imports_it_and_its_checks_are_registered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The module registers what only this capability needs at import, and
+    nothing more is asked of it: `_run` validates the names against `CHECKS`."""
+    monkeypatch.setitem(CHECKS, "secret_page", lambda _judged: {"ok": False})
+    (tmp_path / "two.py").write_text(MODULE)
+    module = load_module(load(_write(tmp_path, "two")))
+    assert module is not None
+    assert CHECKS["secret_page"] is module.secret_page
+    # the import leaves nothing behind for the next capability to collide with
+    assert not [name for name in sys.modules if name.startswith("capabilities.")]
+
+
+def test_a_row_may_template_the_token_a_module_prepares(tmp_path: Path) -> None:
+    """`TEMPLATES` is the fixed set a row may name; a module supplying other
+    names is fine, because `speak` checks the words against the run's context."""
+    text = _text().replace("Hello {key}", "Hello {key} {url} {token}")
+    assert load(_write(tmp_path, "one", text=text)).row("1").words == "Hello {key} {url} {token}"
+    assert {"key", "url", "token"} == TEMPLATES

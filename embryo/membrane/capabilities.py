@@ -6,21 +6,31 @@ whose fenced block holds the words root speaks and whose prose is the outcome,
 and a `## Repair` section with the two phrases root says when a build fails or an
 approval is refused. The words and outcomes live only here; the checks the
 frontmatter names live in `membrane.postconditions`.
+
+A capability may pair with `embryo/capabilities/<name>.py` beside its markdown:
+its own apparatus, not the driver's. The module may define `prepare(doors, log)`,
+an async context manager over the extra context its rows template, and may
+register the checks only it needs by assigning into `postconditions.CHECKS` at
+import.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from contextlib import AbstractAsyncContextManager
+    from types import ModuleType
+    from typing import TextIO
 
 CAPABILITIES = Path(__file__).resolve().parents[1] / "capabilities"
 DOORS: frozenset[str] = frozenset({"root say", "root list", "signed", "unsigned"})
-TEMPLATES: frozenset[str] = frozenset({"key", "url"})
+TEMPLATES: frozenset[str] = frozenset({"key", "url", "token"})
 FRONTMATTER_KEYS = ("name", "depends", "postconditions")
 SEPARATOR = " · "  # U+00B7, between a row's label and its door in the heading
 FENCE = "```"
@@ -30,6 +40,17 @@ PHRASE_RE = re.compile(r"^- (build|refused): `([^`]+)`$")
 
 class CapabilityError(ValueError):
     """A capability file that cannot be loaded, with the file and the row named."""
+
+
+class Prepare(Protocol):
+    """A capability module's `prepare`: an async context manager (write it with
+    `@contextlib.asynccontextmanager`) that starts what the run needs, yields the
+    context its rows template, and takes it away on exit. `doors` is the driver's
+    `Doors`, which the module reaches the account through."""
+
+    def __call__(
+        self, doors: Any, log: TextIO
+    ) -> AbstractAsyncContextManager[Mapping[str, str]]: ...
 
 
 @dataclass(frozen=True)
@@ -54,6 +75,7 @@ class Capability:
     rows: tuple[Row, ...]
     repair: Repair
     path: Path
+    module: Path | None  # `<name>.py` beside the markdown, when the capability has one
 
     @property
     def words(self) -> dict[str, str]:
@@ -220,6 +242,7 @@ def load(path: Path) -> Capability:
     depends, postconditions = values["depends"], values["postconditions"]
     if not isinstance(depends, list) or not isinstance(postconditions, list):
         raise CapabilityError(f"{path.name}: depends and postconditions must be lists")
+    module = path.with_suffix(".py")
     return Capability(
         name=name,
         depends=tuple(depends),
@@ -227,7 +250,23 @@ def load(path: Path) -> Capability:
         rows=_rows(lines[body:], path),
         repair=_repair(lines[body:], path),
         path=path,
+        module=module if module.exists() else None,
     )
+
+
+def load_module(capability: Capability) -> ModuleType | None:
+    """The capability's Python module, imported from the path beside its markdown,
+    or None when it has none. It is not put in `sys.modules`: it is one
+    capability's apparatus, named after a file, and nothing imports it by name."""
+    if capability.module is None:
+        return None
+    spec = importlib.util.spec_from_file_location(
+        f"capabilities.{capability.name}", capability.module
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def catalog(directory: Path = CAPABILITIES) -> dict[str, Capability]:

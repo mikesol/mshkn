@@ -1469,6 +1469,7 @@ async def test_speak_refuses_a_row_whose_template_the_context_cannot_fill(tmp_pa
         ),
         repair=HATCH.repair,
         path=tmp_path / "serve.md",
+        module=None,
     )
     with pytest.raises(
         RuntimeError, match=r"row 2 needs \{url\} and the run's context has \['key'\]"
@@ -1545,6 +1546,7 @@ async def test_speak_walks_the_rows_in_order_and_takes_the_final_list(tmp_path: 
         ),
         repair=HATCH.repair,
         path=tmp_path / "tiny.md",
+        module=None,
     )
     doors = FakeDoors()
     key_dir, pubkey = _keys(tmp_path)
@@ -1569,6 +1571,7 @@ async def test_speak_without_a_root_list_row_returns_no_final(tmp_path: Path) ->
         rows=(Row("1", "root say", WORDS["1"], ""),),
         repair=HATCH.repair,
         path=tmp_path / "tiny.md",
+        module=None,
     )
     key_dir, pubkey = _keys(tmp_path)
     turns, final = await speak(
@@ -1993,6 +1996,7 @@ async def test_run_once_of_a_dependent_without_a_promotion_names_both_commands(
         rows=(),
         repair=HATCH.repair,
         path=tmp_path / "security.md",
+        module=None,
     )
     with pytest.raises(
         RuntimeError, match=r"capability run hatch --keep.*capability promote hatch"
@@ -2048,6 +2052,7 @@ async def test_run_once_refuses_a_dependency_missing_from_the_ancestry(
         rows=(),
         repair=HATCH.repair,
         path=tmp_path / "coding.md",
+        module=None,
     )
     with pytest.raises(
         RuntimeError, match="coding depends on security, not in the ancestry of hatch"
@@ -2104,6 +2109,7 @@ async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_i
         rows=(Row("2", "root say", "My public key is {key}", "A reply."),),
         repair=HATCH.repair,
         path=tmp_path / "security.md",
+        module=None,
     )
     hatched = Hatched(
         ingress_url="",
@@ -2218,6 +2224,7 @@ async def test_run_once_of_a_dependent_refuses_a_key_that_is_not_the_lineages(
         rows=(),
         repair=HATCH.repair,
         path=tmp_path / "security.md",
+        module=None,
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -2274,6 +2281,7 @@ async def test_run_once_of_a_dependent_names_the_directory_that_has_no_key(
         rows=(),
         repair=HATCH.repair,
         path=tmp_path / "security.md",
+        module=None,
     )
     monkeypatch.setattr(
         "membrane.capability.transport_for",
@@ -2680,3 +2688,177 @@ def test_membrane_version_names_the_commit_and_whether_the_tree_was_dirty(
     assert len(version["commit"]) == 40 and isinstance(version["dirty"], bool)
     # outside a repository there is no commit to name
     assert membrane_version(tmp_path) == {"commit": None, "dirty": None}
+
+
+# ---------------------------------------------------------------- a capability's module
+
+
+SERVED = """---
+name: served
+depends: []
+postconditions:
+  - authentication
+---
+
+# served
+
+### 1 · root say
+
+```
+the page is at {url}
+```
+
+A reply that read it.
+
+### 2 · root list
+
+The final state.
+
+## Repair
+
+- build: `check your build`
+- refused: `check your inbox`
+"""
+
+PREPARE_MODULE = '''"""served's own apparatus: what its run needs, and what it takes away."""
+
+from __future__ import annotations
+
+import contextlib
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Mapping
+
+FLAG = Path("__FLAG__")
+EXTRA = __EXTRA__
+
+
+@contextlib.asynccontextmanager
+async def prepare(doors: Any, log: Any) -> AsyncIterator[Mapping[str, str]]:
+    log.write(f"the page is served ({len(doors.sent)} commands so far)\\n")
+    yield EXTRA
+    FLAG.write_text("torn down")
+'''
+
+CHECK_MODULE = """from membrane.postconditions import CHECKS
+
+
+def secret_page(judged):
+    return {"ok": True, "evidence": "read"}
+
+
+CHECKS["secret_page"] = secret_page
+"""
+
+
+def _served(tmp_path: Path, extra: str) -> Path:
+    """A capability whose module prepares the context its one row templates."""
+    from membrane.capabilities import load
+
+    caps = tmp_path / "capabilities"
+    caps.mkdir(parents=True, exist_ok=True)
+    (caps / "served.md").write_text(SERVED)
+    (caps / "served.py").write_text(
+        PREPARE_MODULE.replace("__FLAG__", str(tmp_path / "exited")).replace("__EXTRA__", extra)
+    )
+    assert load(caps / "served.md").module == caps / "served.py"
+    return caps / "served.md"
+
+
+def _said(api: FakeApi) -> list[str]:
+    return [
+        base64.b64decode(body["exec"].removeprefix("membrane root say ")).decode()
+        for method, path, body in api.requests
+        if method == "POST"
+        and path == "/checkpoints/fork"
+        and body["exec"].startswith("membrane root say ")
+    ]
+
+
+async def test_run_once_speaks_what_the_modules_prepare_yields_and_exits_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The capability's module is its own apparatus (capabilities design §4): the
+    driver enters `prepare` after hatching, merges what it yields over `key`, and
+    exits it after the final listing, so what it started is gone before judging."""
+    from membrane.capabilities import load, load_module
+
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    capability = load(_served(tmp_path, '{"url": "http://page"}'))
+    api = FakeApi()
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    log = io.StringIO()
+    summary = await run_once(
+        _settings(),
+        capability,
+        tmp_path / "run",
+        AutoApprover(),
+        hatch_script=_stub_hatch(tmp_path),
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=log,
+        out=tmp_path,
+        module=load_module(capability),
+    )
+    assert _said(api) == ["the page is at http://page"]
+    assert summary["capability"] == "served" and set(summary["postconditions"]) == {
+        "authentication"
+    }
+    assert (tmp_path / "exited").read_text() == "torn down"
+    assert "the page is served (0 commands so far)" in log.getvalue()
+
+
+async def test_a_modules_prepare_may_not_take_the_runs_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`key` is the run's own: the hatcher's public key line, which the rows name
+    and the checks judge. A module that sets it is refused before a row is spoken."""
+    from membrane.capabilities import load, load_module
+
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    capability = load(_served(tmp_path, '{"url": "http://page", "key": "not mine"}'))
+    api = FakeApi()
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match=r"served\.py's prepare must not set 'key'"):
+        await run_once(
+            _settings(),
+            capability,
+            tmp_path / "run",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+            module=load_module(capability),
+        )
+    assert _said(api) == []
+    assert json.loads((tmp_path / "run" / "run.json").read_text())["ok"] is False
+
+
+def test_main_loads_the_module_before_it_checks_the_postcondition_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A check only this capability needs is registered by its module at import,
+    so `_run` must load the module before it validates the names it reads."""
+    from membrane.capabilities import catalog
+
+    caps = tmp_path / "capabilities"
+    _capability(caps, "a", checks="  - secret_page")
+    (caps / "a.py").write_text(CHECK_MODULE)
+    monkeypatch.setattr("membrane.capability.catalog", lambda: catalog(caps))
+    log = io.StringIO()
+    assert "secret_page" not in CHECKS
+    try:
+        assert main(["run", "a", "--env", str(tmp_path / "none")], log=log) == 2
+        assert CHECKS["secret_page"].__name__ == "secret_page"
+    finally:
+        CHECKS.pop("secret_page", None)
+    assert "postconditions no one wrote" not in log.getvalue()
+    assert "MSHKN_API_URL" in log.getvalue()  # it got as far as the settings

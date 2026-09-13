@@ -20,7 +20,7 @@ import os
 import subprocess
 import sys
 import time
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,16 +28,17 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
 import httpx
 
-from membrane.capabilities import TEMPLATE_RE, CapabilityError, catalog, order
+from membrane.capabilities import TEMPLATE_RE, CapabilityError, catalog, load_module, order
 from membrane.config import DEFAULT_MODEL_ID, parse_env
 from membrane.effort import EFFORTS
 from membrane.model import add_usage, zero_usage
 from membrane.postconditions import CHECKS, Judged, Turn, by_label, judge, tool_computers
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+    from types import ModuleType
 
-    from membrane.capabilities import Capability
+    from membrane.capabilities import Capability, Prepare
 
 DEFAULT_BRAIN_API_URL = "https://api.mshkn.dev"
 DEFAULT_OUT = Path("docs/embryo")
@@ -942,6 +943,24 @@ async def speak(
 # ---------------------------------------------------------------- a run
 
 
+@asynccontextmanager
+async def run_context(
+    module: ModuleType | None, name: str, pubkey: str, doors: Doors, *, log: TextIO
+) -> AsyncIterator[dict[str, str]]:
+    """The context the rows' templates are filled from: `key`, the public key line
+    of the run's own signing key, and whatever the capability's module prepared
+    (capabilities design §4). The module's scaffolding is up for the rows and gone
+    after the final listing; `key` is the run's and a module cannot take it."""
+    prepare: Prepare | None = None if module is None else getattr(module, "prepare", None)
+    if prepare is None:
+        yield {"key": pubkey}
+        return
+    async with prepare(doors, log) as extra:
+        if "key" in extra:
+            raise RuntimeError(f"{name}.py's prepare must not set 'key'")
+        yield {"key": pubkey, **extra}
+
+
 def _usage_total(turns: list[Turn]) -> tuple[dict[str, int], int]:
     usage = zero_usage()
     calls = 0
@@ -962,6 +981,7 @@ async def run_once(
     keep: bool,
     log: TextIO,
     out: Path,
+    module: ModuleType | None = None,
 ) -> dict[str, Any]:
     """Hatch (or, for a dependent, start from its last dependency's promotion),
     speak, judge, record, tear down. Returns `run.json`'s document.
@@ -1034,9 +1054,13 @@ async def run_once(
         final: dict[str, Any] | None = None
         try:
             try:
-                turns, final = await speak(
-                    capability, doors, key_dir, {"key": pubkey}, approver, log=log
-                )
+                async with run_context(module, capability.name, pubkey, doors, log=log) as context:
+                    turns, final = await speak(
+                        capability, doors, key_dir, context, approver, log=log
+                    )
+                    # A capability without a `root list` row still gets judged on the end state.
+                    if final is None:
+                        final = await doors.listing()
             except Exception as exc:
                 # An aborted run is evidence too: what was hatched, how far it got, why.
                 record.summary(
@@ -1058,9 +1082,6 @@ async def run_once(
                     }
                 )
                 raise
-            # A capability without a `root list` row still gets judged on the end state.
-            if final is None:
-                final = await doors.listing()
             record.final_list(final)
             computer_ids = [c["computer_id"] for t in turns for c in tool_computers(t)]
             # the hook computers of the signed knock: their logs say why a caller
@@ -1227,6 +1248,9 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
     except CapabilityError as exc:
         log.write(f"{exc}\n")
         return 2
+    # Before the names are validated: a capability's module registers the checks
+    # only it needs as it is imported (capabilities design §4).
+    module = load_module(capability)
     unknown = sorted(set(capability.postconditions) - set(CHECKS))
     if unknown:
         log.write(
@@ -1269,6 +1293,7 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
                     keep=args.keep,
                     log=log,
                     out=args.out,
+                    module=module,
                 )
             )
         except RuntimeError as exc:
