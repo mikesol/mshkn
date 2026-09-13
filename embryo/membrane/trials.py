@@ -17,7 +17,7 @@ from membrane.declarations import (
     parse_verb,
     render_command,
 )
-from membrane.invariants import door_is_open, may_propose
+from membrane.invariants import door_is_open, may_propose, refuse_policy
 from membrane.mshkn import Deferred, MshknError
 from membrane.offering import offered_names
 from membrane.principals import ANONYMOUS
@@ -206,17 +206,24 @@ async def try_verb(
 def try_policy(state: State, doc: object) -> dict[str, Any]:
     """A policy's trial (#171): what the document would offer, without proposing it.
 
-    Parsed the way approval parses it, so an invalid document is refused with the
-    same words; for every principal it names, and for anonymous, the `offered` list
-    a turn from that principal would get under it against the current catalog, and
-    whether the door would really be open (§10.6). Installs nothing, touches no
-    computer, creates no `Trial`: there is no recipe, so there is nothing on the
-    account for `no_undeclared_capability` to find.
+    Checked the way approval checks it, in two stages and with the same words each
+    would give: `parse_policy` for a document that is not a policy at all
+    (`invalid`), then `refuse_policy` -- the policy half of `refuse_approval` -- for
+    one that parses but could never be applied (`refused`). Only a document that
+    would survive both is answered with what it would offer: for every principal it
+    names, and for anonymous, the `offered` list a turn from that principal would
+    get under it against the current catalog, and whether the door would really be
+    open (§10.6). Installs nothing, touches no computer, creates no `Trial`: there
+    is no recipe, so there is nothing on the account for `no_undeclared_capability`
+    to find.
     """
     try:
         policy = parse_policy(doc)
     except DeclarationError as exc:
         return {"status": "invalid", "error": str(exc)}
+    refusal = refuse_policy(policy, state)
+    if refusal is not None:
+        return {"status": "refused", "error": refusal}
     return {
         "status": "tried",
         "door": "open" if door_is_open(policy) else "closed",

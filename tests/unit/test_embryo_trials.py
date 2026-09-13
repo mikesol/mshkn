@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from membrane.declarations import DeclarationError, parse_verb, render_command
+from membrane.declarations import DeclarationError, parse_proposal, parse_verb, render_command
+from membrane.invariants import refuse_approval
 from membrane.mshkn import MshknError
 from membrane.proposals import propose
 from membrane.state import CatalogEntry, State, Trial
@@ -13,7 +14,7 @@ from membrane.trials import RUN_MARGIN, poll_trials, run_trial, sweep_trial, try
 
 from tests.support_embryo import FakeMshkn
 from tests.unit.test_embryo_declarations import VERB
-from tests.unit.test_embryo_proposals import HOOK
+from tests.unit.test_embryo_proposals import HOOK, _two_param_hook
 from tests.unit.test_embryo_verbs import CHAIN_VERB
 
 # The document run-4 proposed and had approved (docs/embryo/hatch/2026-09-13-run-4):
@@ -41,6 +42,14 @@ def _ready(state: State, doc: dict[str, Any], proposal_id: str) -> None:
     state.catalog[verb.name] = CatalogEntry(
         verb=verb, status="ready", recipe_id=f"rec-{verb.name}", proposal_id=proposal_id
     )
+
+
+def _approval_refusal(state: State, doc: dict[str, Any]) -> str | None:
+    """What root would be told if this very document were proposed and approved."""
+    proposal = parse_proposal(
+        {"kind": "policy", "title": "t", "rationale": "r", "policy": doc}, id="p-approve"
+    )
+    return refuse_approval(proposal, state)
 
 
 async def _no_sleep(seconds: float) -> None:
@@ -464,10 +473,62 @@ def test_a_policy_trial_offers_the_catalog_to_a_principal_the_document_widens() 
     assert result["principals"]["anonymous"] == {"offered": [], "propose": False}
 
 
-def test_a_policy_trial_reports_a_door_that_only_says_it_is_open_as_closed() -> None:
-    """§10.6: open with no pre-turn hook is closed, whatever the document says."""
+def test_a_policy_trial_reports_a_closed_door_as_closed() -> None:
     state = State()
-    assert try_policy(state, {"principals": {}, "hooks": [], "door": "open"})["door"] == "closed"
+    result = try_policy(state, {"principals": {"ssh:mike": {"invoke": "*"}}, "door": "closed"})
+    assert result["status"] == "tried" and result["door"] == "closed"
+    # the grant is still read: what the door would offer if it were opened
+    assert result["principals"]["ssh:mike"]["offered"] == ["effort", "remember"]
+
+
+def test_a_policy_trial_is_refused_the_way_approval_would_refuse_it() -> None:
+    """#171 fix round 1: `parse_policy` is not the whole of what approval checks.
+    A document that parses but could never be applied is refused here with the very
+    words `refuse_approval` would deliver, in the turn that wrote it rather than at
+    an approval a turn later."""
+    state = State()
+    _ready(state, SSH_AUTH, "p-1")
+    # parse_verb refuses a two-parameter hook outright (#123), so this one is built
+    # directly, as test_embryo_proposals builds it to reach the same approval guard
+    state.catalog["verify_sig"] = CatalogEntry(
+        verb=_two_param_hook("verify_sig"), status="ready", recipe_id="rec-2", proposal_id="p-2"
+    )
+    refused = {
+        # §10.6: the public door cannot open with no pre-turn hook
+        "no_hook": {"principals": {}, "hooks": [], "door": "open"},
+        # a hook the catalog does not have
+        "unknown_hook": {"principals": {}, "hooks": ["nowhere"], "door": "open"},
+        # a hook that takes two parameters, so nothing could hand it the payload
+        "two_param_hook": {"principals": {}, "hooks": ["verify_sig"], "door": "open"},
+        # §10.7: anonymous may never propose
+        "anonymous_propose": {
+            "principals": {"anonymous": {"invoke": [], "propose": True}},
+            "hooks": ["ssh_auth"],
+            "door": "open",
+        },
+    }
+    for label, doc in refused.items():
+        reason = _approval_refusal(state, doc)
+        assert reason is not None, label
+        assert try_policy(state, doc) == {"status": "refused", "error": reason}, label
+
+
+def test_a_policy_trial_refuses_a_hook_that_declares_no_asserts() -> None:
+    state = State()
+    _ready(state, {k: v for k, v in SSH_AUTH.items() if k != "asserts"}, "p-1")
+    doc: dict[str, Any] = {"principals": {}, "hooks": ["ssh_auth"], "door": "open"}
+    assert try_policy(state, doc) == {
+        "status": "refused",
+        "error": _approval_refusal(state, doc),
+    }
+
+
+def test_a_document_the_trial_accepts_is_one_approval_accepts() -> None:
+    state = State()
+    _ready(state, SSH_AUTH, "p-1")
+    for doc in (RUN_4_POLICY, WIDENED_POLICY):
+        assert _approval_refusal(state, doc) is None
+        assert try_policy(state, doc)["status"] == "tried"
 
 
 def test_an_invalid_policy_is_refused_the_way_a_proposal_of_it_would_be() -> None:

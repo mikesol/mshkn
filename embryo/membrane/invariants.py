@@ -44,6 +44,34 @@ def may_propose(principal: str, policy: Policy) -> bool:
     return policy.grant(principal).propose
 
 
+def refuse_policy(policy: Policy, state: State) -> str | None:
+    """Why this policy document could never be applied, or None (§10).
+
+    The policy half of `refuse_approval`, on its own so that `try` can deliver the
+    same refusal for a document that has not been proposed (#171): what the trial
+    accepts is exactly what approval would accept, and the two cannot drift.
+    """
+    if policy.door == "open" and not policy.hooks:
+        return "the public door cannot open with no pre-turn hook (§10.6)"
+    for hook in policy.hooks:
+        entry = state.catalog.get(hook)
+        if entry is None:
+            return (
+                f"hook {hook} is not a verb in the catalog; the catalog has {sorted(state.catalog)}"
+            )
+        if entry.verb.asserts is None:
+            return f"hook {hook} declares no asserts namespace"
+        properties = entry.verb.params.get("properties", {})
+        if len(properties) != 1:
+            return (
+                f"hook {hook} declares {sorted(properties)} as parameters; "
+                "a hook takes exactly one parameter, which receives the decoded payload"
+            )
+    if policy.grant(ANONYMOUS).propose:
+        return "anonymous may never propose (§10.7)"
+    return None
+
+
 def refuse_approval(proposal: Proposal, state: State) -> str | None:
     if proposal.kind == "verb":
         verb = proposal.verb
@@ -80,24 +108,5 @@ def refuse_approval(proposal: Proposal, state: State) -> str | None:
     if proposal.kind == "policy":
         new = proposal.policy
         assert new is not None
-        if new.door == "open" and not new.hooks:
-            return "the public door cannot open with no pre-turn hook (§10.6)"
-        for hook in new.hooks:
-            entry = state.catalog.get(hook)
-            if entry is None:
-                return (
-                    f"hook {hook} is not a verb in the catalog; "
-                    f"the catalog has {sorted(state.catalog)}"
-                )
-            if entry.verb.asserts is None:
-                return f"hook {hook} declares no asserts namespace"
-            properties = entry.verb.params.get("properties", {})
-            if len(properties) != 1:
-                return (
-                    f"hook {hook} declares {sorted(properties)} as parameters; "
-                    "a hook takes exactly one parameter, which receives the decoded payload"
-                )
-        if new.grant(ANONYMOUS).propose:
-            return "anonymous may never propose (§10.7)"
-        return None
+        return refuse_policy(new, state)
     return None
