@@ -13,6 +13,7 @@ from mshkn.api.computers import router as computers_router
 from mshkn.api.errors import install_error_handlers
 from mshkn.api.ingress import router as ingress_router
 from mshkn.api.keys import router as keys_router
+from mshkn.api.logs import router as logs_router
 from mshkn.api.recipes import router as recipes_router
 from mshkn.api.relay import router as relay_router
 from mshkn.api.system import router as system_router
@@ -66,6 +67,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     app.include_router(ingress_router)
     app.include_router(recipes_router)
     app.include_router(keys_router)
+    app.include_router(logs_router)
     app.include_router(relay_router)
     app.include_router(system_router)
     return app
