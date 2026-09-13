@@ -163,6 +163,12 @@ def _proposal(
 class ScriptedModel:
     def __init__(self) -> None:
         self._n = 0
+        # Set by the flow tier's fake `/v1/messages` handler (tests/support_embryo.py's
+        # `scripted_asgi`), not by `complete` itself: `complete` only ever sees system,
+        # messages and tools, never the envelope around them (model id, output_config,
+        # body_extra), so it cannot be the thing that records what the gateway sent
+        # (task 7, spec §11).
+        self.last_body: dict[str, Any] | None = None
 
     def _call(self, name: str, **input: Any) -> ToolCall:  # noqa: A002
         self._n += 1
