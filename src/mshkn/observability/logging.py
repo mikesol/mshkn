@@ -37,6 +37,32 @@ _BUILTIN_ATTRS = frozenset(
 _LIFTED = frozenset({"request_id", "account_id"})
 
 
+def _unrenderable(value: object, exc: BaseException) -> str:
+    """Name a value that would not render, and what it raised.
+
+    Built only out of `object.__repr__`, which reads the type name straight off
+    the C struct and runs none of the object's own code: it names both types
+    without asking either of them anything, so this cannot itself raise.
+    """
+    return f"[unrenderable {object.__repr__(value)} raised {object.__repr__(exc)}]"
+
+
+def _safe_str(value: object) -> str:
+    """`str(value)`, or a placeholder. See the note in `to_ecs` for why."""
+    try:
+        return str(value)
+    except Exception as exc:
+        return _unrenderable(value, exc)
+
+
+def _safe_repr(value: object) -> str:
+    """`repr(value)`, or a placeholder. See the note in `to_ecs` for why."""
+    try:
+        return repr(value)
+    except Exception as exc:
+        return _unrenderable(value, exc)
+
+
 def _cap(value: object) -> object:
     """Bound one field, and leave it something a strict JSON parser accepts.
 
@@ -59,7 +85,7 @@ def _cap(value: object) -> object:
     elif isinstance(value, str):
         text = value
     else:
-        text = str(value)
+        text = _safe_str(value)
     if len(text) <= _MAX_FIELD_CHARS:
         return text
     return text[: _MAX_FIELD_CHARS - len(_TRUNCATED)] + _TRUNCATED
@@ -74,11 +100,17 @@ def to_ecs(record: logging.LogRecord) -> dict[str, object]:
     """
     try:
         message = record.getMessage()
-    except (TypeError, ValueError, KeyError, IndexError):
-        # %-formatting the args failed. to_ecs is the only mapping there is, so
-        # raising here would lose the record from stdout and from the ring both;
-        # keep the pieces, which are the evidence of what the caller logged.
-        message = f"{record.msg!r} % {record.args!r}"
+    except Exception:
+        # %-formatting the args failed, or an argument's own __str__ did. to_ecs
+        # is the only mapping there is, so raising here would lose the record
+        # from stdout and from the ring both; keep the pieces, which are the
+        # evidence of what the caller logged. Hence `Exception` and not a tuple
+        # of the failures we happened to think of: a detached ORM row raises
+        # AttributeError, and the placeholder the fallback leaves behind names
+        # the failure where enumerating types would have re-raised it. Every
+        # other render below — the pieces here, `_cap` on an extra, the
+        # exception's message — is guarded the same way and for the same reason.
+        message = f"{_safe_repr(record.msg)} % {_safe_repr(record.args)}"
     entry: dict[str, object] = {
         "@timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
         "ecs.version": ECS_VERSION,
@@ -97,23 +129,26 @@ def to_ecs(record: logging.LogRecord) -> dict[str, object]:
     request_id = record.__dict__.get("request_id", _UNSET)
     if request_id is _UNSET:
         request_id = request_id_var.get()
-    if request_id != "-":
-        # Client-supplied, straight off X-Request-Id and never validated.
-        entry["trace.id"] = _cap(str(request_id))
+    if request_id is not None and request_id not in ("", "-"):
+        # Client-supplied, straight off X-Request-Id and never validated. "-" is
+        # the contextvar's own default; an explicit empty or None request_id is
+        # as traceless as no header, and the field is omitted rather than
+        # emitted empty, exactly as for the account below.
+        entry["trace.id"] = _cap(_safe_str(request_id))
     account_id = record.__dict__.get("account_id", _UNSET)
     if account_id is _UNSET:
         account_id = account_id_var.get()
     if account_id is not None:
         # destroy logs the computer's own account, which is right even when the
         # reaper is what ran it; an explicit None means no account at all.
-        entry["mshkn.account_id"] = _cap(str(account_id))
+        entry["mshkn.account_id"] = _cap(_safe_str(account_id))
     for key, value in record.__dict__.items():
         if key not in _BUILTIN_ATTRS and key not in _LIFTED:
             entry[f"mshkn.{key}"] = _cap(value)
     if record.exc_info and record.exc_info[1] is not None:
         exc = record.exc_info[1]
         entry["error.type"] = type(exc).__name__
-        entry["error.message"] = _cap(str(exc))
+        entry["error.message"] = _cap(_safe_str(exc))
         entry["error.stack_trace"] = _cap(_EXC_FORMATTER.formatException(record.exc_info))
     return entry
 

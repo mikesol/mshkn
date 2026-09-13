@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import logging
 import sys
@@ -26,12 +27,29 @@ from mshkn.observability.metrics import (
 
 
 def _record(
-    msg: str = "x", args: tuple[object, ...] | None = None, **attrs: object
+    msg: object = "x", args: tuple[object, ...] | None = None, **attrs: object
 ) -> logging.LogRecord:
     record = logging.LogRecord("t", logging.INFO, "f.py", 1, msg, args, None)
     for key, value in attrs.items():
         setattr(record, key, value)
     return record
+
+
+class _Detached:
+    """A detached or half-constructed ORM row, which is the common real case:
+    `__str__` raises AttributeError, which no tuple of %-formatting errors
+    covers, so enumerating types re-raises it out of `to_ecs`."""
+
+    def __str__(self) -> str:
+        raise AttributeError("'_Detached' object has no attribute 'name'")
+
+
+class _Hostile(_Detached):
+    """A value with nothing left to say: its repr raises as well, so even the
+    fallback that keeps the pieces has to be built out of something else."""
+
+    def __repr__(self) -> str:
+        raise RuntimeError("nothing to say")
 
 
 def test_the_ecs_envelope_is_present_on_every_record() -> None:
@@ -61,6 +79,31 @@ def test_an_explicit_request_id_beats_the_context() -> None:
         request_id_var.reset(token)
 
 
+def test_a_falsy_request_id_on_the_record_still_beats_the_context() -> None:
+    """The presence check, pinned with a value `or` would swallow: falling back
+    to the contextvar here stamps the record with somebody else's trace.
+
+    Doubles as the coercion: the field is a string in every other record, and a
+    consumer that groups on it should not have to handle two types.
+    """
+    token = request_id_var.set("req-ctx")
+    try:
+        assert to_ecs(_record(request_id=0))["trace.id"] == "0"
+    finally:
+        request_id_var.reset(token)
+
+
+def test_an_empty_request_id_is_omitted_rather_than_emitted_empty() -> None:
+    """The same rule as the account: absent means absent. `trace.id: ""` is a
+    trace that matches nothing and reads like a bug in the tracer."""
+    token = request_id_var.set("req-ctx")
+    try:
+        assert "trace.id" not in to_ecs(_record(request_id=None))
+        assert "trace.id" not in to_ecs(_record(request_id=""))
+    finally:
+        request_id_var.reset(token)
+
+
 def test_a_client_supplied_request_id_is_capped() -> None:
     """X-Request-Id is unvalidated client input and lands on every record."""
     token = request_id_var.set("r" * 16000)
@@ -80,6 +123,23 @@ def test_an_explicit_account_beats_the_context() -> None:
     finally:
         account_id_var.reset(token)
     assert "mshkn.account_id" not in to_ecs(_record())
+
+
+def test_a_non_string_account_id_becomes_a_string() -> None:
+    """GET /logs selects a tenant's records by comparing this field with `==`
+    against the account id on the principal, which is a `str`. An int account id
+    stored as an int matches none of them, and the tenant sees an empty log
+    rather than an error — the quietest half of the mis-attribution bug.
+    """
+    assert to_ecs(_record(account_id=123))["mshkn.account_id"] == "123"
+
+
+def test_an_oversized_account_id_is_capped_like_any_other_field() -> None:
+    """It reaches here off a token the client supplied, so it is as unbounded as
+    the trace id and gets the same budget."""
+    value = str(to_ecs(_record(account_id="a" * 9000))["mshkn.account_id"])
+    assert len(value) == _MAX_FIELD_CHARS
+    assert value.endswith(_TRUNCATED)
 
 
 def test_an_explicit_account_of_none_means_no_account() -> None:
@@ -181,6 +241,76 @@ def test_a_message_that_cannot_be_formatted_does_not_lose_the_record() -> None:
     message = str(to_ecs(record)["message"])
     assert "100% done" in message
     assert "extra" in message
+
+
+def test_an_argument_whose_str_raises_does_not_lose_the_record() -> None:
+    """`logger.info("v=%s", row)` on a detached row raises AttributeError out of
+    getMessage, which is not a %-formatting error at all."""
+    entry = to_ecs(_record("v=%s", (_Detached(),)))
+    message = str(entry["message"])
+    assert "v=%s" in message, "the format string is still the evidence of what was logged"
+    assert "_Detached" in message, "and so is the type of the argument that would not render"
+    assert entry["log.level"] == "info", "the rest of the document is untouched"
+
+
+def test_a_value_whose_repr_also_raises_still_produces_a_document() -> None:
+    """The fallback cannot lean on repr either: it is built out of
+    `object.__repr__`, which runs none of the value's own code."""
+    message = str(to_ecs(_record(_Hostile()))["message"])
+    assert "unrenderable" in message
+    assert "_Hostile" in message, "the placeholder names the value"
+    assert "RuntimeError" in message, "and what it raised"
+
+
+def test_an_extra_that_will_not_render_becomes_a_placeholder() -> None:
+    """An `extra=` is arbitrary caller data; one bad row must not take the
+    record's other fields down with it."""
+    entry = to_ecs(_record(row=_Detached(), op="create"))
+    assert "unrenderable" in str(entry["mshkn.row"])
+    assert "AttributeError" in str(entry["mshkn.row"])
+    assert entry["mshkn.op"] == "create", "the fields around it survive"
+
+
+def test_an_exception_whose_str_raises_still_produces_three_error_fields() -> None:
+    """The error branch renders the exception too, and an exception carrying a
+    detached row is exactly the one you most need logged."""
+
+    class UnprintableError(Exception):
+        def __str__(self) -> str:
+            raise AttributeError("no attribute 'detail'")
+
+    try:
+        raise UnprintableError("boom")
+    except UnprintableError:
+        record = logging.LogRecord("t", logging.ERROR, "f.py", 1, "boom", None, sys.exc_info())
+    entry = to_ecs(record)
+    assert entry["error.type"] == "UnprintableError"
+    assert "unrenderable" in str(entry["error.message"])
+    assert "Traceback" in str(entry["error.stack_trace"])
+
+
+def test_a_live_logger_emits_a_line_for_a_record_that_will_not_render(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The end of the argument: a partial `to_ecs` does not surface as an
+    exception the caller can see, it surfaces as `--- Logging error ---` on
+    stderr and an empty line from the handler, and the record is gone from both
+    consumers at once.
+    """
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(ECSFormatter())
+    logger = logging.getLogger("mshkn.test.unrenderable")
+    logger.handlers = [handler]
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info("v=%s", _Detached())
+    finally:
+        logger.handlers = []
+    assert "Logging error" not in capsys.readouterr().err, "the handler did not fall over"
+    entry = json.loads(stream.getvalue())
+    assert "v=%s" in entry["message"]
 
 
 def _sample(metric_text: str, name: str, labels: str) -> float:
