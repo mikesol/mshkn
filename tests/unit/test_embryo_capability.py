@@ -9,6 +9,7 @@ import io
 import json
 import stat
 import subprocess
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -17,6 +18,7 @@ import httpx
 import pytest
 from membrane.capability import (
     CONFLICT_INTERVAL,
+    MAX_REASKS,
     TRANSPORT_RETRIES,
     TURN_WAIT,
     AskApprover,
@@ -39,7 +41,7 @@ from membrane.capability import (
     transport_for,
 )
 from membrane.model import zero_usage
-from membrane.postconditions import CHECKS, Judged, Turn, judge
+from membrane.postconditions import CHECKS, Judged, Turn, by_label, judge, tool_computers
 
 from tests.support_embryo import HATCH, WORDS, audit_line, b64
 
@@ -156,6 +158,7 @@ def test_a_promotion_record_round_trips_and_is_readable_markdown(tmp_path: Path)
         pubkey="ssh-ed25519 AAAA mike",
         model="claude-opus-5",
         default_effort=None,
+        reasks=0,
         started_from=None,
     )
     path = write_promotion(tmp_path, p)
@@ -182,6 +185,7 @@ def test_ancestry_walks_started_from(tmp_path: Path) -> None:
         "pubkey": "ssh-ed25519 AAAA mike",
         "model": "claude-opus-5",
         "default_effort": None,
+        "reasks": 0,
     }
     write_promotion(
         tmp_path, Promotion(capability="hatch", run="hatch/r1", started_from=None, **base)
@@ -699,7 +703,7 @@ async def test_working_labels_are_brain_and_the_verb_chains_without_trials(tmp_p
 async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_labels(
     tmp_path: Path,
 ) -> None:
-    from membrane.capability import promote, read_promotion
+    from membrane.capability import promote, promotion_path, read_promotion
 
     run_dir = tmp_path / "hatch" / "2026-09-12-run-1"
     run_dir.mkdir(parents=True)
@@ -720,6 +724,7 @@ async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_
                 "pubkey": "ssh-ed25519 AAAA mike",
                 "model": "claude-opus-5",
                 "default_effort": None,
+                "reasks": ["4", "5"],
                 "started_from": "hatch",
             }
         )
@@ -760,6 +765,9 @@ async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_
     # the lineage a dependent needs: the hatcher's key, and the model its brain runs
     assert p.key_dir == "/keys/hatch" and p.pubkey == "ssh-ed25519 AAAA mike"
     assert p.model == "claude-opus-5" and p.default_effort is None
+    # the road, kept beside the score: how many rows the run had to be asked twice
+    assert p.reasks == 2
+    assert "promoted from a run with 2 re-asks" in promotion_path(tmp_path, "hatch").read_text()
     assert p.run == "hatch/2026-09-12-run-1" and p.started_from is None
     assert read_promotion(tmp_path, "hatch") == p
     # the working checkpoints went; the key, the rule and the recipes stayed
@@ -795,6 +803,7 @@ async def test_promote_logs_a_delete_that_fails_but_still_returns_the_record(
                 "pubkey": "ssh-ed25519 AAAA mike",
                 "model": "claude-opus-5",
                 "default_effort": None,
+                "reasks": [],
                 "started_from": "hatch",
             }
         )
@@ -857,6 +866,7 @@ async def test_promote_reports_which_labels_were_already_copied_when_a_later_one
                 "pubkey": "ssh-ed25519 AAAA mike",
                 "model": "claude-opus-5",
                 "default_effort": None,
+                "reasks": [],
                 "started_from": "hatch",
             }
         )
@@ -926,6 +936,7 @@ async def test_promote_refuses_when_the_working_brain_is_gone(tmp_path: Path) ->
                 "pubkey": "ssh-ed25519 AAAA mike",
                 "model": "claude-opus-5",
                 "default_effort": None,
+                "reasks": [],
             }
         )
     )
@@ -972,7 +983,46 @@ async def test_promote_refuses_a_run_that_does_not_name_its_key_and_model(tmp_pa
         raise AssertionError(f"promote copied before it checked: {request.url.path}")
 
     doors = _bare_doors(tmp_path, handler)
-    with pytest.raises(RuntimeError, match="does not name key_dir, pubkey, model, default_effort"):
+    with pytest.raises(
+        RuntimeError, match="does not name key_dir, pubkey, model, default_effort, reasks"
+    ):
+        await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
+
+
+async def test_promote_refuses_a_run_that_does_not_count_its_re_asks(tmp_path: Path) -> None:
+    """A run recorded before #170 does not say how many rows it was asked twice,
+    and the count is kept beside the score forever: it cannot be inferred later."""
+    from membrane.capability import promote
+
+    run_dir = tmp_path / "hatch" / "2026-09-12-run-5"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "membrane": {"commit": "abc", "dirty": False},
+                "hatched": {
+                    "rule_id": "ir_1",
+                    "key_id": "key-1",
+                    "recipe_id": "rcp-brain",
+                    "checkpoint_id": "ck-0",
+                    "ingress_url": "u",
+                    "server_id": None,
+                },
+                "key_dir": "/keys/hatch",
+                "pubkey": "ssh-ed25519 AAAA mike",
+                "model": "claude-opus-5",
+                "default_effort": None,
+                "started_from": "hatch",
+            }
+        )
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"promote asked before it checked: {request.url.path}")
+
+    doors = _bare_doors(tmp_path, handler)
+    with pytest.raises(RuntimeError, match="does not name reasks"):
         await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
 
 
@@ -1019,6 +1069,7 @@ async def test_promote_refuses_a_brain_that_is_not_this_runs(tmp_path: Path) -> 
                 "pubkey": "ssh-ed25519 AAAA mike",
                 "model": "claude-opus-5",
                 "default_effort": None,
+                "reasks": [],
                 "started_from": "hatch",
             }
         )
@@ -1068,6 +1119,7 @@ async def test_start_from_forks_the_promoted_labels_into_the_working_ones(tmp_pa
         pubkey="ssh-ed25519 AAAA mike",
         model="claude-opus-5",
         default_effort=None,
+        reasks=0,
         started_from=None,
     )
     checkpoints = [
@@ -1118,6 +1170,7 @@ async def test_teardown_with_a_lineage_keeps_its_key_rule_and_recipes(tmp_path: 
         pubkey="ssh-ed25519 AAAA mike",
         model="claude-opus-5",
         default_effort=None,
+        reasks=0,
         started_from=None,
     )
     seen: list[tuple[str, str]] = []
@@ -1208,9 +1261,16 @@ class FakeDoors:
         polls_to_ready: int = 1,
         policy_first: bool = False,
         deadline_first: bool = False,
+        grant_late: bool = False,
+        policy_every_turn: bool = False,
     ) -> None:
         self.policy_first = policy_first
         self.deadline_first = deadline_first
+        # Two modes in which the policy, not the catalog, is what stops a verb from
+        # being invoked (2026-09-13-run-3): the grant is by name, and a turn that
+        # may not invoke says so and calls nothing.
+        self.grant_late = grant_late
+        self.policy_every_turn = policy_every_turn
         self.fail_first = fail_first or set()
         self.never_ready = never_ready or set()
         self.open_door = open_door
@@ -1231,6 +1291,26 @@ class FakeDoors:
         self.commands = 0
         self.turn = 0
         self.repairs = 0
+        self.count_calls = 0  # invocations of the counter verb, not `count` messages
+
+    def _gated(self) -> bool:
+        """Whether the policy's `invoke` grant decides what a public turn may call."""
+        return self.grant_late or self.policy_every_turn
+
+    def _may_invoke(self, name: str) -> bool:
+        if not self._gated():
+            return True
+        invoke = self.policy["principals"].get("ssh:mike", {}).get("invoke")
+        return invoke == "*" or (isinstance(invoke, list) and name in invoke)
+
+    def _count(self, n: int) -> str:
+        return self.counts[n - 1] if n <= len(self.counts) else f"{n}\n"
+
+    def _widened(self) -> dict[str, Any]:
+        """The policy in force, with `ssh:mike` allowed to invoke everything."""
+        policy = json.loads(json.dumps(self.policy))
+        policy["principals"]["ssh:mike"]["invoke"] = "*"
+        return dict(policy)
 
     def _propose(self, kind: str, name: str, **extra: Any) -> dict[str, Any]:
         pid = f"p-{len(self.proposals) + 1}"
@@ -1330,7 +1410,12 @@ class FakeDoors:
                     "authz",
                     policy={
                         "principals": {
-                            "ssh:mike": {"invoke": "*", "propose": True},
+                            # the gated modes widen by name, as run 3 did, so the
+                            # verbs proposed later are not yet invocable
+                            "ssh:mike": {
+                                "invoke": ["verify_ssh"] if self._gated() else "*",
+                                "propose": True,
+                            },
                             "anonymous": {"invoke": [], "propose": False},
                         },
                         "hooks": ["verify_ssh"],
@@ -1344,7 +1429,7 @@ class FakeDoors:
             made.append(self._propose("verb", "page_title"))
             reply = "Proposed page_title."
         elif msg == WORDS["8"]:
-            if "page_title" in self.catalog:
+            if "page_title" in self.catalog and self._may_invoke("page_title"):
                 tools.append(
                     {
                         "name": "page_title",
@@ -1354,29 +1439,45 @@ class FakeDoors:
                     }
                 )
                 reply = self.title_reply
+            elif "page_title" in self.catalog:
+                reply = "I have no such tool in my hands."
             else:
                 reply = "I have no such verb."
         elif msg == WORDS["9"]:
             made.append(self._propose("verb", "counter", state="chain"))
             reply = "Proposed counter."
         elif msg == WORDS["9-count-1"]:
-            n = len(
+            said = len(
                 [
                     s
                     for s in self.sent
                     if s[2] and isinstance(s[2], dict) and s[2].get("msg") == WORDS["9-count-1"]
                 ]
             )
-            tools.append(
-                {
-                    "name": "counter",
-                    "status": "ok",
-                    "exit_code": 0,
-                    "computer_id": f"comp-count-{n}",
-                    "chain_head": f"ck-{n}",
-                }
+            if self.grant_late and said == 2:
+                # asked to count a second time and still unable to, the agent sees
+                # that its own grant is what stops it and widens it
+                made.append(self._propose("policy", "widen", policy=self._widened()))
+            if "counter" in self.catalog and self._may_invoke("counter"):
+                self.count_calls += 1
+                n = self.count_calls
+                tools.append(
+                    {
+                        "name": "counter",
+                        "status": "ok",
+                        "exit_code": 0,
+                        "computer_id": f"comp-count-{n}",
+                        "chain_head": f"ck-{n}",
+                    }
+                )
+                reply = f"The count is {self._count(n).strip()}."
+            else:
+                reply = "I have no such tool in my hands."
+        if self.policy_every_turn and not any(p["kind"] == "policy" for p in made):
+            # every turn records a policy, unchanged: the trigger fires and fires
+            made.append(
+                self._propose("policy", "again", policy=json.loads(json.dumps(self.policy)))
             )
-            reply = f"The count is {self.counts[n - 1].strip()}."
         audit = audit_line(
             door="ingress",
             principal="ssh:mike",
@@ -1437,10 +1538,7 @@ class FakeDoors:
                 proposal["log"] = "apt: package nope not found"
             else:
                 entry["status"] = proposal["status"] = "ready"
-        count_word = WORDS["9-count-1"]
-        counts = len(
-            [s for s in self.sent if isinstance(s[2], dict) and s[2].get("msg") == count_word]
-        )
+        counts = self.count_calls
         if "counter" in self.catalog:
             # What `list_state` reports: the newest checkpoint on the label, which is
             # the head the last invocation created (`verbs.py`, `chain_head`).
@@ -1490,7 +1588,7 @@ class FakeDoors:
         return {
             "computer_id": computer_id,
             "gone": True,
-            "stdout": self.counts[n - 1],
+            "stdout": self._count(n),
             "exit_code": 0,
         }
 
@@ -1535,9 +1633,32 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
     doors = FakeDoors()
     key_dir, pubkey = _keys(tmp_path)
     log = io.StringIO()
-    turns, final = await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log)
+    turns, final, reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
+    )
     labels = [t.label for t in turns]
-    assert labels == ["1", "2", "4", "5", "6", "7", "8", "9", "9-count-1", "9-count-2"]
+    # Turn 6 applies a policy, and rows 4, 5 and 6 all called no verb, so each is
+    # asked again; 6 records the policy again, which is a second policy change and
+    # a second (and last, MAX_REASKS) re-ask of the three.
+    assert labels == [
+        "1",
+        "2",
+        "4",
+        "5",
+        "6",
+        "4-again-1",
+        "5-again-1",
+        "6-again-1",
+        "4-again-2",
+        "5-again-2",
+        "6-again-2",
+        "7",
+        "8",
+        "9",
+        "9-count-1",
+        "9-count-2",
+    ]
+    assert reasks == ["4", "5", "6", "4", "5", "6"]
     assert turns[1].approvals == [
         {
             "id": "p-1",
@@ -1581,6 +1702,114 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
     assert result["page_title"]["evidence"]["computer_id"] == "comp-title"
     assert result["counter"]["evidence"]["counts"] == [1, 2]
     assert "Turn 8" in log.getvalue()
+    assert "Turn 4-again-1 (re-ask after policy change): Who am I?" in log.getvalue()
+
+
+async def test_a_policy_change_re_asks_only_the_rows_that_called_no_verb(tmp_path: Path) -> None:
+    """The rows that did call a verb are left alone: 7, 8, 9 and the two counts are
+    spoken once each in the happy path, because the policy that turn 6 applies is
+    the last one of the run and every row after it called the verb it asked for."""
+    doors = FakeDoors()
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert reasks == ["4", "5", "6", "4", "5", "6"]
+    assert [t.label for t in turns if t.label.startswith(("7", "8", "9"))] == [
+        "7",
+        "8",
+        "9",
+        "9-count-1",
+        "9-count-2",
+    ]
+    # the latest attempt is what the checks read, and 4 and 5 still answer as they did
+    four, five = by_label(turns, "4"), by_label(turns, "5")
+    assert four is not None and four.label == "4-again-2"
+    assert five is not None and five.label == "5-again-2"
+    judged = judge(
+        ["authentication"],
+        Judged(
+            turns=turns,
+            final=await doors.listing(),
+            recipes_after=set(),
+            preexisting=set(),
+            brain_recipe="rcp-brain",
+            checks={},
+            sent=[],
+            context={},
+        ),
+    )
+    assert judged["authentication"]["ok"] is True
+
+
+async def test_a_policy_change_makes_the_driver_re_ask_the_rows_that_called_no_verb(
+    tmp_path: Path,
+) -> None:
+    """2026-09-13-run-3, which the driver can now recover from: the agent widens
+    its `invoke` grant verb by verb, so rows 8 and the two counts find no tool in
+    their hands, and the widening comes only at the last row. The re-ask asks each
+    of them once more, now that the answer is possible, and all seven pass."""
+    doors = FakeDoors(grant_late=True)
+    key_dir, pubkey = _keys(tmp_path)
+    log = io.StringIO()
+    turns, _final, reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
+    )
+    labels = [t.label for t in turns]
+    assert reasks == ["4", "5", "6", "4", "5", "6", "7", "8", "9", "9-count-1", "9-count-2"]
+    assert labels[labels.index("9-count-2") :] == [
+        "9-count-2",
+        "7-again-1",
+        "8-again-1",
+        "9-again-1",
+        "9-count-1-again-1",
+        "9-count-2-again-1",
+    ]
+    eight = by_label(turns, "8")
+    assert eight is not None and eight.label == "8-again-1"
+    assert [c["name"] for c in eight.audit["tools"]] == ["page_title"]
+    assert "(re-ask after policy change)" in log.getvalue()
+    final = await doors.listing()
+    checks = {
+        cid: await doors.check_computer(cid)
+        for cid in [c["computer_id"] for t in turns for c in tool_computers(t)]
+    }
+    result = judge(
+        list(CHECKS),
+        Judged(
+            turns=turns,
+            final=final,
+            recipes_after=await doors.recipes(),
+            preexisting={"rcp-pre"},
+            brain_recipe="rcp-brain",
+            checks=checks,
+            sent=[(s[0], s[1]) for s in doors.sent],
+            context={},
+        ),
+    )
+    assert all(v["ok"] for v in result.values()), {k: v for k, v in result.items() if not v["ok"]}
+    assert result["authorization"]["evidence"]["exercised"] == ["counter", "page_title"]
+    assert result["counter"]["evidence"]["counts"] == [1, 2]
+
+
+async def test_a_row_is_re_asked_at_most_twice(tmp_path: Path) -> None:
+    """The bound, which is what makes the goto backwards finite: a membrane that
+    records a policy on every turn changes the policy on every settle, and no row
+    is spoken more than twice again."""
+    doors = FakeDoors(policy_every_turn=True)
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    labels = [t.label for t in turns]
+    assert not [label for label in labels if "-again-3" in label], labels
+    counted = Counter(reasks)
+    assert counted and max(counted.values()) == MAX_REASKS
+    assert sorted(counted) == ["4", "5", "6", "7", "8", "9", "9-count-1", "9-count-2"]
+    # every re-ask is the row's own words through the row's own door
+    again = [t for t in turns if "-again-" in t.label]
+    assert {t.words for t in again if t.label.startswith("5-")} == {WORDS["5"]}
+    assert [t.door for t in again if t.label.startswith("5-")] == ["ingress-unsigned"] * 2
 
 
 async def test_speak_walks_the_rows_in_order_and_takes_the_final_list(tmp_path: Path) -> None:
@@ -1603,7 +1832,7 @@ async def test_speak_walks_the_rows_in_order_and_takes_the_final_list(tmp_path: 
     )
     doors = FakeDoors()
     key_dir, pubkey = _keys(tmp_path)
-    turns, final = await speak(
+    turns, final, _reasks = await speak(
         cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     assert [t.label for t in turns] == ["1", "2", "4", "5"]
@@ -1627,7 +1856,7 @@ async def test_speak_without_a_root_list_row_returns_no_final(tmp_path: Path) ->
         module=None,
     )
     key_dir, pubkey = _keys(tmp_path)
-    turns, final = await speak(
+    turns, final, _reasks = await speak(
         cap, FakeDoors(), key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     assert [t.label for t in turns] == ["1"] and final is None
@@ -1641,7 +1870,9 @@ async def test_every_row_settles_so_a_failed_build_after_a_signed_row_is_repaire
     doors = FakeDoors(fail_first={"page_title"})
     key_dir, pubkey = _keys(tmp_path)
     log = io.StringIO()
-    turns, _ = await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log)
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
+    )
     labels = [t.label for t in turns]
     assert "3-repair-1" in labels and labels.index("3-repair-1") > labels.index("7")
     assert "build failed for page_title; repair 1" in log.getvalue()
@@ -1653,7 +1884,7 @@ async def test_verbs_are_approved_before_the_policies_that_name_them(tmp_path: P
     verb in the catalog") and the door stayed closed until the next pass."""
     doors = FakeDoors(policy_first=True)
     key_dir, pubkey = _keys(tmp_path)
-    turns, _final = await speak(
+    turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     assert [a["id"] for a in turns[1].approvals] == ["p-2", "p-1"]
@@ -1677,7 +1908,7 @@ async def test_a_proposal_refused_before_its_build_is_approved_again_after_it(
 
     doors.root = refuse_once  # type: ignore[method-assign]
     key_dir, pubkey = _keys(tmp_path)
-    turns, _final = await speak(
+    turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     results = [(a["id"], a["result"][:14]) for a in turns[1].approvals]
@@ -1692,7 +1923,7 @@ async def test_a_proposal_refused_before_its_build_is_approved_again_after_it(
 async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) -> None:
     doors = FakeDoors(deadline_first=True)
     key_dir, pubkey = _keys(tmp_path)
-    turns, _final = await speak(
+    turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     assert [t.label for t in turns][:4] == ["1", "2", "3-repair-1", "4"]
@@ -1711,7 +1942,7 @@ async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
     window there is."""
     doors = FakeDoors(refuse={"p-1"})
     key_dir, pubkey = _keys(tmp_path)
-    turns, _final = await speak(
+    turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     labels = [t.label for t in turns]
@@ -1728,7 +1959,7 @@ async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Pat
     while it did exactly that)."""
     doors = FakeDoors(refuse={"p-1"})
     key_dir, pubkey = _keys(tmp_path)
-    turns, _final = await speak(
+    turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     repairs = [t.label for t in turns if t.label.startswith("3-repair-")]
@@ -1738,7 +1969,7 @@ async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Pat
 async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
     doors = FakeDoors(fail_first={"verify_ssh"})
     key_dir, pubkey = _keys(tmp_path)
-    turns, _final = await speak(
+    turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     labels = [t.label for t in turns]
@@ -1764,7 +1995,7 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
 
     doors.root_say = stubborn  # type: ignore[method-assign]
     key_dir, pubkey = _keys(tmp_path)
-    turns, final = await speak(
+    turns, final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     labels = [t.label for t in turns]
@@ -1791,7 +2022,7 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
 async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -> None:
     doors = FakeDoors(open_door=False)
     key_dir, pubkey = _keys(tmp_path)
-    turns, final = await speak(
+    turns, final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     public = [t for t in turns if t.door.startswith("ingress")]
@@ -1818,7 +2049,7 @@ async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -
 async def test_a_refused_approval_is_recorded_and_the_verdict_sees_it(tmp_path: Path) -> None:
     doors = FakeDoors(refuse={"p-2"})
     key_dir, pubkey = _keys(tmp_path)
-    turns, _final = await speak(
+    turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     assert turns[1].approvals[1]["result"].startswith("p-2 refused")
@@ -1830,7 +2061,7 @@ async def test_the_asking_approver_reads_the_pilot(tmp_path: Path) -> None:
     key_dir, pubkey = _keys(tmp_path)
     stdin = io.StringIO("approve\nreject not like this\napprove\napprove\napprove\n")
     stdout = io.StringIO()
-    turns, _final = await speak(
+    turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AskApprover(stdin, stdout), log=io.StringIO()
     )
     assert turns[1].approvals[1] == {
@@ -1940,6 +2171,8 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     assert (out_dir / "final-list.json").exists() and any((out_dir / "commands").iterdir())
     run_doc = json.loads((out_dir / "run.json").read_text())
     assert run_doc["turns"][0]["label"] == "1"
+    # no policy was ever applied, so no row was asked twice: the count is zero
+    assert run_doc["reasks"] == []
     # what the run was given, and what each turn's calls actually spent (#122)
     assert run_doc["default_effort"] is None
     assert run_doc["turns"][0]["effort"] == ["medium"]
@@ -2007,6 +2240,7 @@ async def test_an_aborted_run_writes_what_it_had_and_tears_down(
         )
     summary = json.loads((out_dir / "run.json").read_text())
     assert summary["ok"] is False and "boom" in summary["error"] and summary["commands"] == 1
+    assert summary["reasks"] == []  # an aborted run counts its re-asks too
     assert summary["hatched"]["rule_id"] == "rule-1"
     assert "commit" in summary["membrane"]  # an aborted run names its code too
 
@@ -2123,6 +2357,7 @@ async def test_run_once_refuses_a_dependency_missing_from_the_ancestry(
             pubkey="ssh-ed25519 AAAA mike",
             model="claude-opus-5",
             default_effort=None,
+            reasks=0,
             started_from=None,
         ),
     )
@@ -2184,6 +2419,7 @@ async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_i
         pubkey=pubkey,
         model="claude-opus-5",
         default_effort="high",
+        reasks=0,
         started_from=None,
     )
     write_promotion(tmp_path, lineage)
@@ -2299,6 +2535,7 @@ async def test_run_once_of_a_dependent_refuses_a_key_that_is_not_the_lineages(
             pubkey="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIthehatchersownkeyline mike",
             model="claude-opus-5",
             default_effort=None,
+            reasks=0,
             started_from=None,
         ),
     )
@@ -2356,6 +2593,7 @@ async def test_run_once_of_a_dependent_names_the_directory_that_has_no_key(
             pubkey="ssh-ed25519 AAAA mike",
             model="claude-opus-5",
             default_effort=None,
+            reasks=0,
             started_from=None,
         ),
     )
@@ -2655,6 +2893,7 @@ def test_main_promote_runs_through_a_mocked_transport_and_writes_the_record(
                 "pubkey": "ssh-ed25519 AAAA mike",
                 "model": "claude-opus-5",
                 "default_effort": None,
+                "reasks": [],
                 "started_from": "hatch",
             }
         )
@@ -2738,6 +2977,7 @@ def test_main_promote_reports_an_api_error_instead_of_a_traceback(
                 "pubkey": "ssh-ed25519 AAAA mike",
                 "model": "claude-opus-5",
                 "default_effort": None,
+                "reasks": [],
                 "started_from": "hatch",
             }
         )

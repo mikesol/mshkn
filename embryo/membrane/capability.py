@@ -30,6 +30,7 @@ import httpx
 
 from membrane.capabilities import TEMPLATE_RE, CapabilityError, catalog, load_module, order
 from membrane.config import DEFAULT_MODEL_ID, parse_env
+from membrane.declarations import RESERVED_TOOL_NAMES
 from membrane.effort import EFFORTS
 from membrane.model import add_usage, zero_usage
 from membrane.postconditions import CHECKS, Judged, Turn, by_label, judge, tool_computers
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
     from types import ModuleType
 
-    from membrane.capabilities import Capability, Prepare
+    from membrane.capabilities import Capability, Prepare, Row
 
 DEFAULT_BRAIN_API_URL = "https://api.mshkn.dev"
 DEFAULT_OUT = Path("docs/embryo")
@@ -52,6 +53,9 @@ BUILD_TIMEOUT = 600.0
 CONFLICT_INTERVAL = 3.0
 BUILD_INTERVAL = 5.0
 MAX_REPAIRS = 3
+# A row whose answer a policy change makes possible is asked again, at most twice
+# in a run (#170): the bound is what makes a goto backwards finite.
+MAX_REASKS = 2
 TRANSPORT_RETRIES = 3
 
 
@@ -242,8 +246,10 @@ class Promotion:
     """What `promote` wrote: which run, which membrane, the checkpoint ids under
     each promoted label, and the lineage a dependent reuses (its ingress rule,
     scoped key, recipes, the hatcher's signing key and the model the brain was
-    hatched with). `started_from` is the promotion this run began on, so records
-    chain back to a hatch."""
+    hatched with). `reasks` is how many rows that run had to be asked again after a
+    policy change (#170), kept beside the score and never folded into it.
+    `started_from` is the promotion this run began on, so records chain back to a
+    hatch."""
 
     capability: str
     run: str
@@ -258,6 +264,7 @@ class Promotion:
     pubkey: str
     model: str
     default_effort: str | None
+    reasks: int
     started_from: str | None
 
 
@@ -276,7 +283,8 @@ def write_promotion(out: Path, p: Promotion) -> Path:
     lines = [
         f"# Promoted: {p.capability}",
         "",
-        f"Run `{p.run}`, membrane `{p.membrane.get('commit')}`, promoted {p.promoted_at}.",
+        f"Run `{p.run}`, membrane `{p.membrane.get('commit')}`, promoted {p.promoted_at}, "
+        f"promoted from a run with {p.reasks} re-asks.",
         "Dependents start from these labels; `capability promote` overwrites this file.",
         "",
         "| Working label | Promoted label | Checkpoint |",
@@ -733,12 +741,14 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
         raise RuntimeError(
             f"{run_dir} is not under {out}; promote takes the run's evidence directory under --out"
         ) from None
-    lacking = [k for k in ("key_dir", "pubkey", "model", "default_effort") if k not in summary]
+    lacking = [
+        k for k in ("key_dir", "pubkey", "model", "default_effort", "reasks") if k not in summary
+    ]
     if lacking:
         raise RuntimeError(
             f"{run_dir.name}/run.json does not name {', '.join(lacking)}; a promotion carries the "
-            "key its dependents sign with and the model its brain was hatched with, so a run "
-            "recorded without them cannot be promoted"
+            "key its dependents sign with, the model its brain was hatched with and the rows the "
+            "run had to ask again, so a run recorded without them cannot be promoted"
         )
     hatched = Hatched(**summary["hatched"])
     final = json.loads((run_dir / "final-list.json").read_text())
@@ -780,6 +790,7 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
         pubkey=str(summary["pubkey"]),
         model=str(summary["model"]),
         default_effort=summary["default_effort"],
+        reasks=len(summary["reasks"]),
         started_from=None if started in (None, "hatch") else str(started),
     )
     path = write_promotion(out, record)
@@ -828,10 +839,14 @@ async def speak(
     approver: Approver,
     *,
     log: TextIO,
-) -> tuple[list[Turn], dict[str, Any] | None]:
+) -> tuple[list[Turn], dict[str, Any] | None, list[str]]:
     """The capability's rows in order, each followed by approvals, a wait for
     builds and at most MAX_REPAIRS repair turns. A `root list` row takes the
-    listing and is not a turn; the last one taken is returned as the final state."""
+    listing and is not a turn; the last one taken is returned as the final state.
+
+    Returns the turns, the final listing and the labels re-asked, in order: after
+    a settle applies a policy, every public row spoken since the previous policy
+    change whose turn called no catalog verb is spoken again (#170)."""
     for row in capability.rows:
         for name in TEMPLATE_RE.findall(row.words):
             if name not in context:
@@ -840,6 +855,11 @@ async def speak(
                 )
     turns: list[Turn] = []
     final: dict[str, Any] | None = None
+    reasks: list[str] = []
+    # The public rows spoken since the last policy change, and how often each label
+    # has been asked again in this run.
+    since_policy: list[tuple[Row, Turn]] = []
+    reask_counts: dict[str, int] = {}
 
     def mark() -> int:
         return len(doors.sent)
@@ -890,10 +910,17 @@ async def speak(
     repaired: set[str] = set()
     repairs = 0
 
-    async def settle(turn: Turn) -> None:
+    def policy_applied(turn: Turn) -> bool:
+        """Whether an approval on this turn replaced the policy: the membrane answers
+        `p-N applied: policy replaced; effective from the next turn`."""
+        return any(" applied" in a["result"] for a in turn.approvals)
+
+    async def settle(turn: Turn) -> bool:
         """Approvals, builds, and at most MAX_REPAIRS repair turns in the whole run
         for a failed build, a refused approval, or a turn that ran out before
-        proposing (capabilities design §4: every row settles).
+        proposing (capabilities design §4: every row settles). Returns whether any
+        approval in the settle — the row's own turn or a repair turn — applied a
+        policy, which is what a re-ask round waits for.
 
         A refusal leaves its proposal `pending` with the reason on its `log`, and
         the catalog untouched, so a build-only trigger walks straight past it
@@ -901,6 +928,7 @@ async def speak(
         reaches the model whatever door the row used."""
         nonlocal repairs
         listing = await approve_pending(turn)
+        applied = policy_applied(turn)
         current = turn
         while repairs < MAX_REPAIRS:
             failed = sorted(n for n, e in listing["catalog"].items() if e["status"] == "failed")
@@ -916,7 +944,7 @@ async def speak(
                 and p["id"] not in repaired
             )
             if not failed and not refused and not unfinished(current):
-                return
+                return applied
             repairs += 1
             if failed:
                 why, words = f"build failed for {', '.join(failed)}", capability.repair.build
@@ -928,6 +956,8 @@ async def speak(
             log.write(f"  {why}; repair {repairs}\n")
             current = await root_turn(f"3-repair-{repairs}", words)
             listing = await approve_pending(current)
+            applied = applied or policy_applied(current)
+        return applied
 
     async def root_turn(label: str, words: str) -> Turn:
         since = mark()
@@ -950,16 +980,48 @@ async def speak(
         log.write(f"  principal {audit.get('principal')}; {reply.strip()[:120]}\n")
         return turn
 
+    def came_up_empty(turn: Turn) -> bool:
+        """The turn called no catalog verb: its tool names are the membrane's
+        built-ins or nothing at all (a closed door records no tools)."""
+        called = {c.get("name") for c in turn.audit.get("tools", [])}
+        return not called - RESERVED_TOOL_NAMES
+
+    async def reask(applied: bool) -> None:
+        """The goto backwards (#170). While a settle has applied a policy, ask again,
+        once each and in order, every public row spoken since the previous policy
+        change that came up empty — including the row that proposed the policy, which
+        is the run-3 case: the widening arrived at the last row and nothing came
+        after it. The words are the row's own, through the row's own door; nothing is
+        said about why. MAX_REASKS per label makes the loop finite."""
+        while applied:
+            candidates = [pair for pair in since_policy if came_up_empty(pair[1])]
+            since_policy.clear()
+            applied = False
+            for row, _turn in candidates:
+                if reask_counts.get(row.label, 0) >= MAX_REASKS:
+                    continue
+                reask_counts[row.label] = reask_counts.get(row.label, 0) + 1
+                label = f"{row.label}-again-{reask_counts[row.label]}"
+                words = row.words.format(**context)
+                log.write(f"Turn {label} (re-ask after policy change): {words[:80]}\n")
+                again = await public_turn(label, words, signed=row.door == "signed")
+                reasks.append(row.label)
+                # a re-asked turn is itself a row spoken since this policy change
+                since_policy.append((row, again))
+                applied = await settle(again) or applied
+
     for row in capability.rows:
         words = row.words.format(**context)
         if row.door == "root list":
             log.write(f"Turn {row.label} (root): list\n")
             final = await doors.listing()
         elif row.door == "root say":
-            await settle(await root_turn(row.label, words))
+            await reask(await settle(await root_turn(row.label, words)))
         else:
-            await settle(await public_turn(row.label, words, signed=row.door == "signed"))
-    return turns, final
+            turn = await public_turn(row.label, words, signed=row.door == "signed")
+            since_policy.append((row, turn))
+            await reask(await settle(turn))
+    return turns, final, reasks
 
 
 # ---------------------------------------------------------------- a run
@@ -1074,10 +1136,11 @@ async def run_once(
         doors.rule_id = hatched.rule_id
         log.write(f"hatched: {json.dumps(asdict(hatched))}\n")
         final: dict[str, Any] | None = None
+        reasks: list[str] = []
         try:
             try:
                 async with run_context(module, capability.name, pubkey, doors, log=log) as context:
-                    turns, final = await speak(
+                    turns, final, reasks = await speak(
                         capability, doors, key_dir, context, approver, log=log
                     )
                     # A capability without a `root list` row still gets judged on the end state.
@@ -1099,6 +1162,7 @@ async def run_once(
                         "hatched": asdict(hatched),
                         "started_from": lineage.run if lineage else "hatch",
                         "commands": len(doors.sent),
+                        "reasks": reasks,
                         "ok": False,
                         # `str(exc)` is empty for some exceptions (an httpx.ConnectError
                         # with no message, say): naming the type keeps "error" from
@@ -1166,6 +1230,9 @@ async def run_once(
                     for t in turns
                 ],
                 "commands": len(doors.sent),
+                # The road, kept apart from the score: a 7/7 with no re-ask and a
+                # 7/7 with three reached the same state differently (#170).
+                "reasks": reasks,
                 "model_calls": model_calls,
                 "usage": usage,
                 "cost_usd": round(cost_usd(usage, model_id), 4),

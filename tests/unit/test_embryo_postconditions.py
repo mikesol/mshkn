@@ -185,6 +185,25 @@ def test_the_fixtures_pass_every_postcondition() -> None:
     assert all(v["ok"] for v in result.values()), result
 
 
+def test_by_label_reads_the_latest_attempt_of_a_row_and_not_a_label_sharing_its_prefix() -> None:
+    """A row re-asked after a policy change is `<label>-again-<n>` (#170), and a
+    check reads what the row last answered. `9-count-1` is not an attempt at `9`."""
+    from membrane.postconditions import by_label
+
+    turns = [
+        _turn("9", "ingress", audit_line()),
+        _turn("9-count-1", "ingress", audit_line()),
+        _turn("9-count-1-again-1", "ingress", audit_line()),
+        _turn("9-again-1", "ingress", audit_line()),
+        _turn("9-again-2", "ingress", audit_line()),
+    ]
+    assert by_label(turns, "9") is turns[4]
+    assert by_label(turns, "9-count-1") is turns[2]
+    assert by_label(turns, "9-count-2") is None
+    assert by_label(turns, "8") is None
+    assert by_label([], "9") is None
+
+
 def test_authentication_evidence_carries_the_hook_runs_and_their_logs() -> None:
     turns = _good_turns()
     hook = {

@@ -246,14 +246,35 @@ enters its `prepare` before the first row and exits it after the final listing
 yielded. Then, for each row in order: the door, the words with templates filled,
 then settle. `root list` rows record the listing as the turn's output.
 
+**Re-ask.** A policy change is new information about what is now possible, and
+the driver acts on it without telling the agent anything (#170). After any settle
+in which a policy proposal was applied, every public row (`signed` or `unsigned`)
+spoken since the previous policy change whose turn called no catalog verb — its
+audit's `tools` names minus the membrane's built-ins is empty — is spoken again,
+once each and in order, the same words through the same door, labelled
+`<label>-again-<n>`, and each re-asked turn settles like any row. The row whose
+own turn proposed the policy is one of them: that is the `2026-09-13-run-3` case,
+where the widening arrived at the last row and nothing came after it. A re-asked
+turn is itself a row spoken since the change, so a re-ask that changes the policy
+again starts another round; a row is re-asked at most once per policy change and
+at most twice in a run, which is what makes the goto backwards finite. Root rows
+are never re-asked. The checks read a label's latest attempt (`by_label` returns
+the last turn labelled `<label>` or `<label>-again-<n>`). Nothing is said to the
+agent about why it is being asked again: the trigger is its own act, and it still
+has to notice the tool is in its hands. A row whose outcome is not a verb call at
+all — hatch's 4 and 5, "Who am I?" — is a candidate too, so it is re-asked
+harmlessly and the count says so; if that proves noisy the trigger narrows later.
+
 **Judge.** Each named check runs with the same inputs `verdict()` has today
 (turns, final listing, recipes before and after, the brain recipe, computer
 checks, the commands sent) plus the run context (§7). The run is `ok` when every
 named check passes.
 
 **Record.** `docs/embryo/<capability>/<date>-run-N/` with the four files
-`Record` writes today, and `run.json` gains `capability` and `started_from`
-(the promotion record it forked, or `hatch`). `docs/embryo/<capability>/README.md`
+`Record` writes today, and `run.json` gains `capability`, `started_from`
+(the promotion record it forked, or `hatch`) and `reasks`, the labels re-asked in
+order and `[]` when none, kept apart from the score forever: a 7/7 with no re-ask
+and a 7/7 with three reached the same state by different roads. `docs/embryo/<capability>/README.md`
 is the round table. `docs/embryo/README.md` becomes the index of capabilities
 and the DAG. The existing hatch runs move to `docs/embryo/hatch/`.
 
@@ -266,7 +287,8 @@ says `ok`. It forks the working `brain` head to `capability/<name>/brain` and
 every working `verb/<v>` head to `capability/<name>/verb/<v>`, writes
 `docs/embryo/<name>/PROMOTED.md` (the run directory, the membrane commit, the
 checkpoint ids under each promoted label, `rule_id`, `key_id`, `recipe_ids`, the
-date, and `started_from`: the promotion this run began on, so a record's
+date, `reasks` (how many rows the run had to be asked again, §5), and
+`started_from`: the promotion this run began on, so a record's
 ancestry is a chain the driver can walk, and the hatcher's signing key: its
 directory on the operator's machine and its public key line, because the
 promoted identity hook trusts that key and a dependent must sign with it), and
