@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import sys
+from collections import deque
 
 import pytest
 from prometheus_client import generate_latest
@@ -15,7 +16,10 @@ from mshkn.observability.logging import (
     _TRUNCATED,
     ECS_VERSION,
     ECSFormatter,
+    RingBufferHandler,
     account_id_var,
+    configure_logging,
+    install_log_buffer,
     request_id_var,
     to_ecs,
 )
@@ -313,6 +317,28 @@ def test_a_live_logger_emits_a_line_for_a_record_that_will_not_render(
     assert "Logging error" not in capsys.readouterr().err, "the handler did not fall over"
     entry = json.loads(stream.getvalue())
     assert "v=%s" in entry["message"]
+
+
+def test_the_ring_holds_ecs_documents_and_evicts_the_oldest() -> None:
+    buffer: deque[dict[str, object]] = deque(maxlen=2)
+    handler = RingBufferHandler(buffer)
+    for n in range(3):
+        handler.emit(_record(f"msg-{n}"))
+    assert [r["message"] for r in buffer] == ["msg-1", "msg-2"]
+    assert buffer[0]["ecs.version"] == ECS_VERSION
+
+
+def test_installing_the_buffer_twice_leaves_one_handler() -> None:
+    configure_logging()
+    first: deque[dict[str, object]] = deque(maxlen=10)
+    second: deque[dict[str, object]] = deque(maxlen=10)
+    install_log_buffer(first)
+    install_log_buffer(second)
+    rings = [h for h in logging.root.handlers if isinstance(h, RingBufferHandler)]
+    assert len(rings) == 1 and rings[0].buffer is second
+    logging.getLogger("t").info("after")
+    assert [r["message"] for r in second] == ["after"]
+    assert not first, "the replaced buffer stops receiving"
 
 
 def _sample(metric_text: str, name: str, labels: str) -> float:

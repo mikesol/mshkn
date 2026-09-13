@@ -1,8 +1,8 @@
 """ECS log records, and the two places they go.
 
 `to_ecs` maps a LogRecord to the Elastic Common Schema. `ECSFormatter`
-serialises the result for stdout; `RingBufferHandler` (Task 3) keeps the dict in
-a bounded deque the API reads. One mapping, two consumers, identical shape —
+serialises the result for stdout; `RingBufferHandler` keeps the dict in a
+bounded deque the API reads. One mapping, two consumers, identical shape —
 which is the whole point: what a collector scrapes and what `GET /logs` returns
 are the same document.
 """
@@ -14,6 +14,10 @@ import logging
 import math
 from contextvars import ContextVar
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections import deque
 
 request_id_var: ContextVar[str] = ContextVar("mshkn_request_id", default="-")
 account_id_var: ContextVar[str | None] = ContextVar("mshkn_account_id", default=None)
@@ -158,6 +162,33 @@ class ECSFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         return json.dumps(to_ecs(record))
+
+
+class RingBufferHandler(logging.Handler):
+    """Append every record's ECS document to a bounded deque the API reads."""
+
+    def __init__(self, buffer: deque[dict[str, object]]) -> None:
+        super().__init__()
+        self.buffer = buffer
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.buffer.append(to_ecs(record))
+
+
+def install_log_buffer(buffer: deque[dict[str, object]]) -> RingBufferHandler:
+    """Point the root logger at this buffer, replacing any earlier one.
+
+    Not folded into configure_logging: that runs in create_app before a Runtime
+    exists, and the buffer belongs to the Runtime because runtime.py keeps no
+    module-level mutable state. Replacing rather than adding means a process
+    that builds several apps — the flow tier does, once per test — ends with one
+    handler pointed at the app it is actually serving.
+    """
+    root = logging.root
+    root.handlers = [h for h in root.handlers if not isinstance(h, RingBufferHandler)]
+    handler = RingBufferHandler(buffer)
+    root.addHandler(handler)
+    return handler
 
 
 def configure_logging(level: int = logging.INFO) -> None:
