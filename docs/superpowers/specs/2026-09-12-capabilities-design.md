@@ -258,13 +258,15 @@ reading of the reply:
 2. it proposed no verb, so it was not waiting on a build of its own; a turn that
    proposed only a policy still qualifies, which is run 3's last count row, the
    one that proposed the widening it needed;
-3. the change gained its principal at least one verb that is not a door hook:
-   with `p` the turn's principal (a turn that named none is skipped), the grants
-   `policy["principals"][p]["invoke"]` before and after the settle, `"*"` read as
-   every `ready` name in the catalog and an unnamed principal as none, and
-   `(new - old) - hooks` non-empty. A change that gains only the hook — hatch's
-   turn 6, widening to `"*"` when the catalog holds the identity hook and nothing
-   else — is not what any row was waiting for, and re-asks nobody.
+3. the change gained its principal at least one ready verb that is not a door
+   hook: with `p` the turn's principal (a turn that named none is skipped), the
+   grants `policy["principals"][p]["invoke"]` before and after the settle, `"*"`
+   read as every `ready` name in the catalog and an unnamed principal as none,
+   and `((new - old) & ready) - hooks` non-empty. A grant naming a verb that does
+   not exist, or one still building, hands nobody a tool and is not a gain; nor
+   is a change that gains only the hook — hatch's turn 6, widening to `"*"` when
+   the catalog holds the identity hook and nothing else — what any row was
+   waiting for, and it re-asks nobody.
 
 The re-asked row is spoken with the same words through the same door, labelled
 `<label>-again-<n>`, and settles like any row. A re-asked turn is itself a row

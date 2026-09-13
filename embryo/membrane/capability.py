@@ -1011,9 +1011,10 @@ async def speak(
         or nothing at all, as a closed door records none); it proposed no verb, so it
         was not waiting on a build of its own (a turn that proposed only a policy
         still qualifies — run 3's last count row proposed the widening it needed);
-        and the change gained its principal at least one verb that is not a door
-        hook, which is what makes the row's words answerable now and were not
-        before."""
+        and the change gained its principal at least one ready verb that is not a
+        door hook, which is what makes the row's words answerable now and were not
+        before. The gain is intersected with the ready catalog: a grant naming a
+        verb that does not exist, or one still building, hands nobody a tool."""
         called = {c.get("name") for c in turn.audit.get("tools", [])}
         if called - RESERVED_TOOL_NAMES:
             return False
@@ -1027,9 +1028,10 @@ async def speak(
         ready = {
             n for n, e in settled.after.get("catalog", {}).items() if e.get("status") == "ready"
         }
-        gained = granted(after, principal, ready) - granted(
-            settled.before.get("policy", {}), principal, ready
-        )
+        gained = (
+            granted(after, principal, ready)
+            - granted(settled.before.get("policy", {}), principal, ready)
+        ) & ready
         return bool(gained - set(after.get("hooks", [])))
 
     async def reask(settled: Settled) -> None:

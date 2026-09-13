@@ -1245,6 +1245,7 @@ def test_new_key_names_its_owner_and_sign_verifies(tmp_path: Path) -> None:
 GROW = "Grow yourself another verb, and let me use that one."
 GRANT = "Let me use everything you have."
 USE = "Use what I may ask of you."
+GHOST = "Let me use a verb you do not have."
 
 
 class FakeDoors:
@@ -1501,6 +1502,9 @@ class FakeDoors:
             )
             made.append(self._propose("policy", "grant", policy=self._grant(ready)))
             reply = "Proposed a grant of every verb I have."
+        elif self.growing and msg == GHOST:
+            made.append(self._propose("policy", "ghost", policy=self._grant(["nope"])))
+            reply = "Proposed a grant of a verb I never grew."
         elif self.growing and msg == USE:
             granted = self.policy["principals"]["ssh:mike"]["invoke"]
             called: str | None = next(
@@ -1876,6 +1880,39 @@ async def test_a_row_is_re_asked_at_most_twice(tmp_path: Path) -> None:
     again = [t for t in turns if t.label.startswith("ask-again-")]
     assert {t.words for t in again} == {"What can I ask of you?"}
     assert [t.door for t in again] == ["ingress"] * MAX_REASKS
+
+
+async def test_a_grant_of_a_verb_that_is_not_in_the_catalog_re_asks_nothing(
+    tmp_path: Path,
+) -> None:
+    """A gain is a verb the principal can actually invoke: a grant naming `nope`,
+    which was never grown, moves the policy and hands nobody a tool, so the row
+    that came up empty is not asked again on the strength of it."""
+    from membrane.capabilities import Capability, Row
+
+    cap = Capability(
+        name="ghost",
+        depends=(),
+        postconditions=(),
+        rows=(
+            Row("1", "root say", WORDS["1"], ""),
+            Row("2", "root say", WORDS["2"], ""),
+            Row("ask", "signed", "What can I ask of you?", ""),
+            Row("ghost", "signed", GHOST, ""),
+        ),
+        repair=HATCH.repair,
+        path=tmp_path / "ghost.md",
+        module=None,
+    )
+    doors = FakeDoors(growing=True)
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert doors.policy["principals"]["ssh:mike"]["invoke"] == ["nope"]
+    assert "nope" not in doors.catalog
+    assert reasks == []
+    assert [t.label for t in turns] == ["1", "2", "ask", "ghost"]
 
 
 async def test_a_re_ask_that_changes_the_policy_again_starts_another_round(
