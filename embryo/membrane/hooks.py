@@ -24,8 +24,9 @@ async def principal_for(
     runs: list[dict[str, Any]] | None = None,
 ) -> str:
     """The principal the hooks name, anonymous if none does. Every hook actually
-    invoked is appended to `runs` (name, computer, exit code, what it named), so
-    the audit line shows why a knock was or was not recognised (#101)."""
+    invoked is appended to `runs` (name, computer, exit code, what it named, and the
+    error `invoke` returned when the run itself failed), so the audit line shows why
+    a knock was or was not recognised (#101)."""
     for name in policy.hooks:
         entry = state.catalog.get(name)
         if (
@@ -59,6 +60,7 @@ async def principal_for(
                     "computer_id": result.get("computer_id"),
                     "exit_code": exit_code,
                     "principal": principal,
+                    "error": result.get("error"),
                 }
             )
         if principal != ANONYMOUS:

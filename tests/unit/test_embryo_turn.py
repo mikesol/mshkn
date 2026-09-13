@@ -673,6 +673,7 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
             "computer_id": audit["hooks"][0]["computer_id"],
             "exit_code": 0,
             "principal": "ssh:mike",
+            "error": None,
         }
     ]
     assert audit["hooks"][0]["computer_id"].startswith("comp-")
@@ -752,6 +753,55 @@ async def test_hooks_fail_closed_when_not_ready_or_malformed() -> None:
         verb=hook, status="ready", recipe_id="no-such-recipe", proposal_id="p-1"
     )
     assert await principal_for(api, state, policy, "p", remaining=10.0) == "anonymous"
+
+
+async def test_a_hook_runs_entry_names_why_it_failed_or_that_it_did_not() -> None:
+    """A live E2E run recognised no signed knock because verify_ssh's run itself
+    failed (a relay ConnectError) before any computer answered, and the audit's
+    hooks entry gave no reason (#101's intent, #159): a `runs` entry now carries
+    the same `error` `invoke()` returned, `None` when the run succeeded."""
+    api, state = FakeMshkn(), State()
+    policy = parse_policy(OPEN)
+    hook = parse_verb(HOOK)
+    # The run itself fails: create_computer raises 409 because the recipe FakeMshkn
+    # holds is never marked ready. The `error` is the exception's detail, not the
+    # generic "error" status.
+    state.catalog["verify_ssh"] = CatalogEntry(
+        verb=hook, status="ready", recipe_id="no-such-recipe", proposal_id="p-1"
+    )
+    runs: list[dict[str, Any]] = []
+    assert await principal_for(api, state, policy, "p", remaining=10.0, runs=runs) == "anonymous"
+    assert runs == [
+        {
+            "name": "verify_ssh",
+            "status": "error",
+            "computer_id": None,
+            "exit_code": None,
+            "principal": "anonymous",
+            "error": "Recipe no-such-recipe is not ready",
+        }
+    ]
+    # A hook that runs and succeeds carries no error.
+    api2 = FakeMshkn()
+    rid = (await api2.create_recipe(hook.dockerfile)).id
+    api2.recipe_statuses[rid] = ["ready"]
+    await api2.get_recipe(rid)
+    state.catalog["verify_ssh"] = CatalogEntry(
+        verb=hook, status="ready", recipe_id=rid, proposal_id="p-1"
+    )
+    api2.outputs[render_command(hook, {"payload": "p"})] = (0, "mike\n", "")
+    runs2: list[dict[str, Any]] = []
+    assert await principal_for(api2, state, policy, "p", remaining=10.0, runs=runs2) == "ssh:mike"
+    assert runs2 == [
+        {
+            "name": "verify_ssh",
+            "status": "ok",
+            "computer_id": "comp-1",
+            "exit_code": 0,
+            "principal": "ssh:mike",
+            "error": None,
+        }
+    ]
 
 
 async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticated_turn(
