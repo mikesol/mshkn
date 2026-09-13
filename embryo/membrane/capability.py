@@ -1500,11 +1500,12 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
             f"the checks are {sorted(CHECKS)}\n"
         )
         return 2
-    if capability.depends and (args.model or args.effort or args.base_url):
+    if capability.depends and (args.model or args.effort or args.base_url or args.body_extra):
         log.write(
             f"{capability.name} starts from {capability.depends[-1]}'s promotion, whose brain "
-            "runs the model, effort and base URL baked into its /brain/.env at hatch: "
-            "--model, --effort and --base-url belong to a capability that hatches\n"
+            "runs the model, effort, base URL and body extra baked into its /brain/.env at "
+            "hatch: --model, --effort, --base-url and --body-extra belong to a capability "
+            "that hatches\n"
         )
         return 2
     try:

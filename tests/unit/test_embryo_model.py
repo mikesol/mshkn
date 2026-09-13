@@ -95,6 +95,22 @@ def test_body_extra_cannot_quietly_replace_what_the_membrane_composed() -> None:
         )
 
 
+def test_body_extra_cannot_quietly_override_the_effort_the_turn_computed() -> None:
+    """`output_config` is how `compose_request` puts `effort` on the wire. The
+    operator's channel for that axis is `MEMBRANE_EFFORT` (including `off`), not
+    `body_extra`: letting `body_extra` win would let one knob silently defeat the
+    other, the reversibility-based floor `_effort_for` computed per call."""
+    with pytest.raises(ValueError, match="output_config"):
+        compose_request(
+            model_id="m",
+            system="s",
+            messages=[],
+            tools=[],
+            effort="medium",
+            body_extra={"output_config": {"effort": "low"}},
+        )
+
+
 def test_system_text_reads_the_prompt_back_out_of_the_cacheable_blocks() -> None:
     body = compose_request(
         model_id="m", system="seed\n\nI verify.", messages=[], tools=[], effort=None

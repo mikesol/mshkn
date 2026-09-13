@@ -3245,7 +3245,10 @@ def test_main_refuses_a_model_for_a_capability_that_does_not_hatch(
     )
     assert code == 2
     assert "security starts from hatch's promotion" in log.getvalue()
-    assert "--model, --effort and --base-url belong to a capability that hatches" in log.getvalue()
+    assert (
+        "--model, --effort, --base-url and --body-extra belong to a capability that hatches"
+        in log.getvalue()
+    )
 
     log_base_url = io.StringIO()
     code = main(
@@ -3261,6 +3264,21 @@ def test_main_refuses_a_model_for_a_capability_that_does_not_hatch(
     )
     assert code == 2
     assert "security starts from hatch's promotion" in log_base_url.getvalue()
+
+    log_body_extra = io.StringIO()
+    code = main(
+        [
+            "run",
+            "security",
+            "--body-extra",
+            '{"providerOptions": {"gateway": {"only": ["anthropic"]}}}',
+            "--env",
+            str(tmp_path / "none"),
+        ],
+        log=log_body_extra,
+    )
+    assert code == 2
+    assert "security starts from hatch's promotion" in log_body_extra.getvalue()
 
 
 def test_main_writes_the_runs_key_where_key_dir_says_and_the_run_names_it(

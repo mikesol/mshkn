@@ -30,7 +30,16 @@ USAGE_KEYS = (
 CACHE_CONTROL = {"type": "ephemeral"}
 # What `body_extra` may never overwrite: everything the membrane composes and then
 # depends on having composed.
-COMPOSED = ("model", "max_tokens", "stream", "system", "messages", "tools", "cache_control")
+COMPOSED = (
+    "model",
+    "max_tokens",
+    "stream",
+    "system",
+    "messages",
+    "tools",
+    "cache_control",
+    "output_config",
+)
 
 
 def zero_usage() -> dict[str, int]:
