@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # Extended by later tasks as each document lands.
 DOCS: tuple[str, ...] = (
     "README.md",
+    "docs/what-exists.md",
     "CLAUDE.md",
     "DEPLOY.md",
     "docs/infrastructure.md",
@@ -39,6 +40,7 @@ DOCS: tuple[str, ...] = (
 # Words a document must not contain because the thing they name is gone.
 BANNED: dict[str, tuple[str, ...]] = {
     "README.md": ("Nix", "VMManager", "poetry", "xfail", "Telegram"),
+    "docs/what-exists.md": ("Nix", "VMManager", "poetry", "xfail", "Telegram"),
     "CLAUDE.md": ("Telegram", "capability_cache", "Nix", "Priority 1 (Bug Fixes)"),
     "DEPLOY.md": ("Nix", "poetry", "nix-env"),
 }
