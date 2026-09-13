@@ -30,7 +30,7 @@ from membrane.proposals import propose
 from membrane.references import describe, unknown_references
 from membrane.state import WINDOW, Exchange, InboxItem, Pending, Queued
 from membrane.trials import poll_trials, try_policy, try_verb
-from membrane.verbs import invoke, poll_builds
+from membrane.verbs import blocked, invoke, poll_builds, unprovided
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -302,6 +302,11 @@ def build_tools(ctx: Context, pending: Pending) -> dict[str, Tool]:
             assert recipe_id is not None  # offered_names offers no verb without one
 
             async def handler(inp: dict[str, Any]) -> dict[str, Any]:
+                # Offered, so the refusal reaches the model as a tool result;
+                # refused here, so no computer is ever created for it (spec §7.2).
+                missing = unprovided(verb_entry)
+                if missing:
+                    return blocked(verb_entry.verb.name, missing)
                 return await invoke(
                     ctx.api,
                     verb_entry.verb,

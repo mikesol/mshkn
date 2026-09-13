@@ -271,3 +271,13 @@ def test_parse_runs_refuses_a_non_list_and_a_non_object_entry() -> None:
     with pytest.raises(DeclarationError) as exc:
         parse_runs(None, [{"n": 1}, "two"])
     assert "runs[1]" in str(exc.value)
+
+
+def test_requires_on_an_ephemeral_verb_is_refused_constructively() -> None:
+    """Security plan decision 3: root can only place a file on a chain, and an
+    ephemeral invocation never reads one, so the refusal comes at propose time
+    and names the state that would have worked."""
+    with pytest.raises(DeclarationError, match=r"verb\.requires needs state chain") as exc:
+        parse_verb({**VERB, "state": "ephemeral", "requires": [{"kind": "secret", "name": "t"}]})
+    assert "verb/<name>" in str(exc.value)
+    parse_verb({**VERB, "state": "chain", "requires": [{"kind": "secret", "name": "t"}]})

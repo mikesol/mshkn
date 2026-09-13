@@ -873,6 +873,68 @@ async def test_a_ready_verb_is_a_tool_and_builds_are_polled_first(tmp_path: Path
     assert reply.startswith("Example Domain")
 
 
+SECRET_VERB: dict[str, Any] = {
+    "name": "secret_page",
+    "description": "Reads the page behind a token root places on this verb's chain.",
+    "params": {"type": "object", "properties": {}},
+    "dockerfile": (
+        "FROM mshkn-base\n"
+        "RUN printf '%s\\n' '#!/bin/bash' 'cat /verb/token' > /verb/read.sh "
+        "&& chmod +x /verb/read.sh\n"
+    ),
+    "entrypoint": "/verb/read.sh",
+    "effect": "read",
+    "state": "chain",
+    "requires": [{"kind": "secret", "name": "page_token"}],
+}
+
+
+async def test_a_requires_verb_is_offered_but_refuses_to_run_until_provided(
+    tmp_path: Path,
+) -> None:
+    """Spec §7.2: approval builds the verb and the tool list offers it, so the
+    refusal can reach the model as a tool result rather than as silence; the
+    refusal names what root must do. After `provide`, the same call runs."""
+    from membrane.proposals import provide
+
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, api=api)
+    p = propose(ctx.state, {"kind": "verb", "title": "t", "rationale": "r", "verb": SECRET_VERB})
+    assert (await approve(api, ctx.state, p.id)).startswith("p-1 building")
+    verb = parse_verb(SECRET_VERB)
+    api.outputs[render_command(verb, {})] = (0, "the page\n", "")
+    out = await _turn(
+        ctx,
+        "read the page",
+        answers=[
+            message_of(tool_call_completion("secret_page")),
+            message_of(text_completion("blocked, as the tool said")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert "secret_page" in {t["name"] for t in _posted(ctx, 0)["tools"]}
+    assert audit["tools"][0] == {
+        "name": "secret_page",
+        "status": "error",
+        "error": "blocked: secret_page requires page_token; root places it and says provide",
+    }
+    assert [c[0] for c in api.calls if c[0] in ("create_computer", "fork_label")] == []
+    assert (
+        provide(ctx.state, "secret_page", "page_token") == "secret_page: page_token provided (1/1)"
+    )
+    out = await _turn(
+        ctx,
+        "read the page",
+        answers=[
+            message_of(tool_call_completion("secret_page")),
+            message_of(text_completion("the page")),
+        ],
+    )
+    audit, reply = split_output(out)
+    assert audit["tools"][0]["status"] == "ok" and audit["tools"][0]["chain_head"] is not None
+    assert reply.startswith("the page")
+
+
 async def test_the_live_policy_reaches_the_model_on_every_turn(tmp_path: Path) -> None:
     """§10.3 lets approval replace the policy, and §5 says a proposal is a whole
     document rather than a diff -- so an embryo asked to replace its policy must

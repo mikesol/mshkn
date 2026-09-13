@@ -67,6 +67,11 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         # tuple cannot pass against a future seed asserting the opposite.
         "scratch chain",
         "discarded",
+        # spec §7.2: a delivered refusal teaches the block on invocation, but
+        # nothing teaches that the placement is the agent's to design (invisible
+        # mechanism)
+        "cannot be invoked until root has provided every name",
+        "where root puts it is yours to say",
     ):
         assert phrase in seed, phrase
     for phrase in (
@@ -74,6 +79,9 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         "ssh-keygen",
         '"sig"',
         "ssh:mike",
+        # the approval-time block (#91) is gone; a false line in the genome is
+        # worse than a missing one
+        "blocks approval",
         # a constructive refusal teaches these
         "communicate",
         "transact",

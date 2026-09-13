@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
     from membrane.declarations import Verb
     from membrane.mshkn import MshknApi, RecipeInfo, RunResult
-    from membrane.state import State
+    from membrane.state import CatalogEntry, State
 
 POLL_INTERVAL = 3.0
 LOG_TAIL = 2000
@@ -34,6 +34,22 @@ def run_result_doc(run: RunResult) -> dict[str, Any]:
         "exit_code": run.exit_code,
         "stdout": run.stdout,
         "stderr": run.stderr,
+    }
+
+
+def unprovided(entry: CatalogEntry) -> list[str]:
+    """The `requires` names root has not yet said `provide` for (spec §7.2)."""
+    return [r.name for r in entry.verb.requires if r.name not in entry.provided]
+
+
+def blocked(verb: str, names: list[str]) -> dict[str, Any]:
+    """The refusal an unprovided verb's invocation returns: constructive, it names
+    the verb, the names, and root's act. Same shape as every other error result,
+    so the audit line and the model's tool result carry it unchanged."""
+    return {
+        "verb": verb,
+        "status": "error",
+        "error": f"blocked: {verb} requires {', '.join(names)}; root places it and says provide",
     }
 
 
