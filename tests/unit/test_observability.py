@@ -57,7 +57,9 @@ def test_the_ecs_envelope_is_present_on_every_record() -> None:
     assert entry["message"] == "hello w"
     assert entry["log.level"] == "info"
     assert entry["log.logger"] == "t"
-    assert entry["ecs.version"] == ECS_VERSION
+    # The literal, not the constant: the field names above are the ones 8.11.0
+    # defines, so bumping the version without revisiting them is a defect.
+    assert entry["ecs.version"] == "8.11.0" == ECS_VERSION
     assert str(entry["@timestamp"]).endswith("+00:00"), "ECS timestamps are UTC and offset-aware"
 
 
