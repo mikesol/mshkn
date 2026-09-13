@@ -402,9 +402,19 @@ async def test_a_gateway_shaped_brain_speaks_the_liturgy(
     a gateway run carries that a direct run does not, all the way through a turn
     (task 7, spec §11). `flow` has no `last_model_body`, so this reads the request
     the fake `/v1/messages` endpoint actually received off the scripted model
-    itself (`ScriptedModel.last_body`, set by `scripted_asgi`)."""
-    audit, _reply = await embryo_gateway.root_say(WORDS["1"])
-    assert audit["effort"] == [None]
+    itself (`ScriptedModel.last_body`, set by `scripted_asgi`).
+
+    The prompt (not one of hatch's words) drives the scripted model to call the
+    `effort` tool asking for `max` before it answers: `prior_for` caps at `high`
+    (== `API_DEFAULT`), so a tool list alone can never push `resolve` above the
+    unset default, and an assertion that never sees a non-None candidate would
+    pass whether or not the operator's `effort_enabled=False` guard exists. Only
+    a model-requested effort above `high` discriminates (coordinator review,
+    task 7 fix round 1) — with the guard removed, the second call's body would
+    carry `output_config: {"effort": "max"}`; with it restored, neither call ever
+    does, regardless of what was requested."""
+    audit, _reply = await embryo_gateway.root_say("Answer this at your maximum effort.")
+    assert audit["effort"] == [None, None]
     body = embryo_gateway.model.last_body
     assert body is not None
     assert "output_config" not in body

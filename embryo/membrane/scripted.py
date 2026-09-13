@@ -278,6 +278,16 @@ class ScriptedModel:
 
         if "hatched you" in message:
             return self._text(BIRTH_TEXT)
+        if "at your maximum effort" in message:
+            # The only lever that can make `resolve` return a non-None effort when the
+            # run's default is unset: `prior_for` caps at `IRREVERSIBLE_EFFORT` ("high"),
+            # which equals `API_DEFAULT`, so no tool list alone can push a call above the
+            # floor. Only a model-requested effort above "high" can (task 7, gateway test):
+            # asking for "max" here is what makes the effort-disabled path discriminating
+            # rather than vacuously true.
+            if "effort" not in offered:
+                return self._text("I have no effort tool yet.")
+            return self._calls([self._call("effort", level="max")])
         if "public key is" in message and can_propose:
             key = PUBKEY_RE.search(message)
             if key is None:
