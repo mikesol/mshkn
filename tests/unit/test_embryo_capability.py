@@ -26,6 +26,7 @@ from membrane.capability import (
     Hatched,
     Record,
     RunSettings,
+    bare_model_id,
     cost_usd,
     hatch,
     load_key,
@@ -99,8 +100,24 @@ def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
     # 5.00 + 2.50 + 0.25 * 5 + 0.1 * 5 = 5 + 2.5 + 1.25 + 0.5
     assert cost_usd(usage, "claude-opus-5") == pytest.approx(9.25)
     assert cost_usd(zero_usage(), "claude-opus-5") == 0.0
-    with pytest.raises(KeyError):
-        cost_usd(usage, "claude-unknown")
+
+
+def test_a_gateway_id_prices_as_the_model_it_names() -> None:
+    """A hosted gateway namespaces every id by its provider. The six runs spoken
+    before the gateway existed must stay comparable to the ones spoken through it,
+    so the prefix is stripped rather than given a second price row."""
+    usage = {"input_tokens": 1_000_000, "output_tokens": 0}
+    assert cost_usd(usage, "anthropic/claude-opus-5") == cost_usd(usage, "claude-opus-5")
+    assert bare_model_id("anthropic/claude-opus-5") == "claude-opus-5"
+    assert bare_model_id("claude-opus-5") == "claude-opus-5"
+
+
+def test_an_unpriced_model_costs_nothing_known_rather_than_losing_the_run() -> None:
+    """`cost_usd` is called while the summary is assembled, after every turn has
+    been spoken and paid for. A raise there throws away the evidence of a run that
+    has already cost money, which is the worst moment this code could choose."""
+    assert cost_usd(zero_usage(), "moonshot/kimi-k2") is None
+    assert cost_usd({"input_tokens": 10}, "claude-unknown") is None
 
 
 # ---------------------------------------------------------------- the record

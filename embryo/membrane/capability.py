@@ -113,8 +113,23 @@ CACHE_WRITE = 1.25  # of the input price
 CACHE_READ = 0.1
 
 
-def cost_usd(usage: Mapping[str, int], model_id: str) -> float:
-    price = PRICES[model_id]
+def bare_model_id(model_id: str) -> str:
+    """`anthropic/claude-opus-5` as `claude-opus-5`: a gateway namespaces every id by
+    its provider, and the price of a model does not change because of the road taken
+    to reach it."""
+    return model_id.rsplit("/", 1)[-1]
+
+
+def cost_usd(usage: Mapping[str, int], model_id: str) -> float | None:
+    """USD for one run's usage, or None where the model has no price on file.
+
+    None and not a `KeyError`: this is called at the end of `run_once`, while the
+    summary is being assembled, after every turn has been spoken and paid for and
+    before anything has been written to disk. A raise there loses the whole record
+    of a run that has already cost money."""
+    price = PRICES.get(bare_model_id(model_id))
+    if price is None:
+        return None
     return (
         usage.get("input_tokens", 0) * price.input
         + usage.get("cache_creation_input_tokens", 0) * price.input * CACHE_WRITE
@@ -1263,6 +1278,7 @@ async def run_once(
             )
             usage, model_calls = _usage_total(turns)
             passed = sum(1 for v in judged.values() if v["ok"])
+            cost = cost_usd(usage, model_id)
             summary = {
                 "run": out_dir.name,
                 "capability": capability.name,
@@ -1298,7 +1314,7 @@ async def run_once(
                 "reasks": reasks,
                 "model_calls": model_calls,
                 "usage": usage,
-                "cost_usd": round(cost_usd(usage, model_id), 4),
+                "cost_usd": None if cost is None else round(cost, 4),
                 "postconditions": judged,
                 "passed": passed,
                 "ok": passed == len(capability.postconditions),
@@ -1306,9 +1322,10 @@ async def run_once(
             record.transcript(model_id, turns)
             record.summary(summary)
             tokens = f"{usage['input_tokens']} in / {usage['output_tokens']} out"
+            priced = "unpriced" if cost is None else f"${round(cost, 4)}"
             log.write(
                 f"{out_dir.name}: {passed}/{len(capability.postconditions)} postconditions, "
-                f"{model_calls} model calls, {tokens}, ${summary['cost_usd']}\n"
+                f"{model_calls} model calls, {tokens}, {priced}\n"
             )
             for name, v in judged.items():
                 log.write(f"  {'ok ' if v['ok'] else 'NOT'} {name}\n")
