@@ -17,7 +17,7 @@ Dependency direction is strict: `mshkn.api` → `mshkn.services` → `mshkn.host
 A request passes through:
 
 1. The request-id middleware in `src/mshkn/app.py`: it takes `X-Request-Id` or mints one, stores it in the logging contextvar so every log line carries it, and echoes it in the response.
-2. `mshkn.api.deps.require_principal`: `Authorization: Bearer <secret>` is looked up in `accounts.api_key` first and then in `api_keys.secret`, and resolves to a `mshkn.models.Principal` (the account, plus the scoped key when the bearer was one); a missing or unknown secret is 401. Routes a scoped key may never call depend on `mshkn.api.deps.require_account_key` instead and answer 403 to one. The unauthenticated routes are the ingress trigger and the three system endpoints (`GET /health`, `GET /metrics`, `GET /alerts`).
+2. `mshkn.api.deps.require_principal`: `Authorization: Bearer <secret>` is looked up in `accounts.api_key` first and then in `api_keys.secret`, and resolves to a `mshkn.models.Principal` (the account, plus the scoped key when the bearer was one); a missing or unknown secret is 401. Routes a scoped key may never call depend on `mshkn.api.deps.require_account_key` instead and answer 403 to one; `GET /logs` is one of them, because a scoped key is a narrowing and the account's whole log stream would widen it. The unauthenticated routes are the ingress trigger and the three system endpoints (`GET /health`, `GET /metrics`, `GET /alerts`).
 3. A router in `src/mshkn/api/`. Handlers resolve the runtime (`mshkn.api.deps.get_runtime`), run the scope checks of `src/mshkn/api/scopes.py` (§1a), call one service method, and shape the result with a model from `src/mshkn/api/schemas.py`. Orchestration does not live in routers.
 4. A service in `src/mshkn/services/`, which talks to the host boundary and the database.
 
@@ -68,6 +68,7 @@ Domain errors are mapped in one place, `src/mshkn/api/errors.py`, which handles 
 | `GET /health` | subsystem checks |
 | `GET /metrics` | Prometheus exposition |
 | `GET /alerts` | the runtime's alert deque |
+| `GET /logs` | the calling account's recent log records, as ECS NDJSON |
 
 ### 1a. Tenancy: two kinds of credential
 
@@ -249,7 +250,7 @@ Logs are ECS JSON lines: one mapping, `mshkn.observability.logging.to_ecs`, seri
 | `mshkn_thin_pool_used_ratio` | gauge | `kind` = `data`, `metadata` | `Reaper.check_host` |
 | `mshkn_host_ram_used_ratio` | gauge | | `Reaper.check_host` |
 
-`GET /health` reports `database`, `firecracker`, `storage` and `proxy` as `ok` or an error string, with overall `ok` or `degraded`. The database check reads, then reports the reaper's count of consecutive failed cycles (`Reaper.consecutive_failures`, with the last exception) when it is not zero: the reaper writes every cycle, so its failing is what a database that answers reads but refuses writes looks like (always HTTP 200, so a caller has to read `status` in the body; `scripts/e2e.sh` only waits for the endpoint to answer before running the suite). `GET /alerts` returns the reaper's recent alerts: thin pool data or metadata over 80 % (warning) or 95 % (critical), root filesystem usage over 80 % (critical over 95 %), and host RAM over 90 %.
+`GET /health` reports `database`, `firecracker`, `storage` and `proxy` as `ok` or an error string, with overall `ok` or `degraded`. The database check reads, then reports the reaper's count of consecutive failed cycles (`Reaper.consecutive_failures`, with the last exception) when it is not zero: the reaper writes every cycle, so its failing is what a database that answers reads but refuses writes looks like (always HTTP 200, so a caller has to read `status` in the body; `scripts/e2e.sh` only waits for the endpoint to answer before running the suite). `GET /alerts` returns the reaper's recent alerts: thin pool data or metadata over 80 % (warning) or 95 % (critical), root filesystem usage over 80 % (critical over 95 %), and host RAM over 90 %. `GET /logs` returns the calling account's recent records as newline-delimited Elastic Common Schema documents — `@timestamp`, `ecs.version`, `log.level`, `log.logger`, `message`, `trace.id` when there was a request, `error.*` on a failure, and everything a call site passed as `extra=` under an `mshkn.` prefix. They come from a bounded in-memory ring on the runtime, sized by `MSHKN_LOG_BUFFER_SIZE` (1000 records by default), and the same documents are what the process writes to stdout. `limit` keeps the newest records and `since` is exclusive. Nothing survives a restart: stdout is the durable path, and a tenant never sees uvicorn's access lines because those are emitted before authentication has run and so belong to no account.
 
 ## 13. Configuration
 
