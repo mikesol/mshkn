@@ -25,7 +25,6 @@ from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost
 from mshkn.models import CheckpointTrigger, DeliveryStatus, RelayDelivery, RelayStatus, RetryPolicy
 from mshkn.resources import DEFAULT_RESOURCES
-from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.checkpoints import CheckpointService
 from mshkn.services.computers import ComputerService
@@ -33,6 +32,7 @@ from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.recipes import RecipeService
 from mshkn.services.relay import RelayRequest, RelayService, task_key
 from tests.support import account_row
+from tests.unit.conftest import owned_client, owned_tasks
 from tests.unit.test_relay_db import job_row
 
 if TYPE_CHECKING:
@@ -63,13 +63,13 @@ class Relay:
         host = FakeHost()
         self.host = host
         allocator = SlotAllocator()
-        self.tasks = BackgroundTasks()
+        self.tasks = owned_tasks()
         recipes = RecipeService(
             self.config, db, host.blocks, host.hypervisor, allocator, self.tasks
         )
         computers = ComputerService(self.config, db, host, allocator, recipes)
         checkpoints = CheckpointService(self.config, db, host, allocator, computers, self.tasks)
-        self.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))  # type: ignore[arg-type]
+        self.http = owned_client(transport=httpx.MockTransport(handler))  # type: ignore[arg-type]
         lifecycle = Lifecycle(db, computers, checkpoints, self.tasks, self.http)
         self.slept: list[float] = []
 

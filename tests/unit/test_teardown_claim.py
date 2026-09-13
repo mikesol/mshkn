@@ -13,11 +13,11 @@ from mshkn.errors import HostError
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import Computer, ComputerStatus
 from mshkn.resources import DEFAULT_RESOURCES
-from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.computers import ComputerService
 from mshkn.services.recipes import RecipeService
 from tests.support import account_row
+from tests.unit.conftest import owned_tasks
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -39,7 +39,7 @@ async def _service(
         checkpoint_staging_dir=tmp_path / "staging",
     )
     allocator = SlotAllocator()
-    recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, BackgroundTasks())
+    recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, owned_tasks())
     return ComputerService(config, db, host, allocator, recipes), host
 
 

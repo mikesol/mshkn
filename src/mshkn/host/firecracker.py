@@ -489,7 +489,9 @@ class FirecrackerHypervisor:
                         self._map_staging_disk(disk_volume_id),
                         create_tap(STAGING_SLOT, run=self._run),
                     )
-                    pid = await start_firecracker_process(socket_path)
+                    pid = await start_firecracker_process(
+                        socket_path, binary=self._config.firecracker_binary
+                    )
                     self._sockets[pid] = socket_path
                     Path(STAGING_VSOCK_PATH).unlink(missing_ok=True)
                     client = FirecrackerClient(socket_path)
@@ -573,7 +575,9 @@ class FirecrackerHypervisor:
                 if self._staging_dirty:
                     await self._ensure_staging_clean()
                     self._staging_dirty = False
-                fc_task = asyncio.create_task(start_firecracker_process(socket_path))
+                fc_task = asyncio.create_task(
+                    start_firecracker_process(socket_path, binary=self._config.firecracker_binary)
+                )
                 try:
                     await asyncio.gather(
                         self._map_staging_disk(disk_volume_id),

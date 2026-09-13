@@ -19,12 +19,12 @@ from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import Checkpoint, CheckpointTrigger, Computer, ExecSpec
 from mshkn.observability.metrics import checkpoints_total
 from mshkn.resources import DEFAULT_RESOURCES
-from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.checkpoints import CheckpointService, Deferred
 from mshkn.services.computers import ComputerService
 from mshkn.services.recipes import RecipeService
 from tests.support import account_row, checkpoint_row
+from tests.unit.conftest import owned_tasks
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -48,7 +48,7 @@ async def _services(
         checkpoint_retention_count=retention,
     )
     allocator = SlotAllocator()
-    tasks = BackgroundTasks()
+    tasks = owned_tasks()
     recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)
     computers = ComputerService(config, db, host, allocator, recipes)
     checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)

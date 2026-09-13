@@ -39,6 +39,10 @@ class Config:
     # disk; on tmpfs the fsync is free and the upload task moves the files (#144).
     checkpoint_staging_dir: Path = field(default_factory=lambda: Path("/dev/shm/mshkn"))
     ssh_key_path: Path = field(default_factory=lambda: Path("/root/.ssh/id_ed25519"))
+    # The Firecracker executable, resolved on PATH unless it is an absolute path.
+    # Both the booter and /health's probe read it, so the health endpoint reports
+    # on the binary the host would actually run.
+    firecracker_binary: str = "firecracker"
 
     # dm-thin
     thin_pool_data_path: Path = field(default_factory=lambda: Path("/opt/mshkn/thin-pool-data"))
