@@ -11,11 +11,13 @@ from typing import TYPE_CHECKING, Any
 
 from membrane.capabilities import CAPABILITIES, load
 from membrane.memory import Provenance, visible_from
-from membrane.model import Completion, Model, ToolCall, zero_usage
+from membrane.model import Completion, ToolCall, zero_usage
 from membrane.mshkn import CheckpointInfo, Deferred, MshknError, RecipeInfo, RelayJob, RunResult
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    from membrane.scripted import ScriptedModel
 
 HATCH = load(CAPABILITIES / "hatch.md")  # the first capability, read by every tier
 WORDS = HATCH.words  # label -> words; "1", "2", "4", ..., "9-count-2"
@@ -308,7 +310,7 @@ class ListMemory:
         return None
 
 
-def scripted_asgi(model: Model) -> Callable[..., Awaitable[None]]:
+def scripted_asgi(model: ScriptedModel) -> Callable[..., Awaitable[None]]:
     """`membrane serve` as an ASGI app, for the flow tier's in-process relay target."""
     from membrane.serve import answer_async
 
@@ -326,7 +328,13 @@ def scripted_asgi(model: Model) -> Callable[..., Awaitable[None]]:
                 {"type": "error", "error": {"type": "not_found_error", "message": scope["path"]}},
             )
         else:
-            status, doc = 200, await answer_async(model, json.loads(body or b"{}"))
+            # The whole envelope the relay actually sent, not just the system/messages/tools
+            # `answer_async` reads out of it: the gateway test (task 7) asserts on the model id,
+            # `output_config`'s absence and `body_extra`'s survival, none of which `complete`
+            # ever sees.
+            parsed = json.loads(body or b"{}")
+            model.last_body = parsed
+            status, doc = 200, await answer_async(model, parsed)
         data = json.dumps(doc).encode()
         await send(
             {

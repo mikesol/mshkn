@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -54,8 +55,8 @@ class Embryo:
     `brain` on the fake host, which runs nothing, so the helper plays the
     wake-up itself: it drains the relay's task and settles through `list`."""
 
-    def __init__(self, flow: Flow, brain: Path, api: Mshkn) -> None:
-        self.flow, self.brain, self.api = flow, brain, api
+    def __init__(self, flow: Flow, brain: Path, api: Mshkn, model: ScriptedModel) -> None:
+        self.flow, self.brain, self.api, self.model = flow, brain, api, model
         self.notes: list[str] = []
 
     async def _run(self, argv: list[str]) -> str:
@@ -118,10 +119,29 @@ class Embryo:
             store.close()
 
 
-@pytest.fixture
-async def embryo(
-    flow: Flow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+DEFAULT_ENV = (
+    "MSHKN_API_URL=http://flow\nMSHKN_API_KEY=x\nMEMBRANE_MODEL=scripted\n"
+    "ANTHROPIC_BASE_URL=http://model\n"
+)
+# What a gateway run's .env carries that a direct run's does not (task 7, spec §11):
+# a namespaced model id, the effort axis turned off, and an operator's pinned upstream
+# riding through as `body_extra`.
+GATEWAY_ENV = (
+    "MSHKN_API_URL=http://flow\nMSHKN_API_KEY=x\nMEMBRANE_MODEL=scripted\n"
+    "ANTHROPIC_BASE_URL=http://model\nMEMBRANE_MODEL_ID=anthropic/scripted-1\n"
+    "MEMBRANE_EFFORT=off\n"
+    'MEMBRANE_BODY_EXTRA={"providerOptions": {"gateway": {"only": ["anthropic"]}}}\n'
+)
+
+
+@asynccontextmanager
+async def _hatched(
+    flow: Flow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: str
 ) -> AsyncIterator[Embryo]:
+    """The shared body of `embryo` and `embryo_gateway`: a minted brain key, a brain
+    directory carrying the given `.env`, and the scripted model behind the relay's
+    target. The two fixtures differ only in `env` (task 7)."""
+
     async def build_image(cmd: str) -> str:
         # Every build of the hook fails until it carries a supersedes line, so hatch's
         # "check your build" turn (spec §9 turn 3) runs: the trial fails, the approved build
@@ -143,11 +163,9 @@ async def embryo(
     brain.mkdir()
     (brain / "seed.md").write_text((EMBRYO / "seed.md").read_text())
     (brain / "policy.json").write_text((EMBRYO / "policy.json").read_text())
-    (brain / ".env").write_text(
-        "MSHKN_API_URL=http://flow\nMSHKN_API_KEY=x\nMEMBRANE_MODEL=scripted\n"
-        "ANTHROPIC_BASE_URL=http://model\n"
-    )
-    flow.targets["model"] = ASGITransport(app=scripted_asgi(ScriptedModel()))
+    (brain / ".env").write_text(env)
+    model = ScriptedModel()
+    flow.targets["model"] = ASGITransport(app=scripted_asgi(model))
     # the wake-up needs a `brain` head: on the fake host a bare computer, checkpointed and gone
     flow.host.guest.script["sync"] = ExecResult(0, "", "")
     base = (await flow.client.post("/computers", json={})).json()["computer_id"]
@@ -158,8 +176,26 @@ async def embryo(
         base_url="http://flow",
         headers={"Authorization": f"Bearer {minted.json()['secret']}"},
     )
-    yield Embryo(flow, brain, Mshkn(http))
-    await http.aclose()
+    try:
+        yield Embryo(flow, brain, Mshkn(http), model)
+    finally:
+        await http.aclose()
+
+
+@pytest.fixture
+async def embryo(
+    flow: Flow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Embryo]:
+    async with _hatched(flow, tmp_path, monkeypatch, DEFAULT_ENV) as embryo:
+        yield embryo
+
+
+@pytest.fixture
+async def embryo_gateway(
+    flow: Flow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Embryo]:
+    async with _hatched(flow, tmp_path, monkeypatch, GATEWAY_ENV) as embryo:
+        yield embryo
 
 
 async def test_hatch(embryo: Embryo, flow: Flow) -> None:
@@ -357,6 +393,33 @@ async def test_hatch(embryo: Embryo, flow: Flow) -> None:
     assert texts and not any(t.startswith("anonymous:") for t in texts)
     assert any(t.startswith("root:") for t in texts)
     assert any(t.startswith("ssh:mike:") for t in texts)
+
+
+async def test_a_gateway_shaped_brain_speaks_the_liturgy(
+    embryo_gateway: Embryo, flow: Flow
+) -> None:
+    """A namespaced model id, no effort axis and a pinned upstream: the three things
+    a gateway run carries that a direct run does not, all the way through a turn
+    (task 7, spec §11). `flow` has no `last_model_body`, so this reads the request
+    the fake `/v1/messages` endpoint actually received off the scripted model
+    itself (`ScriptedModel.last_body`, set by `scripted_asgi`).
+
+    The prompt (not one of hatch's words) drives the scripted model to call the
+    `effort` tool asking for `max` before it answers: `prior_for` caps at `high`
+    (== `API_DEFAULT`), so a tool list alone can never push `resolve` above the
+    unset default, and an assertion that never sees a non-None candidate would
+    pass whether or not the operator's `effort_enabled=False` guard exists. Only
+    a model-requested effort above `high` discriminates (coordinator review,
+    task 7 fix round 1) — with the guard removed, the second call's body would
+    carry `output_config: {"effort": "max"}`; with it restored, neither call ever
+    does, regardless of what was requested."""
+    audit, _reply = await embryo_gateway.root_say("Answer this at your maximum effort.")
+    assert audit["effort"] == [None, None]
+    body = embryo_gateway.model.last_body
+    assert body is not None
+    assert "output_config" not in body
+    assert body["model"] == "anthropic/scripted-1"
+    assert body["providerOptions"] == {"gateway": {"only": ["anthropic"]}}
 
 
 class _GatedTransport(httpx.AsyncBaseTransport):

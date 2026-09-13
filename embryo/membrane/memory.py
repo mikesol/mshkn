@@ -14,6 +14,7 @@ from mem0.embeddings.base import EmbeddingBase
 from mem0.embeddings.configs import EmbedderConfig
 from mem0.utils.factory import EmbedderFactory
 
+from membrane.config import DEFAULT_ANTHROPIC_BASE_URL
 from membrane.principals import ANONYMOUS, ROOT
 
 if TYPE_CHECKING:
@@ -80,17 +81,30 @@ class HashEmbedder(EmbeddingBase):  # type: ignore[misc]
 EmbedderFactory.provider_to_class["hash"] = "membrane.memory.HashEmbedder"
 
 
-def extraction_llm(api_key: str | None) -> dict[str, Any]:
+def extraction_model_id(base_url: str) -> str:
+    """The extraction model as the endpoint at `base_url` names it: bare for the
+    Anthropic API, provider-namespaced for a gateway."""
+    if base_url == DEFAULT_ANTHROPIC_BASE_URL:
+        return EXTRACTION_MODEL_ID
+    return f"anthropic/{EXTRACTION_MODEL_ID}"
+
+
+def extraction_llm(api_key: str | None, base_url: str) -> dict[str, Any]:
     """mem0's LLM config for fact extraction. `enable_sampling_parameters` is not
     a preference: mem0 sends `temperature` for every model whose family is `haiku`,
     and the Anthropic SDK's `messages.create` has no such parameter, so extraction
     raises without it. Opus never showed this, because mem0 already suppresses
-    sampling parameters for Opus >= 4.7."""
+    sampling parameters for Opus >= 4.7.
+
+    `anthropic_base_url` is not a preference either. This client is in process and
+    never touches the relay, so it is the one caller that would keep dialling
+    api.anthropic.com with a gateway key after everything else had moved (§5.1)."""
     return {
         "provider": "anthropic",
         "config": {
-            "model": EXTRACTION_MODEL_ID,
+            "model": extraction_model_id(base_url),
             "api_key": api_key,
+            "anthropic_base_url": base_url,
             "max_tokens": EXTRACTION_MAX_TOKENS,
             "enable_sampling_parameters": False,
         },
@@ -121,7 +135,7 @@ class Mem0Store:
                 config={"model": OPENAI_EMBEDDER, "api_key": settings.openai_api_key},
             )
             dims = OPENAI_DIMS
-            llm = extraction_llm(settings.anthropic_api_key)
+            llm = extraction_llm(settings.anthropic_api_key, settings.anthropic_base_url)
             infer = True
         config = MemoryConfig(
             vector_store={

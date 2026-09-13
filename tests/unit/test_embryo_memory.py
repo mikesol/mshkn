@@ -7,7 +7,8 @@ import os
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
-from membrane.config import Settings
+import pytest
+from membrane.config import DEFAULT_ANTHROPIC_BASE_URL, Settings
 from membrane.memory import (
     EXTRACTION_MAX_TOKENS,
     EXTRACTION_MODEL_ID,
@@ -15,13 +16,12 @@ from membrane.memory import (
     Mem0Store,
     Provenance,
     extraction_llm,
+    extraction_model_id,
     visible_from,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -145,18 +145,29 @@ def test_add_reports_whether_mem0_stored_a_fact(tmp_path: Path) -> None:
     assert empty.add("mike hatched me", Provenance("root", "api", 1)) is False
 
 
-def test_extraction_sends_no_parameter_the_installed_sdk_rejects() -> None:
+@pytest.mark.parametrize("url", [DEFAULT_ANTHROPIC_BASE_URL, "https://ai-gateway.vercel.sh"])
+def test_extraction_sends_no_parameter_the_installed_sdk_rejects(url: str) -> None:
     """The live run's defect (#107 follow-on): mem0 sends `temperature` for every
     model whose family is `haiku`, and anthropic 1.4.0's `messages.create` has no
     such parameter, so every extraction raised. Opus never hit it: mem0 suppresses
-    sampling parameters for Opus >= 4.7."""
+    sampling parameters for Opus >= 4.7.
+
+    Parametrized over the direct API and a gateway URL (spec §5.1, #127 fix round
+    1): this is the highest-value untested claim in the branch — mem0's extraction
+    LLM follows the brain through the gateway, and its failure would break every
+    memory operation of every gateway run, with no live probe to catch it (that
+    task is blocked). A real `AnthropicLLM(AnthropicConfig(...))` is built for
+    each URL and `llm.client.base_url` is asserted, so this touches the SDK client
+    a dict-construction check cannot: building the client never dials out, only
+    calling it would, and `generate_response` below is answered by a stub."""
     import inspect
 
     import anthropic
     from mem0.configs.llms.anthropic import AnthropicConfig
     from mem0.llms.anthropic import AnthropicLLM
 
-    llm = AnthropicLLM(AnthropicConfig(**extraction_llm("k")["config"]))
+    llm = AnthropicLLM(AnthropicConfig(**extraction_llm("k", url)["config"]))
+    assert str(llm.client.base_url) == url
     sent: dict[str, Any] = {}
 
     def create(**kwargs: Any) -> Any:
@@ -168,4 +179,39 @@ def test_extraction_sends_no_parameter_the_installed_sdk_rejects() -> None:
 
     accepted = set(inspect.signature(anthropic.Anthropic(api_key="k").messages.create).parameters)
     assert set(sent) - accepted == set()
-    assert sent["max_tokens"] == EXTRACTION_MAX_TOKENS and sent["model"] == EXTRACTION_MODEL_ID
+    assert sent["max_tokens"] == EXTRACTION_MAX_TOKENS
+    assert sent["model"] == extraction_model_id(url)
+
+
+def test_extraction_goes_direct_when_the_base_url_is_anthropic() -> None:
+    llm = extraction_llm("sk-a", DEFAULT_ANTHROPIC_BASE_URL)
+    assert llm["config"]["model"] == "claude-haiku-4-5-20251001"
+    assert llm["config"]["anthropic_base_url"] == DEFAULT_ANTHROPIC_BASE_URL
+    assert llm["config"]["api_key"] == "sk-a"
+
+
+def test_extraction_follows_the_brain_through_a_gateway() -> None:
+    """mem0's extraction LLM is a second Anthropic caller, in process and off the
+    relay (§5.1). The brain holds one model key, so if the relay goes through a
+    gateway then extraction must too or every memory operation fails."""
+    llm = extraction_llm("vck-1", "https://ai-gateway.vercel.sh")
+    assert llm["config"]["anthropic_base_url"] == "https://ai-gateway.vercel.sh"
+    # The gateway namespaces every id by its provider, including this one.
+    assert llm["config"]["model"] == "anthropic/claude-haiku-4-5-20251001"
+
+
+def test_the_extraction_model_is_namespaced_only_for_a_gateway() -> None:
+    assert extraction_model_id(DEFAULT_ANTHROPIC_BASE_URL) == EXTRACTION_MODEL_ID
+    assert extraction_model_id("https://ai-gateway.vercel.sh") == f"anthropic/{EXTRACTION_MODEL_ID}"
+
+
+# `test_extraction_sends_no_parameter_the_installed_sdk_rejects` above is the test
+# for whether `temperature` reaches the wire: it builds a real `AnthropicLLM` for
+# both the direct URL and the gateway's and asserts `temperature` is never sent,
+# which is what "sampling parameters stay suppressed through the gateway" actually
+# means. A `test_sampling_parameters_stay_suppressed_through_the_gateway` at the
+# dict level used to sit here; it only ever asserted
+# `extraction_llm(...)["config"]["enable_sampling_parameters"] is False` against
+# the literal `False` that `extraction_llm` writes unconditionally — true by
+# construction and never evidence the SDK boundary holds — so it was removed
+# rather than kept as a second, weaker copy of the test above (#127 fix round 1).

@@ -28,6 +28,18 @@ USAGE_KEYS = (
 # here: the calls of a turn are seconds apart, every read refreshes the entry's
 # timer for free, and the one-hour TTL only doubles the write price.
 CACHE_CONTROL = {"type": "ephemeral"}
+# What `body_extra` may never overwrite: everything the membrane composes and then
+# depends on having composed.
+COMPOSED = (
+    "model",
+    "max_tokens",
+    "stream",
+    "system",
+    "messages",
+    "tools",
+    "cache_control",
+    "output_config",
+)
 
 
 def zero_usage() -> dict[str, int]:
@@ -80,6 +92,7 @@ def compose_request(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     effort: str | None,
+    body_extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The `POST /v1/messages` body: streamed, so a long answer produces bytes
     throughout and the relay reassembles it (relay design §12)."""
@@ -101,6 +114,10 @@ def compose_request(
         body["tools"] = tools
     if effort is not None:
         body["output_config"] = {"effort": effort}
+    for key in body_extra or {}:
+        if key in COMPOSED:
+            raise ValueError(f"MEMBRANE_BODY_EXTRA may not set {key!r}: the membrane composes it")
+    body.update(body_extra or {})
     return body
 
 

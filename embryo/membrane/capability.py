@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 import httpx
 
 from membrane.capabilities import TEMPLATE_RE, CapabilityError, catalog, load_module, order
-from membrane.config import DEFAULT_MODEL_ID, parse_env
+from membrane.config import DEFAULT_ANTHROPIC_BASE_URL, DEFAULT_MODEL_ID, EFFORT_OFF, parse_env
 from membrane.declarations import RESERVED_TOOL_NAMES
 from membrane.effort import EFFORTS
 from membrane.model import add_usage, zero_usage
@@ -45,7 +45,7 @@ DEFAULT_BRAIN_API_URL = "https://api.mshkn.dev"
 DEFAULT_OUT = Path("docs/embryo")
 KEYS = (".mshkn", "keys")  # under the operator's home; never under the repository
 REQUIRED = ("MSHKN_API_URL", "MSHKN_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
-OPTIONAL = ("BRAIN_API_URL",)
+OPTIONAL = ("BRAIN_API_URL", "ANTHROPIC_BASE_URL", "AI_GATEWAY_API_KEY", "MEMBRANE_BODY_EXTRA")
 HATCH = Path(__file__).resolve().parents[1] / "hatch.sh"
 TURN_TIMEOUT = 330.0
 TURN_WAIT = 3600.0
@@ -73,6 +73,30 @@ class RunSettings:
     # The floor under every model call of the run, not the effort of any of them:
     # the turn raises it from its tool list and the model's own request (#122).
     default_effort: str | None = None
+    # Where the relay forwards a model call, and the key for whatever it names. The
+    # operator holds both slots so `--base-url` alone flips a run between the direct
+    # API and a gateway; only one of them is ever written into the brain's .env.
+    base_url: str = DEFAULT_ANTHROPIC_BASE_URL
+    gateway_api_key: str | None = None
+    # One line of JSON, unparsed on the operator's side (#127): the driver has no use
+    # for its contents and only needs to pass it through to `hatch.sh`, which writes
+    # it into the brain's `.env` for `membrane.config.load_settings` to parse.
+    body_extra: str = ""
+
+    @property
+    def model_api_key(self) -> str:
+        """The one key the brain is handed, chosen by where `base_url` points.
+
+        A non-default base URL with no gateway key raises rather than falling back:
+        `load_run_settings` refuses that combination, but `RunSettings` is a public
+        frozen dataclass and nothing stops a caller building one directly, and
+        silently handing an Anthropic key to a gateway is the failure this whole
+        two-slot design exists to prevent."""
+        if self.base_url == DEFAULT_ANTHROPIC_BASE_URL:
+            return self.anthropic_api_key
+        if not self.gateway_api_key:
+            raise ValueError(f"no AI_GATEWAY_API_KEY for base URL {self.base_url}")
+        return self.gateway_api_key
 
 
 def load_run_settings(
@@ -81,14 +105,29 @@ def load_run_settings(
     *,
     model_id: str | None = None,
     effort: str | None = None,
+    base_url: str | None = None,
+    body_extra: str | None = None,
 ) -> RunSettings:
     """The operator's `.env` (git-ignored) under the environment: the four
-    required keys, `BRAIN_API_URL` if the brain dials a different address."""
+    required keys, `BRAIN_API_URL` if the brain dials a different address, and the
+    two gateway slots of spec §5 — `ANTHROPIC_BASE_URL` (or `--base-url`) and
+    `AI_GATEWAY_API_KEY`, plus `MEMBRANE_BODY_EXTRA` (or `--body-extra`) of §8.
+    Raises `ValueError` for a missing required key or for a non-default base URL
+    with no gateway key to send as `x-api-key`; a malformed `MEMBRANE_BODY_EXTRA`
+    is not this function's problem to catch — it travels as an opaque string to
+    `hatch.sh` and is only ever parsed by `membrane.config.load_settings`."""
     values = parse_env(env_file.read_text()) if env_file.exists() else {}
     values.update({k: v for k, v in environ.items() if k in REQUIRED or k in OPTIONAL})
     missing = [name for name in REQUIRED if not values.get(name)]
     if missing:
         raise ValueError(f"missing {', '.join(missing)}: put them in {env_file} or the environment")
+    url = (base_url or values.get("ANTHROPIC_BASE_URL") or DEFAULT_ANTHROPIC_BASE_URL).rstrip("/")
+    gateway_key = values.get("AI_GATEWAY_API_KEY") or None
+    if url != DEFAULT_ANTHROPIC_BASE_URL and not gateway_key:
+        raise ValueError(
+            f"AI_GATEWAY_API_KEY is required when the model base URL is {url}: "
+            f"put it in {env_file} or the environment"
+        )
     return RunSettings(
         api_url=values["MSHKN_API_URL"],
         api_key=values["MSHKN_API_KEY"],
@@ -97,6 +136,9 @@ def load_run_settings(
         openai_api_key=values["OPENAI_API_KEY"],
         model_id=model_id or DEFAULT_MODEL_ID,
         default_effort=effort,
+        base_url=url,
+        gateway_api_key=gateway_key,
+        body_extra=body_extra or values.get("MEMBRANE_BODY_EXTRA") or "",
     )
 
 
@@ -113,8 +155,23 @@ CACHE_WRITE = 1.25  # of the input price
 CACHE_READ = 0.1
 
 
-def cost_usd(usage: Mapping[str, int], model_id: str) -> float:
-    price = PRICES[model_id]
+def bare_model_id(model_id: str) -> str:
+    """`anthropic/claude-opus-5` as `claude-opus-5`: a gateway namespaces every id by
+    its provider, and the price of a model does not change because of the road taken
+    to reach it."""
+    return model_id.rsplit("/", 1)[-1]
+
+
+def cost_usd(usage: Mapping[str, int], model_id: str) -> float | None:
+    """USD for one run's usage, or None where the model has no price on file.
+
+    None and not a `KeyError`: this is called at the end of `run_once`, while the
+    summary is being assembled, after every turn has been spoken and paid for and
+    before anything has been written to disk. A raise there loses the whole record
+    of a run that has already cost money."""
+    price = PRICES.get(bare_model_id(model_id))
+    if price is None:
+        return None
     return (
         usage.get("input_tokens", 0) * price.input
         + usage.get("cache_creation_input_tokens", 0) * price.input * CACHE_WRITE
@@ -245,11 +302,16 @@ PROMOTED_PREFIX = "capability/"
 class Promotion:
     """What `promote` wrote: which run, which membrane, the checkpoint ids under
     each promoted label, and the lineage a dependent reuses (its ingress rule,
-    scoped key, recipes, the hatcher's signing key and the model the brain was
-    hatched with). `reasks` is how many times a row of that run was asked again
-    after a policy change (#170), kept beside the score and never folded into it.
-    `started_from` is the promotion this run began on, so records chain back to a
-    hatch."""
+    scoped key, recipes, the hatcher's signing key, and the model, effort, base
+    URL and body extra the brain was hatched with). `reasks` is how many times a
+    row of that run was asked again after a policy change (#170), kept beside the
+    score and never folded into it. `started_from` is the promotion this run began
+    on, so records chain back to a hatch.
+
+    `base_url` and `body_extra` default so a promotion written before this pair
+    existed still loads (`Promotion(**doc)` in `read_promotion` simply omits
+    them from the call); a dependent read from such a record reports the
+    Anthropic default, which is what every promotion before this one meant."""
 
     capability: str
     run: str
@@ -266,6 +328,8 @@ class Promotion:
     default_effort: str | None
     reasks: int
     started_from: str | None
+    base_url: str = DEFAULT_ANTHROPIC_BASE_URL
+    body_extra: str = ""
 
 
 def promoted_label(name: str, working: str) -> str:
@@ -679,8 +743,13 @@ def hatch(settings: RunSettings, script: Path, *, log: TextIO) -> Hatched:
         "MEMBRANE_MODEL": "anthropic",
         "MEMBRANE_MODEL_ID": settings.model_id,
         "MEMBRANE_EFFORT": settings.default_effort or "",
-        "ANTHROPIC_API_KEY": settings.anthropic_api_key,
+        # Explicit, not inherited: `**os.environ` above happens to carry
+        # ANTHROPIC_BASE_URL when the operator exported it, and a run's model
+        # endpoint should not depend on whether a shell was configured.
+        "ANTHROPIC_API_KEY": settings.model_api_key,
+        "ANTHROPIC_BASE_URL": settings.base_url,
         "OPENAI_API_KEY": settings.openai_api_key,
+        "MEMBRANE_BODY_EXTRA": settings.body_extra,
     }
     proc = subprocess.run(
         [str(script)], env=env, capture_output=True, text=True, timeout=900, check=False
@@ -792,6 +861,12 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
         default_effort=summary["default_effort"],
         reasks=len(summary["reasks"]),
         started_from=None if started in (None, "hatch") else str(started),
+        # `.get` with the direct-API default, not `summary[...]`: a run recorded
+        # before this pair existed still promotes (#127 fix round 1), and a run's
+        # own summary always carries them once it does (`run_once` writes both
+        # unconditionally), so this is a migration default, not a shrug.
+        base_url=summary.get("base_url", DEFAULT_ANTHROPIC_BASE_URL),
+        body_extra=summary.get("body_extra", ""),
     )
     path = write_promotion(out, record)
     log.write(f"wrote {path}\n")
@@ -1143,6 +1218,7 @@ async def run_once(
     # the working tree at this moment, whatever is committed later in the run.
     version = membrane_version()
     model_id, default_effort = settings.model_id, settings.default_effort
+    base_url, body_extra = settings.base_url, settings.body_extra
     pubkey = ""
     lineage: Promotion | None = None
     if capability.depends:
@@ -1172,6 +1248,12 @@ async def run_once(
         pubkey = lineage.pubkey
         version = dict(lineage.membrane)
         model_id, default_effort = lineage.model, lineage.default_effort
+        # A dependent's brain runs its own hatch's /brain/.env, not this command
+        # line's: a dependent that dialled `--base-url` was refused before it got
+        # here (`_run`), but `RunSettings` is a public dataclass and a caller who
+        # builds one directly must not have its `base_url` written into `run.json`
+        # as if the forked brain had actually spoken through it (#127 fix round 1).
+        base_url, body_extra = lineage.base_url, lineage.body_extra
     transport = transport_for(settings.api_url)
     async with (
         httpx.AsyncClient(
@@ -1215,7 +1297,10 @@ async def run_once(
                         "run": out_dir.name,
                         "capability": capability.name,
                         "model": model_id,
+                        "base_url": base_url,
+                        "body_extra": body_extra,
                         "default_effort": default_effort,
+                        "effort_supported": default_effort != EFFORT_OFF,
                         "key_dir": str(key_dir),
                         "pubkey": pubkey,
                         "started": started.isoformat(timespec="seconds"),
@@ -1264,11 +1349,15 @@ async def run_once(
             )
             usage, model_calls = _usage_total(turns)
             passed = sum(1 for v in judged.values() if v["ok"])
+            cost = cost_usd(usage, model_id)
             summary = {
                 "run": out_dir.name,
                 "capability": capability.name,
                 "model": model_id,
+                "base_url": base_url,
+                "body_extra": body_extra,
                 "default_effort": default_effort,
+                "effort_supported": default_effort != EFFORT_OFF,
                 "key_dir": str(key_dir),
                 "pubkey": pubkey,
                 "membrane": version,
@@ -1299,7 +1388,7 @@ async def run_once(
                 "reasks": reasks,
                 "model_calls": model_calls,
                 "usage": usage,
-                "cost_usd": round(cost_usd(usage, model_id), 4),
+                "cost_usd": None if cost is None else round(cost, 4),
                 "postconditions": judged,
                 "passed": passed,
                 "ok": passed == len(capability.postconditions),
@@ -1307,9 +1396,10 @@ async def run_once(
             record.transcript(model_id, turns)
             record.summary(summary)
             tokens = f"{usage['input_tokens']} in / {usage['output_tokens']} out"
+            priced = "unpriced" if cost is None else f"${round(cost, 4)}"
             log.write(
                 f"{out_dir.name}: {passed}/{len(capability.postconditions)} postconditions, "
-                f"{model_calls} model calls, {tokens}, ${summary['cost_usd']}\n"
+                f"{model_calls} model calls, {tokens}, {priced}\n"
             )
             for name, v in judged.items():
                 log.write(f"  {'ok ' if v['ok'] else 'NOT'} {name}\n")
@@ -1340,9 +1430,22 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
     run.add_argument("--model", default=None, help=f"model id (default {DEFAULT_MODEL_ID})")
     run.add_argument(
         "--effort",
-        choices=EFFORTS,
+        choices=(EFFORT_OFF, *EFFORTS),
         default=None,
-        help="the run's default output_config.effort, which a turn may raise (default the API's)",
+        help="the run's default output_config.effort, which a turn may raise; "
+        f"{EFFORT_OFF} keeps the field off the wire for a backend that has no such "
+        "parameter (default the API's)",
+    )
+    run.add_argument(
+        "--base-url",
+        default=None,
+        help=f"where the relay forwards a model call (default {DEFAULT_ANTHROPIC_BASE_URL})",
+    )
+    run.add_argument(
+        "--body-extra",
+        default=None,
+        help="one line of JSON merged onto every request body, e.g. "
+        '\'{"providerOptions": {"gateway": {"only": ["anthropic"]}}}\'',
     )
     run.add_argument("--date", default=datetime.now(UTC).date().isoformat())
     run.add_argument(
@@ -1423,15 +1526,23 @@ def _run(args: argparse.Namespace, log: TextIO) -> int:
             f"the checks are {sorted(CHECKS)}\n"
         )
         return 2
-    if capability.depends and (args.model or args.effort):
+    if capability.depends and (args.model or args.effort or args.base_url or args.body_extra):
         log.write(
             f"{capability.name} starts from {capability.depends[-1]}'s promotion, whose brain "
-            "runs the model and effort baked into its /brain/.env at hatch: --model and "
-            "--effort belong to a capability that hatches\n"
+            "runs the model, effort, base URL and body extra baked into its /brain/.env at "
+            "hatch: --model, --effort, --base-url and --body-extra belong to a capability "
+            "that hatches\n"
         )
         return 2
     try:
-        settings = load_run_settings(args.env, os.environ, model_id=args.model, effort=args.effort)
+        settings = load_run_settings(
+            args.env,
+            os.environ,
+            model_id=args.model,
+            effort=args.effort,
+            base_url=args.base_url,
+            body_extra=args.body_extra,
+        )
     except ValueError as exc:
         log.write(f"{exc}\n")
         return 2

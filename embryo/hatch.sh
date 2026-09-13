@@ -8,10 +8,14 @@
 # Optional: BRAIN_API_URL (what the brain dials; default MSHKN_API_URL),
 # MEMBRANE_MODEL (anthropic|scripted; default anthropic), MEMBRANE_MODEL_ID (the
 # model the brain runs; the membrane defaults to claude-opus-5), MEMBRANE_EFFORT
-# (low|medium|high|xhigh|max; the run's default effort, which a turn may raise but
-# never lower; default the API's), ANTHROPIC_API_KEY and
-# OPENAI_API_KEY (required for anthropic), ANTHROPIC_BASE_URL (optional, the
-# model's base URL; in scripted mode the server's route). Needs uv, curl and jq.
+# (low|medium|high|xhigh|max|off; the run's default effort, which a turn may raise
+# but never lower; off keeps output_config.effort off the wire entirely, for a
+# backend with no such axis — this script is what writes MEMBRANE_EFFORT=off into
+# /brain/.env, not the organism deciding it; default the API's), ANTHROPIC_API_KEY
+# and OPENAI_API_KEY (required for anthropic), ANTHROPIC_BASE_URL (optional, the
+# model's base URL; in scripted mode the server's route), MEMBRANE_BODY_EXTRA
+# (optional, one line of JSON merged onto every request body verbatim, for pinning
+# a gateway's upstream). Needs uv, curl and jq.
 set -euo pipefail
 
 : "${MSHKN_API_URL:?}"
@@ -113,6 +117,7 @@ upload "$CID" /brain/policy.json "$HERE/policy.json"
   [ -n "${ANTHROPIC_API_KEY:-}" ] && echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
   [ -n "${OPENAI_API_KEY:-}" ] && echo "OPENAI_API_KEY=$OPENAI_API_KEY"
   echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
+  [ -n "${MEMBRANE_BODY_EXTRA:-}" ] && echo "MEMBRANE_BODY_EXTRA=$MEMBRANE_BODY_EXTRA"
   true
 } > "$TMP/env"
 upload "$CID" /brain/.env "$TMP/env"

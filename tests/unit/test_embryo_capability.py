@@ -9,7 +9,7 @@ import io
 import json
 import stat
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +26,7 @@ from membrane.capability import (
     Hatched,
     Record,
     RunSettings,
+    bare_model_id,
     cost_usd,
     hatch,
     load_key,
@@ -39,6 +40,7 @@ from membrane.capability import (
     split_output,
     transport_for,
 )
+from membrane.config import EFFORT_OFF
 from membrane.model import zero_usage
 from membrane.postconditions import CHECKS, Judged, Turn, by_label, judge, tool_computers
 
@@ -89,6 +91,61 @@ def test_a_missing_key_is_named(tmp_path: Path) -> None:
         load_run_settings(tmp_path / "absent", {})
 
 
+def test_the_base_url_defaults_to_anthropic_and_the_anthropic_key_travels(
+    tmp_path: Path,
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=u\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=sk-a\nOPENAI_API_KEY=oa\n")
+    settings = load_run_settings(env, {})
+    assert settings.base_url == "https://api.anthropic.com"
+    assert settings.gateway_api_key is None
+    assert settings.model_api_key == "sk-a"
+
+
+def test_a_gateway_base_url_sends_the_gateway_key_instead(tmp_path: Path) -> None:
+    """The operator holds both slots so `--base-url` alone flips a run; the brain is
+    handed one key and never learns which kind it is."""
+    env = tmp_path / ".env"
+    env.write_text(
+        "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=sk-a\nOPENAI_API_KEY=oa\n"
+        "AI_GATEWAY_API_KEY=vck-1\n"
+    )
+    settings = load_run_settings(env, {}, base_url="https://ai-gateway.vercel.sh/")
+    # The trailing slash goes, as it does in the brain's own config (config.py:84).
+    assert settings.base_url == "https://ai-gateway.vercel.sh"
+    assert settings.model_api_key == "vck-1"
+    assert settings.anthropic_api_key == "sk-a"
+
+
+def test_a_gateway_base_url_without_a_gateway_key_is_refused_before_it_hatches(
+    tmp_path: Path,
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=u\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=sk-a\nOPENAI_API_KEY=oa\n")
+    with pytest.raises(ValueError, match="AI_GATEWAY_API_KEY"):
+        load_run_settings(env, {}, base_url="https://ai-gateway.vercel.sh")
+
+
+def test_the_base_url_comes_from_the_env_file_too(tmp_path: Path) -> None:
+    """Today it reaches hatch.sh only by leaking through `**os.environ`."""
+    env = tmp_path / ".env"
+    env.write_text(
+        "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nANTHROPIC_API_KEY=sk-a\nOPENAI_API_KEY=oa\n"
+        "AI_GATEWAY_API_KEY=vck-1\nANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh\n"
+    )
+    assert load_run_settings(env, {}).model_api_key == "vck-1"
+
+
+def test_model_api_key_raises_for_a_directly_built_settings_without_a_gateway_key() -> None:
+    """`load_run_settings` refuses this combination, but `RunSettings` is a public frozen
+    dataclass and nothing stops a caller building one directly (as `_stub_hatch`'s callers do
+    with `dataclasses.replace`): the property must not silently hand an Anthropic key to a
+    gateway."""
+    settings = replace(_settings(), base_url="https://ai-gateway.vercel.sh")
+    with pytest.raises(ValueError, match="AI_GATEWAY_API_KEY"):
+        _ = settings.model_api_key
+
+
 def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
     usage = {
         "input_tokens": 1_000_000,
@@ -99,8 +156,24 @@ def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
     # 5.00 + 2.50 + 0.25 * 5 + 0.1 * 5 = 5 + 2.5 + 1.25 + 0.5
     assert cost_usd(usage, "claude-opus-5") == pytest.approx(9.25)
     assert cost_usd(zero_usage(), "claude-opus-5") == 0.0
-    with pytest.raises(KeyError):
-        cost_usd(usage, "claude-unknown")
+
+
+def test_a_gateway_id_prices_as_the_model_it_names() -> None:
+    """A hosted gateway namespaces every id by its provider. The six runs spoken
+    before the gateway existed must stay comparable to the ones spoken through it,
+    so the prefix is stripped rather than given a second price row."""
+    usage = {"input_tokens": 1_000_000, "output_tokens": 0}
+    assert cost_usd(usage, "anthropic/claude-opus-5") == cost_usd(usage, "claude-opus-5")
+    assert bare_model_id("anthropic/claude-opus-5") == "claude-opus-5"
+    assert bare_model_id("claude-opus-5") == "claude-opus-5"
+
+
+def test_an_unpriced_model_costs_nothing_known_rather_than_losing_the_run() -> None:
+    """`cost_usd` is called while the summary is assembled, after every turn has
+    been spoken and paid for. A raise there throws away the evidence of a run that
+    has already cost money, which is the worst moment this code could choose."""
+    assert cost_usd(zero_usage(), "moonshot/kimi-k2") is None
+    assert cost_usd({"input_tokens": 10}, "claude-unknown") is None
 
 
 # ---------------------------------------------------------------- the record
@@ -2267,7 +2340,8 @@ def _stub_hatch(tmp_path: Path, *, fail: bool = False) -> Path:
     else:
         body += (
             "env | grep -E '^(MSHKN_API_URL|MSHKN_API_KEY|BRAIN_API_URL|MEMBRANE_MODEL"
-            "|MEMBRANE_MODEL_ID|MEMBRANE_EFFORT|ANTHROPIC_API_KEY|OPENAI_API_KEY)='"
+            "|MEMBRANE_MODEL_ID|MEMBRANE_EFFORT|MEMBRANE_BODY_EXTRA|ANTHROPIC_API_KEY"
+            "|ANTHROPIC_BASE_URL|OPENAI_API_KEY)='"
             ' | sort > "$HATCH_ENV_OUT"\n'
             "echo '"
             + json.dumps(
@@ -2307,7 +2381,8 @@ def test_hatch_runs_the_script_with_the_keys_and_the_real_model(
         "http://api/ingress/rule-1", "rule-1", "key-1", "rcp-brain", "ck-brain"
     )
     assert out.read_text() == (
-        "ANTHROPIC_API_KEY=sk-a\nBRAIN_API_URL=https://api.mshkn.dev\nMEMBRANE_EFFORT=\n"
+        "ANTHROPIC_API_KEY=sk-a\nANTHROPIC_BASE_URL=https://api.anthropic.com\n"
+        "BRAIN_API_URL=https://api.mshkn.dev\nMEMBRANE_BODY_EXTRA=\nMEMBRANE_EFFORT=\n"
         "MEMBRANE_MODEL=anthropic\nMEMBRANE_MODEL_ID=claude-opus-5\nMSHKN_API_KEY=k\n"
         "MSHKN_API_URL=http://api\nOPENAI_API_KEY=oa\n"
     )
@@ -2316,6 +2391,29 @@ def test_hatch_runs_the_script_with_the_keys_and_the_real_model(
 def test_a_failed_hatch_raises_with_its_stderr(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="boom"):
         hatch(_settings(), _stub_hatch(tmp_path, fail=True), log=io.StringIO())
+
+
+def test_hatch_hands_the_brain_the_gateway_key_under_the_one_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One model key in /brain/.env, whatever kind it is: a brain checkpoint must not
+    carry a credential for a service it cannot reach (#92)."""
+    out = tmp_path / "env.txt"
+    monkeypatch.setenv("HATCH_ENV_OUT", str(out))
+    settings = replace(
+        _settings(),
+        base_url="https://ai-gateway.vercel.sh",
+        gateway_api_key="vck-1",
+        body_extra='{"providerOptions": {"gateway": {"only": ["anthropic"]}}}',
+    )
+    hatch(settings, _stub_hatch(tmp_path), log=io.StringIO())
+    written = out.read_text()
+    assert "ANTHROPIC_API_KEY=vck-1\n" in written
+    assert "ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh\n" in written
+    assert (
+        'MEMBRANE_BODY_EXTRA={"providerOptions": {"gateway": {"only": ["anthropic"]}}}\n' in written
+    )
+    assert "sk-a" not in written
 
 
 async def test_run_once_hatches_speaks_judges_records_and_tears_down(
@@ -2353,6 +2451,8 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     # what the run was given, and what each turn's calls actually spent (#122)
     assert run_doc["default_effort"] is None
     assert run_doc["turns"][0]["effort"] == ["medium"]
+    # a run not given `--effort off` supports the axis (#127)
+    assert summary["effort_supported"] is True
     deletes = [p for m, p, _ in api.requests if m == "DELETE"]
     assert (
         deletes[:2] == ["/ingress_rules/rule-1", "/keys/key-1"] and "/recipes/rcp-brain" in deletes
@@ -2445,6 +2545,32 @@ async def test_run_once_checks_hook_computers_from_every_turn_not_only_row_4(
     assert summary["ok"] is True  # no postconditions named: 0 passed of 0
 
 
+async def test_run_once_records_effort_unsupported_when_the_run_was_given_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`effort_supported` names a condition the run was hatched under (#127), not an
+    outcome: `--effort off` makes it False even though nothing else about this run
+    differs from `test_run_once_hatches_speaks_judges_records_and_tears_down`."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    api = FakeApi(recipes=[{"recipe_id": "rcp-pre"}])
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    summary = await run_once(
+        replace(_settings(), default_effort=EFFORT_OFF),
+        HATCH,
+        tmp_path / "docs" / "2026-09-13-run-1",
+        AutoApprover(),
+        hatch_script=_stub_hatch(tmp_path),
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=io.StringIO(),
+        out=tmp_path / "docs",
+    )
+    assert summary["default_effort"] == EFFORT_OFF
+    assert summary["effort_supported"] is False
+
+
 async def test_run_once_refuses_an_account_that_already_has_a_brain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2506,6 +2632,93 @@ async def test_an_aborted_run_writes_what_it_had_and_tears_down(
     assert summary["reasks"] == []  # it fell over at turn 1, with nothing re-asked
     assert summary["hatched"]["rule_id"] == "rule-1"
     assert "commit" in summary["membrane"]  # an aborted run names its code too
+    # an aborted run names the conditions it ran under, not only the ones it reached
+    assert summary["effort_supported"] is True
+
+
+async def test_an_aborted_run_names_the_base_url_it_spoke_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partway failure is exactly the case where attributing it to the endpoint matters:
+    the aborted-run record must carry `base_url` too, not only the successful one."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/checkpoints/fork":
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": "c1",
+                    "exec_exit_code": 1,
+                    "exec_stdout": "boom",
+                    "exec_stderr": "boom",
+                },
+            )
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    out_dir = tmp_path / "run"
+    settings = replace(
+        _settings(), base_url="https://ai-gateway.vercel.sh", gateway_api_key="vck-1"
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_once(
+            settings,
+            HATCH,
+            out_dir,
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
+    summary = json.loads((out_dir / "run.json").read_text())
+    assert summary["base_url"] == "https://ai-gateway.vercel.sh"
+
+
+async def test_an_aborted_run_names_effort_unsupported_when_it_was_given_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`effort_supported` is fixed at hatch, before the first model call, so an aborted
+    run names it exactly as a passing one would (#127)."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/checkpoints/fork":
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": "c1",
+                    "exec_exit_code": 1,
+                    "exec_stdout": "boom",
+                    "exec_stderr": "boom",
+                },
+            )
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    out_dir = tmp_path / "run"
+    settings = replace(_settings(), default_effort=EFFORT_OFF)
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_once(
+            settings,
+            HATCH,
+            out_dir,
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+        )
+    summary = json.loads((out_dir / "run.json").read_text())
+    assert summary["default_effort"] == EFFORT_OFF
+    assert summary["effort_supported"] is False
 
 
 async def test_an_aborted_run_names_the_exception_type_when_its_message_is_empty(
@@ -2801,6 +3014,122 @@ async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_i
     assert summary["membrane"] == {"commit": "abc", "dirty": False}
     assert summary["model"] == "claude-opus-5" and summary["default_effort"] == "high"
     assert not (tmp_path / "unused-keys").exists()  # a dependent generates no key
+
+
+async def test_run_once_of_a_dependent_names_its_lineages_base_url_not_the_callers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#127 fix round 1: `model_id` and `default_effort` were already overridden from
+    `lineage` (the test above) because a forked brain runs the /brain/.env of its
+    own hatch, whatever this working tree and command line say. `base_url` and
+    `body_extra` were not: `security` (a dependent, which `_run` correctly refuses
+    `--base-url` for) wrote `settings.base_url` — the direct API default — into
+    its `run.json` even when the hatch it forked from spoke through a gateway.
+    That is silent and it corrupts the one artifact `docs/embryo/README.md`'s
+    "Reading a run spoken through a gateway" section tells a reader to key off."""
+    from membrane.capabilities import Capability, Row
+    from membrane.capability import Promotion, write_promotion
+
+    key_dir = tmp_path / "lineage-keys"
+    key_dir.mkdir()
+    pubkey = new_key(key_dir)
+    lineage = Promotion(
+        capability="hatch",
+        run="hatch/2026-09-12-run-1",
+        membrane={"commit": "abc", "dirty": False},
+        promoted_at="t",
+        labels={"brain": "pb"},
+        rule_id="ir_1",
+        key_id="key-1",
+        brain_recipe="rcp-brain",
+        recipe_ids=("rcp-brain",),
+        key_dir=str(key_dir),
+        pubkey=pubkey,
+        model="claude-opus-5",
+        default_effort=None,
+        reasks=0,
+        started_from=None,
+        base_url="https://ai-gateway.vercel.sh",
+        body_extra='{"providerOptions": {"gateway": {"only": ["anthropic"]}}}',
+    )
+    write_promotion(tmp_path, lineage)
+    cap = Capability(
+        name="security",
+        depends=("hatch",),
+        postconditions=(),
+        rows=(Row("2", "root say", "My public key is {key}", "A reply."),),
+        repair=HATCH.repair,
+        path=tmp_path / "security.md",
+        module=None,
+    )
+    hatched = Hatched(
+        ingress_url="",
+        rule_id="ir_1",
+        key_id="key-1",
+        recipe_id="rcp-brain",
+        checkpoint_id="new-brain",
+    )
+
+    async def fake_start_from(doors: Doors, promotion: Promotion, *, log: Any) -> Hatched:
+        return hatched
+
+    monkeypatch.setattr("membrane.capability.start_from", fake_start_from)
+
+    async def fake_teardown(
+        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(Doors, "teardown", fake_teardown)
+    listing: dict[str, Any] = {"catalog": {}, "proposals": []}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/recipes":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/checkpoints/fork":
+            command = str(json.loads(request.content)["exec"])
+            if command == "membrane root list":
+                return httpx.Response(
+                    200,
+                    json={
+                        "computer_id": "c",
+                        "exec_exit_code": 0,
+                        "exec_stdout": json.dumps(listing),
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": "c",
+                    "exec_exit_code": 0,
+                    "exec_stdout": _out(audit_line(), "Noted."),
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    # `_settings()` defaults to the direct API: the discriminating case is that the
+    # dependent's own settings say one thing and the lineage it forked from says
+    # another, and the recorded evidence must be the lineage's.
+    settings = _settings()
+    assert settings.base_url != lineage.base_url
+    summary = await run_once(
+        settings,
+        cap,
+        tmp_path / "run",
+        AutoApprover(),
+        hatch_script=tmp_path / "unused.sh",
+        key_dir=tmp_path / "unused-keys",
+        keep=False,
+        log=io.StringIO(),
+        out=tmp_path,
+    )
+    assert summary["base_url"] == "https://ai-gateway.vercel.sh"
+    assert summary["body_extra"] == '{"providerOptions": {"gateway": {"only": ["anthropic"]}}}'
 
 
 async def test_run_once_of_a_dependent_refuses_a_key_that_is_not_the_lineages(
@@ -3118,7 +3447,40 @@ def test_main_refuses_a_model_for_a_capability_that_does_not_hatch(
     )
     assert code == 2
     assert "security starts from hatch's promotion" in log.getvalue()
-    assert "--model and --effort belong to a capability that hatches" in log.getvalue()
+    assert (
+        "--model, --effort, --base-url and --body-extra belong to a capability that hatches"
+        in log.getvalue()
+    )
+
+    log_base_url = io.StringIO()
+    code = main(
+        [
+            "run",
+            "security",
+            "--base-url",
+            "https://ai-gateway.vercel.sh",
+            "--env",
+            str(tmp_path / "none"),
+        ],
+        log=log_base_url,
+    )
+    assert code == 2
+    assert "security starts from hatch's promotion" in log_base_url.getvalue()
+
+    log_body_extra = io.StringIO()
+    code = main(
+        [
+            "run",
+            "security",
+            "--body-extra",
+            '{"providerOptions": {"gateway": {"only": ["anthropic"]}}}',
+            "--env",
+            str(tmp_path / "none"),
+        ],
+        log=log_body_extra,
+    )
+    assert code == 2
+    assert "security starts from hatch's promotion" in log_body_extra.getvalue()
 
 
 def test_main_writes_the_runs_key_where_key_dir_says_and_the_run_names_it(

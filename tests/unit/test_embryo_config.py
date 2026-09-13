@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from membrane.config import DEFAULT_BRAIN, load_settings, parse_env
+from membrane.effort import EFFORTS
 
 
 def test_parse_env_reads_key_value_lines_and_ignores_comments() -> None:
@@ -73,6 +74,21 @@ def test_the_default_effort_is_optional_and_validated(tmp_path: Path) -> None:
         load_settings(tmp_path)
 
 
+def test_effort_off_is_not_a_rung_on_the_ladder(tmp_path: Path) -> None:
+    """`output_config.effort` is Anthropic-specific. `off` is the absence of the
+    axis, not the bottom of it, so it stays out of EFFORTS and travels as its own
+    flag — `default_effort=None` already means "the API's default"."""
+    base = "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n"
+    (tmp_path / ".env").write_text(base)
+    settings = load_settings(tmp_path)
+    assert settings.effort_enabled is True and settings.default_effort is None
+
+    (tmp_path / ".env").write_text(base + "MEMBRANE_EFFORT=off\n")
+    off = load_settings(tmp_path)
+    assert off.effort_enabled is False and off.default_effort is None
+    assert "off" not in EFFORTS
+
+
 def test_the_model_base_url_defaults_to_anthropic_and_loses_its_trailing_slash(
     tmp_path: Path,
 ) -> None:
@@ -83,3 +99,35 @@ def test_the_model_base_url_defaults_to_anthropic_and_loses_its_trailing_slash(
         "ANTHROPIC_BASE_URL=https://8000-comp-1.mshkn.dev/\n"
     )
     assert load_settings(tmp_path).anthropic_base_url == "https://8000-comp-1.mshkn.dev"
+
+
+def test_body_extra_is_json_and_fails_at_load_not_at_the_relay(tmp_path: Path) -> None:
+    base = "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n"
+    (tmp_path / ".env").write_text(base)
+    assert load_settings(tmp_path).body_extra == {}
+
+    (tmp_path / ".env").write_text(
+        base + 'MEMBRANE_BODY_EXTRA={"providerOptions": {"gateway": {"only": ["anthropic"]}}}\n'
+    )
+    assert load_settings(tmp_path).body_extra == {
+        "providerOptions": {"gateway": {"only": ["anthropic"]}}
+    }
+
+    (tmp_path / ".env").write_text(base + "MEMBRANE_BODY_EXTRA={not json\n")
+    with pytest.raises(ValueError, match="MEMBRANE_BODY_EXTRA"):
+        load_settings(tmp_path)
+
+    (tmp_path / ".env").write_text(base + 'MEMBRANE_BODY_EXTRA=["a"]\n')
+    with pytest.raises(ValueError, match="MEMBRANE_BODY_EXTRA"):
+        load_settings(tmp_path)
+
+
+def test_body_extra_rejects_a_reserved_key_at_load_not_mid_turn(tmp_path: Path) -> None:
+    """Spec §8: "a malformed value fails at load_settings, before a turn is spoken."
+    A JSON object that names a key `compose_request` composes (`messages`, say) is
+    valid JSON and a valid object, so it survived to `compose_request` and raised
+    mid-turn (#127 fix round 1). This must fail here instead."""
+    base = "MSHKN_API_URL=u\nMSHKN_API_KEY=k\nMEMBRANE_MODEL=scripted\n"
+    (tmp_path / ".env").write_text(base + 'MEMBRANE_BODY_EXTRA={"messages": []}\n')
+    with pytest.raises(ValueError, match="MEMBRANE_BODY_EXTRA may not set messages"):
+        load_settings(tmp_path)

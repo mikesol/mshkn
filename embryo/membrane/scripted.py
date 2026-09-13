@@ -163,6 +163,12 @@ def _proposal(
 class ScriptedModel:
     def __init__(self) -> None:
         self._n = 0
+        # Set by the flow tier's fake `/v1/messages` handler (tests/support_embryo.py's
+        # `scripted_asgi`), not by `complete` itself: `complete` only ever sees system,
+        # messages and tools, never the envelope around them (model id, output_config,
+        # body_extra), so it cannot be the thing that records what the gateway sent
+        # (task 7, spec §11).
+        self.last_body: dict[str, Any] | None = None
 
     def _call(self, name: str, **input: Any) -> ToolCall:  # noqa: A002
         self._n += 1
@@ -272,6 +278,16 @@ class ScriptedModel:
 
         if "hatched you" in message:
             return self._text(BIRTH_TEXT)
+        if "at your maximum effort" in message:
+            # The only lever that can make `resolve` return a non-None effort when the
+            # run's default is unset: `prior_for` caps at `IRREVERSIBLE_EFFORT` ("high"),
+            # which equals `API_DEFAULT`, so no tool list alone can push a call above the
+            # floor. Only a model-requested effort above "high" can (task 7, gateway test):
+            # asking for "max" here is what makes the effort-disabled path discriminating
+            # rather than vacuously true.
+            if "effort" not in offered:
+                return self._text("I have no effort tool yet.")
+            return self._calls([self._call("effort", level="max")])
         if "public key is" in message and can_propose:
             key = PUBKEY_RE.search(message)
             if key is None:
