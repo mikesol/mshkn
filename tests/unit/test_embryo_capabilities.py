@@ -193,6 +193,16 @@ def test_a_words_block_that_is_never_closed_is_an_error(tmp_path: Path) -> None:
         load(_write(tmp_path, "one", text=text))
 
 
+def test_a_words_block_may_hold_lines_that_look_like_the_repair_section(tmp_path: Path) -> None:
+    """The rows and the Repair section are found in one fence-aware pass: what is
+    inside a words block is what root says, whatever it looks like."""
+    text = _text().replace("Hello {key}", "Hello {key}\n\n## Repair\n\n- build: `x`")
+    cap = load(_write(tmp_path, "one", text=text))
+    assert cap.row("1").words == "Hello {key}\n\n## Repair\n\n- build: `x`"
+    assert [r.label for r in cap.rows] == ["1", "2", "3", "4"]
+    assert cap.repair == Repair(build="check your build", refused="check your inbox")
+
+
 def test_a_file_with_no_rows_is_an_error(tmp_path: Path) -> None:
     text = _text().split("### 1 · root say")[0] + "## Repair\n\n- build: `b`\n- refused: `r`\n"
     with pytest.raises(CapabilityError, match="no rows"):

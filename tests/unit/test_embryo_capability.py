@@ -2749,8 +2749,10 @@ CHECKS["served_page"] = served_page
 @contextlib.asynccontextmanager
 async def prepare(doors: Any, log: Any) -> AsyncIterator[Mapping[str, str]]:
     log.write(f"the page is served ({len(doors.sent)} commands so far)\\n")
-    yield EXTRA
-    FLAG.write_text("torn down")
+    try:
+        yield EXTRA
+    finally:
+        FLAG.write_text("torn down")
 '''
 
 CHECK_MODULE = """from membrane.postconditions import CHECKS
@@ -2893,3 +2895,39 @@ def test_main_reports_a_module_that_will_not_import_before_it_hatches(
     log = io.StringIO()
     assert main(["run", "a", "--env", str(tmp_path / "none")], log=log) == 2
     assert "a.py could not be imported: boom" in log.getvalue()
+
+
+async def test_a_run_that_fails_mid_speak_still_exits_the_modules_prepare(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The module's scaffolding is inside the run's `try`: a row that raises tears
+    down what the module started, and the error is still the run's."""
+    from membrane.capabilities import load, load_module
+
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    monkeypatch.setitem(CHECKS, "served_page", lambda _judged: {"ok": False, "evidence": {}})
+    capability = load(_served(tmp_path, '{"url": "http://page"}'))
+    api = FakeApi()
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+
+    async def boom(*args: Any, **kwargs: Any) -> tuple[list[Turn], dict[str, Any] | None]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("membrane.capability.speak", boom)
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_once(
+            _settings(),
+            capability,
+            tmp_path / "run",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=tmp_path,
+            module=load_module(capability),
+        )
+    assert (tmp_path / "exited").read_text() == "torn down"
+    assert json.loads((tmp_path / "run" / "run.json").read_text())["error"] == "boom"

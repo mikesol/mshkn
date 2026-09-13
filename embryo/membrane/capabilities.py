@@ -131,23 +131,21 @@ def _is_fence(line: str) -> bool:
     return line.rstrip() == FENCE
 
 
-def _sections(lines: list[str], path: Path) -> list[tuple[str, list[str]]]:
-    """The `### ` headings and the lines under each, in document order. Anything
-    before the first heading is prose, and a row's section ends at the next `###`
-    heading or at any `##` heading (`## Repair` is where they all end). Headings
-    inside a fenced block are words, not headings."""
-    sections: list[tuple[str, list[str]]] = []
+def _sections(lines: list[str], path: Path) -> list[tuple[str, str, list[str]]]:
+    """Every `##` or `### ` heading and the lines under it, in document order, as
+    (marker, heading, body): the rows are the `###` ones and Repair is a `##` one,
+    both found in this one pass. Anything before the first heading is prose, and a
+    heading inside a fenced block is a line root speaks, not a heading."""
+    sections: list[tuple[str, str, list[str]]] = []
     body: list[str] | None = None
     in_fence = False
     for line in lines:
         if _is_fence(line):
             in_fence = not in_fence
-        elif not in_fence and line.startswith("### "):
+        elif not in_fence and (line.startswith("### ") or line.startswith("## ")):
+            marker, _, heading = line.partition(" ")
             body = []
-            sections.append((line[4:].strip(), body))
-            continue
-        elif not in_fence and line.startswith("## "):
-            body = None
+            sections.append((marker, heading.strip(), body))
             continue
         if body is not None:
             body.append(line)
@@ -178,10 +176,12 @@ def _words(label: str, body: list[str], path: Path) -> tuple[str | None, str]:
     return ("\n".join(blocks[0]) if blocks else None), "\n".join(outcome).strip()
 
 
-def _rows(lines: list[str], path: Path) -> tuple[Row, ...]:
+def _rows(sections: list[tuple[str, str, list[str]]], path: Path) -> tuple[Row, ...]:
     rows: list[Row] = []
     seen: set[str] = set()
-    for heading, body in _sections(lines, path):
+    for marker, heading, body in sections:
+        if marker != "###":
+            continue  # `## Repair`, or any other section of prose
         label, sep, door = heading.partition(SEPARATOR)
         label, door = label.strip(), door.strip()
         if not sep or not label or not door:
@@ -213,15 +213,14 @@ def _rows(lines: list[str], path: Path) -> tuple[Row, ...]:
     return tuple(rows)
 
 
-def _repair(lines: list[str], path: Path) -> Repair:
-    try:
-        start = next(i for i, line in enumerate(lines) if line.strip() == "## Repair")
-    except StopIteration:
-        raise CapabilityError(f"{path.name}: no '## Repair' section") from None
+def _repair(sections: list[tuple[str, str, list[str]]], path: Path) -> Repair:
+    body = next(
+        (b for marker, heading, b in sections if marker == "##" and heading == "Repair"), None
+    )
+    if body is None:
+        raise CapabilityError(f"{path.name}: no '## Repair' section")
     phrases: dict[str, str] = {}
-    for line in lines[start + 1 :]:
-        if line.startswith("## "):
-            break
+    for line in body:
         match = PHRASE_RE.match(line.strip())
         if match:
             phrases[match.group(1)] = match.group(2)
@@ -243,12 +242,13 @@ def load(path: Path) -> Capability:
     if not isinstance(depends, list) or not isinstance(postconditions, list):
         raise CapabilityError(f"{path.name}: depends and postconditions must be lists")
     module = path.with_suffix(".py")
+    sections = _sections(lines[body:], path)
     return Capability(
         name=name,
         depends=tuple(depends),
         postconditions=tuple(postconditions),
-        rows=_rows(lines[body:], path),
-        repair=_repair(lines[body:], path),
+        rows=_rows(sections, path),
+        repair=_repair(sections, path),
         path=path,
         module=module if module.exists() else None,
     )
