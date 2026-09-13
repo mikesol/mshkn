@@ -6,7 +6,7 @@ each one's ok and the evidence it was judged on. The seven of the embryo spec
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from membrane.declarations import RESERVED_NAMESPACES, RESERVED_TOOL_NAMES
@@ -16,7 +16,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
 VERIFIED = "ssh:mike"
-ROOT_COMMANDS = frozenset({"say", "list", "approve", "reject"})
+ROOT_COMMANDS = frozenset({"say", "list", "approve", "reject", "provide"})
+# Root's one by-hand act (capabilities design §7.2): the four commands
+# `Doors.provision` sends, in this order, once per `provide`.
+PROVISION: tuple[str, ...] = ("create", "upload", "checkpoint", "destroy")
 # The membrane's built-ins, read from the membrane rather than copied: a tool the
 # turn offers and the catalog does not name is undeclared capability, and a stale
 # copy here would have failed postcondition 4 on `effort` (#122).
@@ -33,6 +36,9 @@ class Turn:
     reply: str
     commands: list[int]
     approvals: list[dict[str, Any]]
+    # What root placed after this turn settled (§7.2): verb, name, path, the
+    # checkpoint the placement made, and what `provide` answered.
+    provisions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -253,12 +259,37 @@ def no_undeclared_capability(j: Judged) -> dict[str, Any]:
 
 
 def nothing_by_hand(j: Judged) -> dict[str, Any]:
+    """Root sent nothing but its door commands, except the provisioning sequence
+    (§7.3): `create, upload, checkpoint, destroy`, contiguous and whole, exactly
+    once per `provide`. The sequence is recorded by the driver that performs it,
+    so its checkpoint is under the chain it forked by construction
+    (`Doors.provision`); the judge checks the shape and the count."""
     commands: dict[str, int] = {}
     for door, name in j.sent:
         key = f"{door} {name}"
         commands[key] = commands.get(key, 0) + 1
-    by_hand = [k for k in commands if k.split(" ", 1)[1] not in ROOT_COMMANDS]
-    return {"ok": not by_hand, "evidence": {"commands": commands}}
+    names = [name for _, name in j.sent]
+    by_hand: list[str] = []
+    provisions = 0
+    i = 0
+    while i < len(names):
+        if tuple(names[i : i + len(PROVISION)]) == PROVISION:
+            provisions += 1
+            i += len(PROVISION)
+            continue
+        if names[i] not in ROOT_COMMANDS:
+            by_hand.append(names[i])
+        i += 1
+    provides = names.count("provide")
+    return {
+        "ok": not by_hand and provisions == provides,
+        "evidence": {
+            "commands": commands,
+            "provisions": provisions,
+            "provides": provides,
+            "by_hand": by_hand,
+        },
+    }
 
 
 CHECKS: dict[str, Callable[[Judged], dict[str, Any]]] = {
@@ -274,7 +305,8 @@ CHECKS: dict[str, Callable[[Judged], dict[str, Any]]] = {
 # Two kinds of check (capabilities design §6). An invariant reads no row label
 # and holds on any run: root_unforgeable watches every public turn's principal,
 # no_undeclared_capability watches the catalog, the proposals and the recipes,
-# and nothing_by_hand watches the commands sent — none of them looks up a label.
+# and nothing_by_hand watches the commands sent and knows the one sequence root
+# may send by hand — none of them looks up a label.
 # An exercise reads the rows that exercised it and belongs to the capability
 # that wrote those rows: authentication reads hatch's rows 4 and 5, authorization
 # and counter read 8 and 9-count-*, page_title reads 8. A dependent capability
