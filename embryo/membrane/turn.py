@@ -19,16 +19,17 @@ from typing import TYPE_CHECKING, Any, Literal
 from membrane.declarations import DeclarationError
 from membrane.effort import API_DEFAULT, EFFORTS, highest, prior_for, resolve
 from membrane.hooks import principal_for
-from membrane.invariants import door_is_open, may_invoke, may_propose
+from membrane.invariants import door_is_open
 from membrane.loop import CAP_REACHED, OUT_OF_TOKENS, Tool, run_calls
 from membrane.memory import Provenance
 from membrane.model import add_usage, compose_request, parse_message, request_headers
 from membrane.mshkn import MshknError
+from membrane.offering import offered_names
 from membrane.principals import ROOT, is_authenticated, namespace_of
 from membrane.proposals import propose
 from membrane.references import describe, unknown_references
 from membrane.state import WINDOW, Exchange, InboxItem, Pending, Queued
-from membrane.trials import poll_trials, try_verb
+from membrane.trials import poll_trials, try_policy, try_verb
 from membrane.verbs import invoke, poll_builds
 
 if TYPE_CHECKING:
@@ -39,12 +40,20 @@ if TYPE_CHECKING:
     from membrane.mshkn import MshknApi, RelayJob
     from membrane.state import Brain, CatalogEntry, State
 
+    Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
 Door = Literal["api", "ingress"]
 # One fork's clock: bounds the tool runs of that fork, not the model (#110).
 TURN_DEADLINE = 240.0
 DOOR_CLOSED = "The public door is closed."
 BAD_PAYLOAD = "The payload is not base64."
 MODEL_FAILED = "The model service failed this turn."
+# `try` takes one document or the other, and the refusal names both (#171).
+TRY_ONE_OF = (
+    "try takes a verb declaration to build and run, or a policy document to report "
+    "what it would offer, not both and not neither: give verb (with params or runs) "
+    "or give policy"
+)
 
 REMEMBER_TOOL: dict[str, Any] = {
     "name": "remember",
@@ -63,15 +72,18 @@ TRY_TOOL: dict[str, Any] = {
     "parameter objects — for several, which run in order; a chain verb's invocations "
     "share one scratch chain, so a second run reads what the first left. Returns the "
     "build log and every invocation's stdout, stderr and exit code as data. Installs "
-    "nothing.",
+    "nothing. Give `policy` instead of `verb` to try a policy document: it reports, "
+    "for each principal it names and for anonymous, the tools a turn from that "
+    "principal would be offered under it, against the current catalog, and whether "
+    "the door is open. Installs nothing.",
     "input_schema": {
         "type": "object",
         "properties": {
             "verb": {"type": "object"},
             "params": {"type": "object"},
             "runs": {"type": "array", "items": {"type": "object"}},
+            "policy": {"type": "object"},
         },
-        "required": ["verb"],
     },
 }
 EFFORT_TOOL: dict[str, Any] = {
@@ -227,6 +239,13 @@ def build_tools(ctx: Context, pending: Pending) -> dict[str, Tool]:
         return {"status": "remembered"}
 
     async def do_try(inp: dict[str, Any]) -> dict[str, Any]:
+        # The handler decides, not the schema: a `oneOf` would be refused by the
+        # model service before the membrane could say what would have been valid.
+        policy_doc = inp.get("policy")
+        if (inp.get("verb") is None) == (policy_doc is None):
+            return {"status": "invalid", "error": TRY_ONE_OF}
+        if policy_doc is not None:
+            return try_policy(state, policy_doc)
         return await try_verb(
             ctx.api,
             state,
@@ -260,27 +279,27 @@ def build_tools(ctx: Context, pending: Pending) -> dict[str, Tool]:
         pending.made.append(proposal.id)
         return proposal.to_doc()
 
-    if is_authenticated(principal):
-        tools["remember"] = Tool(REMEMBER_TOOL, remember)
-        # §10.7's gate, for a reason of its own: an anonymous caller that could ask
-        # for `max` on every turn is a cost attack through the public door.
-        tools["effort"] = Tool(EFFORT_TOOL, do_effort)
-        if may_propose(principal, policy):
-            tools["try"] = Tool(TRY_TOOL, do_try)
-            tools["propose"] = Tool(PROPOSE_TOOL, do_propose)
+    # Who gets what is `offered_names` and nothing else, so the dry run `try` does
+    # on a candidate policy cannot drift from the live offer (#171). The order below
+    # is the order the request carries; `pending.offered` sorts it, which is exactly
+    # what `offered_names` returns.
+    names = set(offered_names(principal, policy, state.catalog))
+    builtin: dict[str, tuple[dict[str, Any], Handler]] = {
+        "remember": (REMEMBER_TOOL, remember),
+        "effort": (EFFORT_TOOL, do_effort),
+        "try": (TRY_TOOL, do_try),
+        "propose": (PROPOSE_TOOL, do_propose),
+    }
+    for name, (definition, handler) in builtin.items():
+        if name in names:
+            tools[name] = Tool(definition, handler)
     for name, entry in state.catalog.items():
-        if (
-            entry.status != "ready"
-            or entry.recipe_id is None
-            or not may_invoke(principal, entry.verb, policy)
-        ):
+        if name not in names:
             continue
 
-        def make(
-            verb_entry: CatalogEntry,
-        ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
+        def make(verb_entry: CatalogEntry) -> Handler:
             recipe_id = verb_entry.recipe_id
-            assert recipe_id is not None  # the loop above filtered on it
+            assert recipe_id is not None  # offered_names offers no verb without one
 
             async def handler(inp: dict[str, Any]) -> dict[str, Any]:
                 return await invoke(
@@ -518,18 +537,28 @@ async def finish(ctx: Context, job: RelayJob) -> str:
     return await continue_turn(ctx, job.response_body)
 
 
+def _said(pending: Pending) -> str:
+    """A turn's reply (§6): every text block the model said, in the order it
+    said them, joined with a blank line. One that rode with tool calls is
+    remembered in `pending.messages` but was never delivered (#124) until
+    this joined it with the rest."""
+    return "\n\n".join(t for t in pending.said if t.strip())
+
+
 async def continue_turn(ctx: Context, message: dict[str, Any]) -> str:
     pending = ctx.state.pending
     assert pending is not None
     completion = parse_message(message)
     pending.usage = add_usage(pending.usage, completion.usage)
+    if completion.text.strip():
+        pending.said.append(completion.text)
     if completion.stop_reason == "max_tokens":
         # The budget ran out mid-response: whatever calls arrived are not run.
         return await close_turn(
-            ctx, text=f"{OUT_OF_TOKENS} {completion.text}".strip(), stopped="max_tokens"
+            ctx, text=f"{OUT_OF_TOKENS} {_said(pending)}".strip(), stopped="max_tokens"
         )
     if not completion.calls:
-        return await close_turn(ctx, text=completion.text, stopped="done")
+        return await close_turn(ctx, text=_said(pending), stopped="done")
     pending.messages.append({"role": "assistant", "content": completion.content})
     tools = build_tools(ctx, pending)
     before = len(pending.calls)
@@ -537,7 +566,7 @@ async def continue_turn(ctx: Context, message: dict[str, Any]) -> str:
         completion, tools, pending, deadline=ctx.deadline, now=ctx.now
     )
     if outcome == "cap":
-        return await close_turn(ctx, text=f"{CAP_REACHED} {completion.text}".strip(), stopped="cap")
+        return await close_turn(ctx, text=f"{CAP_REACHED} {_said(pending)}".strip(), stopped="cap")
     pending.messages.append({"role": "user", "content": results})
     previous = pending.job
     pending.forks += 1

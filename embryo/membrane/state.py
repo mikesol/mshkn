@@ -143,6 +143,10 @@ class Pending:
     # a turn is a life, so nothing here is the next turn's floor.
     requested_effort: str | None = None
     efforts: list[str | None] = field(default_factory=list)
+    # Every text block the model said this turn, in order, including one that
+    # rode with tool calls (#124): a turn's reply is all of them joined, not
+    # only the last response's.
+    said: list[str] = field(default_factory=list)
 
     def to_doc(self) -> dict[str, Any]:
         return asdict(self)

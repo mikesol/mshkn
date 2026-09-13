@@ -10,10 +10,11 @@ import urllib.request
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from membrane.liturgy import LITURGY
 from membrane.model import Completion, compose_request, zero_usage
 from membrane.scripted import ScriptedModel
 from membrane.serve import answer, build_server, main
+
+from tests.support_embryo import WORDS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -43,7 +44,7 @@ def _request(
 
 def test_answer_is_a_message_with_end_turn_for_text_and_tool_use_for_calls() -> None:
     model = ScriptedModel()
-    text = answer(model, _request("seed", LITURGY[1]))
+    text = answer(model, _request("seed", WORDS["1"]))
     assert text["type"] == "message" and text["role"] == "assistant" and text["model"] == "scripted"
     assert text["content"][0]["type"] == "text" and "embryo" in text["content"][0]["text"]
     assert text["stop_reason"] == "end_turn" and text["usage"] == zero_usage()
@@ -52,7 +53,7 @@ def test_answer_is_a_message_with_end_turn_for_text_and_tool_use_for_calls() -> 
         for n in ("remember", "try", "propose")
     ]
     key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIServeTestKeyServeTestKeyServeTestKeyServeT"
-    calls = answer(model, _request("seed", LITURGY[2].format(key=key), tools))
+    calls = answer(model, _request("seed", WORDS["2"].format(key=key), tools))
     assert calls["stop_reason"] == "tool_use"
     assert [b["type"] for b in calls["content"]] == ["tool_use", "tool_use", "tool_use"]
     assert [b["name"] for b in calls["content"]] == ["try", "propose", "propose"]
@@ -79,7 +80,7 @@ class _Recorder:
 
 def test_answer_hands_the_model_the_system_words_not_the_cacheable_blocks() -> None:
     recorder = _Recorder()
-    answer(recorder, _request("seed\n\nI verify.", LITURGY[1]))
+    answer(recorder, _request("seed\n\nI verify.", WORDS["1"]))
     assert recorder.system == "seed\n\nI verify."
 
 
@@ -91,7 +92,7 @@ def test_the_server_answers_post_v1_messages_and_nothing_else() -> None:
         port = server.server_address[1]
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/v1/messages",
-            data=json.dumps(_request("seed", LITURGY[1])).encode(),
+            data=json.dumps(_request("seed", WORDS["1"])).encode(),
             headers={"content-type": "application/json", "x-api-key": "ignored"},
             method="POST",
         )

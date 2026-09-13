@@ -414,7 +414,7 @@ async def test_superseding_a_live_hook_with_two_parameters_is_refused(tmp_path: 
     approving a superseding verb that took a live hook from one parameter to
     two was accepted -- and hooks.py then silently skips it forever after:
     never invoked, never recorded in `runs`, no signal anywhere. Turn 3 of
-    the liturgy is a supersede-and-rebuild loop, so this is a live path
+    hatch is a supersede-and-rebuild loop, so this is a live path
     (#123 final review)."""
     api, state = FakeMshkn(), _brain(tmp_path).state()
     hook = propose(state, _verb_proposal(HOOK))

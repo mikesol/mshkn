@@ -17,7 +17,7 @@ from sse_starlette.event import ensure_bytes
 from mshkn.models import RelayDelivery, parse_scopes
 from mshkn.services.recipes import BASE_IMAGE, dockerfile_base_image, image_name
 from mshkn.services.starlark import execute_transform, validate_starlark
-from tests.support_embryo import LITURGY
+from tests.support_embryo import WORDS
 
 EMBRYO = Path(__file__).resolve().parents[2] / "embryo"
 
@@ -34,7 +34,7 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
     §3, and the standing rule in CLAUDE.md. Present: what cannot be learned
     because learning it requires it, and what no experiment reveals because the
     failure is silent. Absent: everything a constructive refusal, a tool
-    description or the liturgy teaches instead (#123)."""
+    description or the capability teaches instead (#123)."""
     seed = (EMBRYO / "seed.md").read_text()
     for phrase in (
         # bootstrap
@@ -70,7 +70,7 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
     ):
         assert phrase in seed, phrase
     for phrase in (
-        # the liturgy asks instead (turn 2)
+        # hatch.md asks instead (row 2)
         "ssh-keygen",
         '"sig"',
         "ssh:mike",
@@ -158,7 +158,8 @@ def test_hatch_script_makes_the_calls_the_spec_lists() -> None:
     assert scopes.relay_targets == ("https://example.com/",)
     assert scopes.relay_deliver == RelayDelivery(label="brain", exec="membrane resume")
     assert "set -euo pipefail" in script
-    assert (EMBRYO / "liturgy.md").read_text().count("| ") > 20
+    # the words the script hatches the brain to hear: one headed section per row
+    assert (EMBRYO / "capabilities" / "hatch.md").read_text().count("\n### ") == 11
 
 
 def test_turn_two_states_the_facts_only_the_sender_can_state() -> None:
@@ -168,7 +169,7 @@ def test_turn_two_states_the_facts_only_the_sender_can_state() -> None:
     scores the literal ssh:mike and inventing a name flexes no muscle. What
     to build, which namespace to assert and what the policy says stay the
     embryo's."""
-    turn2 = LITURGY[2]
+    turn2 = WORDS["2"]
     for phrase in ("ssh-keygen -Y sign -n mshkn", "mike", "beside my message", "{key}"):
         assert phrase in turn2, phrase
     for phrase in ("allowed_signers", "asserts", "hook", "policy"):
@@ -185,28 +186,11 @@ def test_turn_two_states_roots_intent_to_keep_changing_the_agent_from_outside() 
     because the policy language cannot express root's rights and asking for them
     invites a correct refusal. What the intent raises — that a signature proves
     authorship and not freshness — is the model's problem to meet."""
-    turn2 = LITURGY[2]
+    turn2 = WORDS["2"]
     assert "I'll speak to you from outside rather than from here" in turn2
     assert "asking you to become something different" in turn2
     for phrase in ("grant", "`propose`", "authority", "root", "replay", "nonce"):
         assert phrase not in turn2, phrase
-
-
-def test_the_liturgy_the_tiers_send_is_the_liturgy_the_repository_publishes() -> None:
-    """`LITURGY` is the script the flow and E2E tiers speak; `embryo/liturgy.md`
-    is the table a reader sees, and §9 of the design spec copies that table a
-    third time. Nothing else in the suite would notice the three drifting
-    apart — the E2E tier reads the scripted model's reply rather than a real
-    one, so a liturgy that disagrees with the membrane still goes green — so
-    every turn's words are pinned here, in every document that publishes them.
-    Turn 2 is split around its `{key}` placeholder, which both documents write
-    as an ellipsis."""
-    spec = EMBRYO.parent / "docs/superpowers/specs/2026-09-08-embryo-design.md"
-    for document in ((EMBRYO / "liturgy.md"), spec):
-        published = document.read_text()
-        for turn, words in LITURGY.items():
-            for part in words.split("{key}"):
-                assert part in published, (document.name, turn, part)
 
 
 def _expand(expression: str, wheel_name: str) -> str:

@@ -1,7 +1,8 @@
 """try (spec §5): build a declaration and run its invocations in order on computers
 with no secrets and no policy check; a `chain` verb's invocations share a scratch
 chain that is discarded with the trial (#118). Returns the build log and every
-invocation's output as data."""
+invocation's output as data. `try_policy` is the same tool on a policy document
+(#171): no computer at all, only what that document would offer each principal."""
 
 from __future__ import annotations
 
@@ -9,8 +10,17 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
-from membrane.declarations import DeclarationError, parse_runs, parse_verb, render_command
+from membrane.declarations import (
+    DeclarationError,
+    parse_policy,
+    parse_runs,
+    parse_verb,
+    render_command,
+)
+from membrane.invariants import door_is_open, may_propose, refuse_policy
 from membrane.mshkn import Deferred, MshknError
+from membrane.offering import offered_names
+from membrane.principals import ANONYMOUS
 from membrane.state import InboxItem, Trial
 from membrane.verbs import log_tail, run_result_doc, submit_recipe, wait_for_recipe
 
@@ -191,6 +201,40 @@ async def try_verb(
     trial.status = "done"
     trial.build_log = log_tail(info.build_log)
     return {"trial": trial.id, "build_log": trial.build_log, **result}
+
+
+def try_policy(state: State, doc: object) -> dict[str, Any]:
+    """A policy's trial (#171): what the document would offer, without proposing it.
+
+    Checked the way approval checks it, in two stages and with the same words each
+    would give: `parse_policy` for a document that is not a policy at all
+    (`invalid`), then `refuse_policy` -- the policy half of `refuse_approval` -- for
+    one that parses but could never be applied (`refused`). Only a document that
+    would survive both is answered with what it would offer: for every principal it
+    names, and for anonymous, the `offered` list a turn from that principal would
+    get under it against the current catalog, and whether the door would really be
+    open (§10.6). Installs nothing, touches no computer, creates no `Trial`: there
+    is no recipe, so there is nothing on the account for `no_undeclared_capability`
+    to find.
+    """
+    try:
+        policy = parse_policy(doc)
+    except DeclarationError as exc:
+        return {"status": "invalid", "error": str(exc)}
+    refusal = refuse_policy(policy, state)
+    if refusal is not None:
+        return {"status": "refused", "error": refusal}
+    return {
+        "status": "tried",
+        "door": "open" if door_is_open(policy) else "closed",
+        "principals": {
+            p: {
+                "offered": offered_names(p, policy, state.catalog),
+                "propose": may_propose(p, policy),
+            }
+            for p in sorted(set(policy.principals) | {ANONYMOUS})
+        },
+    }
 
 
 async def poll_trials(api: MshknApi, state: State, *, remaining: float) -> list[InboxItem]:

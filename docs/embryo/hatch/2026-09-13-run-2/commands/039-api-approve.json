@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-13T07:21:50+00:00",
+ "command": "approve",
+ "computer_id": "comp-322fc500ee25",
+ "detail": [
+  "p-2"
+ ],
+ "door": "api",
+ "n": 39,
+ "seconds": 2.0348384079989046,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-2 applied: policy replaced; effective from the next turn\n"
+}

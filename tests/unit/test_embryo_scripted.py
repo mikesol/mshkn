@@ -1,4 +1,5 @@
-"""The scripted model plays the liturgy (spec §9, §11) from the words, not the turn number."""
+"""The scripted model plays hatch (embryo/capabilities/hatch.md) from the words,
+not the turn number."""
 
 from __future__ import annotations
 
@@ -236,6 +237,62 @@ async def test_turns_7_to_9_verbs() -> None:
     ]
     assert [c.name for c in (await _turn("count", tools=tools)).calls] == ["counter"]
     assert (await _turn("count")).text == "I have no counter verb yet."
+
+
+async def test_turn_8_page_title_result_says_then_remembers_then_closes() -> None:
+    """#124 (2026-09-13-run-2): a text block that rode with a tool call was
+    dropped on the way to the reply. The script now says something before it
+    remembers, so the fix in `turn.py` -- a turn's reply is every text block
+    it said, not only the last response's -- has something real to prove
+    itself against, and turn 8 closes in three forks instead of two."""
+    tools = [
+        *TOOLS_BIRTH,
+        {"name": "page_title", "description": "", "input_schema": {"type": "object"}},
+    ]
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": _input("page_title https://example.com")},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tu_1",
+                    "name": "page_title",
+                    "input": {"url": "https://example.com"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tu_1",
+                    "content": json.dumps({"status": "ok", "stdout": "Example Domain\n"}),
+                }
+            ],
+        },
+    ]
+    out = await ScriptedModel().complete(system="s", messages=messages, tools=tools)
+    assert out.text == "Example Domain — from a computer that is gone."
+    assert [c.name for c in out.calls] == ["remember"]
+    assert out.calls[0].input["text"] == "Example Domain, from a computer that self-destructed."
+    assert out.content[0] == {"type": "text", "text": out.text}
+    messages.append({"role": "assistant", "content": out.content})
+    messages.append(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": out.calls[0].id,
+                    "content": json.dumps({"status": "remembered"}),
+                }
+            ],
+        }
+    )
+    closing = await ScriptedModel().complete(system="s", messages=messages, tools=tools)
+    assert closing.calls == () and closing.text == "Noted."
 
 
 async def test_anything_else() -> None:

@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-13T11:59:52+00:00",
+ "command": "say",
+ "computer_id": "comp-b9846e7fb28e",
+ "detail": {
+  "msg": "Give yourself a verb: given a URL, report the page's title. It must run on its own computer.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgT2KxCrjmScV5j209cqx3TDNTTC\n0NZNpKJDBfvyzcFjYAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABAiMsW2GudDmgxsf2UYudJ5zM8QamEtn/e0F6LHG2Dl1fklnNAmVZw1k+WAmJ5Id\nQsoE5yjRYAUy4fvrJdHRD+Ag==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 70,
+ "seconds": 5.814896718016826,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\n",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-e1b092331f4b\", \"exit_code\": 0, \"name\": \"ssh_identity\", \"principal\": \"ssh:mike\", \"status\": \"ok\"}], \"job\": \"rj-b0aa3a24c65f\", \"offered\": [\"effort\", \"propose\", \"remember\", \"ssh_identity\", \"try\"], \"principal\": \"ssh:mike\", \"started\": true, \"turn\": 6}\n{\"turn\": 6, \"job\": \"rj-b0aa3a24c65f\"}\n"
+}

@@ -74,7 +74,7 @@ Two verbs on one chain are serialised, which is correct for writers and slow for
 
 ### `try`
 
-The model may test a verb declaration before proposing it: `try(verb, params)`. The membrane submits the recipe, and when it is `ready` runs one invocation per entry of the trial's `runs` list, in order, each self-destructing: an `ephemeral` verb's on a fresh computer with no label, a `chain` verb's on a scratch chain labelled `verb/trial/<trial id>` and discarded when the trial ends. It returns the build log and every invocation's stdout, stderr and exit code as data (#118). Nothing enters the catalog. A trial's build result arrives through the inbox like an approved build, since a build can outlast the turn. This is the loop "write it, build it, read the failure, fix it" from Phase 10, driven by the model, with no human between attempts and no authority in play. What a trial cannot do is exactly what a verb without approval cannot do: hold a secret, touch the verb's own chain, or be invoked by anyone. It has the same egress every `docker build` has today; per-verb egress scoping is a mshkn feature that does not exist yet (§14).
+The model may test a verb declaration before proposing it: `try(verb, params)`. The membrane submits the recipe, and when it is `ready` runs one invocation per entry of the trial's `runs` list, in order, each self-destructing: an `ephemeral` verb's on a fresh computer with no label, a `chain` verb's on a scratch chain labelled `verb/trial/<trial id>` and discarded when the trial ends. It returns the build log and every invocation's stdout, stderr and exit code as data (#118). Nothing enters the catalog. A trial's build result arrives through the inbox like an approved build, since a build can outlast the turn. This is the loop "write it, build it, read the failure, fix it" from Phase 10, driven by the model, with no human between attempts and no authority in play. What a trial cannot do is exactly what a verb without approval cannot do: hold a secret, touch the verb's own chain, or be invoked by anyone. It has the same egress every `docker build` has today; per-verb egress scoping is a mshkn feature that does not exist yet (§14). `try` also takes a policy document and reports what it would offer each principal, against the current catalog; it is checked the way approval checks it, so a document approval would refuse is refused here in the same words, and nothing is installed (#171, 2026-09-13-run-4).
 
 ### Proposals
 
@@ -152,7 +152,7 @@ Every interaction is a fork of the head of `brain` whose exec is a membrane comm
 
 ### A `say` turn
 
-Rewritten by `docs/superpowers/specs/2026-09-09-async-turn-relay-design.md` §6 (#110): a turn is a chain of forks. `say` runs the principal, the builds, the input and the tools, posts the model request to the host's relay with its own wake-up as the delivery, records the pending turn in `state.json`, and answers with an acknowledgement. `membrane resume <job_id>` continues it. Every command settles a pending turn first; a `say` while one is pending is queued and runs next. The reply and the closing audit line are read from `list`.
+Rewritten by `docs/superpowers/specs/2026-09-09-async-turn-relay-design.md` §6 (#110): a turn is a chain of forks. `say` runs the principal, the builds, the input and the tools, posts the model request to the host's relay with its own wake-up as the delivery, records the pending turn in `state.json`, and answers with an acknowledgement. `membrane resume <job_id>` continues it. Every command settles a pending turn first; a `say` while one is pending is queued and runs next. The reply and the closing audit line are read from `list`. The reply is every text block the model produced in the turn, in order, not only the last response's (2026-09-13-run-2).
 
 What the brain cannot do in a turn, by construction: read or write a file, run a command, reach the network, see a key, change its tools, act with any authority beyond its scoped key, make the host call anything but the prefixes its key names, or make the host run anything on `brain` but its own `resume`.
 
@@ -182,6 +182,8 @@ The priors, the state before turn 1:
 | Tools on turn 1 | `remember`, `effort`, `try`, `propose`. |
 
 ## 9. The liturgy
+
+*Superseded 2026-09-12: the words live in `embryo/capabilities/hatch.md` and the shape in `docs/superpowers/specs/2026-09-12-capabilities-design.md`. The table below is as it stood on 2026-09-11.*
 
 Fixed words, in order. Each turn asks for an outcome, never a mechanism; the model's choices may vary, the artefacts may not. `liturgy.md` is the canonical text; this is the shape. Turn numbers are the script's, not a promise about how many interactions a run takes (§11).
 

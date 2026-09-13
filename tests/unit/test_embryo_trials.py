@@ -2,14 +2,54 @@
 
 from __future__ import annotations
 
-from membrane.declarations import parse_verb, render_command
+from typing import Any
+
+import pytest
+from membrane.declarations import DeclarationError, parse_proposal, parse_verb, render_command
+from membrane.invariants import refuse_approval
 from membrane.mshkn import MshknError
-from membrane.state import State, Trial
-from membrane.trials import RUN_MARGIN, poll_trials, run_trial, sweep_trial, try_verb
+from membrane.proposals import propose
+from membrane.state import CatalogEntry, State, Trial
+from membrane.trials import RUN_MARGIN, poll_trials, run_trial, sweep_trial, try_policy, try_verb
 
 from tests.support_embryo import FakeMshkn
 from tests.unit.test_embryo_declarations import VERB
+from tests.unit.test_embryo_proposals import HOOK, _two_param_hook
 from tests.unit.test_embryo_verbs import CHAIN_VERB
+
+# The document run-4 proposed and had approved (docs/embryo/hatch/2026-09-13-run-4):
+# an open door behind its own hook, and an outside principal granted nothing.
+SSH_AUTH: dict[str, Any] = {**HOOK, "name": "ssh_auth"}
+RUN_4_POLICY: dict[str, Any] = {
+    "principals": {
+        "anonymous": {"invoke": [], "propose": False},
+        "ssh:mike": {"invoke": [], "propose": False},
+    },
+    "hooks": ["ssh_auth"],
+    "door": "open",
+}
+WIDENED_POLICY: dict[str, Any] = {
+    **RUN_4_POLICY,
+    "principals": {
+        "anonymous": {"invoke": [], "propose": False},
+        "ssh:mike": {"invoke": "*", "propose": True},
+    },
+}
+
+
+def _ready(state: State, doc: dict[str, Any], proposal_id: str) -> None:
+    verb = parse_verb(doc)
+    state.catalog[verb.name] = CatalogEntry(
+        verb=verb, status="ready", recipe_id=f"rec-{verb.name}", proposal_id=proposal_id
+    )
+
+
+def _approval_refusal(state: State, doc: dict[str, Any]) -> str | None:
+    """What root would be told if this very document were proposed and approved."""
+    proposal = parse_proposal(
+        {"kind": "policy", "title": "t", "rationale": "r", "policy": doc}, id="p-approve"
+    )
+    return refuse_approval(proposal, state)
 
 
 async def _no_sleep(seconds: float) -> None:
@@ -389,3 +429,121 @@ async def test_a_poll_with_no_time_left_leaves_the_trial_building_for_the_next_t
     assert len(items) == 1 and "trial t-1 of page_title: 1 of 1 ran" in items[0].text
     trial = state.trials["t-1"]
     assert trial.status == "done" and trial.results[0]["stdout"] == "ran"
+
+
+# --- a policy's trial (#171) -----------------------------------------------------
+
+
+def test_a_policy_trial_reports_what_the_document_would_offer_each_principal() -> None:
+    """run-4's document (docs/embryo/hatch/2026-09-13-run-4): the door is open behind
+    its own hook, and the principal that comes through it is granted nothing but the
+    floor every authenticated caller has. The list is the one every audit line
+    already carries: no `propose`, no `try`, and not the hook it authenticates with."""
+    state = State()
+    _ready(state, SSH_AUTH, "p-1")
+    assert try_policy(state, RUN_4_POLICY) == {
+        "status": "tried",
+        "door": "open",
+        "principals": {
+            "anonymous": {"offered": [], "propose": False},
+            "ssh:mike": {"offered": ["effort", "remember"], "propose": False},
+        },
+    }
+
+
+def test_a_policy_trial_names_anonymous_even_when_the_document_does_not() -> None:
+    state = State()
+    _ready(state, SSH_AUTH, "p-1")
+    result = try_policy(state, {"hooks": ["ssh_auth"], "door": "open"})
+    assert sorted(result["principals"]) == ["anonymous"]
+    assert result["principals"]["anonymous"] == {"offered": [], "propose": False}
+
+
+def test_a_policy_trial_offers_the_catalog_to_a_principal_the_document_widens() -> None:
+    state = State()
+    _ready(state, SSH_AUTH, "p-1")
+    _ready(state, VERB, "p-2")
+    result = try_policy(state, WIDENED_POLICY)
+    assert result["door"] == "open"
+    assert result["principals"]["ssh:mike"] == {
+        "offered": ["effort", "page_title", "propose", "remember", "ssh_auth", "try"],
+        "propose": True,
+    }
+    # the same catalog, the same turn: anonymous still gets nothing (§10.7)
+    assert result["principals"]["anonymous"] == {"offered": [], "propose": False}
+
+
+def test_a_policy_trial_reports_a_closed_door_as_closed() -> None:
+    state = State()
+    result = try_policy(state, {"principals": {"ssh:mike": {"invoke": "*"}}, "door": "closed"})
+    assert result["status"] == "tried" and result["door"] == "closed"
+    # the grant is still read: what the door would offer if it were opened
+    assert result["principals"]["ssh:mike"]["offered"] == ["effort", "remember"]
+
+
+def test_a_policy_trial_is_refused_the_way_approval_would_refuse_it() -> None:
+    """#171 fix round 1: `parse_policy` is not the whole of what approval checks.
+    A document that parses but could never be applied is refused here with the very
+    words `refuse_approval` would deliver, in the turn that wrote it rather than at
+    an approval a turn later."""
+    state = State()
+    _ready(state, SSH_AUTH, "p-1")
+    # parse_verb refuses a two-parameter hook outright (#123), so this one is built
+    # directly, as test_embryo_proposals builds it to reach the same approval guard
+    state.catalog["verify_sig"] = CatalogEntry(
+        verb=_two_param_hook("verify_sig"), status="ready", recipe_id="rec-2", proposal_id="p-2"
+    )
+    refused = {
+        # §10.6: the public door cannot open with no pre-turn hook
+        "no_hook": {"principals": {}, "hooks": [], "door": "open"},
+        # a hook the catalog does not have
+        "unknown_hook": {"principals": {}, "hooks": ["nowhere"], "door": "open"},
+        # a hook that takes two parameters, so nothing could hand it the payload
+        "two_param_hook": {"principals": {}, "hooks": ["verify_sig"], "door": "open"},
+        # §10.7: anonymous may never propose
+        "anonymous_propose": {
+            "principals": {"anonymous": {"invoke": [], "propose": True}},
+            "hooks": ["ssh_auth"],
+            "door": "open",
+        },
+    }
+    for label, doc in refused.items():
+        reason = _approval_refusal(state, doc)
+        assert reason is not None, label
+        assert try_policy(state, doc) == {"status": "refused", "error": reason}, label
+
+
+def test_a_policy_trial_refuses_a_hook_that_declares_no_asserts() -> None:
+    state = State()
+    _ready(state, {k: v for k, v in SSH_AUTH.items() if k != "asserts"}, "p-1")
+    doc: dict[str, Any] = {"principals": {}, "hooks": ["ssh_auth"], "door": "open"}
+    assert try_policy(state, doc) == {
+        "status": "refused",
+        "error": _approval_refusal(state, doc),
+    }
+
+
+def test_a_document_the_trial_accepts_is_one_approval_accepts() -> None:
+    state = State()
+    _ready(state, SSH_AUTH, "p-1")
+    for doc in (RUN_4_POLICY, WIDENED_POLICY):
+        assert _approval_refusal(state, doc) is None
+        assert try_policy(state, doc)["status"] == "tried"
+
+
+def test_an_invalid_policy_is_refused_the_way_a_proposal_of_it_would_be() -> None:
+    state = State()
+    doc: dict[str, Any] = {"principals": {"root": {"invoke": "*", "propose": True}}}
+    with pytest.raises(DeclarationError) as raised:
+        propose(state, {"kind": "policy", "title": "t", "rationale": "r", "policy": doc})
+    assert try_policy(state, doc) == {"status": "invalid", "error": str(raised.value)}
+
+
+def test_a_policy_trial_installs_nothing_and_starts_no_trial() -> None:
+    state = State()
+    _ready(state, SSH_AUTH, "p-1")
+    before = dict(state.catalog)
+    assert try_policy(state, WIDENED_POLICY)["status"] == "tried"
+    # no Trial, so no recipe on the account for no_undeclared_capability to find
+    assert state.trials == {} and state.proposals == {}
+    assert state.catalog == before and state.policy.to_doc() == State().policy.to_doc()

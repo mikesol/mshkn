@@ -1,4 +1,4 @@
-"""A model that plays the liturgy (spec §9) deterministically, so the flow and
+"""A model that plays hatch (embryo/capabilities/hatch.md) deterministically, so the flow and
 E2E tiers prove the membrane without a third-party key (§11). It reads the
 words, not the turn number, and emits real declarations that build on the host."""
 
@@ -117,7 +117,7 @@ DECLARATIONS = {"page_title": PAGE_TITLE, "counter": COUNTER}
 
 def OPEN_DOOR_POLICY(principal: str) -> dict[str, Any]:  # noqa: N802
     # Ruling P1: the principal named in the door proposal gets propose rights
-    # too, since liturgy turns 6, 7 and 9 arrive through the public door as
+    # too, since hatch rows 6, 7 and 9 arrive through the public door as
     # ssh:mike and must be able to propose.
     return {
         "principals": {
@@ -153,7 +153,7 @@ def _proposal(
     doc: dict[str, Any] = {
         "kind": kind,
         "title": title,
-        "rationale": f"The liturgy asked for {title}.",
+        "rationale": f"The capability asked for {title}.",
         "supersedes": supersedes,
     }
     doc[kind] = payload
@@ -178,6 +178,37 @@ class ScriptedModel:
             {"type": "tool_use", "id": c.id, "name": c.name, "input": c.input} for c in calls
         ]
         return Completion(text="", calls=tuple(calls), content=content)
+
+    @staticmethod
+    def _text_and_call(text: str, call: ToolCall) -> Completion:
+        """A response whose text rides with a tool call (turn 8, #124): the
+        script says something, then remembers, so the fix -- a turn's reply is
+        every text block it said, not only the last response's -- has something
+        real to prove itself against."""
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": text},
+            {"type": "tool_use", "id": call.id, "name": call.name, "input": call.input},
+        ]
+        return Completion(text=text, calls=(call,), content=content)
+
+    @staticmethod
+    def _names_called(messages: list[dict[str, Any]], results: list[dict[str, Any]]) -> set[str]:
+        """The tool names behind a tool_result list: matched by id against the
+        assistant message that made the calls, so one fork's result can be told
+        apart from another's."""
+        if len(messages) < 2:
+            return set()
+        prior = messages[-2].get("content")
+        if not isinstance(prior, list):
+            return set()
+        ids = {r.get("tool_use_id") for r in results if isinstance(r, dict)}
+        return {
+            block["name"]
+            for block in prior
+            if isinstance(block, dict)
+            and block.get("type") == "tool_use"
+            and block.get("id") in ids
+        }
 
     @staticmethod
     def _summarise(results: list[dict[str, Any]]) -> str:
@@ -220,6 +251,20 @@ class ScriptedModel:
         del system, timeout
         last = messages[-1]["content"] if messages else ""
         if isinstance(last, list):
+            names = self._names_called(messages, last)
+            if "page_title" in names:
+                # Turn 8 (#124, 2026-09-13-run-2): the script now says something
+                # before it remembers, so a turn's reply carries both -- not only
+                # the last response's text -- and proves the fix rather than
+                # merely failing to trip it.
+                return self._text_and_call(
+                    "Example Domain — from a computer that is gone.",
+                    self._call(
+                        "remember", text="Example Domain, from a computer that self-destructed."
+                    ),
+                )
+            if "remember" in names:
+                return self._text("Noted.")
             return self._text(self._summarise(last))
         principal, message = parse_input(last)
         offered = {t["name"] for t in tools}
