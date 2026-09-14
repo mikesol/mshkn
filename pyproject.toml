@@ -99,7 +99,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["mshkn", "membrane"]
+source = ["mshkn", "membrane", "embryo/capabilities"]
 branch = true
 
 [tool.coverage.report]

@@ -448,6 +448,8 @@ override the path.)
   refusal teaches the block but nothing teaches that the placement is the
   agent's to design.
 
+*Decisions made when this section was built (2026-09-13, `docs/superpowers/plans/2026-09-13-security.md`):* the widened `nothing_by_hand` lives in `embryo/membrane/postconditions.py`, since provisioning is the driver's act and an invariant's name means one thing whichever capability names it; the path is read from a fenced block holding the path alone, or, failing that, from inline code; a verb with `requires` must be `state: chain` (refused constructively at propose time, since root can only place a file on a chain); a superseding verb starts with nothing provided; `capability rotate` is deferred and the rotation is done by hand as `embryo/README.md` says.
+
 ### 7.3 Postconditions
 
 - `no_foreign_credential_on_brain`: fork the final `brain` head and search

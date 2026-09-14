@@ -27,7 +27,7 @@ This is a single-host research system with no users. The API changes without not
 
 - More than one host. Slots, taps, thin volumes and the checkpoint directory are local to the machine; a checkpoint cannot be restored on another host.
 - Billing, quotas beyond the VM limit, or any notion of a user beyond an API key.
-- Four of the 180 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
+- Four of the 184 end-to-end tests describe checks that are not implemented and fail on purpose until they are (#65): the structured-log and audit-log checks, the checkpoint storage-cost measurement, and the R2 bucket-policy check.
 
 ## Layout
 
@@ -68,7 +68,7 @@ uv run pytest tests/flow      # the real app and services over the fake host
 MSHKN_SERVER=root@<ip> scripts/e2e.sh   # pushes, deploys, runs tests/e2e on the live server
 ```
 
-The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 170 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.
+The E2E suite is the definition of done for the product (`docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md`). It currently reports 174 passed, 6 skipped and 4 failed; the four are the unimplemented checks in #65, and anything else failing is a regression.
 
 The full local gate, which is what CI runs (`.github/workflows/ci.yml`) after `uv sync --frozen`:
 

@@ -10,7 +10,7 @@ from membrane.cli import USAGE, run
 from membrane.commands import list_state, root
 from membrane.config import load_settings
 from membrane.declarations import parse_policy
-from membrane.proposals import propose
+from membrane.proposals import approve, propose
 from membrane.state import Brain, State
 from membrane.turn import Context
 
@@ -151,6 +151,42 @@ async def test_list_state_reports_chain_heads(brain_dir: Path) -> None:
     listing = json.loads(await list_state(api, state))
     assert listing["catalog"]["counter"]["chain_head"] == "ckpt-b"
     assert listing["catalog"]["counter"]["chain_length"] == 2
+
+
+async def test_list_state_reports_requires_and_provided_and_root_provide(brain_dir: Path) -> None:
+    """Spec §7.2: root reads what a verb still needs off `list`, and says
+    `provide <verb> <name>`; the command carries no value and there is no way to
+    pass one (arity 2)."""
+    api = FakeMshkn()
+    verb = {
+        "name": "secret_page",
+        "description": "d",
+        "params": {"type": "object", "properties": {}},
+        "dockerfile": "FROM mshkn-base",
+        "entrypoint": "/verb/read.sh",
+        "effect": "read",
+        "state": "chain",
+        "requires": [{"kind": "secret", "name": "page_token"}],
+    }
+    state = Brain(brain_dir).state()
+    p = propose(state, {"kind": "verb", "title": "t", "rationale": "r", "verb": verb})
+    await approve(api, state, p.id)
+    Brain(brain_dir).save(state)
+    out, code = await _run(brain_dir, ["root", "list"], api)
+    entry = json.loads(out)["catalog"]["secret_page"]
+    assert code == 0 and entry["chain"] == "verb/secret_page"
+    assert entry["requires"] == [{"kind": "secret", "name": "page_token"}]
+    assert entry["provided"] == []
+    out, code = await _run(brain_dir, ["root", "provide", "secret_page", "page_token"], api)
+    assert (out, code) == ("secret_page: page_token provided (1/1)\n", 0)
+    out, _ = await _run(brain_dir, ["root", "list"], api)
+    assert json.loads(out)["catalog"]["secret_page"]["provided"] == ["page_token"]
+    # arity: a value cannot ride along
+    out, code = await _run(
+        brain_dir, ["root", "provide", "secret_page", "page_token", "s3cr3t"], api
+    )
+    assert code == 2 and out == USAGE
+    assert "provide <verb> <name>" in USAGE
 
 
 async def test_list_state_separates_the_declared_hooks_from_the_ready_ones(

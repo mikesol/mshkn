@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 
 MSHKN_SERVER = os.environ.get("MSHKN_SERVER")
 RETENTION = 5  # MSHKN_CHECKPOINT_RETENTION on the live host (DEPLOY.md)
+# A capability's promotion lives under this prefix and is the one thing on the shared
+# test account no test may remove; see the pre-clean in T6.4.
+PROMOTED_PREFIX = "capability/"
 
 # ---------------------------------------------------------------------------
 # T6.1 — Orchestrator Crash Recovery
@@ -106,11 +109,16 @@ class TestT64CheckpointRetention:
     per checkpoint would make each one a head that is never pruned.
     """
 
-    async def _list_checkpoint_ids(self, client: httpx.AsyncClient) -> set[str]:
-        """Helper: return set of all checkpoint IDs for the current account."""
+    async def _list_checkpoints(self, client: httpx.AsyncClient) -> list[dict[str, Any]]:
+        """Helper: every checkpoint on the current account, label included."""
         resp = await client.get("/checkpoints")
         resp.raise_for_status()
-        return {c["checkpoint_id"] for c in resp.json()}
+        rows: list[dict[str, Any]] = resp.json()
+        return rows
+
+    async def _list_checkpoint_ids(self, client: httpx.AsyncClient) -> set[str]:
+        """Helper: return set of all checkpoint IDs for the current account."""
+        return {c["checkpoint_id"] for c in await self._list_checkpoints(client)}
 
     async def test_excess_checkpoints_pruned(self, client: httpx.AsyncClient) -> None:
         """Create more checkpoints than the retention limit; oldest should be pruned.
@@ -120,11 +128,19 @@ class TestT64CheckpointRetention:
         """
         import time
 
-        # Clean up pre-existing checkpoints so we start from a known state
-        existing = await self._list_checkpoint_ids(client)
-        for cid in existing:
+        # Clean up pre-existing checkpoints so we start from a known state — every one
+        # but a promotion's. This account is shared with the capability runs, and on
+        # 2026-09-13 this loop deleted `capability/hatch/verb/call_count`
+        # (ckpt-f405a61b82a7), the surviving chain of the promoted hatch. Nothing is lost
+        # by leaving it: a promoted checkpoint is a labelled head, and
+        # `list_prunable_checkpoints` excludes every label's newest from the prunable set
+        # altogether, so it neither gets pruned nor takes a slot in the retention window
+        # this test is measuring.
+        for ckpt in await self._list_checkpoints(client):
+            if str(ckpt["label"] or "").startswith(PROMOTED_PREFIX):
+                continue
             with contextlib.suppress(Exception):
-                await client.delete(f"/checkpoints/{cid}")
+                await client.delete(f"/checkpoints/{ckpt['checkpoint_id']}")
 
         computer_id = await create_computer(client)
         checkpoint_ids: list[str] = []
@@ -137,18 +153,19 @@ class TestT64CheckpointRetention:
                 checkpoint_ids.append(resp.json()["checkpoint_id"])
                 await asyncio.sleep(0.5)
 
-            # Wait for reaper to prune (up to 150s)
+            # Wait for reaper to prune (up to 150s). Count this test's own eight, not the
+            # account's total: the pre-clean now leaves a promotion's checkpoints behind,
+            # and they are outside the prunable set this assertion is about.
+            mine = set(checkpoint_ids)
             deadline = time.time() + 150
             while time.time() < deadline:
                 await asyncio.sleep(10)
-                all_ids = await self._list_checkpoint_ids(client)
-                if len(all_ids) <= 5:
+                left = await self._list_checkpoint_ids(client) & mine
+                if len(left) <= 5:
                     return  # Success
 
-            all_ids = await self._list_checkpoint_ids(client)
-            assert len(all_ids) <= 5, (
-                f"Expected at most 5 checkpoints after pruning, got {len(all_ids)}"
-            )
+            left = await self._list_checkpoint_ids(client) & mine
+            assert len(left) <= 5, f"Expected at most 5 checkpoints after pruning, got {len(left)}"
         finally:
             await destroy_computer(client, computer_id)
             for cid in checkpoint_ids:

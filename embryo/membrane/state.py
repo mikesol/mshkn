@@ -31,6 +31,9 @@ class CatalogEntry:
     status: CatalogStatus
     recipe_id: str | None
     proposal_id: str
+    # The names of `verb.requires` root has placed on the verb's chain and said
+    # `provide` for (spec §7.2). Invocation refuses until every name is here.
+    provided: list[str] = field(default_factory=list)
 
     def to_doc(self) -> dict[str, Any]:
         return {
@@ -38,6 +41,7 @@ class CatalogEntry:
             "status": self.status,
             "recipe_id": self.recipe_id,
             "proposal_id": self.proposal_id,
+            "provided": list(self.provided),
         }
 
     @classmethod
@@ -47,6 +51,7 @@ class CatalogEntry:
             status=doc["status"],
             recipe_id=doc.get("recipe_id"),
             proposal_id=doc["proposal_id"],
+            provided=list(doc.get("provided", [])),
         )
 
 

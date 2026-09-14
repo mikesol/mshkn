@@ -70,6 +70,11 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         # tuple cannot pass against a future seed asserting the opposite.
         "scratch chain",
         "discarded",
+        # spec §7.2: a delivered refusal teaches the block on invocation, but
+        # nothing teaches that the placement is the agent's to design (invisible
+        # mechanism)
+        "cannot be invoked until root has provided every name",
+        "where root puts it is yours to say",
     ):
         assert phrase in seed, phrase
     for phrase in (
@@ -77,6 +82,9 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         "ssh-keygen",
         '"sig"',
         "ssh:mike",
+        # the approval-time block (#91) is gone; a false line in the genome is
+        # worse than a missing one
+        "blocks approval",
         # a constructive refusal teaches these
         "communicate",
         "transact",
@@ -253,6 +261,20 @@ def test_run_parses_the_exit_code_from_a_real_crlf_sse_stream() -> None:
         check=True,
     )
     assert result.stdout.rstrip(b"\n") == b"0"
+
+
+def test_hatch_writes_only_the_brains_own_names_into_env() -> None:
+    """Spec §7.1: `/brain/.env` names the brain's own keys and nothing else; the
+    security check `no_foreign_credential_on_brain` judges a brain against the
+    names this script writes, so the two must agree."""
+    from membrane.capabilities import CAPABILITIES, load, load_module
+
+    security = load_module(load(CAPABILITIES / "security.md"))
+    assert security is not None
+    script = (EMBRYO / "hatch.sh").read_text()
+    block = script.split('} > "$TMP/env"', 1)[0].rsplit("{\n", 1)[1]
+    written = set(re.findall(r'echo "([A-Z_]+)=', block))
+    assert written == security.HATCH_ENV
 
 
 def _hatch_function(name: str) -> str:

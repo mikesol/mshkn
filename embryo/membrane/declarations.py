@@ -250,6 +250,13 @@ def parse_verb(doc: object) -> Verb:
     timeout = d.get("timeout_seconds", TIMEOUT_DEFAULT)
     if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= TIMEOUT_MAX:
         raise DeclarationError(f"verb.timeout_seconds must be an integer from 1 to {TIMEOUT_MAX}")
+    requires = _requirements(d.get("requires"))
+    if requires and state == "ephemeral":
+        raise DeclarationError(
+            "verb.requires needs state chain: root places what a verb requires on the "
+            f"verb's chain {CHAIN_PREFIX}<name>, and an ephemeral invocation runs from "
+            "the recipe alone and never sees it"
+        )
     return Verb(
         name=name,
         description=description,
@@ -263,7 +270,7 @@ def parse_verb(doc: object) -> Verb:
         needs=needs,
         timeout_seconds=timeout,
         allow=_namespaced_principals(d.get("allow"), "verb.allow"),
-        requires=_requirements(d.get("requires")),
+        requires=requires,
     )
 
 

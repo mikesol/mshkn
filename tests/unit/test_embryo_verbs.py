@@ -203,3 +203,31 @@ async def test_poll_builds_tolerates_a_catalog_entry_with_no_matching_proposal()
 def test_log_tail_keeps_the_end() -> None:
     assert log_tail(None) == ""
     assert log_tail("x" * 3000, limit=5) == "xxxxx"
+
+
+def test_unprovided_lists_the_names_root_has_not_placed() -> None:
+    from membrane.declarations import parse_verb
+    from membrane.state import CatalogEntry
+    from membrane.verbs import blocked, unprovided
+
+    verb = parse_verb(
+        {
+            "name": "secret_page",
+            "description": "d",
+            "params": {"type": "object", "properties": {}},
+            "dockerfile": "FROM mshkn-base",
+            "entrypoint": "/verb/read.sh",
+            "effect": "read",
+            "state": "chain",
+            "requires": [{"kind": "secret", "name": "a"}, {"kind": "secret", "name": "b"}],
+        }
+    )
+    entry = CatalogEntry(verb=verb, status="ready", recipe_id="rcp-1", proposal_id="p-1")
+    assert unprovided(entry) == ["a", "b"]
+    entry.provided.append("b")
+    assert unprovided(entry) == ["a"]
+    assert blocked("secret_page", ["a"]) == {
+        "verb": "secret_page",
+        "status": "error",
+        "error": "blocked: secret_page requires a; root places it and says provide",
+    }

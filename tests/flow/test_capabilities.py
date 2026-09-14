@@ -3,11 +3,15 @@ in process against the real app over the fake host, a scripted model playing
 the rows. Hatch: a trial, proposals, approval, builds (one failing first), a
 pre-turn hook, the door opening, an ephemeral verb, and a chain verb trialled
 twice on a scratch chain before it is proposed and then run to two checkpoints
-of its own."""
+of its own. Security: hatch's state grown the short way, then the three rows of
+§7.2 — a verb with `requires` refused until root has placed the token on its
+chain at the path the reply named, the page read from a computer that is gone,
+and a second verb needing the same token — judged by the five checks it names."""
 
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import subprocess
 from contextlib import asynccontextmanager
@@ -17,12 +21,24 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
+from membrane.capabilities import CAPABILITIES, load, load_module
+from membrane.capability import Doors as DriverDoors
+from membrane.capability import Record, paths_in
 from membrane.cli import run
 from membrane.config import load_settings
 from membrane.declarations import parse_verb, render_command
 from membrane.memory import USER_ID, Mem0Store
 from membrane.mshkn import Mshkn
-from membrane.scripted import COUNTER, PAGE_TITLE, VERIFY_SSH, ScriptedModel
+from membrane.postconditions import CHECKS, Judged, Turn, judge
+from membrane.scripted import (
+    COUNTER,
+    PAGE_TITLE,
+    SECRET_LENGTH,
+    SECRET_PAGE,
+    SECRET_PATH,
+    VERIFY_SSH,
+    ScriptedModel,
+)
 from membrane.state import Brain
 
 from mshkn.host import ExecResult
@@ -34,6 +50,7 @@ if TYPE_CHECKING:
     from .conftest import Flow
 
 EMBRYO = Path(__file__).resolve().parents[2] / "embryo"
+SECURITY = load(CAPABILITIES / "security.md")
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFlowTestKeyFlowTestKeyFlowTestKeyFlowTestKe"
 BRAIN_SCOPES = {
     "recipes": {"create": True, "read": True},
@@ -393,6 +410,215 @@ async def test_hatch(embryo: Embryo, flow: Flow) -> None:
     assert texts and not any(t.startswith("anonymous:") for t in texts)
     assert any(t.startswith("root:") for t in texts)
     assert any(t.startswith("ssh:mike:") for t in texts)
+
+
+async def _grown(embryo: Embryo) -> dict[str, Any]:
+    """The state hatch's promotion leaves behind, grown the short way: the hook
+    (its first build fails and is repaired, as the fixture scripts), the door,
+    and the policy under which ssh:mike may propose and invoke everything.
+    Returns the hook declaration the signed rows are scripted against."""
+    hook = VERIFY_SSH(KEY)
+    embryo.script_output(hook, {"payload": json.dumps({"msg": "probe", "sig": ""})}, "", code=1)
+    await embryo.root_say(WORDS["2"].format(key=KEY))
+    assert (await embryo.root("approve", "p-1")).startswith("p-1 building")
+    assert (await embryo.root("approve", "p-2")).startswith("p-2 applied")
+    await embryo.listing()  # polls the failed build into the inbox
+    await embryo.root_say(HATCH.repair.build)
+    assert (await embryo.root("approve", "p-3")).startswith("p-3 building")
+    assert (await embryo.listing())["catalog"]["verify_ssh"]["status"] == "ready"
+    signed6 = {"msg": WORDS["6"], "sig": "c2ln"}
+    embryo.script_output(hook, {"payload": json.dumps(signed6)}, "mike\n")
+    audit, _ = await embryo.public_say(signed6)
+    assert (await embryo.root("approve", audit["proposals"][0]["id"])).endswith(
+        "applied: policy replaced; effective from the next turn\n"
+    )
+    return hook
+
+
+async def test_security(embryo: Embryo, flow: Flow, tmp_path: Path) -> None:
+    """Spec §7.2 end to end on the fake host: the page is prepared by security's
+    module, the agent (scripted) asks for a verb with `requires` and says where
+    the token goes, invocation is refused until root has placed it, the driver
+    places it on the verb's chain from the path it read, root says provide, the
+    page is read from a computer on that chain, and the token is on no brain."""
+    preexisting = {r["recipe_id"] for r in (await flow.client.get("/recipes")).json()}
+    hook = await _grown(embryo)
+    security = load_module(SECURITY)
+    assert security is not None
+    driver = DriverDoors(flow.client, flow.client, "", Record(tmp_path / "run"))
+    sent: list[tuple[str, str]] = []
+    # the inspection at prepare's exit: the fake guest answers the one command it runs
+    flow.host.guest.stream_script[security.INSPECT] = [
+        ("stdout", "---"),
+        ("stdout", "MSHKN_API_URL"),
+        ("stdout", "MSHKN_API_KEY"),
+        ("stdout", "MEMBRANE_MODEL"),
+        ("stdout", "ANTHROPIC_BASE_URL"),
+    ]
+    log = io.StringIO()
+    turns: list[Turn] = []
+    try:
+        async with security.prepare(driver, log) as context:
+            url, token = context["url"], context["token"]
+            assert url.startswith("https://8000-") and url.endswith("/page")
+            # the server is a computer of its own on the account, from the brain's
+            # (here: no) recipe, with the token and the script uploaded, never on a
+            # command line
+            server = [
+                c for _, c in flow.host.guest.commands if c.startswith("python3 /tmp/page.py")
+            ]
+            assert server == ["python3 /tmp/page.py"]
+            assert all(token not in c for _, c in flow.host.guest.commands)
+
+            # row 11: a trial that sees the 401, a proposal with requires, a path in the reply
+            words11 = SECURITY.row("11").words.format(url=url)
+            page_cmd = embryo.script_output(SECRET_PAGE(url), {}, security.PAGE_BODY)
+            flow.host.guest.script_sequence[page_cmd] = [
+                ExecResult(22, "", "curl: (22) The requested URL returned error: 401"),
+                ExecResult(0, security.PAGE_BODY, ""),
+            ]
+            signed11 = {"msg": words11, "sig": "c2ln"}
+            embryo.script_output(hook, {"payload": json.dumps(signed11)}, "mike\n")
+            audit11, reply11 = await embryo.public_say(signed11)
+            turns.append(Turn("11", "ingress", words11, audit11, reply11, [], []))
+            assert [t["name"] for t in audit11["tools"]] == ["try", "propose"], audit11
+            assert audit11["tools"][0]["runs"][0]["exit_code"] == 22, audit11
+            pid = audit11["proposals"][0]["id"]
+            assert (await embryo.root("approve", pid)).startswith(f"{pid} ready")
+            listing = await embryo.listing()
+            entry = listing["catalog"]["secret_page"]
+            assert entry["requires"] == [{"kind": "secret", "name": "page_token"}]
+            assert entry["provided"] == [] and entry["chain"] == "verb/secret_page"
+            assert paths_in(reply11) == [SECRET_PATH]
+
+            # refused until root has provided: offered, called, blocked, no computer created
+            read = {"msg": SECURITY.row("12").words, "sig": "c2ln"}
+            embryo.script_output(hook, {"payload": json.dumps(read)}, "mike\n")
+            audit_blocked, reply_blocked = await embryo.public_say(read)
+            assert "secret_page" in audit_blocked["offered"]
+            assert audit_blocked["tools"][0]["status"] == "error"
+            assert audit_blocked["tools"][0]["error"] == (
+                "blocked: secret_page requires page_token; root places it and says provide"
+            )
+            assert "blocked" in reply_blocked
+            blocked_chain = await flow.client.get(
+                "/checkpoints", params={"label": "verb/secret_page"}
+            )
+            assert blocked_chain.json() == []
+
+            # root provides: the driver's four commands, then provide through root's door
+            placed = await driver.provision(
+                "secret_page", entry["chain"], entry["recipe_id"], paths_in(reply11)[0], token
+            )
+            sent += [(s.door, s.name) for s in driver.sent]
+            chain = (
+                await flow.client.get("/checkpoints", params={"label": "verb/secret_page"})
+            ).json()
+            assert [c["id"] for c in chain] == [placed]
+            uploaded = [
+                data for (_, path), data in flow.host.guest.files.items() if path == SECRET_PATH
+            ]
+            assert uploaded == [token.encode()]
+            assert await embryo.root("provide", "secret_page", "page_token") == (
+                "secret_page: page_token provided (1/1)\n"
+            )
+            sent.append(("api", "provide"))
+            provided = await embryo.listing()
+            assert provided["catalog"]["secret_page"]["provided"] == ["page_token"]
+            # what `provide` put in the inbox is there for the next turn to read
+            assert provided["inbox"] == 1
+
+            # row 12: the body, from a computer on the verb's chain that is gone
+            embryo.script_output(hook, {"payload": json.dumps(read)}, "mike\n")
+            audit12, reply12 = await embryo.public_say(read)
+            turns.append(Turn("12", "ingress", read["msg"], audit12, reply12, [], []))
+            assert reply12.startswith(security.PAGE_BODY.strip()), reply12
+            call = audit12["tools"][0]
+            assert call["status"] == "ok" and call["chain_head"] not in (None, placed)
+            assert (await embryo.listing())["inbox"] == 0  # the turn drained it
+            heads = {
+                c["id"]: c
+                for c in (
+                    await flow.client.get("/checkpoints", params={"label": "verb/secret_page"})
+                ).json()
+            }
+            # the invocation forked root's placement
+            assert heads[call["chain_head"]]["parent_id"] == placed
+            gone = await flow.client.get(f"/computers/{call['computer_id']}/status")
+            assert gone.status_code == 404
+            exec_log = await flow.client.get(f"/computers/{call['computer_id']}/exec_log")
+            assert security.PAGE_BODY.strip() in exec_log.json()["stdout"]
+            checks = {
+                call["computer_id"]: {
+                    "computer_id": call["computer_id"],
+                    "gone": True,
+                    "stdout": exec_log.json()["stdout"],
+                    "exit_code": 0,
+                }
+            }
+
+            # row 13: a second verb needing the same token; the scripted answer is a second copy
+            words13 = SECURITY.row("13").words
+            length_cmd = embryo.script_output(SECRET_LENGTH(url), {}, "54\n")
+            flow.host.guest.script_sequence[length_cmd] = [
+                ExecResult(22, "", "401"),
+                ExecResult(0, "54\n", ""),
+            ]
+            signed13 = {"msg": words13, "sig": "c2ln"}
+            embryo.script_output(hook, {"payload": json.dumps(signed13)}, "mike\n")
+            audit13, reply13 = await embryo.public_say(signed13)
+            turns.append(Turn("13", "ingress", words13, audit13, reply13, [], []))
+            pid13 = audit13["proposals"][0]["id"]
+            assert (await embryo.root("approve", pid13)).startswith(f"{pid13} ready")
+            entry13 = (await embryo.listing())["catalog"]["secret_length"]
+            assert entry13["requires"] == [{"kind": "secret", "name": "page_token"}]
+            before = len(driver.sent)
+            await driver.provision(
+                "secret_length", entry13["chain"], entry13["recipe_id"], paths_in(reply13)[0], token
+            )
+            sent += [(s.door, s.name) for s in driver.sent[before:]]
+            assert (await embryo.root("provide", "secret_length", "page_token")).startswith(
+                "secret_length: page_token provided"
+            )
+            sent.append(("api", "provide"))
+            final = await embryo.listing()
+
+        # the server is gone and the inspection ran against the fake brain
+        assert security.inspection["files_with_token"] == []
+        assert "MSHKN_API_KEY" in security.inspection["env_names"]
+        # no command the host ever ran carried the token, the placements and the
+        # two invocations included: it reached a guest as an upload's body only
+        assert all(token not in c for _, c in flow.host.guest.commands)
+        # the token is on no brain, and the flow tier can say so for real: the brain
+        # directory and mem0's store are on this machine
+        assert token not in (embryo.brain / "state.json").read_text()
+        assert all(token not in text for text in embryo.memory_texts())
+        assert token not in log.getvalue()
+        for written in (tmp_path / "run" / "commands").iterdir():
+            assert token not in written.read_text()
+        recipes_after = {r["recipe_id"] for r in (await flow.client.get("/recipes")).json()}
+        verdict = judge(
+            SECURITY.postconditions,
+            Judged(
+                turns=turns,
+                final=final,
+                recipes_after=recipes_after,
+                preexisting=preexisting,
+                brain_recipe="rcp-none",
+                checks=checks,
+                sent=sent,
+                context={"key": KEY, "url": url, "token": token},
+            ),
+        )
+        assert {name: v["ok"] for name, v in verdict.items()} == dict.fromkeys(
+            SECURITY.postconditions, True
+        ), verdict
+        assert set(final["catalog"]) == {"verify_ssh", "secret_page", "secret_length"}
+        assert final["catalog"]["secret_length"]["provided"] == ["page_token"]
+    finally:
+        # the module's registrations are global; they do not leak into the next test
+        CHECKS.pop("no_foreign_credential_on_brain", None)
+        CHECKS.pop("secret_page", None)
 
 
 async def test_a_gateway_shaped_brain_speaks_the_liturgy(

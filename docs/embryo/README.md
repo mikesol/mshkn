@@ -5,7 +5,10 @@ Each capability (`docs/superpowers/specs/2026-09-12-capabilities-design.md`) has
 | Capability | Depends on | Directory | Promoted |
 |---|---|---|---|
 | hatch | | `docs/embryo/hatch/` | [`2026-09-13-run-5`](hatch/PROMOTED.md) |
+| security | hatch | `docs/embryo/security/` | not yet |
 The capability files are under `embryo/capabilities/`. The checks a capability names are in `embryo/membrane/postconditions.py`; a capability names the invariants and its own exercises, not an ancestor's, because the ancestor's promotion is the proof those already passed (#167).
+
+A capability's module (`embryo/capabilities/<name>.py`) may register checks only it needs; security's are `no_foreign_credential_on_brain` and `secret_page`.
 
 ## Reading a run spoken through a gateway
 

@@ -673,6 +673,7 @@ async def test_the_hook_names_the_principal_and_anonymous_gets_nothing(tmp_path:
             "computer_id": audit["hooks"][0]["computer_id"],
             "exit_code": 0,
             "principal": "ssh:mike",
+            "error": None,
         }
     ]
     assert audit["hooks"][0]["computer_id"].startswith("comp-")
@@ -752,6 +753,55 @@ async def test_hooks_fail_closed_when_not_ready_or_malformed() -> None:
         verb=hook, status="ready", recipe_id="no-such-recipe", proposal_id="p-1"
     )
     assert await principal_for(api, state, policy, "p", remaining=10.0) == "anonymous"
+
+
+async def test_a_hook_runs_entry_names_why_it_failed_or_that_it_did_not() -> None:
+    """A live E2E run recognised no signed knock because verify_ssh's run itself
+    failed (a relay ConnectError) before any computer answered, and the audit's
+    hooks entry gave no reason (#101's intent, #159): a `runs` entry now carries
+    the same `error` `invoke()` returned, `None` when the run succeeded."""
+    api, state = FakeMshkn(), State()
+    policy = parse_policy(OPEN)
+    hook = parse_verb(HOOK)
+    # The run itself fails: create_computer raises 409 because the recipe FakeMshkn
+    # holds is never marked ready. The `error` is the exception's detail, not the
+    # generic "error" status.
+    state.catalog["verify_ssh"] = CatalogEntry(
+        verb=hook, status="ready", recipe_id="no-such-recipe", proposal_id="p-1"
+    )
+    runs: list[dict[str, Any]] = []
+    assert await principal_for(api, state, policy, "p", remaining=10.0, runs=runs) == "anonymous"
+    assert runs == [
+        {
+            "name": "verify_ssh",
+            "status": "error",
+            "computer_id": None,
+            "exit_code": None,
+            "principal": "anonymous",
+            "error": "Recipe no-such-recipe is not ready",
+        }
+    ]
+    # A hook that runs and succeeds carries no error.
+    api2 = FakeMshkn()
+    rid = (await api2.create_recipe(hook.dockerfile)).id
+    api2.recipe_statuses[rid] = ["ready"]
+    await api2.get_recipe(rid)
+    state.catalog["verify_ssh"] = CatalogEntry(
+        verb=hook, status="ready", recipe_id=rid, proposal_id="p-1"
+    )
+    api2.outputs[render_command(hook, {"payload": "p"})] = (0, "mike\n", "")
+    runs2: list[dict[str, Any]] = []
+    assert await principal_for(api2, state, policy, "p", remaining=10.0, runs=runs2) == "ssh:mike"
+    assert runs2 == [
+        {
+            "name": "verify_ssh",
+            "status": "ok",
+            "computer_id": "comp-1",
+            "exit_code": 0,
+            "principal": "ssh:mike",
+            "error": None,
+        }
+    ]
 
 
 async def test_anonymous_turn_polls_but_leaves_the_inbox_for_a_later_authenticated_turn(
@@ -871,6 +921,68 @@ async def test_a_ready_verb_is_a_tool_and_builds_are_polled_first(tmp_path: Path
         "computer_id": "comp-2",
     }
     assert reply.startswith("Example Domain")
+
+
+SECRET_VERB: dict[str, Any] = {
+    "name": "secret_page",
+    "description": "Reads the page behind a token root places on this verb's chain.",
+    "params": {"type": "object", "properties": {}},
+    "dockerfile": (
+        "FROM mshkn-base\n"
+        "RUN printf '%s\\n' '#!/bin/bash' 'cat /verb/token' > /verb/read.sh "
+        "&& chmod +x /verb/read.sh\n"
+    ),
+    "entrypoint": "/verb/read.sh",
+    "effect": "read",
+    "state": "chain",
+    "requires": [{"kind": "secret", "name": "page_token"}],
+}
+
+
+async def test_a_requires_verb_is_offered_but_refuses_to_run_until_provided(
+    tmp_path: Path,
+) -> None:
+    """Spec §7.2: approval builds the verb and the tool list offers it, so the
+    refusal can reach the model as a tool result rather than as silence; the
+    refusal names what root must do. After `provide`, the same call runs."""
+    from membrane.proposals import provide
+
+    api = FakeMshkn()
+    ctx = _ctx(tmp_path, api=api)
+    p = propose(ctx.state, {"kind": "verb", "title": "t", "rationale": "r", "verb": SECRET_VERB})
+    assert (await approve(api, ctx.state, p.id)).startswith("p-1 building")
+    verb = parse_verb(SECRET_VERB)
+    api.outputs[render_command(verb, {})] = (0, "the page\n", "")
+    out = await _turn(
+        ctx,
+        "read the page",
+        answers=[
+            message_of(tool_call_completion("secret_page")),
+            message_of(text_completion("blocked, as the tool said")),
+        ],
+    )
+    audit, _ = split_output(out)
+    assert "secret_page" in {t["name"] for t in _posted(ctx, 0)["tools"]}
+    assert audit["tools"][0] == {
+        "name": "secret_page",
+        "status": "error",
+        "error": "blocked: secret_page requires page_token; root places it and says provide",
+    }
+    assert [c[0] for c in api.calls if c[0] in ("create_computer", "fork_label")] == []
+    assert (
+        provide(ctx.state, "secret_page", "page_token") == "secret_page: page_token provided (1/1)"
+    )
+    out = await _turn(
+        ctx,
+        "read the page",
+        answers=[
+            message_of(tool_call_completion("secret_page")),
+            message_of(text_completion("the page")),
+        ],
+    )
+    audit, reply = split_output(out)
+    assert audit["tools"][0]["status"] == "ok" and audit["tools"][0]["chain_head"] is not None
+    assert reply.startswith("the page")
 
 
 async def test_the_live_policy_reaches_the_model_on_every_turn(tmp_path: Path) -> None:
