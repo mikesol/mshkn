@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from membrane.postconditions import CHECKS
 
 from mshkn.app import create_app
 from mshkn.config import Config
@@ -12,13 +13,30 @@ from mshkn.host.fake import FakeHost
 from mshkn.runtime import Runtime
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Iterator
 
     import aiosqlite
     import httpx
     from fastapi import FastAPI
 
     from mshkn.host import Host
+
+
+@pytest.fixture(autouse=True)
+def _checks_registry() -> Iterator[None]:
+    """A capability's module registers what only it needs into the global
+    `CHECKS` on import (capabilities design §4), and never unregisters it: a
+    test that loads such a module leaves its checks behind for the next one,
+    which is what `test_embryo_postconditions.py`'s `set(CHECKS) - INVARIANTS
+    == EXERCISES` needs to not see. Snapshotting and restoring here replaces
+    the hand-written `CHECKS.pop(...)` cleanup that used to live in every test
+    module that loads one."""
+    before = dict(CHECKS)
+    try:
+        yield
+    finally:
+        CHECKS.clear()
+        CHECKS.update(before)
 
 
 @pytest.fixture

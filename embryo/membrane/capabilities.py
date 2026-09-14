@@ -3,7 +3,7 @@
 A capability is `embryo/capabilities/<name>.md`: a frontmatter block (`name`,
 `depends`, `postconditions`), prose, one `### <label> · <door>` section per row
 whose fenced block holds the words root speaks and whose prose is the outcome,
-and a `## Repair` section with the two phrases root says when a build fails or an
+and a `## Repair` section with the phrases root says when a build fails or an
 approval is refused. The words and outcomes live only here; the checks the
 frontmatter names live in `membrane.postconditions`.
 
@@ -35,7 +35,7 @@ FRONTMATTER_KEYS = ("name", "depends", "postconditions")
 SEPARATOR = " · "  # U+00B7, between a row's label and its door in the heading
 FENCE = "```"
 TEMPLATE_RE = re.compile(r"\{([a-z_]+)\}")
-PHRASE_RE = re.compile(r"^- (build|refused): `([^`]+)`$")
+PHRASE_RE = re.compile(r"^- (build|refused|provide): `([^`]+)`$")
 
 
 class CapabilityError(ValueError):
@@ -65,6 +65,9 @@ class Row:
 class Repair:
     build: str
     refused: str
+    # What root says when a verb still needs something and the reply named no
+    # path for it (spec §7.2); None for a capability that provides nothing.
+    provide: str | None = None
 
 
 @dataclass(frozen=True)
@@ -227,7 +230,9 @@ def _repair(sections: list[tuple[str, str, list[str]]], path: Path) -> Repair:
     for key in ("build", "refused"):
         if key not in phrases:
             raise CapabilityError(f"{path.name}: Repair: missing '{key}'")
-    return Repair(build=phrases["build"], refused=phrases["refused"])
+    return Repair(
+        build=phrases["build"], refused=phrases["refused"], provide=phrases.get("provide")
+    )
 
 
 def load(path: Path) -> Capability:

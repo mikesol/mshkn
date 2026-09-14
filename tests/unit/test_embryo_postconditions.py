@@ -444,7 +444,12 @@ def test_no_undeclared_capability_watches_the_catalog_the_offer_and_the_recipes(
 def test_nothing_by_hand_is_the_command_list() -> None:
     assert _judge()["nothing_by_hand"] == {
         "ok": True,
-        "evidence": {"commands": {"api say": 1, "api list": 1, "api approve": 1, "ingress say": 1}},
+        "evidence": {
+            "commands": {"api say": 1, "api list": 1, "api approve": 1, "ingress say": 1},
+            "provisions": 0,
+            "provides": 0,
+            "by_hand": [],
+        },
     }
     assert _judge(sent=[("api", "upload")])["nothing_by_hand"]["ok"] is False
 
@@ -523,3 +528,65 @@ def test_the_counter_fails_when_an_invocation_is_lost() -> None:
 
     assert result["ok"] is False
     assert result["evidence"]["counts"] == [1, 3, 4]
+
+
+def test_nothing_by_hand_allows_one_provisioning_sequence_per_provide() -> None:
+    """Spec §7.3: root's by-hand acts are allowed when they are exactly the
+    provisioning sequence and there is one such sequence per `provide`."""
+    final = {"policy": {"principals": {}}, "catalog": {}, "proposals": []}
+    ok = _judged(
+        [],
+        final,
+        sent=[
+            ("api", "say"),
+            ("api", "list"),
+            ("api", "approve"),
+            ("api", "create"),
+            ("api", "upload"),
+            ("api", "checkpoint"),
+            ("api", "destroy"),
+            ("api", "provide"),
+            ("ingress", "say"),
+        ],
+    )
+    verdict = CHECKS["nothing_by_hand"](ok)
+    assert verdict["ok"] is True
+    assert verdict["evidence"]["provisions"] == 1 and verdict["evidence"]["provides"] == 1
+    assert verdict["evidence"]["by_hand"] == []
+    # a provide with no sequence behind it, or a sequence with no provide, is by hand
+    for sent in (
+        [("api", "provide")],
+        [("api", "create"), ("api", "upload"), ("api", "checkpoint"), ("api", "destroy")],
+        # the sequence must be contiguous and whole
+        [
+            ("api", "create"),
+            ("api", "list"),
+            ("api", "upload"),
+            ("api", "checkpoint"),
+            ("api", "destroy"),
+            ("api", "provide"),
+        ],
+        [("api", "create"), ("api", "upload"), ("api", "destroy"), ("api", "provide")],
+        # any other command is by hand, as today
+        [("api", "exec")],
+    ):
+        assert CHECKS["nothing_by_hand"](_judged([], final, sent=sent))["ok"] is False, sent
+    broken = CHECKS["nothing_by_hand"](
+        _judged([], final, sent=[("api", "create"), ("api", "list")])
+    )
+    assert broken["evidence"]["by_hand"] == ["create"]
+
+
+def test_a_turn_carries_what_root_provided_for_it() -> None:
+    turn = Turn("11", "ingress", "w", {}, "", [], [])
+    assert turn.provisions == []
+    turn.provisions.append(
+        {
+            "verb": "secret_page",
+            "name": "page_token",
+            "path": "/verb/token",
+            "checkpoint": "ck-1",
+            "result": "secret_page: page_token provided (1/1)",
+        }
+    )
+    assert turn.provisions[0]["path"] == "/verb/token"

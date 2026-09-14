@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from membrane.declarations import parse_verb
+from membrane.declarations import parse_verb, render_command
 from membrane.scripted import COUNTER, PAGE_TITLE, VERIFY_SSH, ScriptedModel, parse_input
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExampleEx"
@@ -300,7 +300,134 @@ async def test_anything_else() -> None:
 
 
 def test_every_scripted_declaration_is_a_valid_verb_from_mshkn_base() -> None:
+    from membrane.scripted import SECRET_LENGTH, SECRET_PAGE
+
     for doc in (VERIFY_SSH(KEY), PAGE_TITLE, COUNTER):
         verb = parse_verb(doc)
         assert verb.dockerfile.startswith("FROM mshkn-base\n")
         assert "<<" not in verb.dockerfile  # no heredocs: the host's legacy builder has none
+    for url_doc in (SECRET_PAGE("https://x/page"), SECRET_LENGTH("https://x/page")):
+        verb = parse_verb(url_doc)
+        assert verb.dockerfile.startswith("FROM mshkn-base\n")
+        assert "<<" not in verb.dockerfile
+        assert verb.state == "chain" and verb.effect == "read"
+    assert "/verb/read.sh" in render_command(parse_verb(SECRET_PAGE("https://x/page")), {})
+
+
+PAGE = "https://8000-comp-1.test.dev/page"
+ROW_11 = (
+    f"Give yourself a verb that reads the page at {PAGE}. The page wants a bearer token "
+    "that I hold. Tell me where to put it and how; I will not paste it here."
+)
+
+
+async def test_row_11_tries_then_proposes_a_secret_verb_and_says_where_the_token_goes() -> None:
+    from membrane.scripted import SECRET_PAGE, SECRET_PATH
+
+    model = ScriptedModel()
+    first = await model.complete(
+        system="",
+        messages=[
+            {"role": "user", "content": _input(ROW_11, principal="ssh:mike", door="ingress")}
+        ],
+        tools=TOOLS_BIRTH,
+    )
+    assert [c.name for c in first.calls] == ["try", "propose"]
+    assert first.calls[0].input["verb"] == SECRET_PAGE(PAGE)
+    assert first.calls[1].input["verb"]["requires"] == [{"kind": "secret", "name": "page_token"}]
+    assert first.calls[1].input["verb"]["state"] == "chain"
+    assert PAGE in first.calls[1].input["verb"]["dockerfile"]
+    # after the results: the reply carries the path in a fenced block, nothing else the driver
+    # would read as a path, and says the trial saw the 401
+    results = [
+        {
+            "type": "tool_result",
+            "tool_use_id": first.calls[0].id,
+            "content": json.dumps({"trial": "t-1", "status": "done", "runs": [{"exit_code": 22}]}),
+        },
+        {
+            "type": "tool_result",
+            "tool_use_id": first.calls[1].id,
+            "content": json.dumps({"id": "p-7"}),
+        },
+    ]
+    second = await model.complete(
+        system="",
+        messages=[
+            {"role": "user", "content": _input(ROW_11, principal="ssh:mike", door="ingress")},
+            {"role": "assistant", "content": first.content},
+            {"role": "user", "content": results},
+        ],
+        tools=TOOLS_BIRTH,
+    )
+    assert second.calls == ()
+    assert f"```\n{SECRET_PATH}\n```" in second.text and "401" in second.text
+    assert second.text.count("/verb/") == 1
+
+
+async def test_read_the_page_calls_the_verb_when_offered() -> None:
+    without = await _turn("read the page", principal="ssh:mike", door="ingress")
+    assert without.calls == () and "no secret_page verb" in without.text
+    with_verb = await _turn(
+        "read the page",
+        tools=[
+            *TOOLS_BIRTH,
+            {"name": "secret_page", "description": "", "input_schema": {"type": "object"}},
+        ],
+        principal="ssh:mike",
+        door="ingress",
+    )
+    assert [c.name for c in with_verb.calls] == ["secret_page"] and with_verb.calls[0].input == {}
+
+
+async def test_row_13_proposes_a_second_verb_needing_the_same_token() -> None:
+    from membrane.scripted import SECRET_LENGTH, SECRET_PATH
+
+    model = ScriptedModel()
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": f"[ssh:mike via ingress] {ROW_11}"},
+        {"role": "assistant", "content": "done"},
+        {
+            "role": "user",
+            "content": _input(
+                "Give yourself a second verb that needs the same token.",
+                principal="ssh:mike",
+                door="ingress",
+            ),
+        },
+    ]
+    first = await model.complete(system="", messages=messages, tools=TOOLS_BIRTH)
+    assert [c.name for c in first.calls] == ["try", "propose"]
+    assert first.calls[1].input["verb"] == SECRET_LENGTH(PAGE)
+    assert first.calls[1].input["verb"]["requires"] == [{"kind": "secret", "name": "page_token"}]
+    results = [
+        {
+            "type": "tool_result",
+            "tool_use_id": first.calls[0].id,
+            "content": json.dumps({"trial": "t-2", "status": "done"}),
+        },
+        {
+            "type": "tool_result",
+            "tool_use_id": first.calls[1].id,
+            "content": json.dumps({"id": "p-8"}),
+        },
+    ]
+    second = await model.complete(
+        system="",
+        messages=[
+            *messages,
+            {"role": "assistant", "content": first.content},
+            {"role": "user", "content": results},
+        ],
+        tools=TOOLS_BIRTH,
+    )
+    assert f"```\n{SECRET_PATH}\n```" in second.text
+
+
+async def test_row_13_without_a_remembered_page_says_so() -> None:
+    out = await _turn(
+        "Give yourself a second verb that needs the same token.",
+        principal="ssh:mike",
+        door="ingress",
+    )
+    assert out.calls == () and "no page" in out.text

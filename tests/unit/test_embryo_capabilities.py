@@ -222,6 +222,13 @@ def test_the_repair_section_is_required_and_has_two_phrases(tmp_path: Path) -> N
     text = _text().replace("- refused: `check your inbox`\n", "")
     with pytest.raises(CapabilityError, match="Repair: missing 'refused'"):
         load(_write(tmp_path, "one", text=text))
+    assert load(_write(tmp_path, "one")).repair.provide is None
+    text = _text().replace(
+        "- refused: `check your inbox`\n",
+        "- refused: `check your inbox`\n- provide: `where should I put it?`\n",
+    )
+    cap = load(_write(tmp_path, "one", text=text))
+    assert cap.repair.provide == "where should I put it?"
 
 
 def test_catalog_loads_every_file_and_order_puts_dependencies_first(tmp_path: Path) -> None:
@@ -353,3 +360,28 @@ def test_a_row_may_template_the_token_a_module_prepares(tmp_path: Path) -> None:
     text = _text().replace("Hello {key}", "Hello {key} {url} {token}")
     assert load(_write(tmp_path, "one", text=text)).row("1").words == "Hello {key} {url} {token}"
     assert {"key", "url", "token"} == TEMPLATES
+
+
+def test_security_depends_on_hatch_and_names_the_invariants_and_its_own_checks() -> None:
+    """Spec §7.2, §7.3 and #167: a dependent names the three invariants and its
+    own exercises, never an ancestor's; its rows are the spec's table verbatim."""
+    security = load(CAPABILITIES / "security.md")
+    assert security.name == "security" and security.depends == ("hatch",)
+    assert security.postconditions == (
+        "root_unforgeable",
+        "no_undeclared_capability",
+        "nothing_by_hand",
+        "no_foreign_credential_on_brain",
+        "secret_page",
+    )
+    assert [r.label for r in security.rows] == ["11", "12", "13", "14"]
+    assert [r.door for r in security.rows] == ["signed", "signed", "signed", "root list"]
+    assert security.row("11").words.startswith("Give yourself a verb that reads the page at {url}.")
+    assert "I will not paste it here." in security.row("11").words
+    assert "{token}" not in security.row("11").words  # the token never rides in the words
+    assert security.row("12").words == "read the page"
+    assert security.row("13").words == "Give yourself a second verb that needs the same token."
+    assert security.repair == Repair(
+        build="check your build", refused="check your inbox", provide="where should I put it?"
+    )
+    assert order(catalog(), "security") == [catalog()["hatch"], security]

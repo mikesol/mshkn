@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from membrane.memory import MemoryStore
     from membrane.mshkn import MshknApi
 
-ARITY = {"say": 1, "list": 0, "approve": 1, "reject": 2, "disable": 1, "revert": 1}
+ARITY = {"say": 1, "list": 0, "approve": 1, "reject": 2, "disable": 1, "revert": 1, "provide": 2}
 
 
 def _valid(argv: list[str]) -> bool:

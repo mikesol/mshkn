@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
+from membrane.capabilities import CAPABILITIES, load
 from membrane.capability import (
     CONFLICT_INTERVAL,
     MAX_REASKS,
@@ -199,11 +200,22 @@ def test_record_writes_every_command_the_transcript_and_the_summary(tmp_path: Pa
         reply="I propose.\nproposal p-1\n{}",
         commands=[1],
         approvals=[{"id": "p-1", "decision": "approve", "result": "p-1 building: verb v"}],
+        provisions=[
+            {
+                "verb": "secret_page",
+                "name": "page_token",
+                "path": "/verb/token",
+                "checkpoint": "ck-1",
+                "result": "ok",
+            }
+        ],
     )
     transcript = record.transcript("claude-opus-5", [turn])
     text = transcript.read_text()
     assert "## Turn 2" in text and "open the door" in text and "p-1 building: verb v" in text
     assert '"model_calls": 1' in text and "I propose." in text
+    assert "**Provided:**" in text
+    assert "- secret_page page_token at /verb/token -> ck-1: ok" in text
     listing = {"turn": 12, "catalog": {}}
     assert json.loads(record.final_list(listing).read_text()) == listing
     summary = {"ok": False, "postconditions": {}}
@@ -232,6 +244,7 @@ def test_a_promotion_record_round_trips_and_is_readable_markdown(tmp_path: Path)
         default_effort=None,
         reasks=0,
         started_from=None,
+        rotated_from=None,
     )
     path = write_promotion(tmp_path, p)
     assert path == promotion_path(tmp_path, "hatch") == tmp_path / "hatch" / "PROMOTED.md"
@@ -240,6 +253,13 @@ def test_a_promotion_record_round_trips_and_is_readable_markdown(tmp_path: Path)
     assert "capability/hatch/brain" in text and "ck-b" in text
     assert read_promotion(tmp_path, "hatch") == p
     assert read_promotion(tmp_path, "security") is None
+    # The keys a run rotated after it was promoted (spec §7.1 step 2), written by
+    # hand until `capability rotate` exists: the record carries them either way.
+    rotated = replace(p, rotated_from="hatch/2026-09-13-run-5 ckpt-3d9e33337cff")
+    write_promotion(tmp_path, rotated)
+    assert '"rotated_from": "hatch/2026-09-13-run-5 ckpt-3d9e33337cff"' in path.read_text()
+    read = read_promotion(tmp_path, "hatch")
+    assert read is not None and read.rotated_from == "hatch/2026-09-13-run-5 ckpt-3d9e33337cff"
 
 
 def test_ancestry_walks_started_from(tmp_path: Path) -> None:
@@ -290,8 +310,12 @@ class FakeApi:
     exec_logs: dict[str, dict[str, Any]] = field(default_factory=dict)
     gone: set[str] = field(default_factory=set)
     fail_deletes: bool = False
+    fail_checkpoints: bool = False
     turns: dict[int, tuple[dict[str, Any], str]] = field(default_factory=dict)
     next_turn: int = 1
+    computers: list[dict[str, Any]] = field(default_factory=list)
+    uploads: list[tuple[str, str, bytes]] = field(default_factory=list)
+    created_checkpoints: list[dict[str, Any]] = field(default_factory=list)
 
     def _listing(self) -> dict[str, Any]:
         return {
@@ -337,7 +361,11 @@ class FakeApi:
         return out
 
     def handler(self, request: httpx.Request) -> httpx.Response:
-        body: dict[str, Any] = json.loads(request.content) if request.content else {}
+        try:
+            body: dict[str, Any] = json.loads(request.content) if request.content else {}
+        except json.JSONDecodeError:
+            # an upload's body is the file itself, not JSON (spec §7.2's placement)
+            body = {}
         self.requests.append((request.method, request.url.path, body or None))
         path = request.url.path
         if request.method == "POST" and path == "/checkpoints/fork":
@@ -358,6 +386,8 @@ class FakeApi:
         if request.method == "GET" and path == "/recipes":
             return httpx.Response(200, json=self.recipes)
         if request.method == "GET" and path == "/checkpoints":
+            if self.fail_checkpoints:
+                return httpx.Response(500, json={"detail": "no"})
             label = request.url.params.get("label")
             rows = [c for c in self.checkpoints if label is None or c["label"] == label]
             return httpx.Response(200, json=rows)
@@ -369,6 +399,41 @@ class FakeApi:
             if cid in self.exec_logs:
                 return httpx.Response(200, json=self.exec_logs[cid])
             return httpx.Response(404, json={"detail": "no log"})
+        if request.method == "POST" and path == "/computers":
+            cid = f"comp-{len(self.computers) + 1}"
+            self.computers.append({"id": cid, "recipe_id": body.get("recipe_id")})
+            return httpx.Response(
+                200,
+                json={
+                    "computer_id": cid,
+                    "url": f"https://{cid}.test.dev",
+                    "recipe_id": body.get("recipe_id"),
+                },
+            )
+        if (
+            request.method == "POST"
+            and path.startswith("/checkpoints/")
+            and path.endswith("/fork")
+            and not body
+        ):
+            cid = f"comp-{len(self.computers) + 1}"
+            self.computers.append({"id": cid, "from": path.split("/")[2]})
+            return httpx.Response(200, json={"computer_id": cid, "url": f"https://{cid}.test.dev"})
+        if request.method == "POST" and path.endswith("/upload"):
+            self.uploads.append((path.split("/")[2], request.url.params["path"], request.content))
+            return httpx.Response(
+                200, json={"status": "uploaded", "path": request.url.params["path"]}
+            )
+        if request.method == "POST" and path.endswith("/checkpoint"):
+            ck: dict[str, Any] = {
+                "id": f"ck-{len(self.created_checkpoints) + 1}",
+                "label": body["label"],
+                "created_at": f"2026-09-13T00:00:{len(self.created_checkpoints):02d}",
+                "recipe_id": None,
+            }
+            self.created_checkpoints.append(ck)
+            self.checkpoints.append(ck)
+            return httpx.Response(200, json={"checkpoint_id": ck["id"]})
         if request.method == "DELETE":
             return httpx.Response(500 if self.fail_deletes else 200, json={})
         return httpx.Response(404, json={"detail": f"unrouted {request.method} {path}"})
@@ -665,6 +730,29 @@ async def test_teardown_deletes_the_door_the_key_the_chains_and_the_recipes(
     assert "/checkpoints/ck-other" not in deletes
 
 
+async def test_teardown_never_touches_a_promoted_checkpoint_or_the_recipe_it_names(
+    tmp_path: Path,
+) -> None:
+    """The E2E run of 2026-09-13 lost the real `capability/hatch/brain`: the service
+    dedupes recipes by content, so the scripted hatch was built from the very recipe
+    the promoted brain was built from, `hatched.recipe_id` matched that checkpoint
+    through the recipe clause, and the recipe went after it. A promotion is another
+    run's evidence; the working head beside it still goes."""
+    api = FakeApi(
+        checkpoints=[
+            {"id": "ck-promoted", "label": "capability/hatch/brain", "recipe_id": "rcp-brain"},
+            {"id": "ck-work", "label": "brain", "recipe_id": "rcp-brain"},
+        ]
+    )
+    doors = _doors(api, tmp_path)
+    hatched = Hatched("http://api/ingress/rule-1", "rule-1", "key-1", "rcp-brain", "ck-work")
+    await doors.teardown(hatched, {"proposals": []})
+    deletes = [p for m, p, _ in api.requests if m == "DELETE"]
+    assert "/checkpoints/ck-work" in deletes
+    assert "/checkpoints/ck-promoted" not in deletes
+    assert "/recipes/rcp-brain" not in deletes
+
+
 async def test_teardown_drops_the_scripted_server_first(tmp_path: Path) -> None:
     api = FakeApi()
     doors = _doors(api, tmp_path)
@@ -685,6 +773,31 @@ async def test_teardown_survives_failing_deletes(tmp_path: Path) -> None:
         "/keys/key-1",
         "/recipes/rcp-brain",
     ]
+
+
+async def test_teardown_deletes_no_recipe_when_the_checkpoints_cannot_be_listed(
+    tmp_path: Path,
+) -> None:
+    """The recipe set's promoted-checkpoint subtraction reads the very listing
+    that just failed to load, so falling through to the recipe loop below would
+    delete every recipe named by `hatched` or a proposal, promoted or not -- the
+    exact mechanism that destroyed `capability/hatch/brain` on 2026-09-13, since
+    the service dedupes recipes by content and a scripted hatch builds the very
+    recipe a promoted brain was built from. A failed listing must stop before
+    that loop instead."""
+    api = FakeApi(fail_checkpoints=True)
+    doors = _doors(api, tmp_path)
+    hatched = Hatched("u", "rule-1", "key-1", "rcp-brain", "ck-brain")
+    listing = {"proposals": [{"id": "p-1", "recipe_id": "rcp-page"}]}
+    log = io.StringIO()
+    await doors.teardown(hatched, listing, log=log)
+    assert [p for m, p, _ in api.requests if m == "DELETE"] == [
+        "/ingress_rules/rule-1",
+        "/keys/key-1",
+    ]
+    assert not any(p.startswith("/recipes/") for m, p, _ in api.requests if m == "DELETE")
+    assert not any(p.startswith("/checkpoints/") for m, p, _ in api.requests if m == "DELETE")
+    assert "could not list checkpoints" in log.getvalue()
 
 
 # ---------------------------------------------------------------- the door helpers a promotion uses
@@ -1320,6 +1433,7 @@ GRANT = "Let me use everything you have."
 USE = "Use what I may ask of you."
 GHOST = "Let me use a verb you do not have."
 SELF = "Say in your own words what you have become."
+SECURITY = load(CAPABILITIES / "security.md")  # rows 11-14, and the provide phrase
 
 
 class FakeDoors:
@@ -1342,7 +1456,15 @@ class FakeDoors:
         deadline_first: bool = False,
         grant_late: bool = False,
         growing: bool = False,
+        secret: bool = False,
+        path_in_reply: str | None = "```\n/verb/token\n```",
     ) -> None:
+        # A membrane that grows a verb with a `requires` at row 11 (spec §7.2), and
+        # what the replies of rows 11 and 13 say about where root should put the
+        # token; `None` is a reply that names no path at all.
+        self.secret = secret
+        self.path_in_reply = path_in_reply
+        self.provided_at: list[tuple[str, str, str]] = []
         self.policy_first = policy_first
         self.deadline_first = deadline_first
         # The policy, not the catalog, is what stops a verb from being invoked
@@ -1413,6 +1535,8 @@ class FakeDoors:
         }
         if kind == "verb":
             doc["verb"] = {"name": name, "state": extra.get("state", "ephemeral"), "effect": "read"}
+            if "requires" in extra:
+                doc["verb"]["requires"] = extra["requires"]
         self.proposals.append(doc)
         return doc
 
@@ -1437,6 +1561,7 @@ class FakeDoors:
         if text == HATCH.repair.build and getattr(self, "pending_door", False):
             self.pending_door = False
             text = WORDS["2"]  # the check of the trial ends in the two proposals
+        said = "Proposed."
         if text.startswith(WORDS["2"][:30]):
             door_policy = {
                 "principals": {
@@ -1460,11 +1585,14 @@ class FakeDoors:
                 made.append(
                     self._propose("verb", name, supersedes=self.catalog[name]["proposal_id"])
                 )
+        elif text == "where should I put it?":
+            # security's provide phrase: the agent answers with the path alone
+            said = "Put it at\n```\n/verb/token\n```"
         audit = audit_line(
             tools=[{"name": "propose", "status": "ok", "id": p["id"]} for p in made],
             proposals=[{"id": p["id"], "sha256": "x"} for p in made],
         )
-        return self._reply(audit, "Proposed.")
+        return self._reply(audit, said)
 
     async def public_say(self, payload: Any) -> tuple[dict[str, Any], str]:
         self.sent.append(("ingress", "say", payload))
@@ -1562,6 +1690,62 @@ class FakeDoors:
                 reply = f"The count is {self._count(n).strip()}."
             else:
                 reply = "I have no such tool in my hands."
+        elif self.secret and msg.startswith("Give yourself a verb that reads the page at "):
+            tools.append({"name": "try", "status": "done", "trial": "t-9"})
+            made.append(
+                self._propose(
+                    "verb",
+                    "secret_page",
+                    state="chain",
+                    requires=[{"kind": "secret", "name": "page_token"}],
+                )
+            )
+            reply = "Proposed secret_page. The trial saw the 401." + (
+                f"\nPut it at\n{self.path_in_reply}"
+                if self.path_in_reply
+                else "\nSomewhere on its disk."
+            )
+        elif self.secret and msg == "read the page":
+            entry = self.catalog.get("secret_page")
+            if entry and entry["status"] == "ready" and entry["provided"] == ["page_token"]:
+                tools.append(
+                    {
+                        "name": "secret_page",
+                        "status": "ok",
+                        "exit_code": 0,
+                        "computer_id": "comp-secret",
+                        "chain_head": "ck-secret-1",
+                    }
+                )
+                reply = "The page behind the token says: perfect number 8128."
+            elif entry:
+                tools.append(
+                    {
+                        "name": "secret_page",
+                        "status": "error",
+                        "error": (
+                            "blocked: secret_page requires page_token; "
+                            "root places it and says provide"
+                        ),
+                    }
+                )
+                reply = "Blocked: root has not provided page_token."
+            else:
+                reply = "I have no such verb."
+        elif self.secret and msg == "Give yourself a second verb that needs the same token.":
+            made.append(
+                self._propose(
+                    "verb",
+                    "secret_length",
+                    state="chain",
+                    requires=[{"kind": "secret", "name": "page_token"}],
+                )
+            )
+            reply = "Proposed secret_length." + (
+                f" Same place:\n{self.path_in_reply}"
+                if self.path_in_reply
+                else " Wherever the first one went."
+            )
         elif self.growing and msg == GROW:
             self.grown += 1
             name = f"extra{self.grown}"
@@ -1613,6 +1797,10 @@ class FakeDoors:
         self.commands += 1
         if argv[0] == "list":
             return json.dumps(self._listing())
+        if argv[0] == "provide":
+            verb, name = argv[1], argv[2]
+            self.catalog[verb]["provided"].append(name)
+            return f"{verb}: {name} provided (1/1)\n"
         pid = argv[1]
         proposal = next(p for p in self.proposals if p["id"] == pid)
         if argv[0] == "reject":
@@ -1646,6 +1834,9 @@ class FakeDoors:
             "recipe_id": proposal["recipe_id"],
             "chain_head": None,
             "chain_length": 0,
+            "chain": f"verb/{name}",
+            "requires": proposal["verb"].get("requires", []),
+            "provided": [],
         }
         self.polls[name] = 0
         return f"{pid} building: verb {name} recipe {proposal['recipe_id']}\n"
@@ -1701,7 +1892,21 @@ class FakeDoors:
                 return listing
         return listing
 
+    async def provision(self, verb: str, chain: str, recipe_id: str, path: str, secret: str) -> str:
+        for name in ("create", "upload", "checkpoint", "destroy"):
+            self.sent.append(("api", name, {"verb": verb}))
+            self.commands += 1
+        self.provided_at.append((verb, path, secret))
+        return f"ck-{verb}-provisioned"
+
     async def check_computer(self, computer_id: str) -> dict[str, Any]:
+        if computer_id == "comp-secret":
+            return {
+                "computer_id": computer_id,
+                "gone": True,
+                "stdout": "The page behind the token says: perfect number 8128.\n",
+                "exit_code": 0,
+            }
         if computer_id == "comp-title":
             return {
                 "computer_id": computer_id,
@@ -2525,7 +2730,7 @@ async def test_run_once_checks_hook_computers_from_every_turn_not_only_row_4(
     )
 
     async def fake_teardown(
-        self: Doors, h: Hatched, listing_arg: Any, *, lineage: Any = None
+        self: Doors, h: Hatched, listing_arg: Any, *, lineage: Any = None, log: Any = None
     ) -> None:
         return None
 
@@ -2957,7 +3162,7 @@ async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_i
     teardown_calls: list[tuple[Hatched, Any, Promotion | None]] = []
 
     async def fake_teardown(
-        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None
+        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None, log: Any = None
     ) -> None:
         teardown_calls.append((h, listing, lineage))
 
@@ -3076,7 +3281,7 @@ async def test_run_once_of_a_dependent_names_its_lineages_base_url_not_the_calle
     monkeypatch.setattr("membrane.capability.start_from", fake_start_from)
 
     async def fake_teardown(
-        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None
+        self: Doors, h: Hatched, listing: Any, *, lineage: Promotion | None = None, log: Any = None
     ) -> None:
         return None
 
@@ -3886,11 +4091,8 @@ def test_main_loads_the_module_before_it_checks_the_postcondition_names(
     monkeypatch.setattr("membrane.capability.catalog", lambda: catalog(caps))
     log = io.StringIO()
     assert "secret_page" not in CHECKS
-    try:
-        assert main(["run", "a", "--env", str(tmp_path / "none")], log=log) == 2
-        assert CHECKS["secret_page"].__name__ == "secret_page"
-    finally:
-        CHECKS.pop("secret_page", None)
+    assert main(["run", "a", "--env", str(tmp_path / "none")], log=log) == 2
+    assert CHECKS["secret_page"].__name__ == "secret_page"
     assert "postconditions no one wrote" not in log.getvalue()
     assert "MSHKN_API_URL" in log.getvalue()  # it got as far as the settings
 
@@ -3946,3 +4148,317 @@ async def test_a_run_that_fails_mid_speak_still_exits_the_modules_prepare(
         )
     assert (tmp_path / "exited").read_text() == "torn down"
     assert json.loads((tmp_path / "run" / "run.json").read_text())["error"] == "RuntimeError: boom"
+
+
+# ---------------------------------------------------------------- root provides (§7.2)
+
+
+def test_paths_in_reads_a_fenced_path_first_and_inline_code_second() -> None:
+    """Spec §7.2 asks for the path in a fenced block; an inline `/path` is the
+    same answer (security plan decision 2). The proposal documents the membrane
+    appends after the reply are not read, so an entrypoint's path is not one."""
+    from membrane.capability import paths_in
+
+    fenced = "Put the token at\n\n```\n/verb/token\n```\n\nthen say provide."
+    assert paths_in(fenced) == ["/verb/token"]
+    assert paths_in("Put it at `/verb/secrets/token`, please.") == ["/verb/secrets/token"]
+    both = "Write `/etc/x` if you like, but the verb reads\n```\n/verb/token\n```"
+    assert paths_in(both) == ["/verb/token"]
+    two = "```\n/verb/a\n```\nand\n```\n/verb/b\n```\nand again `/verb/a`"
+    assert paths_in(two) == ["/verb/a", "/verb/b"]
+    script = "```bash\ncat /verb/token\n```"  # a block that is not a bare path
+    assert paths_in(script) == []
+    trailing = 'I need it.\nproposal p-3\n{"verb": {"entrypoint": "`/verb/run.sh`"}}'
+    assert paths_in(trailing) == []
+    assert paths_in("no path here") == []
+    # a backtick pair inside a fenced script is shell command substitution, not a
+    # path root should read; the inline fallback must not see it either
+    substitution = "```bash\ncat `/verb/token`\n```"
+    assert paths_in(substitution) == []
+
+
+def test_unprovided_verbs_reads_ready_entries_with_names_root_has_not_provided() -> None:
+    from membrane.capability import unprovided_verbs
+
+    listing = {
+        "catalog": {
+            "verify_ssh": {
+                "status": "ready",
+                "recipe_id": "r1",
+                "chain": "verb/verify_ssh",
+                "requires": [],
+                "provided": [],
+            },
+            "secret_page": {
+                "status": "ready",
+                "recipe_id": "r2",
+                "chain": "verb/secret_page",
+                "requires": [{"kind": "secret", "name": "page_token"}],
+                "provided": [],
+            },
+            "later": {
+                "status": "building",
+                "recipe_id": "r3",
+                "chain": "verb/later",
+                "requires": [{"kind": "secret", "name": "page_token"}],
+                "provided": [],
+            },
+            "done": {
+                "status": "ready",
+                "recipe_id": "r4",
+                "chain": "verb/done",
+                "requires": [{"kind": "secret", "name": "a"}, {"kind": "secret", "name": "b"}],
+                "provided": ["a"],
+            },
+        }
+    }
+    assert unprovided_verbs(listing) == [
+        ("secret_page", "page_token", "r2", "verb/secret_page"),
+        ("done", "b", "r4", "verb/done"),
+    ]
+
+
+async def test_provision_creates_from_the_recipe_when_the_chain_is_empty_and_records_by_name(
+    tmp_path: Path,
+) -> None:
+    """Spec §7.2: create, upload, checkpoint under the chain, destroy, with the
+    account key and outside every door. The secret is the upload's body and no
+    recorded detail carries it."""
+    api = FakeApi()
+    doors = _doors(api, tmp_path)
+    ckpt = await doors.provision(
+        "secret_page", "verb/secret_page", "rcp-sp", "/verb/token", "s3cr3t-value"
+    )
+    assert ckpt == "ck-1"
+    assert api.computers == [{"id": "comp-1", "recipe_id": "rcp-sp"}]
+    assert api.uploads == [("comp-1", "/verb/token", b"s3cr3t-value")]
+    assert api.created_checkpoints[0]["label"] == "verb/secret_page"
+    assert [(m, p) for m, p, _ in api.requests if m == "DELETE"] == [
+        ("DELETE", "/computers/comp-1")
+    ]
+    assert [(s.door, s.name) for s in doors.sent] == [
+        ("api", "create"),
+        ("api", "upload"),
+        ("api", "checkpoint"),
+        ("api", "destroy"),
+    ]
+    assert doors.sent[0].detail == {"verb": "secret_page", "from": "rcp-sp"}
+    assert doors.sent[0].computer_id == "comp-1"
+    assert doors.sent[1].detail == {"verb": "secret_page", "path": "/verb/token", "bytes": 12}
+    assert doors.sent[2].detail == {
+        "verb": "secret_page",
+        "label": "verb/secret_page",
+        "checkpoint_id": "ck-1",
+    }
+    for written in (tmp_path / "run" / "commands").iterdir():
+        assert "s3cr3t-value" not in written.read_text(), written
+
+
+async def test_provision_forks_the_chain_head_when_there_is_one(tmp_path: Path) -> None:
+    api = FakeApi(
+        checkpoints=[
+            {
+                "id": "ck-old",
+                "label": "verb/secret_page",
+                "created_at": "2026-09-13T00:00:00",
+                "recipe_id": "rcp-sp",
+            }
+        ]
+    )
+    doors = _doors(api, tmp_path)
+    await doors.provision("secret_page", "verb/secret_page", "rcp-sp", "/verb/token", "t")
+    assert api.computers == [{"id": "comp-1", "from": "ck-old"}]
+    assert doors.sent[0].detail == {"verb": "secret_page", "from": "ck-old"}
+
+
+async def test_provision_destroys_the_computer_when_the_upload_fails(tmp_path: Path) -> None:
+    api = FakeApi()
+    original = api.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/upload"):
+            api.requests.append((request.method, request.url.path, None))
+            return httpx.Response(500, json={"detail": "no"})
+        return original(request)
+
+    transport = httpx.MockTransport(handler)
+    authed = httpx.AsyncClient(
+        base_url="http://api", headers={"Authorization": "Bearer k"}, transport=transport
+    )
+    doors = Doors(authed, authed, "rule-1", Record(tmp_path / "run"))
+    with pytest.raises(httpx.HTTPStatusError):
+        await doors.provision("secret_page", "verb/secret_page", "rcp-sp", "/verb/token", "t")
+    assert ("DELETE", "/computers/comp-1", None) in api.requests
+    assert [s.name for s in doors.sent] == ["create", "upload", "destroy"]
+
+
+async def test_provision_destroy_failing_does_not_replace_the_uploads_own_exception(
+    tmp_path: Path,
+) -> None:
+    """The destroy in `provision`'s `finally` must be suppressed like
+    `copy_label`'s (Minor 2): unsuppressed, a transport error raised while
+    cleaning up after a failed upload would replace the upload's own
+    `HTTPStatusError` and hide what actually went wrong."""
+    api = FakeApi()
+    original = api.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/upload"):
+            api.requests.append((request.method, request.url.path, None))
+            return httpx.Response(500, json={"detail": "no"})
+        if request.method == "DELETE":
+            api.requests.append((request.method, request.url.path, None))
+            raise httpx.ConnectError("down")
+        return original(request)
+
+    transport = httpx.MockTransport(handler)
+    authed = httpx.AsyncClient(
+        base_url="http://api", headers={"Authorization": "Bearer k"}, transport=transport
+    )
+    doors = Doors(authed, authed, "rule-1", Record(tmp_path / "run"))
+    with pytest.raises(httpx.HTTPStatusError):
+        await doors.provision("secret_page", "verb/secret_page", "rcp-sp", "/verb/token", "t")
+    assert ("DELETE", "/computers/comp-1", None) in api.requests
+    assert [s.name for s in doors.sent] == ["create", "upload", "destroy"]
+
+
+async def test_after_a_row_settles_root_provides_where_the_reply_said(tmp_path: Path) -> None:
+    """Spec §7.2: a driver rule keyed on state. Row 11's settle finds a ready verb
+    with an unprovided name and a path in the reply, places the run's token there
+    on the verb's chain, says provide, and row 12 then reads the page."""
+    doors = FakeDoors(secret=True)
+    key_dir, pubkey = _keys(tmp_path)
+    # the door and the grant hatch's promotion would have left behind
+    await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO())
+    doors.sent.clear()
+    log = io.StringIO()
+    turns, final, reasks = await speak(
+        SECURITY,
+        doors,
+        key_dir,
+        {"key": pubkey, "url": "https://page/page", "token": "tok-1"},
+        AutoApprover(),
+        log=log,
+    )
+    assert [t.label for t in turns] == ["11", "12", "13"] and reasks == []
+    assert doors.provided_at == [
+        ("secret_page", "/verb/token", "tok-1"),
+        ("secret_length", "/verb/token", "tok-1"),
+    ]
+    assert turns[0].provisions == [
+        {
+            "verb": "secret_page",
+            "name": "page_token",
+            "path": "/verb/token",
+            "checkpoint": "ck-secret_page-provisioned",
+            "result": "secret_page: page_token provided (1/1)",
+        }
+    ]
+    assert turns[2].provisions[0]["verb"] == "secret_length"
+    assert turns[1].audit["tools"][0]["status"] == "ok"
+    names = [s[1] for s in doors.sent]
+    assert names.count("provide") == 2 and names.count("create") == 2
+    assert "provided page_token for secret_page at /verb/token" in log.getvalue()
+    assert final is not None and final["catalog"]["secret_page"]["provided"] == ["page_token"]
+    # the commands the placement spent belong to the row's turn
+    assert len(turns[0].commands) >= 6
+
+
+async def test_a_reply_with_no_path_earns_the_provide_repair_phrase(tmp_path: Path) -> None:
+    doors = FakeDoors(secret=True, path_in_reply=None)
+    key_dir, pubkey = _keys(tmp_path)
+    await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO())
+    log = io.StringIO()
+    turns, _, _ = await speak(
+        SECURITY,
+        doors,
+        key_dir,
+        {"key": pubkey, "url": "https://page/page", "token": "tok-1"},
+        AutoApprover(),
+        log=log,
+    )
+    assert [t.label for t in turns][:3] == ["11", "3-repair-1", "12"]
+    assert turns[1].words == "where should I put it?"
+    assert doors.provided_at[0] == ("secret_page", "/verb/token", "tok-1")
+    assert "no path for secret_page requires page_token; repair 1" in log.getvalue()
+
+
+async def test_without_a_token_in_the_context_nothing_is_placed_and_nothing_repaired(
+    tmp_path: Path,
+) -> None:
+    """A capability that serves nothing has no token to place: the verb stays
+    unprovided, the run says so, and no repair turn is spent on it."""
+    doors = FakeDoors(secret=True)
+    key_dir, pubkey = _keys(tmp_path)
+    await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO())
+    log = io.StringIO()
+    turns, _, _ = await speak(
+        SECURITY,
+        doors,
+        key_dir,
+        {"key": pubkey, "url": "https://page/page"},
+        AutoApprover(),
+        log=log,
+    )
+    assert [t.label for t in turns] == ["11", "12", "13"]
+    assert doors.provided_at == [] and turns[0].provisions == []
+    assert "the run has no token to place" in log.getvalue()
+    assert turns[1].audit["tools"][0]["status"] == "error"
+
+
+async def test_the_pilot_can_override_or_skip_a_placement(tmp_path: Path) -> None:
+    doors = FakeDoors(secret=True)
+    key_dir, pubkey = _keys(tmp_path)
+    await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO())
+    # every proposal approved; the first placement overridden, the second skipped
+    stdin = io.StringIO("approve\n/verb/secrets/token\napprove\nskip\n")
+    stdout = io.StringIO()
+    turns, final, _ = await speak(
+        SECURITY,
+        doors,
+        key_dir,
+        {"key": pubkey, "url": "https://page/page", "token": "tok-1"},
+        AskApprover(stdin, stdout),
+        log=io.StringIO(),
+    )
+    assert doors.provided_at == [("secret_page", "/verb/secrets/token", "tok-1")]
+    assert "provide secret_page page_token: path [/verb/token] | skip> " in stdout.getvalue()
+    assert turns[2].provisions == []
+    # A skip is the pilot's answer for the run: no repair turn is spent asking the
+    # agent again, and the pilot is not prompted a second time.
+    assert [t.label for t in turns] == ["11", "12", "13"]
+    assert stdout.getvalue().count("provide secret_length page_token:") == 1
+    assert final is not None and final["catalog"]["secret_length"]["provided"] == []
+
+
+async def test_a_capability_with_no_provide_phrase_says_so_instead_of_repairing(
+    tmp_path: Path,
+) -> None:
+    """`Repair.provide` is None for a capability that provides nothing (hatch's is).
+    A requirement with no path is then logged and left where it is: there are no
+    words to say, so no repair turn is spoken and none of the run's budget goes."""
+    doors = FakeDoors(secret=True, path_in_reply=None)
+    key_dir, pubkey = _keys(tmp_path)
+    await speak(HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO())
+    log = io.StringIO()
+    turns, _, _ = await speak(
+        replace(SECURITY, repair=HATCH.repair),
+        doors,
+        key_dir,
+        {"key": pubkey, "url": "https://page/page", "token": "tok-1"},
+        AutoApprover(),
+        log=log,
+    )
+    assert [t.label for t in turns] == ["11", "12", "13"]
+    assert doors.provided_at == []
+    assert "no path for secret_page requires page_token and security" in log.getvalue()
+    assert "has no provide phrase" in log.getvalue()
+
+
+def test_the_asking_approver_places_with_the_parsed_path_by_default() -> None:
+    stdout = io.StringIO()
+    assert AskApprover(io.StringIO("\n"), stdout).place("v", "n", "/verb/t") == "/verb/t"
+    assert AskApprover(io.StringIO("skip\n"), stdout).place("v", "n", "/verb/t") is None
+    assert AskApprover(io.StringIO("relative\n/abs\n"), stdout).place("v", "n", None) == "/abs"
+    assert AskApprover(io.StringIO(""), stdout).place("v", "n", "/verb/t") is None
+    assert AutoApprover().place("v", "n", "/verb/t") == "/verb/t"

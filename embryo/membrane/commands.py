@@ -1,5 +1,6 @@
-"""Root commands (spec §6): list, approve, reject, disable, revert, and root's
-own say. Each begins by polling builds and trials so list shows transitions."""
+"""Root commands (spec §6): list, approve, reject, disable, revert, provide,
+and root's own say. Each begins by polling builds and trials so list shows
+transitions."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from membrane.invariants import door_is_open
-from membrane.proposals import approve, disable, reject, revert
+from membrane.proposals import approve, disable, provide, reject, revert
 from membrane.trials import poll_trials
 from membrane.turn import say
 from membrane.verbs import chain_head, poll_builds
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 USAGE = (
     "usage: membrane say <b64>\n"
     "       membrane root say <b64> | list | approve <id> | reject <id> <b64 reason> | "
-    "disable <verb> | revert <id>\n"
+    "disable <verb> | revert <id> | provide <verb> <name>\n"
     "       membrane resume <job_id>\n"
     "       membrane serve [--port N]\n"
 )
@@ -41,6 +42,9 @@ async def list_state(api: MshknApi, state: State) -> str:
             "recipe_id": entry.recipe_id,
             "chain_head": head,
             "chain_length": length,
+            "chain": entry.verb.chain,
+            "requires": [r.to_doc() for r in entry.verb.requires],
+            "provided": list(entry.provided),
         }
     # A declared hook only names a caller once its recipe is ready: principal_for
     # skips every other entry and the turn falls back to anonymous. `status` is
@@ -124,6 +128,8 @@ async def root(argv: list[str], ctx: Context) -> tuple[str, int]:
             return disable(state, args[0]) + "\n", 0
         if command == "revert":
             return revert(state, args[0]) + "\n", 0
+        if command == "provide":
+            return provide(state, args[0], args[1]) + "\n", 0
         # cli.run's _valid() never lets an unknown command reach here, but
         # root() must be safe when called directly too (P13): no
         # fall-through to revert for a command it does not recognize.
