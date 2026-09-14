@@ -327,6 +327,37 @@ async def test_mapping_failure_cancels_the_process_start(
     assert not any(e.startswith("ssh:") for e in timeline)
 
 
+async def test_a_mapping_failure_orphans_no_firecracker(
+    staged: Staged, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The whole of #66, with the real start helper and a real child process.
+
+    The test above stubs the helper, so it proves `_stage` cancels and nothing
+    about what the cancel leaves running. Here the child is real: it is
+    spawned, the disk mapping then fails, and the cancel has to take the
+    process and its socket with it. `_stage` hardcodes /tmp for the socket,
+    hence the pid-qualified disk name.
+    """
+    hv, run, _timeline = staged
+    binary = _fake_binary(tmp_path, creates_socket=False)  # so the poll is still running
+
+    async def start(socket_path: str, **_kwargs: Any) -> int:
+        return await real_start_firecracker_process(socket_path, binary=binary, socket_timeout=30.0)
+
+    monkeypatch.setattr(fc, "start_firecracker_process", start)
+    disk_name = f"mshkn-comp-orphantest-{os.getpid()}"
+    socket_path = Path(f"/tmp/fc-{disk_name}.socket")
+    run.responses[STAGING_TABLE] = ShellError(STAGING_TABLE, 1, "pool full")
+    try:
+        with pytest.raises(HostError):
+            await hv.boot(slot=3, disk_volume_id=7, disk_name=disk_name, resources=Resources())
+        assert _survivors(binary) == [], "the abandoned Firecracker is killed, not orphaned"
+        assert not socket_path.exists()
+    finally:
+        socket_path.unlink(missing_ok=True)
+        socket_path.with_suffix(".socket.pid").unlink(missing_ok=True)
+
+
 async def test_build_template_boots_snapshots_and_tears_down_staging(
     staged: Staged, tmp_path: Path
 ) -> None:
@@ -412,20 +443,40 @@ async def test_kill_unlinks_the_api_socket_a_boot_created(
         vm = await hv.boot(slot=3, disk_volume_id=7, disk_name=disk_name, resources=Resources())
         assert vm.socket_path == str(socket_path)
         assert socket_path.exists(), "the fake firecracker bound its API socket"
-        await hv.kill(vm.pid)
-        assert not socket_path.exists(), "kill must unlink the API socket it recorded"
+        await hv.kill(vm.pid, vm.socket_path)
+        assert not socket_path.exists(), "kill must unlink the socket of the VM it killed"
     finally:
         socket_path.unlink(missing_ok=True)
         socket_path.with_suffix(".socket.pid").unlink(missing_ok=True)
     assert _survivors(binary) == [], "the test leaves no process behind"
 
 
-async def test_killing_a_pid_the_hypervisor_never_started_is_still_a_kill(
-    staged: Staged,
+async def test_killing_a_vm_this_process_never_started_still_releases_its_socket(
+    staged: Staged, tmp_path: Path
 ) -> None:
-    """`kill` of an unrecorded pid still kills and does not raise on the missing socket."""
+    """The socket path is the caller's, so a VM older than the service is swept too (#67).
+
+    `kill` used to consult an in-memory pid-to-path map, which after a service
+    restart was empty: every VM running across the restart left its socket in
+    /tmp for good, and only a later boot that happened to reuse the same disk
+    name cleared it. The path now comes off `computers.socket_path`, which
+    outlives the process, so a pid this object never saw is released like any
+    other.
+    """
     hv, _run, timeline = staged
-    await hv.kill(4242)
+    socket_path = tmp_path / "fc-from-a-previous-service.socket"
+    socket_path.touch()
+    await hv.kill(4242, str(socket_path))
+    assert timeline == ["kill:4242"]
+    assert not socket_path.exists()
+
+
+async def test_killing_a_pid_whose_socket_is_already_gone_does_not_raise(
+    staged: Staged, tmp_path: Path
+) -> None:
+    """Teardown reaches kill on paths that already cleaned up; the unlink is a no-op."""
+    hv, _run, timeline = staged
+    await hv.kill(4242, str(tmp_path / "never-existed.socket"))
     assert timeline == ["kill:4242"]
 
 
@@ -455,7 +506,7 @@ async def test_kill_of_a_vm_that_already_died_still_unlinks_its_socket(
         await real_kill_firecracker_process(vm.pid)  # the VM dies on its own
         assert not hv.is_alive(vm.pid)
         assert socket_path.exists(), "firecracker does not remove its socket when it dies"
-        await hv.kill(vm.pid)
+        await hv.kill(vm.pid, vm.socket_path)
         assert not socket_path.exists(), "kill of a dead pid must still unlink its socket"
     finally:
         socket_path.unlink(missing_ok=True)

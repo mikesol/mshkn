@@ -28,13 +28,13 @@ from mshkn.models import (
 )
 from mshkn.observability.metrics import checkpoints_total
 from mshkn.resources import DEFAULT_RESOURCES
-from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.checkpoints import CheckpointService
 from mshkn.services.computers import ComputerService
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.recipes import RecipeService
 from tests.support import account_row, recipe_row
+from tests.unit.conftest import owned_client, owned_tasks
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -68,12 +68,12 @@ async def _lifecycle(
         checkpoint_staging_dir=tmp_path / "staging",
     )
     allocator = SlotAllocator()
-    tasks = BackgroundTasks()
+    tasks = owned_tasks()
     recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)
     computers = ComputerService(config, db, host, allocator, recipes)
     checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
     app, received = _receiver()
-    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://receiver")
+    http = owned_client(transport=httpx.ASGITransport(app=app), base_url="http://receiver")
     lifecycle = Lifecycle(db, computers, checkpoints, tasks, http)
     return lifecycle, computers, checkpoints, host, received
 

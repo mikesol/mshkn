@@ -221,3 +221,22 @@ def test_post_process_leaves_a_real_init_binary_alone(tmp_path: Path) -> None:
     # written unconditionally, so a rootfs that never had the files gets them too
     assert (mp / "etc" / "hostname").read_text() == "mshkn\n"
     assert (mp / "etc" / "hosts").read_text() == "127.0.0.1 localhost\n127.0.1.1 mshkn\n"
+
+
+def test_post_process_replaces_a_dangling_fcnet_enable_symlink(tmp_path: Path) -> None:
+    """A recipe Dockerfile that enabled fcnet.service planted a link to nothing (#68).
+
+    `Path.exists()` follows the link, so a dangling one reads as absent and
+    `symlink_to` then raised FileExistsError, failing the whole recipe build.
+    """
+    mp = _rootfs(tmp_path)
+    wants = mp / "etc" / "systemd" / "system" / "sysinit.target.wants"
+    wants.mkdir(parents=True)
+    (wants / "fcnet.service").symlink_to("/etc/systemd/system/fcnet.service")
+    assert not (wants / "fcnet.service").exists(), "the target does not exist yet"
+
+    _post_process_rootfs(mp, Config(ssh_key_path=tmp_path / "absent"))
+
+    assert (wants / "fcnet.service").is_symlink()
+    assert str((wants / "fcnet.service").readlink()) == "/etc/systemd/system/fcnet.service"
+    assert (mp / "etc" / "systemd" / "system" / "fcnet.service").is_file()

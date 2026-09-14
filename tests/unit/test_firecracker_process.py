@@ -67,6 +67,33 @@ async def test_start_times_out_when_the_socket_never_appears(tmp_path: Path) -> 
     assert _survivors(binary) == [], "the test leaves no process behind"
 
 
+async def test_cancelling_the_start_kills_the_child_it_had_already_spawned(tmp_path: Path) -> None:
+    """Cancellation lands after `create_subprocess_exec` returned (#66).
+
+    `_stage` cancels this task when the tap or the disk mapping fails. The
+    child is already running by then and its pid is nobody's, so unwinding the
+    awaiting task without killing it left a Firecracker holding the staging tap
+    and a socket in /tmp for the life of the host.
+    """
+    socket_path = str(tmp_path / "cancelled.socket")
+    # The socket never appears, so the poll is still running when the cancel
+    # lands however slow the machine is.
+    binary = _fake_binary(tmp_path, creates_socket=False)
+    task = asyncio.create_task(
+        start_firecracker_process(socket_path, binary=binary, socket_timeout=30.0)
+    )
+    pid_file = Path(f"{socket_path}.pid")
+    while not pid_file.exists():  # the child is up, and the poll is mid-wait
+        await asyncio.sleep(0.005)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+    assert _survivors(binary) == [], "the cancelled start leaves no process behind"
+
+
 async def test_start_times_out_as_a_timeout_when_the_child_died_first(tmp_path: Path) -> None:
     """A Firecracker that exits before binding the socket still raises TimeoutError.
 

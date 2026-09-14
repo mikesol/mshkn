@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from httpx import ASGITransport, AsyncClient
 
-import mshkn.api.system as system_module
 from mshkn.host.fake import FakeHost
+from tests.support import present_firecracker
 from tests.unit.conftest import make_app, make_runtime
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import aiosqlite
-    import pytest
 
     from mshkn.config import Config
     from mshkn.host.fake import FakeHostInstance
@@ -28,10 +30,10 @@ async def _health(
 
 
 async def test_health_is_ok_when_every_subsystem_answers(
-    db: aiosqlite.Connection, runtime_config: Config, monkeypatch: pytest.MonkeyPatch
+    db: aiosqlite.Connection, runtime_config: Config, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(system_module, "_firecracker_present", lambda _config: "ok")
-    body = await _health(db, runtime_config, FakeHost())
+    config = replace(runtime_config, **present_firecracker(tmp_path))  # type: ignore[arg-type]
+    body = await _health(db, config, FakeHost())
     assert body == {
         "status": "ok",
         "subsystems": {"database": "ok", "firecracker": "ok", "storage": "ok", "proxy": "ok"},
@@ -39,12 +41,12 @@ async def test_health_is_ok_when_every_subsystem_answers(
 
 
 async def test_health_is_degraded_but_200_when_a_subsystem_fails(
-    db: aiosqlite.Connection, runtime_config: Config, monkeypatch: pytest.MonkeyPatch
+    db: aiosqlite.Connection, runtime_config: Config, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(system_module, "_firecracker_present", lambda _config: "ok")
+    config = replace(runtime_config, **present_firecracker(tmp_path))  # type: ignore[arg-type]
     host = FakeHost()
     host.proxy.is_healthy = False
-    body = await _health(db, runtime_config, host)
+    body = await _health(db, config, host)
     assert body["status"] == "degraded"
     subsystems = body["subsystems"]
     assert isinstance(subsystems, dict)
@@ -55,18 +57,22 @@ async def test_health_is_degraded_but_200_when_a_subsystem_fails(
 async def test_health_reports_a_missing_firecracker_binary(
     db: aiosqlite.Connection, runtime_config: Config
 ) -> None:
-    body = await _health(db, runtime_config, FakeHost())
+    """Named, not inherited from the box: on a host that does have firecracker
+    on PATH this used to pass on the kernel check and assert nothing."""
+    config = replace(runtime_config, firecracker_binary="mshkn-no-such-binary")
+    body = await _health(db, config, FakeHost())
     subsystems = body["subsystems"]
     assert isinstance(subsystems, dict)
-    assert body["status"] == "degraded" and "firecracker" in str(subsystems["firecracker"])
+    assert body["status"] == "degraded"
+    assert subsystems["firecracker"] == "firecracker binary mshkn-no-such-binary not on PATH"
 
 
 async def test_health_reports_the_database_degraded_while_reaper_cycles_fail(
-    db: aiosqlite.Connection, runtime_config: Config, monkeypatch: pytest.MonkeyPatch
+    db: aiosqlite.Connection, runtime_config: Config, tmp_path: Path
 ) -> None:
     """Reads worked throughout the #105 incident; the reaper's failing writes are the signal."""
-    monkeypatch.setattr(system_module, "_firecracker_present", lambda _config: "ok")
-    rt = make_runtime(db, config=runtime_config, host=FakeHost())
+    config = replace(runtime_config, **present_firecracker(tmp_path))  # type: ignore[arg-type]
+    rt = make_runtime(db, config=config, host=FakeHost())
     rt.reaper.consecutive_failures = 3
     rt.reaper.last_failure = "OperationalError: database is locked"
     app = make_app(rt)

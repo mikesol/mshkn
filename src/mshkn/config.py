@@ -39,6 +39,10 @@ class Config:
     # disk; on tmpfs the fsync is free and the upload task moves the files (#144).
     checkpoint_staging_dir: Path = field(default_factory=lambda: Path("/dev/shm/mshkn"))
     ssh_key_path: Path = field(default_factory=lambda: Path("/root/.ssh/id_ed25519"))
+    # The Firecracker executable, resolved on PATH unless it is an absolute path.
+    # Both the booter and /health's probe read it, so the health endpoint reports
+    # on the binary the host would actually run.
+    firecracker_binary: str = "firecracker"
 
     # dm-thin
     thin_pool_data_path: Path = field(default_factory=lambda: Path("/opt/mshkn/thin-pool-data"))
@@ -57,6 +61,9 @@ class Config:
     idle_timeout_seconds: int = 1800  # 30 minutes
     checkpoint_retention_count: int = 20  # per account, keep last N
     exec_log_retention_seconds: int = 86400  # ephemeral exec output; 0 keeps it forever
+
+    # Observability
+    log_buffer_size: int = 1000  # ECS records kept in memory for the logs endpoint
 
     # Relay (#110)
     relay_timeout_seconds: int = 3600  # default and cap of a job's upstream timeout

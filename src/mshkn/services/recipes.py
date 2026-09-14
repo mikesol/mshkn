@@ -566,6 +566,11 @@ def _post_process_rootfs(mount_point: Path, config: Config) -> None:
     sysinit_wants = mp / "etc" / "systemd" / "system" / "sysinit.target.wants"
     sysinit_wants.mkdir(parents=True, exist_ok=True)
     fcnet_link = sysinit_wants / "fcnet.service"
+    # `exists()` follows the link, so a recipe that enabled the unit itself left
+    # one pointing at nothing, which read as absent and then failed the build on
+    # FileExistsError (#68). Same handling as /sbin/init above.
+    if fcnet_link.is_symlink():
+        fcnet_link.unlink()
     if not fcnet_link.exists():
         fcnet_link.symlink_to("/etc/systemd/system/fcnet.service")
 

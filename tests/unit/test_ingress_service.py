@@ -4,7 +4,6 @@ import asyncio
 import json
 from typing import TYPE_CHECKING
 
-import httpx
 import pytest
 
 from mshkn.config import Config
@@ -14,7 +13,6 @@ from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import CheckpointTrigger, ComputerStatus, IngressLogStatus
 from mshkn.resources import DEFAULT_RESOURCES, Resources
-from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.checkpoints import CheckpointService, Deferred
 from mshkn.services.computers import ComputerService
@@ -22,6 +20,7 @@ from mshkn.services.ingress import CreateOutcome, IngressService, validate_trans
 from mshkn.services.lifecycle import Lifecycle
 from mshkn.services.recipes import RecipeService
 from tests.support import account_row
+from tests.unit.conftest import owned_client, owned_tasks
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,11 +51,11 @@ async def _ingress(
         checkpoint_staging_dir=tmp_path / "staging",
     )
     allocator = SlotAllocator()
-    tasks = BackgroundTasks()
+    tasks = owned_tasks()
     recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)
     computers = ComputerService(config, db, host, allocator, recipes)
     checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
-    lifecycle = Lifecycle(db, computers, checkpoints, tasks, httpx.AsyncClient())
+    lifecycle = Lifecycle(db, computers, checkpoints, tasks, owned_client())
     return (
         IngressService(db, computers, checkpoints, lifecycle, tasks),
         computers,

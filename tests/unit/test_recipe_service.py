@@ -10,10 +10,10 @@ from mshkn.db import get_recipe, insert_account, insert_computer
 from mshkn.errors import Conflict, NotFound
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import RecipeStatus
-from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.recipes import RecipeService, dockerfile_content_hash, recipe_image_tag
 from tests.support import FakeShell, account_row, computer_row
+from tests.unit.conftest import owned_tasks
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -50,7 +50,7 @@ def _service(
         host.blocks,
         host.hypervisor,
         SlotAllocator(),
-        BackgroundTasks(),
+        owned_tasks(),
         run=shell,
         build_image=build_image,
     )

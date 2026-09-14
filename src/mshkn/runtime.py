@@ -142,6 +142,7 @@ class Runtime:
     relay: RelayService
     reaper: Reaper
     alerts: deque[Alert]
+    logs: deque[dict[str, object]]
     http: httpx.AsyncClient
 
     @classmethod
@@ -160,6 +161,7 @@ class Runtime:
         # and a 302 to a private address is a call it never saw.
         client = http if http is not None else httpx.AsyncClient(follow_redirects=False)
         alerts: deque[Alert] = deque(maxlen=_ALERT_HISTORY_SIZE)
+        logs: deque[dict[str, object]] = deque(maxlen=config.log_buffer_size)
         recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)
         computers = ComputerService(config, db, host, allocator, recipes)
         checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
@@ -183,6 +185,7 @@ class Runtime:
             relay=relay,
             reaper=reaper,
             alerts=alerts,
+            logs=logs,
             http=client,
         )
 

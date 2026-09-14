@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from itertools import count
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +19,7 @@ from mshkn.db import connect, insert_account, run_migrations
 from mshkn.host.fake import FakeHost
 from mshkn.models import Account
 from mshkn.runtime import Runtime
+from tests.support import present_firecracker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -77,13 +79,15 @@ def _receiver(received: list[dict[str, Any]]) -> FastAPI:
 
 
 @asynccontextmanager
-async def _build_flow(config: Config, tmp_path: Path) -> AsyncIterator[Flow]:
+async def _build_flow(config: Config, home: Path) -> AsyncIterator[Flow]:
     """The shared body of both fixtures: a migrated database, a fake host, a
     Runtime whose callback client posts into an in-process receiver, and the
-    real ASGI app in front of it."""
+    real ASGI app in front of it. `home` is this flow's alone — two flows open
+    at once must not share a database file."""
+    home.mkdir(parents=True, exist_ok=True)
     config.ssh_key_path.parent.mkdir(parents=True, exist_ok=True)
     config.ssh_key_path.with_suffix(".pub").write_text("ssh-ed25519 AAAAflowtest mshkn@flow\n")
-    db = await connect(tmp_path / "flow.db")
+    db = await connect(home / "flow.db")
     await run_migrations(db, Path("migrations"))
     await insert_account(
         db,
@@ -130,16 +134,22 @@ async def _build_flow(config: Config, tmp_path: Path) -> AsyncIterator[Flow]:
             host.close()
 
 
+def _config(home: Path) -> Config:
+    home.mkdir(parents=True, exist_ok=True)
+    return Config(
+        domain="test.dev",
+        checkpoint_local_dir=home / "checkpoints",
+        checkpoint_staging_dir=home / "staging",
+        idle_timeout_seconds=0,
+        ssh_key_path=home / "id_ed25519",
+        **present_firecracker(home),  # type: ignore[arg-type]
+    )
+
+
 @pytest.fixture
 async def flow(tmp_path: Path) -> AsyncIterator[Flow]:
-    config = Config(
-        domain="test.dev",
-        checkpoint_local_dir=tmp_path / "checkpoints",
-        checkpoint_staging_dir=tmp_path / "staging",
-        idle_timeout_seconds=0,
-        ssh_key_path=tmp_path / "id_ed25519",
-    )
-    async with _build_flow(config, tmp_path) as built:
+    home = tmp_path / "flow-0"
+    async with _build_flow(_config(home), home) as built:
         yield built
 
 
@@ -147,18 +157,14 @@ async def flow(tmp_path: Path) -> AsyncIterator[Flow]:
 def flow_factory(tmp_path: Path) -> Callable[..., AbstractAsyncContextManager[Flow]]:
     """Build a Flow with Config overrides (idle_timeout_seconds, checkpoint_retention_count)."""
 
+    homes = count()
+
     @asynccontextmanager
     async def make(**overrides: Any) -> AsyncIterator[Flow]:
         rate_limit: RateLimiter | None = overrides.pop("rate_limit", None)
-        config = Config(
-            domain="test.dev",
-            checkpoint_local_dir=tmp_path / "checkpoints",
-            checkpoint_staging_dir=tmp_path / "staging",
-            idle_timeout_seconds=0,
-            ssh_key_path=tmp_path / "id_ed25519",
-        )
-        config = replace(config, **overrides)
-        async with _build_flow(config, tmp_path) as built:
+        home = tmp_path / f"flow-{next(homes)}"
+        config = replace(_config(home), **overrides)
+        async with _build_flow(config, home) as built:
             if rate_limit is not None:
                 built.runtime.rate_limiter = rate_limit
             yield built
