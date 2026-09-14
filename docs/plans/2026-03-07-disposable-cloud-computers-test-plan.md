@@ -506,10 +506,12 @@ Walk through every single API endpoint:
 
 ## Phase 9: "The Economics Are a Fantasy" (Cost Validation)
 
-### T9.1 — Measure Actual S3 Costs
-
-- Run 10 computers for 2 hours, 5 checkpoints each. What's the actual R2 bill?
-- Compare to the "$0.015/GB/mo" claim.
+T9.1 (measure the actual R2 bill against the "$0.015/GB/mo" claim) left the
+definition of done on 2026-09-13. It read Cloudflare's price list rather than
+anything mshkn does, and paid for that reading with 100 computers, hours of
+accumulation and a billing-API call. The one mshkn claim inside it — that shared
+base layers deduplicate — is a byte count, not a bill, and belongs in the perf
+tier if it is wanted at all.
 
 ### T9.2 — Measure NVMe Wear
 

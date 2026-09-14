@@ -1,15 +1,21 @@
 """Phase 11: Observability — "Metrics, Logs, and Status"
 
-These tests run against a LIVE server with real Firecracker VMs.
-Nothing here is skipped. Most tests exercise an observability endpoint that
-is already implemented; two (structured JSON logs and the audit log) are not
-implemented yet and fail on purpose via pytest.fail — not implemented is a
-flavor of broken, so they are not silently skipped or given an
-expected-failure marker.
+These tests run against a LIVE server with real Firecracker VMs. Nothing here
+is skipped and nothing here is a placeholder.
+
+T11.2 reads the server's own records back over `GET /logs` (see
+docs/superpowers/specs/2026-09-13-log-endpoint-design.md). It used to fail as
+`Not implemented` even though the formatter had existed since PR2, because this
+tier holds an HTTP client and nothing else and had no route to stdout.
+
+The audit-log placeholder left on 2026-09-13 and is now #180. It had no code
+behind it at all — no audit table, no audit writer — so it was a feature wearing
+a test's clothes. Its test comes back when the feature does.
 """
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -58,19 +64,32 @@ class TestT111PrometheusEndpoint:
 
 
 class TestT112StructuredLogs:
-    """Verify the server emits structured JSON logs."""
+    """Verify the server emits structured ECS logs and will hand them back."""
 
-    async def test_logs_are_json(self) -> None:
-        """Server logs should be structured JSON with standard fields.
+    async def test_logs_are_ecs_and_reconstruct_a_computer(self, client: httpx.AsyncClient) -> None:
+        """Every line is an ECS document, and one of them names the computer.
 
-        Expected fields per log line:
-        - timestamp (ISO 8601)
-        - level (info, warn, error)
-        - msg (human-readable message)
-        - computer_id (when applicable)
-        - request_id (for HTTP requests)
+        The last clause is what makes this a test of mshkn rather than of
+        json.loads: it proves a specific computer's life is reconstructable
+        from the log alone, which is what the plan's T11.3 asked for.
         """
-        pytest.fail("Not implemented: structured JSON log field verification")
+        async with managed_computer(client) as computer_id:
+            resp = await client.get("/logs", params={"limit": 500})
+            assert resp.status_code == 200, resp.text
+            assert resp.headers["content-type"].startswith("application/x-ndjson")
+
+            lines = resp.text.splitlines()
+            assert lines, "the create logged nothing"
+            entries = []
+            for line in lines:
+                entry = json.loads(line)  # a non-JSON line fails here, which is the point
+                for field in ("@timestamp", "ecs.version", "log.level", "log.logger", "message"):
+                    assert field in entry, f"missing {field} in {entry}"
+                entries.append(entry)
+
+            assert any(e.get("mshkn.computer_id") == computer_id for e in entries), (
+                f"no record names {computer_id}; the log cannot reconstruct its life"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -168,26 +187,6 @@ class TestT116HealthCheck:
         if "subsystems" in body:
             for sub in ["database", "firecracker", "storage"]:
                 assert sub in body["subsystems"], f"Missing subsystem '{sub}' in health check"
-
-
-# ---------------------------------------------------------------------------
-# T11.7 — Audit Log
-# ---------------------------------------------------------------------------
-
-
-class TestT117AuditLog:
-    """Verify that security-relevant operations are audit-logged."""
-
-    async def test_create_destroy_logged(self) -> None:
-        """Create and destroy operations should appear in an audit log.
-
-        The audit log should capture:
-        - Who (API key / account)
-        - What (operation: create, destroy, checkpoint, fork)
-        - When (timestamp)
-        - What resource (computer_id, checkpoint_id)
-        """
-        pytest.fail("Not implemented: audit log for create and destroy operations")
 
 
 # ---------------------------------------------------------------------------

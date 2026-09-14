@@ -176,7 +176,7 @@ class FakeHypervisor(_Failable):
         self.restored: list[tuple[int, SnapshotFiles]] = []
         self.snapshots: list[tuple[str, Path]] = []
         self.torn_down: list[int] = []
-        self.killed: list[int] = []
+        self.killed: list[tuple[int, str]] = []
 
     def _vm(self, slot: int, disk_name: str) -> RunningVM:
         pid = next(self._pids)
@@ -218,8 +218,8 @@ class FakeHypervisor(_Failable):
         self._maybe_fail("build_template")
         return await self.snapshot(f"/tmp/fake-template-{disk_volume_id}.socket", dest_dir)
 
-    async def kill(self, pid: int) -> None:
-        self.killed.append(pid)
+    async def kill(self, pid: int, socket_path: str) -> None:
+        self.killed.append((pid, socket_path))
         self.alive.pop(pid, None)
 
     def is_alive(self, pid: int) -> bool:

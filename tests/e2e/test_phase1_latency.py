@@ -47,6 +47,7 @@ MERGE_CEILING_MS = 10_000
 # large-state fork. Three samples cannot support that, so this ratio only
 # catches fork becoming O(state) — CoW broken, not CoW slightly slower.
 FORK_O1_MAX_RATIO = 3.0
+FORK_O1_SAMPLES = 10  # three could not outvote one slow host moment (#69)
 
 # ---------------------------------------------------------------------------
 # T1.1 — Create Latency (Target: <= 2s)
@@ -356,9 +357,14 @@ class TestT14ForkLatency:
         """Fork from 1MB state vs 50MB state — the 50MB fork must not scale with state.
 
         The plan (T1.4) wants the two means statistically indistinguishable;
-        three samples cannot support that, so FORK_O1_MAX_RATIO is a generous
+        FORK_O1_SAMPLES cannot support that, so FORK_O1_MAX_RATIO is a generous
         ceiling that only catches CoW breaking and fork becoming O(state).
         The printed report is what a human eyeballs for the finer picture.
+
+        The samples, not the ceiling, are what keeps this from flapping: at
+        three a single slow fork moved the mean by a third, which is most of
+        the headroom the ratio has. Raising the ceiling instead would buy the
+        stability by giving up the only thing the assertion detects.
         """
         small_timings: list[float] = []
         large_timings: list[float] = []
@@ -376,7 +382,7 @@ class TestT14ForkLatency:
             )
             small_ckpt = await checkpoint_computer(long_client, small_comp, label="fork-small")
 
-            for i in range(3):
+            for i in range(FORK_O1_SAMPLES):
                 start = time.perf_counter()
                 fid = await fork_checkpoint(long_client, small_ckpt)
                 elapsed_ms = (time.perf_counter() - start) * 1000
@@ -396,7 +402,7 @@ class TestT14ForkLatency:
             )
             large_ckpt = await checkpoint_computer(long_client, large_comp, label="fork-large")
 
-            for i in range(3):
+            for i in range(FORK_O1_SAMPLES):
                 start = time.perf_counter()
                 fid = await fork_checkpoint(long_client, large_ckpt)
                 elapsed_ms = (time.perf_counter() - start) * 1000

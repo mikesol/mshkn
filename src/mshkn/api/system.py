@@ -22,8 +22,8 @@ router = APIRouter(tags=["system"])
 
 
 def _firecracker_present(config: Config) -> str:
-    if shutil.which("firecracker") is None:
-        return "firecracker binary not on PATH"
+    if shutil.which(config.firecracker_binary) is None:
+        return f"firecracker binary {config.firecracker_binary} not on PATH"
     if not config.kernel_path.exists():
         return f"kernel not found at {config.kernel_path}"
     return "ok"

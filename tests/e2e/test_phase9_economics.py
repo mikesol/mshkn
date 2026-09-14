@@ -1,38 +1,17 @@
 """Phase 9: Economics — "Cost Targets and Resource Efficiency"
 
-These tests run against a LIVE server with real Firecracker VMs.
-Two tests are skipped outright, with reasons, because they require a
-week- or month-long measurement window (NVMe wear, sleep-cost billing).
-The third (R2 storage cost per GB) is not implemented yet and fails on
-purpose via pytest.fail — not implemented is a flavor of broken, so it is
-not silently skipped or given an expected-failure marker.
+These tests run against a LIVE server with real Firecracker VMs. Both are
+skipped outright, with reasons, because they require a week- or month-long
+measurement window (NVMe wear, sleep-cost billing).
+
+T9.1 (R2 storage cost per GB) was dropped from the definition of done on
+2026-09-13: it measured Cloudflare's price list rather than mshkn's behaviour.
+See the Phase 9 note in docs/plans/2026-03-07-disposable-cloud-computers-test-plan.md.
 """
 
 from __future__ import annotations
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# T9.1 — S3 / R2 Storage Costs
-# ---------------------------------------------------------------------------
-
-
-class TestT91S3Costs:
-    """Verify checkpoint storage costs stay within budget."""
-
-    async def test_checkpoint_storage_cost_per_gb(self) -> None:
-        """Measure the per-GB cost of checkpoint storage on Cloudflare R2.
-
-        Test plan:
-        1. Create 100 computers with varying state sizes (1MB - 100MB)
-        2. Checkpoint each one, measure total R2 usage
-        3. Run for several hours to accumulate billing data
-        4. Query R2 billing API for actual costs
-        5. Verify cost per GB-month is within target ($0.015/GB-month for R2)
-        6. Verify deduplication reduces effective cost (shared base layers)
-        """
-        pytest.fail("Not implemented: R2 checkpoint storage cost-per-GB measurement")
-
 
 # ---------------------------------------------------------------------------
 # T9.2 — NVMe Wear Leveling

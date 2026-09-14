@@ -28,24 +28,57 @@ if [ "$MEMBRANE_MODEL" = anthropic ]; then
 fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+
+# What a hatch has put on the account so far, and whether it got all the way to
+# its final JSON line. The unwind trap reads them.
+CID=
+KEY_ID=
+HATCHED=
+
+unwind() { # EXIT: take back what a hatch that never finished left on the account
+  local status=$?
+  rm -rf "$TMP"
+  if [ -z "$HATCHED" ]; then
+    # `set -e` is off inside a trap and every delete is best-effort: one that
+    # fails must not stop the next, and the script still exits on its own code.
+    if [ -n "$CID" ]; then
+      echo "unwinding: deleting computer $CID" >&2
+      api DELETE "/computers/$CID" > /dev/null || true
+    fi
+    if [ -n "$KEY_ID" ]; then
+      echo "unwinding: deleting scoped key $KEY_ID" >&2
+      api DELETE "/keys/$KEY_ID" > /dev/null || true
+    fi
+  fi
+  exit "$status"
+}
+trap unwind EXIT
+
+# The account key reaches curl on stdin, never in its argument list: argv is
+# readable by every user on the operator's machine for the life of the call.
+# Only the quoted form of a curl config value carries a colon (the unquoted one
+# is silently dropped), and a quoted one takes backslash escapes, so escape.
+auth_config() {
+  local key=${MSHKN_API_KEY//\\/\\\\}
+  printf 'header = "Authorization: Bearer %s"\n' "${key//\"/\\\"}"
+}
 
 api() { # method path [json]
   local method="$1" path="$2" body="${3:-}"
   if [ -n "$body" ]; then
-    curl -fsS -X "$method" "$MSHKN_API_URL$path" -H "Authorization: Bearer $MSHKN_API_KEY" \
+    auth_config | curl -fsS --config - -X "$method" "$MSHKN_API_URL$path" \
       -H 'Content-Type: application/json' --data "$body"
   else
-    curl -fsS -X "$method" "$MSHKN_API_URL$path" -H "Authorization: Bearer $MSHKN_API_KEY"
+    auth_config | curl -fsS --config - -X "$method" "$MSHKN_API_URL$path"
   fi
 }
 upload() { # computer_id remote_path local_file
-  curl -fsS -X POST "$MSHKN_API_URL/computers/$1/upload?path=$2" -H "Authorization: Bearer $MSHKN_API_KEY" \
+  auth_config | curl -fsS --config - -X POST "$MSHKN_API_URL/computers/$1/upload?path=$2" \
     -H 'Content-Type: application/octet-stream' --data-binary "@$3" > /dev/null
 }
 run() { # computer_id command  (exec over SSE; fails unless the exit event is 0)
   local out
-  out="$(curl -fsS -N -X POST "$MSHKN_API_URL/computers/$1/exec" -H "Authorization: Bearer $MSHKN_API_KEY" \
+  out="$(auth_config | curl -fsS -N --config - -X POST "$MSHKN_API_URL/computers/$1/exec" \
     -H 'Content-Type: application/json' --data "$(jq -cn --arg c "$2" '{command: $c, timeout_seconds: 300}')")"
   local code
   code="$(printf '%s\n' "$out" | tr -d '\r' | awk '/^event: exit/{getline; sub(/^data: /, ""); print}' | tail -1)"
@@ -126,10 +159,12 @@ run "$CID" "/brain/venv/bin/pip install --no-deps -q /tmp/$WHEEL_NAME && ln -sf 
 echo "checkpointing as brain" >&2
 CKPT_ID="$(api POST "/computers/$CID/checkpoint" '{"label": "brain"}' | jq -r .checkpoint_id)"
 api DELETE "/computers/$CID" > /dev/null
+CID=  # gone on purpose; the unwind must not chase it
 
 echo "opening the (closed) public door" >&2
 RULE_JSON="$(api POST /ingress_rules "$(jq -cn --rawfile s "$HERE/ingress.star" '{name: "brain", starlark_source: $s, response_mode: "sync", rate_limit_rpm: 30}')")"
 
+HATCHED=1  # everything below this line belongs to the caller, not to the unwind
 jq -cn --arg url "$(jq -r .ingress_url <<<"$RULE_JSON")" --arg rule "$(jq -r .id <<<"$RULE_JSON")" \
   --arg key "$KEY_ID" --arg recipe "$RECIPE_ID" --arg ckpt "$CKPT_ID" --argjson server "$SERVER_ID" \
   '{ingress_url: $url, rule_id: $rule, key_id: $key, recipe_id: $recipe, checkpoint_id: $ckpt, server_id: $server}'

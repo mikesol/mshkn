@@ -9,7 +9,6 @@ from collections import deque
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-import httpx
 import pytest
 
 from mshkn.config import Config
@@ -25,7 +24,6 @@ from mshkn.host import ExecResult
 from mshkn.host.fake import FakeHost, FakeHostInstance
 from mshkn.models import CheckpointTrigger, ExecLog, ExecSpec
 from mshkn.resources import DEFAULT_RESOURCES
-from mshkn.runtime import BackgroundTasks
 from mshkn.services.allocator import SlotAllocator
 from mshkn.services.checkpoints import CheckpointService
 from mshkn.services.computers import ComputerService
@@ -33,6 +31,7 @@ from mshkn.services.lifecycle import EXEC_LOG_OUTPUT_BYTES, Lifecycle, truncate_
 from mshkn.services.reaper import Reaper
 from mshkn.services.recipes import RecipeService
 from tests.support import account_row
+from tests.unit.conftest import owned_client, owned_tasks
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -73,11 +72,11 @@ async def _services(
         exec_log_retention_seconds=retention,
     )
     allocator = SlotAllocator()
-    tasks = BackgroundTasks()
+    tasks = owned_tasks()
     recipes = RecipeService(config, db, host.blocks, host.hypervisor, allocator, tasks)
     computers = ComputerService(config, db, host, allocator, recipes)
     checkpoints = CheckpointService(config, db, host, allocator, computers, tasks)
-    lifecycle = Lifecycle(db, computers, checkpoints, tasks, httpx.AsyncClient())
+    lifecycle = Lifecycle(db, computers, checkpoints, tasks, owned_client())
     meminfo = tmp_path / "meminfo"
     meminfo.write_text("MemTotal:       1000 kB\nMemAvailable:    800 kB\n")
     reaper = Reaper(

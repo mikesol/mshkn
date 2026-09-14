@@ -1,11 +1,32 @@
-"""Row builders and shell fakes shared by the unit tier. Row builders give every
-field a sensible default; override only what the test is about. `ShellRecorder`
-and `FakeShell` stand in for `mshkn.host.shell.run`."""
+"""Row builders and shell fakes shared by the unit and flow tiers. Row builders
+give every field a sensible default; override only what the test is about.
+`ShellRecorder` and `FakeShell` stand in for `mshkn.host.shell.run`."""
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from mshkn.host.shell import ShellError
 from mshkn.models import Account, Checkpoint, Computer, ComputerStatus, Recipe, RecipeStatus
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def present_firecracker(directory: Path) -> dict[str, object]:
+    """Config overrides that let `/health`'s firecracker probe pass for real.
+
+    The probe reads a binary and a kernel image off the host, which no fake host
+    can carry, so the only way past it used to be patching the module — the one
+    module patch left in the flow tier (#69). Point the config at files the test
+    made and the check runs as itself.
+    """
+    binary = directory / "firecracker"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    kernel = directory / "vmlinux.bin"
+    kernel.write_bytes(b"")
+    return {"firecracker_binary": str(binary), "kernel_path": kernel}
 
 
 def account_row(id: str = "acct-1", *, api_key: str = "test-key", vm_limit: int = 10) -> Account:  # noqa: A002

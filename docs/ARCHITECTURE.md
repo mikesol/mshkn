@@ -17,7 +17,7 @@ Dependency direction is strict: `mshkn.api` → `mshkn.services` → `mshkn.host
 A request passes through:
 
 1. The request-id middleware in `src/mshkn/app.py`: it takes `X-Request-Id` or mints one, stores it in the logging contextvar so every log line carries it, and echoes it in the response.
-2. `mshkn.api.deps.require_principal`: `Authorization: Bearer <secret>` is looked up in `accounts.api_key` first and then in `api_keys.secret`, and resolves to a `mshkn.models.Principal` (the account, plus the scoped key when the bearer was one); a missing or unknown secret is 401. Routes a scoped key may never call depend on `mshkn.api.deps.require_account_key` instead and answer 403 to one. The unauthenticated routes are the ingress trigger and the three system endpoints (`GET /health`, `GET /metrics`, `GET /alerts`).
+2. `mshkn.api.deps.require_principal`: `Authorization: Bearer <secret>` is looked up in `accounts.api_key` first and then in `api_keys.secret`, and resolves to a `mshkn.models.Principal` (the account, plus the scoped key when the bearer was one); a missing or unknown secret is 401. Routes a scoped key may never call depend on `mshkn.api.deps.require_account_key` instead and answer 403 to one; `GET /logs` is one of them, because a scoped key is a narrowing and the account's whole log stream would widen it. The unauthenticated routes are the ingress trigger and the three system endpoints (`GET /health`, `GET /metrics`, `GET /alerts`).
 3. A router in `src/mshkn/api/`. Handlers resolve the runtime (`mshkn.api.deps.get_runtime`), run the scope checks of `src/mshkn/api/scopes.py` (§1a), call one service method, and shape the result with a model from `src/mshkn/api/schemas.py`. Orchestration does not live in routers.
 4. A service in `src/mshkn/services/`, which talks to the host boundary and the database.
 
@@ -68,6 +68,7 @@ Domain errors are mapped in one place, `src/mshkn/api/errors.py`, which handles 
 | `GET /health` | subsystem checks |
 | `GET /metrics` | Prometheus exposition |
 | `GET /alerts` | the runtime's alert deque |
+| `GET /logs` | the calling account's recent log records, as ECS NDJSON |
 
 ### 1a. Tenancy: two kinds of credential
 
@@ -152,7 +153,7 @@ A VM is started as a `firecracker --api-sock /tmp/fc-<disk name>.socket` process
 
 **Durable (disk).** The thin pool `mshkn-pool` with base volume 0 (the export of the `mshkn-base` image, written by `python -m mshkn base-volume`), one volume per computer (`mshkn-<computer id>`), one per checkpoint (`mshkn-ckpt-<checkpoint id>`), and one per recipe base (`mshkn-recipe-<recipe id>`). Checkpoint snapshot files under `checkpoint_local_dir/<checkpoint id>/` (`vmstate`, `memory`), mirrored to R2 under `<account id>/<checkpoint id>/`, and template snapshots under `checkpoint_local_dir/templates/<key>/`. A checkpoint's files are written first under `checkpoint_staging_dir/<checkpoint id>/` (tmpfs, `/dev/shm/mshkn` by default), because Firecracker fsyncs the memory file; the upload task copies them into the durable directory by rename, uploads, and removes the staging copy after a linger. A fork looks in the durable directory, then the staging one, then R2.
 
-**Process-local (rebuilt at start).** The allocator's free-slot set and next volume id; the SSH connection pool; the hypervisor's staging lock and its pid-to-socket registry; the per-label fork locks in `CheckpointService`; ingress rate limiters (keyed by internal rule id); the exec rate limiter; the alert deque; background tasks. A restart loses in-flight uploads and callbacks (the reaper and the next checkpoint create recover the rest); at start-up, `CheckpointService.recover_staging` persists any complete snapshot still on the staging directory and empties it.
+**Process-local (rebuilt at start).** The allocator's free-slot set and next volume id; the SSH connection pool; the hypervisor's staging lock; the per-label fork locks in `CheckpointService`; ingress rate limiters (keyed by internal rule id); the exec rate limiter; the alert deque; background tasks. A restart loses in-flight uploads and callbacks (the reaper and the next checkpoint create recover the rest); at start-up, `CheckpointService.recover_staging` persists any complete snapshot still on the staging directory and empties it.
 
 **Kernel and daemons.** Tap devices, dm-thin mappings, Firecracker processes, Caddy routes. `Runtime.start` finishes interrupted teardowns, reaps computers whose Firecracker process is gone and re-derives slots and volume ids from the database and the pool; a resource with no database row is not reclaimed, so on the test host `scripts/e2e.sh` clears whatever a previous run left behind.
 
@@ -233,11 +234,11 @@ Slot N gives host address `172.16.N.1`, VM address `172.16.N.2`, tap `tapN` and 
 - **Dead VMs are reaped**, at startup and every reaper cycle, tolerant of resources that are already gone, and the reaper catches a failure per computer so one broken computer does not block the others.
 - **One teardown per computer.** `destroy`, `cleanup_dead` and the idle reap all go through `claim_teardown`; the loser of the race does nothing. `SlotAllocator.release_slot` refuses a slot that is not held, so even a stray second release cannot hand one slot to two VMs.
 - **Relay jobs survive a restart.** Unsettled jobs are re-run at start; their headers are still stored and the brain has seen nothing.
-- **Known gaps** are tracked as issues: #66 (an abandoned bring-up can leave a Firecracker that had already spawned), #67 (the socket registry is process-local).
+- **A VM's API socket outlives no VM.** `Hypervisor.kill` takes the socket path from its caller — `RunningVM.socket_path` during a bring-up, the `socket_path` column afterwards — so a VM the running process never started is released like any other, and a start that returns no pid takes its own child and socket with it.
 
 ## 12. Observability
 
-Logs are JSON lines (`mshkn.observability.logging.JSONFormatter`) with `timestamp`, `level`, `logger`, `msg`, `request_id`, and structured extras where the service supplies them (`op`, `computer_id`, `checkpoint_id`, `account_id`, `recipe_id`, `trigger`).
+Logs are ECS JSON lines: one mapping, `mshkn.observability.logging.to_ecs`, serialised by `mshkn.observability.logging.ECSFormatter`. Every record carries `@timestamp`, `ecs.version`, `log.level`, `log.logger` and `message`. `trace.id` is present only inside a request — a reaper cycle has no trace, so the field is omitted rather than emitted empty — and so is the account field mshkn.account_id, which is omitted when neither the record nor the request names an account. Structured extras are namespaced under `mshkn.*` where the service supplies them (op, computer_id, checkpoint_id, account_id, recipe_id, trigger). A record with an exception attached adds `error.type`, `error.message` and `error.stack_trace`.
 
 | Metric | Type | Labels | Set by |
 |---|---|---|---|
@@ -249,7 +250,7 @@ Logs are JSON lines (`mshkn.observability.logging.JSONFormatter`) with `timestam
 | `mshkn_thin_pool_used_ratio` | gauge | `kind` = `data`, `metadata` | `Reaper.check_host` |
 | `mshkn_host_ram_used_ratio` | gauge | | `Reaper.check_host` |
 
-`GET /health` reports `database`, `firecracker`, `storage` and `proxy` as `ok` or an error string, with overall `ok` or `degraded`. The database check reads, then reports the reaper's count of consecutive failed cycles (`Reaper.consecutive_failures`, with the last exception) when it is not zero: the reaper writes every cycle, so its failing is what a database that answers reads but refuses writes looks like (always HTTP 200, so a caller has to read `status` in the body; `scripts/e2e.sh` only waits for the endpoint to answer before running the suite). `GET /alerts` returns the reaper's recent alerts: thin pool data or metadata over 80 % (warning) or 95 % (critical), root filesystem usage over 80 % (critical over 95 %), and host RAM over 90 %.
+`GET /health` reports `database`, `firecracker`, `storage` and `proxy` as `ok` or an error string, with overall `ok` or `degraded`. The database check reads, then reports the reaper's count of consecutive failed cycles (`Reaper.consecutive_failures`, with the last exception) when it is not zero: the reaper writes every cycle, so its failing is what a database that answers reads but refuses writes looks like (always HTTP 200, so a caller has to read `status` in the body; `scripts/e2e.sh` only waits for the endpoint to answer before running the suite). `GET /alerts` returns the reaper's recent alerts: thin pool data or metadata over 80 % (warning) or 95 % (critical), root filesystem usage over 80 % (critical over 95 %), and host RAM over 90 %. `GET /logs` returns the calling account's recent records as newline-delimited Elastic Common Schema documents — `@timestamp`, `ecs.version`, `log.level`, `log.logger`, `message`, `trace.id` when there was a request, `error.*` on a failure, and everything a call site passed as `extra=` under an `mshkn.` prefix. They come from a bounded in-memory ring on the runtime, sized by `MSHKN_LOG_BUFFER_SIZE` (1000 records by default), and the same documents are what the process writes to stdout. `limit` keeps the newest records and `since` is exclusive. Nothing survives a restart: stdout is the durable path, and a tenant never sees uvicorn's access lines because those are emitted before authentication has run and so belong to no account.
 
 ## 13. Configuration
 
@@ -299,4 +300,8 @@ app = create_app(runtime)
 client = AsyncClient(transport=ASGITransport(app=app), base_url="http://flow")
 ```
 
-`tests/flow/conftest.py` does exactly this, adds two accounts, points the callback client at an in-process receiver, and closes everything after each test. The fakes expose their state (`host.hypervisor.alive`, `host.blocks.mounts`, `host.proxy.routes`, `host.guest.evicted`) so a test asserts on outcomes, not on mocks. Unit tests of a host module (`tests/unit/test_firecracker_stage.py`, `tests/unit/test_dmthin.py`, `tests/unit/test_ssh_guest.py`) exercise the real command chains against recorders and fake binaries instead.
+`tests/flow/conftest.py` does exactly this, adds two accounts, points the callback client at an in-process receiver, and closes everything after each test. Each flow gets a directory of its own, so two open at once do not share a database file. The fakes expose their state (`host.hypervisor.alive`, `host.blocks.mounts`, `host.proxy.routes`, `host.guest.evicted`) so a test asserts on outcomes, not on mocks. Unit tests of a host module (`tests/unit/test_firecracker_stage.py`, `tests/unit/test_dmthin.py`, `tests/unit/test_ssh_guest.py`) exercise the real command chains against recorders and fake binaries instead.
+
+Neither tier patches a module under test. What the fake host cannot carry — the Firecracker binary and the kernel image that `/health` probes — is a Config field, `firecracker_binary`, which the booter reads too, so the endpoint reports on the binary the host would actually run; `tests.support.present_firecracker` points a test's config at files it made.
+
+A unit helper that builds services by hand takes its `BackgroundTasks` from `owned_tasks()` and its HTTP client from `owned_client()` (`tests/unit/conftest.py`), as `make_runtime` does for the Runtime it returns. The `db` fixture drains every task and closes every client on the way out, before the connection goes — a drain is what flushes a task's last write, and a task that outlives its test lands its failure in whatever runs next.

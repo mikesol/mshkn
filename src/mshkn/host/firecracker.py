@@ -200,23 +200,42 @@ async def start_firecracker_process(
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
-    # Poll for socket creation instead of fixed 500ms sleep
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + socket_timeout
-    while loop.time() < deadline:
-        if Path(socket_path).exists():
-            break
-        await asyncio.sleep(0.01)
-    else:
-        # Leaving the child running would orphan a Firecracker that owns the
-        # staging tap; the caller only ever learns about a pid we return.
+
+    async def _abandon_child() -> None:
+        """Kill and reap the child, and take its socket with it.
+
+        The caller only ever learns about a pid this function returns, so on
+        any path that does not return one the child is nobody's: left running
+        it owns the staging tap for good.
+        """
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         await proc.wait()
-        logger.warning(
-            "Killed Firecracker PID=%d: API socket %s never appeared", proc.pid, socket_path
-        )
-        raise TimeoutError(f"Firecracker socket {socket_path} not created within {socket_timeout}s")
+        Path(socket_path).unlink(missing_ok=True)
+
+    # Poll for socket creation instead of fixed 500ms sleep
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + socket_timeout
+    try:
+        while loop.time() < deadline:
+            if Path(socket_path).exists():
+                break
+            await asyncio.sleep(0.01)
+        else:
+            await _abandon_child()
+            logger.warning(
+                "Killed Firecracker PID=%d: API socket %s never appeared", proc.pid, socket_path
+            )
+            raise TimeoutError(
+                f"Firecracker socket {socket_path} not created within {socket_timeout}s"
+            )
+    except asyncio.CancelledError:
+        # `_stage` cancels this task when the tap or the disk mapping fails, by
+        # which time create_subprocess_exec has long returned: the cancellation
+        # unwinds the awaiting task and leaves the child behind (#66).
+        await _abandon_child()
+        logger.warning("Killed Firecracker PID=%d: start was cancelled", proc.pid)
+        raise
     logger.info("Started Firecracker process PID=%d socket=%s", proc.pid, socket_path)
     return proc.pid
 
@@ -405,11 +424,6 @@ class FirecrackerHypervisor:
         # after a failed stage. A successful stage renames both the tap and the
         # mapping away, so cleaning before every stage was 15 ms of no-ops (#147).
         self._staging_dirty = True
-        # pid -> API socket path, so a killed VM's socket is removed. Firecracker
-        # does not unlink its own socket on exit, and start_firecracker_process
-        # only clears a stale one for the path it is about to use, so without
-        # this every VM that ever ran leaves a file behind in /tmp.
-        self._sockets: dict[int, str] = {}
 
     # -- Hypervisor protocol -------------------------------------------------
 
@@ -489,8 +503,9 @@ class FirecrackerHypervisor:
                         self._map_staging_disk(disk_volume_id),
                         create_tap(STAGING_SLOT, run=self._run),
                     )
-                    pid = await start_firecracker_process(socket_path)
-                    self._sockets[pid] = socket_path
+                    pid = await start_firecracker_process(
+                        socket_path, binary=self._config.firecracker_binary
+                    )
                     Path(STAGING_VSOCK_PATH).unlink(missing_ok=True)
                     client = FirecrackerClient(socket_path)
                     try:
@@ -519,26 +534,31 @@ class FirecrackerHypervisor:
                         await client.create_snapshot(str(files.vmstate), str(files.memory))
                     finally:
                         await client.close()
-                    await self.kill(pid)
+                    await self.kill(pid, socket_path)
                     pid = None
                     await destroy_tap(STAGING_SLOT, run=self._run)
                     await self._run(f"dmsetup remove {STAGING_DRIVE_NAME}")
                 except Exception:
                     logger.exception("Template build on volume %d failed", disk_volume_id)
-                    await self._cleanup_staging(pid)
+                    await self._cleanup_staging(pid, socket_path)
                     raise
             logger.info("Built template from volume %d at %s", disk_volume_id, dest_dir)
             return files
 
-    async def kill(self, pid: int) -> None:
-        await kill_firecracker_process(pid)
-        self._unlink_socket(pid)
+    async def kill(self, pid: int, socket_path: str) -> None:
+        """Kill a VM's process and remove its API socket.
 
-    def _unlink_socket(self, pid: int) -> None:
-        """Remove the API socket of a VM this hypervisor started, if we know it."""
-        path = self._sockets.pop(pid, None)
-        if path is not None:
-            Path(path).unlink(missing_ok=True)
+        The socket path is the caller's, not something this object remembers.
+        Firecracker does not unlink its own socket on exit and
+        `start_firecracker_process` only clears the one path it is about to
+        reuse, so something has to remove it; an in-memory pid-to-path map knew
+        nothing about the VMs running before the last service restart, and left
+        their sockets in /tmp for good (#67). `RunningVM.socket_path` and the
+        `socket_path` column on `computers` both carry it, so every caller has
+        it already.
+        """
+        await kill_firecracker_process(pid)
+        Path(socket_path).unlink(missing_ok=True)
 
     def is_alive(self, pid: int) -> bool:
         try:
@@ -573,7 +593,9 @@ class FirecrackerHypervisor:
                 if self._staging_dirty:
                     await self._ensure_staging_clean()
                     self._staging_dirty = False
-                fc_task = asyncio.create_task(start_firecracker_process(socket_path))
+                fc_task = asyncio.create_task(
+                    start_firecracker_process(socket_path, binary=self._config.firecracker_binary)
+                )
                 try:
                     await asyncio.gather(
                         self._map_staging_disk(disk_volume_id),
@@ -585,7 +607,6 @@ class FirecrackerHypervisor:
                         await fc_task
                     raise
                 pid = await fc_task
-                self._sockets[pid] = socket_path
                 # Firecracker binds the vsock socket afresh on boot and on restore.
                 Path(STAGING_VSOCK_PATH).unlink(missing_ok=True)
                 client = FirecrackerClient(socket_path)
@@ -610,7 +631,7 @@ class FirecrackerHypervisor:
                     f"dmsetup rename {STAGING_DRIVE_NAME} {disk_name}"
                 )
             except Exception:
-                await self._cleanup_staging(pid)
+                await self._cleanup_staging(pid, socket_path)
                 raise
         return RunningVM(
             pid=pid, socket_path=socket_path, slot=slot, vm_ip=final_vm_ip, tap_device=final_tap
@@ -716,13 +737,13 @@ class FirecrackerHypervisor:
         except Exception:
             logger.debug("Staging drive cleanup failed", exc_info=True)
 
-    async def _cleanup_staging(self, pid: int | None) -> None:
+    async def _cleanup_staging(self, pid: int | None, socket_path: str) -> None:
         if pid is not None:
             try:
                 await kill_firecracker_process(pid)
             except Exception:
                 logger.warning("Failed to kill staging FC process PID=%s", pid)
-            self._unlink_socket(pid)
+        Path(socket_path).unlink(missing_ok=True)
         await self._ensure_staging_clean()
         # Best-effort cleanup may itself have failed; the next stage checks again.
         self._staging_dirty = True

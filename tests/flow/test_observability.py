@@ -6,13 +6,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mshkn.api import system as system_module
 from mshkn.host import PoolUsage
 
 if TYPE_CHECKING:
     import pytest
-
-    from mshkn.config import Config
 
     from .conftest import Flow
 
@@ -20,12 +17,8 @@ if TYPE_CHECKING:
 async def test_health_degrades_when_the_database_fails_and_metrics_render(
     flow: Flow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def present(config: Config) -> str:
-        return "ok"
-
-    # The one module seam the flow tier patches: the firecracker binary and the
-    # kernel image are host facts, not runtime state the fake host can carry.
-    monkeypatch.setattr(system_module, "_firecracker_present", present)
+    # No module patch: the flow config points the firecracker probe at a binary
+    # and a kernel the fixture made, so every subsystem check runs as itself.
     healthy = (await flow.client.get("/health")).json()
     assert healthy["status"] == "ok"
     assert set(healthy["subsystems"]) == {"database", "firecracker", "storage", "proxy"}

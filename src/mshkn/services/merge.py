@@ -64,35 +64,40 @@ def all_relative_entries(*dirs: Path) -> set[str]:
 
 
 def entry_path(root: Path, rel: str) -> Path | None:
-    """`root / rel`, or None when a symlink stands anywhere above it.
+    """`root / rel`, or None when anything but a directory stands above it.
 
     A symlink is an entry, never a door. If `usr/sbin` is a link in one tree
     then `usr/sbin/init` is not reachable in that tree at all: reaching it
     would leave the volume and land on the host's own filesystem. The caller
     reads that None as "absent here", so a fork that replaced a directory with
     a link deletes the directory's children and adds the link.
+
+    A regular file is the same shape (#80): `usr/sbin` as a file makes
+    `usr/sbin/init` unreachable too, and writing it anyway meant `mkdir`
+    through a file, which raises FileExistsError.
     """
     walked = root
     for part in Path(rel).parts[:-1]:
         walked = walked / part
-        if walked.is_symlink():
+        if walked.is_symlink() or walked.is_file():
             return None
     return root / rel
 
 
 def unlink_stale_ancestors(output: Path, entries: set[str]) -> None:
-    """Remove symlinks in `output` that stand above an entry of the result.
+    """Remove symlinks and files in `output` that stand above an entry of the result.
 
-    An output volume snapped from the parent carries the parent's symlinks. A
-    fork that replaced one of them with a real directory makes that link stale:
-    left in place it shadows the children about to be copied, and the delete
-    pass then removes the link too, so neither survives.
+    An output volume snapped from the parent carries the parent's symlinks and
+    its files. A fork that replaced one of them with a real directory makes it
+    stale: left in place it shadows the children about to be copied, and the
+    delete pass then removes it too, so neither survives.
     """
     for rel in sorted(entries):
         walked = output
         for part in Path(rel).parts[:-1]:
             walked = walked / part
-            if walked.is_symlink() and str(walked.relative_to(output)) not in entries:
+            shadows = walked.is_symlink() or walked.is_file()
+            if shadows and str(walked.relative_to(output)) not in entries:
                 walked.unlink()
 
 
