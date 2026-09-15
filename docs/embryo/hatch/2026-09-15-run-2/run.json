@@ -1,0 +1,528 @@
+{
+ "approver": "AutoApprover",
+ "base_url": "https://ai-gateway.vercel.sh",
+ "body_extra": "{\"providerOptions\":{\"gateway\":{\"only\":[\"zai\"]}}}",
+ "capability": "hatch",
+ "commands": 185,
+ "continuations": [
+  "2-continue-1"
+ ],
+ "cost_usd": 0.1167,
+ "default_effort": "off",
+ "effort_supported": false,
+ "ended": "2026-09-15T19:49:10+00:00",
+ "hatched": {
+  "checkpoint_id": "ckpt-c103324c107b",
+  "ingress_url": "https://mshkn.dev/ingress/ir_mFJmAx4avwO3Iavhl6B3hsrqC_s",
+  "key_id": "key-80148cd0ddb7",
+  "recipe_id": "rcp-e4b6243ae974",
+  "rule_id": "ir_mFJmAx4avwO3Iavhl6B3hsrqC_s",
+  "server_id": null
+ },
+ "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-15-run-2",
+ "membrane": {
+  "commit": "e9dd0524bfd7ecda6ed9a1c306683ecd722db4a9",
+  "dirty": false
+ },
+ "model": "zai/glm-4.7",
+ "model_calls": 44,
+ "ok": false,
+ "passed": 2,
+ "postconditions": {
+  "authentication": {
+   "evidence": {
+    "hook_logs": [
+     {
+      "computer_id": "comp-969afb8833c6",
+      "exit_code": 1,
+      "gone": true,
+      "stdout": "Too few arguments for verify: missing principal identity\r\n"
+     }
+    ],
+    "hooks": [
+     {
+      "computer_id": "comp-969afb8833c6",
+      "error": null,
+      "exit_code": 1,
+      "name": "ssh_verify_hook",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "signed": "anonymous",
+    "unsigned": "anonymous"
+   },
+   "ok": false
+  },
+  "authorization": {
+   "evidence": {
+    "anonymous": {
+     "invoke": [],
+     "propose": false
+    },
+    "anonymous_offered": [],
+    "exercised": [],
+    "verified": {
+     "invoke": [],
+     "propose": true
+    }
+   },
+   "ok": false
+  },
+  "counter": {
+   "evidence": {
+    "chain_heads": [],
+    "computer_ids": [],
+    "counts": [],
+    "final_chain_head": null
+   },
+   "ok": false
+  },
+  "no_undeclared_capability": {
+   "evidence": {
+    "catalog": [
+     "ssh_verify",
+     "ssh_verify_hook"
+    ],
+    "not_ready": [
+     "ssh_verify"
+    ],
+    "undeclared_recipes": [],
+    "unexpected_tools": [],
+    "unproposed": [
+     "ssh_verify"
+    ]
+   },
+   "ok": false
+  },
+  "nothing_by_hand": {
+   "evidence": {
+    "by_hand": [],
+    "commands": {
+     "api approve": 5,
+     "api list": 166,
+     "api say": 6,
+     "ingress say": 8
+    },
+    "provides": 0,
+    "provisions": 0
+   },
+   "ok": true
+  },
+  "page_title": {
+   "evidence": {
+    "computer_id": null,
+    "gone": null,
+    "reply": "I cannot fulfill this request.\n\n1.  **No Verb Installed**: The `page_title` verb does not exist. In the previous turn, I only `tried` the verb, which runs on a temporary computer and installs nothing.\n2.  **Permission Denied**: My current policy explicitly states `\"anonymous\": {\"invoke\": []}`. This means you are not permitted to invoke any verbs while unauthenticated.\n\nTo use this capability, you must authenticate as `ssh:mike` and `propose` the `page_title` verb so it can be installed permanently.",
+    "stdout": null
+   },
+   "ok": false
+  },
+  "root_unforgeable": {
+   "evidence": {
+    "public_principals": [
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous"
+    ]
+   },
+   "ok": true
+  }
+ },
+ "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDKjcMzKVBZnfIMTxJFnn9gtLHsFa1+XT4Z3IENq2VgA mike",
+ "reasks": [],
+ "run": "2026-09-15-run-2",
+ "seconds": 1436.5,
+ "started": "2026-09-15T19:25:13+00:00",
+ "started_from": "hatch",
+ "turns": [
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "1",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1408,
+    "input_tokens": 1653,
+    "output_tokens": 549
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 building: verb ssh_verify recipe rcp-a7714ffcd056"
+    },
+    {
+     "decision": "approve",
+     "id": "p-3",
+     "result": "p-3 building: verb ssh_verify_hook recipe rcp-cea2bcea3d57"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "2",
+   "model_calls": 14,
+   "principal": "root",
+   "proposals": [
+    "p-1",
+    "p-2",
+    "p-3"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 93696,
+    "input_tokens": 17610,
+    "output_tokens": 8940
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-4",
+     "result": "p-4 building: verb ssh_verify_hook recipe rcp-d1c4b964cb78"
+    },
+    {
+     "decision": "approve",
+     "id": "p-5",
+     "result": "p-5 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "3-repair-1",
+   "model_calls": 17,
+   "principal": "root",
+   "proposals": [
+    "p-4",
+    "p-5"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "propose",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 166016,
+    "input_tokens": 22882,
+    "output_tokens": 8782
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "3-repair-2",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 384,
+    "input_tokens": 3415,
+    "output_tokens": 405
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "3-repair-3",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3200,
+    "input_tokens": 951,
+    "output_tokens": 469
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "2-continue-1",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3456,
+    "input_tokens": 947,
+    "output_tokens": 426
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "4",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3531,
+    "output_tokens": 875
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress-unsigned",
+   "effort": [
+    null
+   ],
+   "label": "5",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3328,
+    "input_tokens": 319,
+    "output_tokens": 554
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "6",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3328,
+    "input_tokens": 435,
+    "output_tokens": 1609
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "7",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3456,
+    "input_tokens": 613,
+    "output_tokens": 2852
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "8",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3840,
+    "input_tokens": 585,
+    "output_tokens": 743
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 512,
+    "input_tokens": 3600,
+    "output_tokens": 1202
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9-count-1",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 512,
+    "input_tokens": 3007,
+    "output_tokens": 568
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9-count-2",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 512,
+    "input_tokens": 2498,
+    "output_tokens": 418
+   }
+  }
+ ],
+ "usage": {
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 283648,
+  "input_tokens": 62046,
+  "output_tokens": 28392
+ }
+}

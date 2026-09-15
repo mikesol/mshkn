@@ -29,10 +29,12 @@ Spec §12. This task produces an **answer**, not code. It gates Task 5's default
 
 **Blocked on:** a payment method on the Vercel team. A probe run before that returns `403 customer_verification_required`, which is not an answer to the question being asked.
 
+**Answered 2026-09-15 — spec §12.1 and §12.2. No longer blocked.** Billing verification cleared, and a free-tier restriction behind it (`403 RestrictedModelsError` on everything but `zai/*`) cleared once credits were topped up. All three steps ran, and the answer to the question the task exists for is the *good* one: `output_config.effort` survives for `anthropic/*` — 200 on `medium`, 400 on a bogus value, which is the negative control that makes it an answer rather than a shrug. So Task 5's `off` sentinel is only ever needed for non-Anthropic runs, and Task 8's control run is like-for-like. Step 3 was run against `zai/glm-4.7` as well as opus; both stream and both emit `tool_use` in Anthropic shape. The probe also turned up a defect the plan did not anticipate — the extraction model id of Task 6 named nothing in the gateway's catalogue (§12.2), which would have failed every memory operation of every gateway run.
+
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-13-model-gateway-design.md` (§12 records the finding)
 
-- [ ] **Step 1: Confirm billing is live with the cheapest possible call**
+- [x] **Step 1: Confirm billing is live with the cheapest possible call**
 
 ```bash
 cd /home/mikesol/Documents/GitHub/mshkn
@@ -45,7 +47,7 @@ cat /tmp/probe-a.json
 
 Expected: `status 200` and a body with a `content` array. A `403 customer_verification_required` means billing is still not enabled — stop, and report it. Do not proceed to Step 2 on a 403; the later probes will all fail the same way and tell you nothing.
 
-- [ ] **Step 2: Probe `output_config.effort`, the question the task exists for**
+- [x] **Step 2: Probe `output_config.effort`, the question the task exists for**
 
 ```bash
 KEY=$(grep '^AI_GATEWAY_API_KEY=' .env | cut -d= -f2- | tr -d '"'"'"' \r')
@@ -61,7 +63,7 @@ Two possible answers, both useful:
 - **`200`** — the field survives. Task 5's `off` sentinel is only ever needed for non-Anthropic runs, and Task 8's control run is a like-for-like comparison against the six existing runs.
 - **`400`** — the field does not survive. The control run must itself be run with `MEMBRANE_EFFORT=off`, and no run through the gateway is directly comparable to the six existing ones on any axis that effort touches. Say so loudly; it is the more consequential outcome.
 
-- [ ] **Step 3: Probe streaming with a tool, since the membrane always streams**
+- [x] **Step 3: Probe streaming with a tool, since the membrane always streams**
 
 `compose_request` sets `"stream": True` unconditionally (`model.py:88`) and the liturgy is nothing but tool calls, so a gateway that handles neither is no use whatever it does with effort.
 

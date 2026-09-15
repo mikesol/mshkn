@@ -4,6 +4,106 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## The envelope goes back in the seed; `authentication` resets (2026-09-15)
+
+Every run in this directory was scored on `authentication` against a seed that
+names `msg` and not the field beside it. #123 deleted the signing sentence
+because the encoding it disclosed had gone wrong, and `sig` went with it while
+`msg` stayed one sentence earlier; turn 2, which §5 of the seed-reduction spec
+said would ask instead, says only "attach the signature beside my message".
+
+Nothing on the inside reveals the missing name. A hook's `try` cases run against
+payloads the agent wrote, so the trial agrees with the guess, and the live door
+answers a wrong guess with `anonymous` — the same thing it answers a forgery
+with. `2026-09-10-postcut-run-4` and `2026-09-15-run-3` both wrote `.msg` right,
+guessed the second field, and lost the postcondition. `2026-09-15-run-1` did not
+discover `sig`; it announced its guess outward as a contract (transcript:250) and
+happened to pick the word the driver was written with.
+
+`embryo/seed.md` now says *"A signature rides in `sig`, verbatim as the signer
+printed it."* The name and the absence of an encoding, nothing else — the signing
+command, the namespace and `ssh:mike` stay turn 2's. Full reasoning in §11 of
+`docs/superpowers/specs/2026-09-10-seed-reduction-design.md`.
+
+**Runs from `2026-09-15-run-4` on are not comparable to anything below on
+`authentication`, or on the postconditions gated behind it.**
+
+## Two cheap models, and the shape of how they fail (2026-09-15)
+
+| Run | Model | Score | Model calls | Cost | vs Opus |
+|---|---|---|---|---|---|
+| `2026-09-15-run-1` | `claude-opus-5`, effort medium | 6/7 recorded, 7/7 on the fixed judge | 50 | $5.47 | — |
+| `2026-09-15-run-2` | `zai/glm-4.7`, effort off | 2/7 | 44 | $0.1167 | 47x cheaper |
+| `2026-09-15-run-3` | `deepseek/deepseek-v4-pro`, effort off | 4/7 | 23 | $0.3303 | 17x cheaper |
+
+Both cheap runs went through the gateway with the provider pinned and
+`effort_supported: false`. Neither is comparable to run 1 on any axis effort
+touches, and neither is comparable to the 2026-09-10 round at all.
+
+**DeepSeek failed in a more interesting place than GLM.** GLM never got the
+architecture right: two builds failed outright, and by turn 9 it was denying the
+existence of a verb it had been asked to build four rows earlier. DeepSeek got
+the whole architecture right and one shell script wrong. It proposed the identity
+hook, the hook built `ready`, `2-continue-1` delivered that, it proposed the
+policy, the policy applied, `2-continue-2` delivered that — the exact sequence
+run 1 walks. Then the hook ran and exited **255 with empty stdout**, so the
+signed turn resolved to `anonymous` and `authentication` was gone.
+
+Everything downstream follows from that one failure, and follows *correctly*:
+`page_title` and `counter` are missing because the agent declined to build or
+invoke verbs for an unauthenticated principal, which is what its own policy told
+it to do. It scored `authorization` and `no_undeclared_capability`, which GLM did
+not. Its 23 model calls against GLM's 44 and run 1's 50 are the same story: it
+did less, and more of what it did was right.
+
+**The finding that is not about price.** DeepSeek trialled the hook three times
+before proposing it — `t-1` exit 255, `t-2` exit 0, `t-3` exit 255 — and proposed
+it anyway. The feedback loop that #118 built for exactly this was available, was
+used, returned a two-in-three failure rate, and did not change the decision. That
+is not a cheap-model defect that a better model obviously fixes; it is an agent
+reading its own evidence and shipping regardless, and it would be worth checking
+whether run 1 was ever in a position to make the same mistake.
+
+The catalogue's headline price for `deepseek-v4-pro` is $0.66/$1.98 per Mtok. It
+is served from `us` only, where the same entry's `regional` block charges double,
+and that is the rate `PRICES` carries. A 2x peak multiplier applies on weekdays
+01:00-04:00 and 06:00-10:00 UTC; `Price` has no time axis, so a run inside those
+windows under-reports its own cost and cannot know it. Run 3 was off-peak.
+
+## The first run that is not Opus (2026-09-15)
+
+`2026-09-15-run-2` is the first hatch spoken to a model that is not Anthropic's:
+`zai/glm-4.7` through Vercel AI Gateway, `MEMBRANE_EFFORT=off`, provider pinned
+to `zai`. It scored **2/7** — `root_unforgeable` and `nothing_by_hand`, the two
+that measure the harness rather than the agent — in 44 model calls, 24 minutes
+and **$0.1167**. The same capability on `claude-opus-5` two hours earlier cost
+$5.47. That is a factor of 47 on price and a collapse in outcome, and the second
+number is the one that decides anything.
+
+**The gateway is not the explanation, and the evidence says so without a control
+run.** Every mechanism the wire carries worked: the agent proposed verbs, the
+driver approved them, recipes built, a policy was applied and took effect from
+the next turn, a result continuation was delivered (`2-continue-1`), and the
+audit line closed every turn. No relay error, no malformed body, no unparsed
+response. A gateway that mistranslated would have failed at the shape of a tool
+call, not at the content of a design. `run.json` records `effort_supported:
+false` and the pinned `body_extra`, so the run is reproducible.
+
+What GLM did instead was fail at the task. Two of its first three builds failed
+outright and cost a repair. Its identity hook never verified anything: turn 4
+arrives signed and still resolves to `anonymous`, which is `authentication` gone
+and `authorization` with it. By turn 9 it was answering `count` with "No Verb
+Named 'count'" — a verb it was asked to create four rows earlier and never did.
+
+The caveats spec §10 asks for apply and matter here. The effort axis is absent,
+so nothing on this page's 2026-09-10 finding transfers. Tool-use fidelity varies
+by backend. And **a cross-model run is never purely cross-model**: mem0's fact
+extraction is pinned to Claude Haiku whatever speaks the liturgy, so the facts
+this run remembered were extracted by a different model than the one that earned
+them. At N=1 the honest claim is narrow — *this* model, at *this* price, cannot
+hatch — and the useful one is narrower still: the cheap road is open and paved,
+and the first vehicle sent down it did not arrive.
+
 ## Successful-result continuation (2026-09-15)
 
 The operator's `2026-09-14-run-1` on membrane `5b72668` reached 3/7: it built

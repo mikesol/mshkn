@@ -183,13 +183,26 @@ def load_run_settings(
 
 @dataclass(frozen=True)
 class Price:
-    """USD per million tokens, from the Claude API reference (cached 2026-06-24)."""
+    """USD per million tokens, from the model's own published price list."""
 
     input: float
     output: float
 
 
-PRICES = {"claude-opus-5": Price(input=5.0, output=25.0)}
+PRICES = {
+    # Claude API reference, cached 2026-06-24.
+    "claude-opus-5": Price(input=5.0, output=25.0),
+    # The gateway's own catalogue, read 2026-09-15. zai publishes no cache-write
+    # tier; CACHE_WRITE below is applied to it all the same, which is this table's
+    # standing approximation and not a claim about what zai charges.
+    "glm-4.7": Price(input=0.6, output=2.2),
+    # The `regional.us` rates, not the headline ones: the catalogue serves this
+    # model from `us` only and prices it there at double its own top line. It also
+    # carries a 2x peak multiplier on weekday 01:00-04:00 and 06:00-10:00 UTC,
+    # which this table has no axis for. A run inside those windows costs twice what
+    # its record says, and the record has no way to know it did.
+    "deepseek-v4-pro": Price(input=1.32, output=3.96),
+}
 CACHE_WRITE = 1.25  # of the input price
 CACHE_READ = 0.1
 

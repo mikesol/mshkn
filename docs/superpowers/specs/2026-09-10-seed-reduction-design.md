@@ -178,3 +178,23 @@ It is shown on every turn, including anonymous ones. Withholding it there was co
 More turns per run, and probably lower scores. That is the point: the score is meant to measure the organism, not the genome. The 2026-09-09 round is the baseline for what an unaided agent did with turn 2, and it reached 3 of 7 at best; the 2026-09-10 round reached 7 of 7 with the seed as it now stands.
 
 One run at `--effort medium` against the reduced seed, matching the 2026-09-10 round's conditions so the seed is the only variable, recorded in `docs/embryo/` whatever it says. Whether one sample is enough to land on is a decision taken after reading it, not before.
+
+## 11. Reversed 2026-09-15: `sig` goes back in the seed
+
+§5 justified dropping the envelope with one sentence: *"root builds the envelope, so where the signature rides is root's to state."* Root does not state it. Turn 2's words, unchanged since the cut, are *"attach the signature beside my message"* — a preposition, not a field name. The envelope left the seed and never arrived in the liturgy, so §3's "paid for" ledger has a hole in it that three months of runs did not close.
+
+Worse, the cut was asymmetric. It deleted the signing sentence and left `msg` standing in the sentence before, so the seed names one field of two. An agent reads a payload shape that is half-specified and cannot tell which half.
+
+**Nothing in the system reveals the other name.** A hook's `try` cases are built from payloads the agent writes itself, so the trial confirms whatever the agent guessed; the live door fails silently to `anonymous`, which is the same observation a forged signature produces. This is the definition of invisible mechanism in §3, and it is why the field belongs in the seed rather than anywhere else.
+
+The evidence is three runs, and it corrects the record of one of them:
+
+- `2026-09-10-postcut-run-4` wrote `.sig` and lost `authentication` to the base64 layer over the armor. Its FINDING paid for that by deleting the quirk and concluded *"The envelope is self-evident: `sig` is what the signer printed. There is nothing left to tell the model."* The first half is right about the **value** and wrong about the **name**, which is what was left to tell.
+- `2026-09-15-run-1` (Opus, 6/7) is cited as evidence that the envelope is discoverable. It is not. The model never observed a real payload: its ten trial cases were its own construction, and it announced its guess outward as a contract — *"put the armored signature in `sig` beside `msg`"* (transcript:250). It guessed the same word `capability.py:886` was written with. Agreement between two independent guesses at an obvious short name was scored as knowledge.
+- `2026-09-15-run-3` (DeepSeek, 4/7) wrote `.msg` correctly and `.signature` for the other, and lost `authentication`. The disclosed half right, the undisclosed half guessed — exactly the shape a half-specified envelope predicts.
+
+**What goes back, and what does not.** One clause in the payload paragraph: *"A signature rides in `sig`, verbatim as the signer printed it."* The name, because no experiment reveals it. The absence of an encoding, because postcut-run-4 proves a silent decode mismatch is indistinguishable from a forgery. Not the signing command, not the namespace, not `mike` → `ssh:mike`: those are sender facts, turn 2 does state them, and §5 stands for them.
+
+The alternative — teaching turn 2 to name the field, which would make §5's sentence true instead of retiring it — was the other candidate and was not taken. Root's words are the agent's adversary in this measure; a field name in them is an instruction, where in the genome it is anatomy.
+
+`test_the_seed_names_both_envelope_fields_and_neither_encoding` holds the line in both directions. **Runs from 2026-09-15-run-4 on are not comparable to this round on `authentication`.**
