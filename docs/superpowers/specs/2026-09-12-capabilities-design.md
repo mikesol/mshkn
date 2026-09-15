@@ -246,6 +246,22 @@ enters its `prepare` before the first row and exits it after the final listing
 yielded. Then, for each row in order: the door, the words with templates filled,
 then settle. `root list` rows record the listing as the turn's output.
 
+**Result continuation.** After settling approvals, builds and provisions, deliver
+new successful results once and let the agent continue before advancing the row.
+The notification contains proposal IDs and terminal statuses (`ready` or `applied`)
+and confirmed provision names, never secret values, future rows, postconditions or
+suggested implementations. It asks only to continue the request, without replaying
+its operation. Each row (including a re-ask) gets at most three continuation turns;
+new proposals still settle at the limit, and undelivered results are logged.
+No new results means no continuation. Labels are `<label>-continue-<n>` and
+`run.json` records them in `continuations`, separately from the score and `reasks`.
+
+The original row determines the door: root stays root, signed stays signed, and
+unsigned stays unsigned, even if a root repair produced the result. Repairs during
+a public continuation also use that public door. Normal membrane authentication
+and policy checks still apply; a closed door is not bypassed. The agent sees no
+script and the driver does not inspect replies for promises of a next turn.
+
 **Re-ask.** A policy change is new information about what is now possible, and
 the driver acts on it without telling the agent anything (#170). After any settle
 in which a policy proposal was applied, a public row (`signed` or `unsigned`)

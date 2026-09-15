@@ -1966,6 +1966,8 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
     turns, final, reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
     assert labels == ["1", "2", "4", "5", "6", "7", "8", "9", "9-count-1", "9-count-2"]
     # Turn 6's policy widens `ssh:mike` to "*", but the only ready verb is the door
@@ -2027,6 +2029,8 @@ async def test_a_policy_change_that_gains_only_a_hook_re_asks_nothing(tmp_path: 
     turns, _final, reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert doors.policy["principals"]["ssh:mike"]["invoke"] == "*"
     assert doors.policy["hooks"] == ["verify_ssh"]
     assert reasks == []
@@ -2046,6 +2050,8 @@ async def test_a_policy_change_makes_the_driver_re_ask_the_rows_that_called_no_v
     turns, _final, reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
     assert reasks == ["8", "9-count-1", "9-count-2"]
     assert labels[labels.index("9-count-2") :] == [
@@ -2091,6 +2097,8 @@ async def test_a_row_that_proposed_a_verb_is_not_re_asked(tmp_path: Path) -> Non
     turns, _final, reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
     seven, nine = by_label(turns, "7"), by_label(turns, "9")
     assert seven is not None and nine is not None
@@ -2141,6 +2149,8 @@ async def test_a_row_is_re_asked_at_most_twice(tmp_path: Path) -> None:
     turns, _final, reasks = await speak(
         _growth(tmp_path), doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
     assert sorted(doors.catalog) == ["extra1", "extra2", "extra3", "verify_ssh"]
     assert reasks.count("ask") == MAX_REASKS
@@ -2195,6 +2205,8 @@ async def test_a_grant_of_a_verb_that_is_not_in_the_catalog_re_asks_nothing(
     turns, _final, reasks = await speak(
         cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert doors.policy["principals"]["ssh:mike"]["invoke"] == ["nope"]
     assert "nope" not in doors.catalog
     assert reasks == []
@@ -2229,6 +2241,8 @@ async def test_an_applied_prompt_is_not_a_policy_change(tmp_path: Path) -> None:
     turns, _final, reasks = await speak(
         cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     applied = [p for p in doors.proposals if p["kind"] == "prompt"]
     assert applied and all(p["status"] == "applied" for p in applied)
     # the prompt re-asked nobody and cost nobody their place in the window: the
@@ -2258,6 +2272,8 @@ async def test_a_re_ask_that_changes_the_policy_again_starts_another_round(
     turns, _final, reasks = await speak(
         _growth(tmp_path), doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
     assert reasks == ["ask", "ask", "grant"]
     assert labels[labels.index("grant") :] == ["grant", "grant-again-1"]
@@ -2290,6 +2306,8 @@ async def test_speak_walks_the_rows_in_order_and_takes_the_final_list(tmp_path: 
     turns, final, _reasks = await speak(
         cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert [t.label for t in turns] == ["1", "2", "4", "5"]
     assert [t.door for t in turns] == ["api", "api", "ingress", "ingress-unsigned"]
     assert turns[1].words.endswith(pubkey)  # the template was filled
@@ -2314,6 +2332,8 @@ async def test_speak_without_a_root_list_row_returns_no_final(tmp_path: Path) ->
     turns, final, _reasks = await speak(
         cap, FakeDoors(), key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert [t.label for t in turns] == ["1"] and final is None
 
 
@@ -2328,6 +2348,8 @@ async def test_every_row_settles_so_a_failed_build_after_a_signed_row_is_repaire
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
     assert "3-repair-1" in labels and labels.index("3-repair-1") > labels.index("7")
     assert "build failed for page_title; repair 1" in log.getvalue()
@@ -2342,6 +2364,8 @@ async def test_verbs_are_approved_before_the_policies_that_name_them(tmp_path: P
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert [a["id"] for a in turns[1].approvals] == ["p-2", "p-1"]
     assert all("refused" not in a["result"] for a in turns[1].approvals), turns[1].approvals
     assert turns[2].audit["principal"] == "ssh:mike"
@@ -2366,6 +2390,8 @@ async def test_a_proposal_refused_before_its_build_is_approved_again_after_it(
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     results = [(a["id"], a["result"][:14]) for a in turns[1].approvals]
     assert results == [
         ("p-2", "p-2 building: "),
@@ -2381,6 +2407,8 @@ async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) 
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert [t.label for t in turns][:4] == ["1", "2", "3-repair-1", "4"]
     assert turns[1].audit["stopped"] == "deadline" and turns[1].approvals == []
     assert [a["id"] for a in turns[2].approvals] == ["p-1", "p-2"]
@@ -2400,6 +2428,8 @@ async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
     assert "3-repair-1" in labels, labels
     repair = turns[labels.index("3-repair-1")]
@@ -2417,6 +2447,8 @@ async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Pat
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     repairs = [t.label for t in turns if t.label.startswith("3-repair-")]
     assert repairs == ["3-repair-1"], repairs
 
@@ -2427,6 +2459,8 @@ async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
     assert labels[:4] == ["1", "2", "3-repair-1", "4"]
     repair = turns[2]
@@ -2453,6 +2487,8 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
     turns, final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
     assert labels[:6] == ["1", "2", "3-repair-1", "3-repair-2", "3-repair-3", "4"]
     # the hook never became ready, so the signed knock is anonymous
@@ -2480,6 +2516,8 @@ async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -
     turns, final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     public = [t for t in turns if t.door.startswith("ingress")]
     assert public and all(t.audit["principal"] is None for t in public)
     final = await doors.listing()
@@ -2507,6 +2545,8 @@ async def test_a_refused_approval_is_recorded_and_the_verdict_sees_it(tmp_path: 
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert turns[1].approvals[1]["result"].startswith("p-2 refused")
     assert doors.policy["door"] == "closed"
 
@@ -2519,6 +2559,8 @@ async def test_the_asking_approver_reads_the_pilot(tmp_path: Path) -> None:
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AskApprover(stdin, stdout), log=io.StringIO()
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert turns[1].approvals[1] == {
         "id": "p-2",
         "decision": "reject: not like this",
@@ -4340,6 +4382,8 @@ async def test_after_a_row_settles_root_provides_where_the_reply_said(tmp_path: 
         AutoApprover(),
         log=log,
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert [t.label for t in turns] == ["11", "12", "13"] and reasks == []
     assert doors.provided_at == [
         ("secret_page", "/verb/token", "tok-1"),
@@ -4377,6 +4421,8 @@ async def test_a_reply_with_no_path_earns_the_provide_repair_phrase(tmp_path: Pa
         AutoApprover(),
         log=log,
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert [t.label for t in turns][:3] == ["11", "3-repair-1", "12"]
     assert turns[1].words == "where should I put it?"
     assert doors.provided_at[0] == ("secret_page", "/verb/token", "tok-1")
@@ -4400,6 +4446,8 @@ async def test_without_a_token_in_the_context_nothing_is_placed_and_nothing_repa
         AutoApprover(),
         log=log,
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert [t.label for t in turns] == ["11", "12", "13"]
     assert doors.provided_at == [] and turns[0].provisions == []
     assert "the run has no token to place" in log.getvalue()
@@ -4421,6 +4469,8 @@ async def test_the_pilot_can_override_or_skip_a_placement(tmp_path: Path) -> Non
         AskApprover(stdin, stdout),
         log=io.StringIO(),
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert doors.provided_at == [("secret_page", "/verb/secrets/token", "tok-1")]
     assert "provide secret_page page_token: path [/verb/token] | skip> " in stdout.getvalue()
     assert turns[2].provisions == []
@@ -4449,6 +4499,8 @@ async def test_a_capability_with_no_provide_phrase_says_so_instead_of_repairing(
         AutoApprover(),
         log=log,
     )
+    # These assertions concern script rows and repairs; continuations have their own tests.
+    turns = [t for t in turns if "-continue-" not in t.label]
     assert [t.label for t in turns] == ["11", "12", "13"]
     assert doors.provided_at == []
     assert "no path for secret_page requires page_token and security" in log.getvalue()
@@ -4462,3 +4514,124 @@ def test_the_asking_approver_places_with_the_parsed_path_by_default() -> None:
     assert AskApprover(io.StringIO("relative\n/abs\n"), stdout).place("v", "n", None) == "/abs"
     assert AskApprover(io.StringIO(""), stdout).place("v", "n", "/verb/t") is None
     assert AutoApprover().place("v", "n", "/verb/t") == "/verb/t"
+
+
+async def test_success_continues_staged_hook_then_policy_before_public_rows(tmp_path: Path) -> None:
+    """The failed hatch: the agent waits for the hook before proposing its policy."""
+    doors = FakeDoors()
+    original = doors.root_say
+
+    async def staged(text: str) -> tuple[dict[str, Any], str]:
+        if text.startswith(WORDS["2"][:30]):
+            result = await original(text)
+            doors.proposals.pop()  # the agent has not proposed its policy yet
+            result[0]["proposals"] = result[0]["proposals"][:1]
+            return result
+        if text.startswith("External results:") and doors.policy["door"] == "closed":
+            assert (
+                text
+                == 'External results: [["proposal", "p-1", "ready"]]. Continue with the request.'
+            )
+            doors._propose("policy", "door", policy=doors._grant([]))
+        return await original(text)
+
+    doors.root_say = staged  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    continuations: list[str] = []
+    turns, final, _ = await speak(
+        HATCH,
+        doors,
+        key_dir,
+        {"key": pubkey},
+        AutoApprover(),
+        log=io.StringIO(),
+        continuations=continuations,
+    )
+    assert [t.label for t in turns[:6]] == ["1", "2", "2-continue-1", "2-continue-2", "4", "5"]
+    assert turns[4].audit["principal"] == "ssh:mike"
+    assert final is not None and final["policy"]["door"] == "open"
+    assert continuations == [
+        "2-continue-1",
+        "2-continue-2",
+        "6-continue-1",
+        "7-continue-1",
+        "9-continue-1",
+    ]
+    assert doors.count_calls == 2  # result delivery never replays the count operation
+    assert sum('"p-1", "ready"' in t.words for t in turns) == 1
+
+
+@pytest.mark.parametrize("door", ["root say", "signed", "unsigned"])
+async def test_continuations_preserve_origin_door_and_are_bounded(
+    tmp_path: Path, door: str
+) -> None:
+    from membrane.capabilities import Row
+    from membrane.capability import MAX_CONTINUATIONS
+
+    doors = FakeDoors()
+    seen: list[tuple[str, Any]] = []
+
+    def propose() -> tuple[dict[str, Any], str]:
+        doors._propose("prompt", "self")
+        return audit_line(), "Waiting for approval."
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        seen.append(("root", text))
+        return propose()
+
+    async def public(payload: Any) -> tuple[dict[str, Any], str]:
+        seen.append(("public", payload))
+        return propose()
+
+    doors.root_say = root  # type: ignore[method-assign]
+    doors.public_say = public  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(HATCH, rows=(Row("request", door, "Become something.", ""),))
+    log = io.StringIO()
+    turns, _, _ = await speak(cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log)
+    assert len(seen) == MAX_CONTINUATIONS + 1
+    assert "continuation budget exhausted" in log.getvalue()
+    assert len(doors.proposals) == MAX_CONTINUATIONS + 1
+    assert all(p["status"] == "applied" for p in doors.proposals)
+    assert [t.label for t in turns] == ["request", *[f"request-continue-{n}" for n in range(1, 4)]]
+    if door == "root say":
+        assert all(route == "root" for route, _ in seen)
+    else:
+        assert all(route == "public" for route, _ in seen)
+        assert all(("sig" in payload) == (door == "signed") for _, payload in seen)
+        assert all(
+            set(payload) == ({"msg", "sig"} if door == "signed" else {"msg"}) for _, payload in seen
+        )
+
+
+@pytest.mark.parametrize("signed", [True, False])
+async def test_public_continuation_repairs_never_escalate_to_root(
+    tmp_path: Path, signed: bool
+) -> None:
+    from membrane.capabilities import Row
+
+    doors = FakeDoors()
+    payloads: list[Any] = []
+
+    async def public(payload: Any) -> tuple[dict[str, Any], str]:
+        payloads.append(payload)
+        if len(payloads) == 1:
+            doors._propose("prompt", "self")
+        audit = audit_line(door="ingress", principal="ssh:mike" if signed else "anonymous")
+        if len(payloads) == 2:
+            audit["stopped"] = "deadline"
+        return audit, "Done."
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        pytest.fail("A public continuation must never acquire root authority")
+
+    doors.public_say = public  # type: ignore[method-assign]
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(HATCH, rows=(Row("request", "signed" if signed else "unsigned", "Change.", ""),))
+    turns, _, _ = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert [t.label for t in turns] == ["request", "request-continue-1", "3-repair-1"]
+    assert all(("sig" in payload) == signed for payload in payloads)
+    assert payloads[-1]["msg"] == HATCH.repair.build

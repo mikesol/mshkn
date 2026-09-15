@@ -4,6 +4,18 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## Successful-result continuation (2026-09-15)
+
+The operator's `2026-09-14-run-1` on membrane `5b72668` reached 3/7: it built
+`ssh_verify`, but the agent deliberately deferred its door policy until the hook
+was ready. The driver never delivered that success, so all subsequent public
+rows met a closed door. Bounded result continuations now allow that next turn,
+through the originating row's door, without exposing the script or repairing
+policy by hand. The seed and capability's questions are unchanged. Earlier runs
+had no success continuations and are not directly comparable in cost or success
+rate; new runs record `continuations` separately from their postcondition score.
+No new live hatch has been run for this driver change.
+
 ## The result, on the capabilities driver (2026-09-13)
 
 This round is the first runs of `hatch` on the capabilities driver, each written by `uv run capability run hatch`. This row's `run.json` is left exactly as the run recorded it, aborted-run evidence and all.
