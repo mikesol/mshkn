@@ -299,34 +299,39 @@ only for non-Anthropic runs; if it is rejected, the control run must itself be
 run with effort off, and the six existing runs are not directly comparable to
 anything through the gateway.
 
-### 12.1 Probed 2026-09-15: partly settled, and the control run is blocked
+### 12.1 Probed 2026-09-15: settled. The effort field survives.
 
-The 403 of 2026-09-13 is gone; the key authenticates and the catalogue reads.
-What replaced it is a spend gate, and it lands on the control run specifically.
+The 403 of 2026-09-13 was billing verification, and clearing it exposed a second
+gate — a free tier that serves `zai/*` and restricts everything else with 403
+`RestrictedModelsError`. Both are now behind us; the answers below were taken on
+paid credits.
 
-- **`anthropic/claude-opus-5` returns 403 `RestrictedModelsError`**: "Free tier
-  users do not have access to this model." So does `anthropic/claude-haiku-4.5`,
-  and so does every Alibaba slug. The control run of §9 — the most valuable
-  single run in the sequence — cannot be spoken until the team holds paid
-  credits. The effort question above is therefore still open for Anthropic
-  models, for a different reason than before.
-- **`zai/glm-4.7` answers on the free tier, and answers correctly.** A plain call
-  returns an Anthropic `message` with a `content` array and `usage` carrying
-  `cache_read_input_tokens`. A streamed call carrying one tool returned
-  `message_start`, `content_block_start` / `_delta` / `_stop`, `message_delta`
-  and `message_stop`, with a `content_block_start` whose block is
-  `{"type": "tool_use", …}` — exactly what `parse_message` reads at
-  `model.py:139`. **The gateway's Anthropic skin is real for a non-Anthropic
-  model**, which is the load-bearing bet of §4 and was until now untested.
-- Free-tier calls to that model are rate-limited after a few in a row, so
-  `output_config.effort` against GLM was not reached. It is the cheap question,
-  and §7's `off` sentinel is the safe answer regardless.
+**The question this section was opened for: `output_config.effort` reaches
+Anthropic models through the gateway intact.** `{"effort": "medium"}` on
+`anthropic/claude-opus-5` returns 200. The negative control is what makes that an
+answer rather than a shrug: `{"effort": "banana"}` returns 400, `output_config.effort:
+Invalid option: expected one of "low"|"medium"|"high"|"max"|"xhigh"`, so the
+field is parsed and validated rather than tolerated and dropped. The same prompt
+at the API default returned a `thinking` block where the `medium` call returned
+plain text, which is the field being acted on and not merely accepted.
 
-So the order the spec assumed is inverted by cost: the gateway is now provable on
-a cheap model and unaffordable on the control. §9 stands as written — the control
-run still comes before any *comparison* — but a first GLM run may be spoken ahead
-of it as a shakedown of the wire, on the understanding that it measures nothing
-against the six direct runs.
+So §7's `off` sentinel is needed **only for non-Anthropic runs**, and the control
+run of §9 is a like-for-like comparison against the six direct runs — the better
+of the two outcomes Task 1 of the plan laid out.
+
+**And the skin is real for a non-Anthropic model**, which is the load-bearing bet
+of §4 and had never been tested. `zai/glm-4.7` returns an Anthropic `message`
+with a `content` array and `usage`; streamed with one tool it emits
+`message_start`, `content_block_start` / `_delta` / `_stop`, `message_delta` and
+`message_stop`, and the opening block is `{"type": "tool_use", …}` — exactly what
+`parse_message` reads at `model.py:139`.
+
+One caveat on that model. The gateway validates `output_config.effort` for
+`zai/glm-4.7` by the same schema and accepts `medium` with a 200. That is the
+*skin* validating, not zai honouring: nothing in the response says the value
+reached a model with such an axis. A GLM run is still to be spoken with
+`MEMBRANE_EFFORT=off` — the axis there is unmeasurable, which is what §7 means by
+absent, and a 200 is not evidence against it.
 
 ### 12.2 The extraction slug §5.1 composes does not exist
 
@@ -342,10 +347,11 @@ authority, not a prefix on the first. `EXTRACTION_GATEWAY_MODEL_ID` is therefore
 stored beside `EXTRACTION_MODEL_ID` rather than derived from it, and §5.1's "the
 id is composed from the base URL rather than stored twice" no longer holds.
 
-Nothing caught this and nothing could have: the live probe that would have was
-Task 1, and Task 1 was blocked on billing. `bare_model_id` in the other direction
-(§6) is unaffected — stripping a prefix that is present is not the same bet as
-inventing one that must be.
+`anthropic/claude-haiku-4.5` answers 200 on paid credits, so the corrected id is
+live and not merely catalogued. Nothing caught the old one and nothing could
+have: the live probe that would have was Task 1, and Task 1 was blocked on
+billing. `bare_model_id` in the other direction (§6) is unaffected — stripping a
+prefix that is present is not the same bet as inventing one that must be.
 
 ## 13. Rejected
 
