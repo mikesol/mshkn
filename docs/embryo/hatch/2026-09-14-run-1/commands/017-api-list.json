@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-14T15:47:16+00:00",
+ "command": "list",
+ "computer_id": "comp-0db66abe5236",
+ "detail": [],
+ "door": "api",
+ "n": 17,
+ "seconds": 3.3272922550095245,
+ "status": 200,
+ "stderr": "",
+ "stdout": "{\n \"catalog\": {},\n \"door\": {\n  \"hooks\": [],\n  \"hooks_ready\": [],\n  \"status\": \"closed\"\n },\n \"inbox\": 0,\n \"pending\": {\n  \"door\": \"api\",\n  \"forks\": 2,\n  \"job\": \"rj-de10f8075aab\",\n  \"model_calls\": 2,\n  \"principal\": \"root\",\n  \"started_at\": \"2026-09-14T15:45:57+00:00\",\n  \"turn\": 2,\n  \"usage\": {\n   \"cache_creation_input_tokens\": 377,\n   \"cache_read_input_tokens\": 2054,\n   \"input_tokens\": 2,\n   \"output_tokens\": 6324\n  }\n },\n \"policy\": {\n  \"door\": \"closed\",\n  \"hooks\": [],\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   }\n  }\n },\n \"principals\": [],\n \"proposals\": [],\n \"queue\": [],\n \"trials\": [],\n \"turn\": 2,\n \"window\": [\n  {\n   \"audit\": {\n    \"door\": \"api\",\n    \"effort\": [\n     \"medium\"\n    ],\n    \"forks\": 1,\n    \"hooks\": [],\n    \"job\": \"rj-2b765b19bbe1\",\n    \"memory_written\": false,\n    \"model_calls\": 1,\n    \"offered\": [\n     \"effort\",\n     \"propose\",\n     \"remember\",\n     \"try\"\n    ],\n    \"principal\": \"root\",\n    \"proposals\": [],\n    \"references\": [],\n    \"started_at\": \"2026-09-14T15:45:20+00:00\",\n    \"stopped\": \"done\",\n    \"tools\": [],\n    \"turn\": 1,\n    \"usage\": {\n     \"cache_creation_input_tokens\": 2226,\n     \"cache_read_input_tokens\": 0,\n     \"input_tokens\": 2,\n     \"output_tokens\": 1004\n    }\n   },\n   \"door\": \"api\",\n   \"input\": \"Hello. I am the one who hatched you. Tell me what you are and what you can do.\",\n   \"output\": \"\\n\",\n   \"principal\": \"root\",\n   \"reply\": \"\",\n   \"turn\": 1\n  }\n ]\n}\n"
+}

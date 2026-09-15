@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-14T15:50:17+00:00",
+ "command": "list",
+ "computer_id": "comp-1b12faa1d078",
+ "detail": [],
+ "door": "api",
+ "n": 28,
+ "seconds": 15.481351593974978,
+ "status": 200,
+ "stderr": "",
+ "stdout": "{\n \"catalog\": {},\n \"door\": {\n  \"hooks\": [],\n  \"hooks_ready\": [],\n  \"status\": \"closed\"\n },\n \"inbox\": 0,\n \"pending\": {\n  \"door\": \"api\",\n  \"forks\": 5,\n  \"job\": \"rj-2d42c87639ec\",\n  \"model_calls\": 5,\n  \"principal\": \"root\",\n  \"started_at\": \"2026-09-14T15:45:57+00:00\",\n  \"turn\": 2,\n  \"usage\": {\n   \"cache_creation_input_tokens\": 35818,\n   \"cache_read_input_tokens\": 6162,\n   \"input_tokens\": 8,\n   \"output_tokens\": 13993\n  }\n },\n \"policy\": {\n  \"door\": \"closed\",\n  \"hooks\": [],\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   }\n  }\n },\n \"principals\": [],\n \"proposals\": [],\n \"queue\": [],\n \"trials\": [\n  {\n   \"id\": \"t-1\",\n   \"recipe_id\": \"rcp-ab4cd7b3ed54\",\n   \"status\": \"done\",\n   \"verb\": \"ssh_selftest\"\n  },\n  {\n   \"id\": \"t-2\",\n   \"recipe_id\": \"rcp-f1bfd5236800\",\n   \"status\": \"done\",\n   \"verb\": \"ssh_selftest2\"\n  },\n  {\n   \"id\": \"t-3\",\n   \"recipe_id\": \"rcp-1549b6604d01\",\n   \"status\": \"done\",\n   \"verb\": \"ssh_verify\"\n  }\n ],\n \"turn\": 2,\n \"window\": [\n  {\n   \"audit\": {\n    \"door\": \"api\",\n    \"effort\": [\n     \"medium\"\n    ],\n    \"forks\": 1,\n    \"hooks\": [],\n    \"job\": \"rj-2b765b19bbe1\",\n    \"memory_written\": false,\n    \"model_calls\": 1,\n    \"offered\": [\n     \"effort\",\n     \"propose\",\n     \"remember\",\n     \"try\"\n    ],\n    \"principal\": \"root\",\n    \"proposals\": [],\n    \"references\": [],\n    \"started_at\": \"2026-09-14T15:45:20+00:00\",\n    \"stopped\": \"done\",\n    \"tools\": [],\n    \"turn\": 1,\n    \"usage\": {\n     \"cache_creation_input_tokens\": 2226,\n     \"cache_read_input_tokens\": 0,\n     \"input_tokens\": 2,\n     \"output_tokens\": 1004\n    }\n   },\n   \"door\": \"api\",\n   \"input\": \"Hello. I am the one who hatched you. Tell me what you are and what you can do.\",\n   \"output\": \"\\n\",\n   \"principal\": \"root\",\n   \"reply\": \"\",\n   \"turn\": 1\n  }\n ]\n}\n"
+}
