@@ -29,6 +29,8 @@ Spec §12. This task produces an **answer**, not code. It gates Task 5's default
 
 **Blocked on:** a payment method on the Vercel team. A probe run before that returns `403 customer_verification_required`, which is not an answer to the question being asked.
 
+**Run 2026-09-15, partly answered — spec §12.1 and §12.2.** Billing verification has cleared, and what blocks the task now is that the team holds no paid credits: `anthropic/*` is free-tier-restricted (403 `RestrictedModelsError`), so Steps 1 and 2 still cannot be answered. Step 3 was answered instead against `zai/glm-4.7`, which the free tier does serve — streaming and `tool_use` both arrive in Anthropic shape. The probe also turned up a defect the plan did not anticipate: the extraction model id names nothing in the gateway's catalogue (§12.2). **Top up credits, then re-run Steps 1 and 2 before the control run of Task 8.**
+
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-13-model-gateway-design.md` (§12 records the finding)
 

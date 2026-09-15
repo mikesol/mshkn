@@ -31,6 +31,10 @@ OPENAI_DIMS = 1536
 # spends one budget on both the model's deliberation and the document it emits,
 # so a long deliberation truncates the JSON and mem0 silently stores nothing.
 EXTRACTION_MODEL_ID = "claude-haiku-4-5-20251001"
+# The same model as the gateway's catalogue names it. Not composed from the id
+# above: a gateway is a second naming authority, not a prefix on the first, and
+# it publishes no dated slug at all (spec §5.1, corrected 2026-09-15).
+EXTRACTION_GATEWAY_MODEL_ID = "anthropic/claude-haiku-4.5"
 EXTRACTION_MAX_TOKENS = 4000
 
 
@@ -82,11 +86,11 @@ EmbedderFactory.provider_to_class["hash"] = "membrane.memory.HashEmbedder"
 
 
 def extraction_model_id(base_url: str) -> str:
-    """The extraction model as the endpoint at `base_url` names it: bare for the
-    Anthropic API, provider-namespaced for a gateway."""
+    """The extraction model as the endpoint at `base_url` names it: the dated id
+    for the Anthropic API, the gateway's own slug for a gateway."""
     if base_url == DEFAULT_ANTHROPIC_BASE_URL:
         return EXTRACTION_MODEL_ID
-    return f"anthropic/{EXTRACTION_MODEL_ID}"
+    return EXTRACTION_GATEWAY_MODEL_ID
 
 
 def extraction_llm(api_key: str | None, base_url: str) -> dict[str, Any]:

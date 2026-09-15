@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from membrane.config import DEFAULT_ANTHROPIC_BASE_URL, Settings
 from membrane.memory import (
+    EXTRACTION_GATEWAY_MODEL_ID,
     EXTRACTION_MAX_TOKENS,
     EXTRACTION_MODEL_ID,
     HashEmbedder,
@@ -196,13 +197,19 @@ def test_extraction_follows_the_brain_through_a_gateway() -> None:
     gateway then extraction must too or every memory operation fails."""
     llm = extraction_llm("vck-1", "https://ai-gateway.vercel.sh")
     assert llm["config"]["anthropic_base_url"] == "https://ai-gateway.vercel.sh"
-    # The gateway namespaces every id by its provider, including this one.
-    assert llm["config"]["model"] == "anthropic/claude-haiku-4-5-20251001"
+    assert llm["config"]["model"] == EXTRACTION_GATEWAY_MODEL_ID
 
 
-def test_the_extraction_model_is_namespaced_only_for_a_gateway() -> None:
+def test_the_extraction_model_is_renamed_not_namespaced_for_a_gateway() -> None:
+    """The gateway's catalogue is a second naming authority, not a prefix on the
+    first. `GET https://ai-gateway.vercel.sh/v1/models` on 2026-09-15 listed
+    `anthropic/claude-3-haiku` and `anthropic/claude-haiku-4.5` and no dated slug
+    at all, so the composed id the spec assumed reaches no model. The negative
+    control is the second assertion: it fails the moment the id is derived from
+    the direct-API one again."""
     assert extraction_model_id(DEFAULT_ANTHROPIC_BASE_URL) == EXTRACTION_MODEL_ID
-    assert extraction_model_id("https://ai-gateway.vercel.sh") == f"anthropic/{EXTRACTION_MODEL_ID}"
+    assert extraction_model_id("https://ai-gateway.vercel.sh") == EXTRACTION_GATEWAY_MODEL_ID
+    assert extraction_model_id("https://ai-gateway.vercel.sh") != f"anthropic/{EXTRACTION_MODEL_ID}"
 
 
 # `test_extraction_sends_no_parameter_the_installed_sdk_rejects` above is the test

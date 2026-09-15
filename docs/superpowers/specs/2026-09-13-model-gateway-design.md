@@ -299,6 +299,54 @@ only for non-Anthropic runs; if it is rejected, the control run must itself be
 run with effort off, and the six existing runs are not directly comparable to
 anything through the gateway.
 
+### 12.1 Probed 2026-09-15: partly settled, and the control run is blocked
+
+The 403 of 2026-09-13 is gone; the key authenticates and the catalogue reads.
+What replaced it is a spend gate, and it lands on the control run specifically.
+
+- **`anthropic/claude-opus-5` returns 403 `RestrictedModelsError`**: "Free tier
+  users do not have access to this model." So does `anthropic/claude-haiku-4.5`,
+  and so does every Alibaba slug. The control run of §9 — the most valuable
+  single run in the sequence — cannot be spoken until the team holds paid
+  credits. The effort question above is therefore still open for Anthropic
+  models, for a different reason than before.
+- **`zai/glm-4.7` answers on the free tier, and answers correctly.** A plain call
+  returns an Anthropic `message` with a `content` array and `usage` carrying
+  `cache_read_input_tokens`. A streamed call carrying one tool returned
+  `message_start`, `content_block_start` / `_delta` / `_stop`, `message_delta`
+  and `message_stop`, with a `content_block_start` whose block is
+  `{"type": "tool_use", …}` — exactly what `parse_message` reads at
+  `model.py:139`. **The gateway's Anthropic skin is real for a non-Anthropic
+  model**, which is the load-bearing bet of §4 and was until now untested.
+- Free-tier calls to that model are rate-limited after a few in a row, so
+  `output_config.effort` against GLM was not reached. It is the cheap question,
+  and §7's `off` sentinel is the safe answer regardless.
+
+So the order the spec assumed is inverted by cost: the gateway is now provable on
+a cheap model and unaffordable on the control. §9 stands as written — the control
+run still comes before any *comparison* — but a first GLM run may be spoken ahead
+of it as a shakedown of the wire, on the understanding that it measures nothing
+against the six direct runs.
+
+### 12.2 The extraction slug §5.1 composes does not exist
+
+`GET https://ai-gateway.vercel.sh/v1/models` on 2026-09-15 returned 372 models.
+The Anthropic Haiku entries are `anthropic/claude-3-haiku` and
+`anthropic/claude-haiku-4.5`. There is no dated slug in the catalogue at all, so
+`f"anthropic/{EXTRACTION_MODEL_ID}"` — the composition §5.1 chose precisely to
+avoid storing the id twice — names nothing, and would have failed every memory
+operation of every gateway run: the exact failure §5.1 was written to prevent.
+
+The reasoning was sound and the premise was wrong. A gateway is a second naming
+authority, not a prefix on the first. `EXTRACTION_GATEWAY_MODEL_ID` is therefore
+stored beside `EXTRACTION_MODEL_ID` rather than derived from it, and §5.1's "the
+id is composed from the base URL rather than stored twice" no longer holds.
+
+Nothing caught this and nothing could have: the live probe that would have was
+Task 1, and Task 1 was blocked on billing. `bare_model_id` in the other direction
+(§6) is unaffected — stripping a prefix that is present is not the same bet as
+inventing one that must be.
+
 ## 13. Rejected
 
 - **A second request composer and parser in `model.py`**, per #127. Provider
