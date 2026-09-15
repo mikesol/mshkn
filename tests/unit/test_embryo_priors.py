@@ -75,12 +75,15 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         # mechanism)
         "cannot be invoked until root has provided every name",
         "where root puts it is yours to say",
+        # the envelope's second field name. #123 took it out on the theory that turn 2
+        # asks for it; turn 2 says only "attach the signature beside my message", which
+        # names nothing. See test_the_seed_names_both_envelope_fields below.
+        "`sig`",
     ):
         assert phrase in seed, phrase
     for phrase in (
         # hatch.md asks instead (row 2)
         "ssh-keygen",
-        '"sig"',
         "ssh:mike",
         # the approval-time block (#91) is gone; a false line in the genome is
         # worse than a missing one
@@ -103,6 +106,27 @@ def test_the_seed_is_bootstrap_and_invisible_mechanism_and_nothing_else() -> Non
         "`runs`",
     ):
         assert phrase not in seed, phrase
+
+
+def test_the_seed_names_both_envelope_fields_and_neither_encoding() -> None:
+    """Half an envelope is the worst of the three states. #123 deleted the signing
+    sentence because it had gone wrong — it disclosed a base64 layer over the armor
+    that `sign()` no longer sends — and `sig` went out with it while `msg` stayed.
+    Nothing reveals the missing name: a hook's `try` payloads are the agent's own, so
+    the trial agrees with whatever the agent guessed, and the live door fails silently
+    to `anonymous`. Two runs wrote `.msg` correctly, guessed the second field and lost
+    `authentication` for it — 2026-09-10-postcut-run-4 (`.sig`, defeated by the base64
+    layer) and 2026-09-15-run-3 (`.signature`, defeated by the name). Opus's
+    2026-09-15-run-1 did not discover `sig`; it guessed the same word the driver was
+    written with and announced it outward as a contract.
+
+    The second assertion is the negative control against over-restoring: the field
+    name is invisible mechanism and belongs here, the signing protocol is turn 2's to
+    state, and the encoding was paid for by deleting the quirk rather than disclosing
+    it (postcut-run-4's FINDING). Restoring any of the latter two here fails."""
+    seed = (EMBRYO / "seed.md").read_text()
+    assert "`msg`" in seed and "`sig`" in seed
+    assert "base64" not in seed and "ssh-keygen" not in seed
 
 
 def test_the_seed_does_not_say_a_trial_has_no_chain() -> None:

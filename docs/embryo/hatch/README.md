@@ -4,6 +4,30 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## The envelope goes back in the seed; `authentication` resets (2026-09-15)
+
+Every run in this directory was scored on `authentication` against a seed that
+names `msg` and not the field beside it. #123 deleted the signing sentence
+because the encoding it disclosed had gone wrong, and `sig` went with it while
+`msg` stayed one sentence earlier; turn 2, which §5 of the seed-reduction spec
+said would ask instead, says only "attach the signature beside my message".
+
+Nothing on the inside reveals the missing name. A hook's `try` cases run against
+payloads the agent wrote, so the trial agrees with the guess, and the live door
+answers a wrong guess with `anonymous` — the same thing it answers a forgery
+with. `2026-09-10-postcut-run-4` and `2026-09-15-run-3` both wrote `.msg` right,
+guessed the second field, and lost the postcondition. `2026-09-15-run-1` did not
+discover `sig`; it announced its guess outward as a contract (transcript:250) and
+happened to pick the word the driver was written with.
+
+`embryo/seed.md` now says *"A signature rides in `sig`, verbatim as the signer
+printed it."* The name and the absence of an encoding, nothing else — the signing
+command, the namespace and `ssh:mike` stay turn 2's. Full reasoning in §11 of
+`docs/superpowers/specs/2026-09-10-seed-reduction-design.md`.
+
+**Runs from `2026-09-15-run-4` on are not comparable to anything below on
+`authentication`, or on the postconditions gated behind it.**
+
 ## Two cheap models, and the shape of how they fail (2026-09-15)
 
 | Run | Model | Score | Model calls | Cost | vs Opus |
