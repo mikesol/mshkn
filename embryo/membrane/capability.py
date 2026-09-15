@@ -57,6 +57,7 @@ MAX_REPAIRS = 3
 # A row whose answer a policy change makes possible is asked again, at most twice
 # in a run (#170): the bound is what makes a goto backwards finite.
 MAX_REASKS = 2
+MAX_CONTINUATIONS = 3
 TRANSPORT_RETRIES = 3
 
 FENCED_RE = re.compile(r"```[^\n]*\n(.*?)\n?```", re.S)
@@ -1129,6 +1130,7 @@ async def speak(
     *,
     log: TextIO,
     reasks: list[str] | None = None,
+    continuations: list[str] | None = None,
 ) -> tuple[list[Turn], dict[str, Any] | None, list[str]]:
     """The capability's rows in order, each followed by approvals, a wait for
     builds and at most MAX_REPAIRS repair turns. A `root list` row takes the
@@ -1148,6 +1150,7 @@ async def speak(
     turns: list[Turn] = []
     final: dict[str, Any] | None = None
     reasks = [] if reasks is None else reasks
+    continuations = [] if continuations is None else continuations
     # The public rows spoken since the last policy change, and how often each label
     # has been asked again in this run.
     since_policy: list[tuple[Row, Turn]] = []
@@ -1274,7 +1277,7 @@ async def speak(
             for a in turn.approvals
         )
 
-    async def settle(turn: Turn) -> Settled:
+    async def settle_repairs(turn: Turn, *, continuation: bool = False) -> Settled:
         """Approvals, builds, root's provisions, and at most MAX_REPAIRS repair
         turns in the whole run for a failed build, a refused approval, a turn that
         ran out before proposing, or a requirement the reply named no path for
@@ -1326,9 +1329,64 @@ async def speak(
                 why, words = f"no path for {', '.join(unplaced)}", capability.repair.provide
             repairs += 1
             log.write(f"  {why}; repair {repairs}\n")
-            current = await root_turn(f"3-repair-{repairs}", words)
+            label = f"3-repair-{repairs}"
+            if continuation and turn.door != "api":
+                current = await public_turn(label, words, signed=turn.door == "ingress")
+            else:
+                current = await root_turn(label, words)
             _, listing = await approve_pending(current)
             applied = applied or policy_applied(current, listing)
+
+    delivered: set[tuple[str, ...]] = set()
+
+    async def settle(turn: Turn) -> Settled:
+        """Deliver successful external results once, under the originating authority.
+
+        Only observed state is reported: no script, scoring hints, secret values,
+        or replay of the original operation. Repairs retain their existing path;
+        their results never change the door used for a continuation.
+        """
+        current = turn
+        first: Settled | None = None
+        for n in range(MAX_CONTINUATIONS + 1):
+            start = len(turns)
+            settled = await settle_repairs(current, continuation=n > 0)
+            first = Settled(
+                settled.applied or (first.applied if first else False),
+                first.before if first else settled.before,
+                settled.after,
+            )
+            batch: list[tuple[str, ...]] = []
+            proposals = {p["id"]: p for p in settled.after["proposals"]}
+            for completed in [current, *turns[start:]]:
+                for approval in completed.approvals:
+                    p = proposals.get(approval["id"], {})
+                    if approval["decision"] == "approve" and p.get("status") in (
+                        "ready",
+                        "applied",
+                    ):
+                        batch.append(("proposal", approval["id"], p["status"]))
+                for provision in completed.provisions:
+                    entry = settled.after["catalog"].get(provision["verb"], {})
+                    if provision["name"] in entry.get("provided", []):
+                        batch.append(("provided", provision["verb"], provision["name"]))
+            batch = list(dict.fromkeys(event for event in batch if event not in delivered))
+            if not batch:
+                return first
+            if n == MAX_CONTINUATIONS:
+                log.write(
+                    f"  {turn.label}: continuation budget exhausted; results remain undelivered\n"
+                )
+                return first
+            delivered.update(batch)
+            words = "External results: " + json.dumps(batch) + ". Continue with the request."
+            label = f"{turn.label}-continue-{n + 1}"
+            continuations.append(label)
+            if turn.door == "api":
+                current = await root_turn(label, words)
+            else:
+                current = await public_turn(label, words, signed=turn.door == "ingress")
+        raise AssertionError("unreachable")
 
     async def root_turn(label: str, words: str) -> Turn:
         since = mark()
@@ -1544,11 +1602,19 @@ async def run_once(
         log.write(f"hatched: {json.dumps(asdict(hatched))}\n")
         final: dict[str, Any] | None = None
         reasks: list[str] = []
+        continuations: list[str] = []
         try:
             try:
                 async with run_context(module, capability.name, pubkey, doors, log=log) as context:
                     turns, final, reasks = await speak(
-                        capability, doors, key_dir, context, approver, log=log, reasks=reasks
+                        capability,
+                        doors,
+                        key_dir,
+                        context,
+                        approver,
+                        log=log,
+                        reasks=reasks,
+                        continuations=continuations,
                     )
                     # A capability without a `root list` row still gets judged on the end state.
                     if final is None:
@@ -1574,6 +1640,7 @@ async def run_once(
                         "commands": len(doors.sent),
                         # what it had re-asked before it fell over, not nothing
                         "reasks": reasks,
+                        "continuations": continuations,
                         "ok": False,
                         # `str(exc)` is empty for some exceptions (an httpx.ConnectError
                         # with no message, say): naming the type keeps "error" from
@@ -1650,6 +1717,7 @@ async def run_once(
                 # The road, kept apart from the score: a 7/7 with no re-ask and a
                 # 7/7 with three reached the same state differently (#170).
                 "reasks": reasks,
+                "continuations": continuations,
                 "model_calls": model_calls,
                 "usage": usage,
                 "cost_usd": None if cost is None else round(cost, 4),

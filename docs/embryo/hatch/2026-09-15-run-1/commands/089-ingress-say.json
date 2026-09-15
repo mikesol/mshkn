@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-15T15:27:56+00:00",
+ "command": "say",
+ "computer_id": "comp-70ca2dcfa758",
+ "detail": {
+  "msg": "Who am I?"
+ },
+ "door": "ingress",
+ "n": 89,
+ "seconds": 4.156157096847892,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-04ce9f57e03c\", \"error\": null, \"exit_code\": 1, \"name\": \"ssh_identity\", \"principal\": \"anonymous\", \"status\": \"ok\"}], \"job\": \"rj-533aed556343\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 6}\n{\"turn\": 6, \"job\": \"rj-533aed556343\"}\n"
+}

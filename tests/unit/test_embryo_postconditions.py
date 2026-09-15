@@ -590,3 +590,43 @@ def test_a_turn_carries_what_root_provided_for_it() -> None:
         }
     )
     assert turn.provisions[0]["path"] == "/verb/token"
+
+
+def test_the_counter_counts_the_invocations_of_row_nines_continuations() -> None:
+    """Live `2026-09-15-run-1`: after row 9's proposal settled, the driver's
+    `9-continue-1` delivered the build and the model invoked its new counter twice
+    to check it, so `9-count-1` read 3 and the window that looked only at the two
+    count rows saw `[3]` and called a working counter a miss. A continuation is a
+    turn the driver spoke, not a gap in the evidence: its invocations are counted
+    in the order they happened, and the last one seen names the verb whose head
+    the catalog must agree with."""
+    turns = _good_turns()
+    turns.insert(
+        4,
+        _counted(
+            "9-continue-1",
+            [
+                {"name": "counter", "computer_id": "c9x", "chain_head": "k1"},
+                {"name": "counter", "computer_id": "c9y", "chain_head": "k2"},
+            ],
+            "1, then 2 — it holds across calls",
+        ),
+    )
+    turns[5] = _counted(
+        "9-count-1", [{"name": "counter", "computer_id": "c9a", "chain_head": "k3"}], "3"
+    )
+    turns[6] = _counted("9-count-2", [], "4")  # answered from what it already knew
+    checks = _good_checks()
+    checks["c9x"] = {"computer_id": "c9x", "gone": True, "stdout": "1\n", "exit_code": 0}
+    checks["c9y"] = {"computer_id": "c9y", "gone": True, "stdout": "2\n", "exit_code": 0}
+    checks["c9a"]["stdout"] = "3\n"
+    final = _good_final()
+    final["catalog"]["counter"]["chain_length"] = 3
+    final["catalog"]["counter"]["chain_head"] = "k3"
+
+    result = _judge(turns=turns, checks=checks, final=final)["counter"]
+
+    assert result["ok"] is True
+    assert result["evidence"]["counts"] == [1, 2, 3]
+    assert result["evidence"]["chain_heads"] == ["k1", "k2", "k3"]
+    assert result["evidence"]["final_chain_head"] == "k3"
