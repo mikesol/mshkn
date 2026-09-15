@@ -4,6 +4,40 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## The first run that is not Opus (2026-09-15)
+
+`2026-09-15-run-2` is the first hatch spoken to a model that is not Anthropic's:
+`zai/glm-4.7` through Vercel AI Gateway, `MEMBRANE_EFFORT=off`, provider pinned
+to `zai`. It scored **2/7** — `root_unforgeable` and `nothing_by_hand`, the two
+that measure the harness rather than the agent — in 44 model calls, 24 minutes
+and **$0.1167**. The same capability on `claude-opus-5` two hours earlier cost
+$5.47. That is a factor of 47 on price and a collapse in outcome, and the second
+number is the one that decides anything.
+
+**The gateway is not the explanation, and the evidence says so without a control
+run.** Every mechanism the wire carries worked: the agent proposed verbs, the
+driver approved them, recipes built, a policy was applied and took effect from
+the next turn, a result continuation was delivered (`2-continue-1`), and the
+audit line closed every turn. No relay error, no malformed body, no unparsed
+response. A gateway that mistranslated would have failed at the shape of a tool
+call, not at the content of a design. `run.json` records `effort_supported:
+false` and the pinned `body_extra`, so the run is reproducible.
+
+What GLM did instead was fail at the task. Two of its first three builds failed
+outright and cost a repair. Its identity hook never verified anything: turn 4
+arrives signed and still resolves to `anonymous`, which is `authentication` gone
+and `authorization` with it. By turn 9 it was answering `count` with "No Verb
+Named 'count'" — a verb it was asked to create four rows earlier and never did.
+
+The caveats spec §10 asks for apply and matter here. The effort axis is absent,
+so nothing on this page's 2026-09-10 finding transfers. Tool-use fidelity varies
+by backend. And **a cross-model run is never purely cross-model**: mem0's fact
+extraction is pinned to Claude Haiku whatever speaks the liturgy, so the facts
+this run remembered were extracted by a different model than the one that earned
+them. At N=1 the honest claim is narrow — *this* model, at *this* price, cannot
+hatch — and the useful one is narrower still: the cheap road is open and paved,
+and the first vehicle sent down it did not arrive.
+
 ## Successful-result continuation (2026-09-15)
 
 The operator's `2026-09-14-run-1` on membrane `5b72668` reached 3/7: it built
