@@ -4,6 +4,33 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## Successful-result continuation (2026-09-15)
+
+The operator's `2026-09-14-run-1` on membrane `5b72668` reached 3/7: it built
+`ssh_verify`, but the agent deliberately deferred its door policy until the hook
+was ready. The driver never delivered that success, so all subsequent public
+rows met a closed door. Bounded result continuations now allow that next turn,
+through the originating row's door, without exposing the script or repairing
+policy by hand. The seed and capability's questions are unchanged. Earlier runs
+had no success continuations and are not directly comparable in cost or success
+rate; new runs record `continuations` separately from their postcondition score.
+
+`2026-09-15-run-1` is that live hatch, on membrane `1538f85`, four continuations,
+zero re-asks, 50 model calls, $5.47, and **6/7 as recorded**. It answers the
+Sept 14 failure outright: row 2 proposed only the hook, `2-continue-1` delivered
+it ready, the agent proposed the policy it had said it would propose,
+`2-continue-2` delivered that applied, and row 4 arrived as `ssh:mike` — three
+postconditions Sept 14 could not reach.
+
+The one miss is the judge, not the run. `9-continue-1` invoked the new counter
+twice to check it worked, so the count rows read 3 and the window that looked
+only at `9-count-1` and `9-count-2` saw a single invocation and no verb to name.
+The three invocations are monotonic, each left its own head, and the catalog's
+head is the last of them. The window now spans row 9's continuations too, so the
+same evidence reads 7/7; the verdict in `run.json` is left exactly as the run
+recorded it. Runs before this one had no continuations, so no earlier verdict
+moves.
+
 ## The result, on the capabilities driver (2026-09-13)
 
 This round is the first runs of `hatch` on the capabilities driver, each written by `uv run capability run hatch`. This row's `run.json` is left exactly as the run recorded it, aborted-run evidence and all.
