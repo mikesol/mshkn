@@ -4,6 +4,48 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## Two cheap models, and the shape of how they fail (2026-09-15)
+
+| Run | Model | Score | Model calls | Cost | vs Opus |
+|---|---|---|---|---|---|
+| `2026-09-15-run-1` | `claude-opus-5`, effort medium | 6/7 recorded, 7/7 on the fixed judge | 50 | $5.47 | — |
+| `2026-09-15-run-2` | `zai/glm-4.7`, effort off | 2/7 | 44 | $0.1167 | 47x cheaper |
+| `2026-09-15-run-3` | `deepseek/deepseek-v4-pro`, effort off | 4/7 | 23 | $0.3303 | 17x cheaper |
+
+Both cheap runs went through the gateway with the provider pinned and
+`effort_supported: false`. Neither is comparable to run 1 on any axis effort
+touches, and neither is comparable to the 2026-09-10 round at all.
+
+**DeepSeek failed in a more interesting place than GLM.** GLM never got the
+architecture right: two builds failed outright, and by turn 9 it was denying the
+existence of a verb it had been asked to build four rows earlier. DeepSeek got
+the whole architecture right and one shell script wrong. It proposed the identity
+hook, the hook built `ready`, `2-continue-1` delivered that, it proposed the
+policy, the policy applied, `2-continue-2` delivered that — the exact sequence
+run 1 walks. Then the hook ran and exited **255 with empty stdout**, so the
+signed turn resolved to `anonymous` and `authentication` was gone.
+
+Everything downstream follows from that one failure, and follows *correctly*:
+`page_title` and `counter` are missing because the agent declined to build or
+invoke verbs for an unauthenticated principal, which is what its own policy told
+it to do. It scored `authorization` and `no_undeclared_capability`, which GLM did
+not. Its 23 model calls against GLM's 44 and run 1's 50 are the same story: it
+did less, and more of what it did was right.
+
+**The finding that is not about price.** DeepSeek trialled the hook three times
+before proposing it — `t-1` exit 255, `t-2` exit 0, `t-3` exit 255 — and proposed
+it anyway. The feedback loop that #118 built for exactly this was available, was
+used, returned a two-in-three failure rate, and did not change the decision. That
+is not a cheap-model defect that a better model obviously fixes; it is an agent
+reading its own evidence and shipping regardless, and it would be worth checking
+whether run 1 was ever in a position to make the same mistake.
+
+The catalogue's headline price for `deepseek-v4-pro` is $0.66/$1.98 per Mtok. It
+is served from `us` only, where the same entry's `regional` block charges double,
+and that is the rate `PRICES` carries. A 2x peak multiplier applies on weekdays
+01:00-04:00 and 06:00-10:00 UTC; `Price` has no time axis, so a run inside those
+windows under-reports its own cost and cannot know it. Run 3 was off-peak.
+
 ## The first run that is not Opus (2026-09-15)
 
 `2026-09-15-run-2` is the first hatch spoken to a model that is not Anthropic's:

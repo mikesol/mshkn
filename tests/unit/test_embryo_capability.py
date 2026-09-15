@@ -179,6 +179,19 @@ def test_the_cheap_backend_is_priced_so_a_run_can_show_what_it_saved() -> None:
     assert cost_usd(usage, "claude-opus-5") == pytest.approx(30.0)
 
 
+def test_deepseek_is_priced_at_the_rate_it_is_actually_served_at() -> None:
+    """The catalogue lists `deepseek-v4-pro` at $0.66/$1.98 and then serves it from
+    `us` only, where its own `regional` block doubles both. Taking the headline
+    would halve every cost this model records; the second assertion is the negative
+    control against exactly that. Its 2x weekday peak multiplier has no home in this
+    table and is a known under-report rather than an omission to fix here — `Price`
+    has no time axis, and giving it one to track a provider's tariff calendar is the
+    organism learning what a provider is."""
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert cost_usd(usage, "deepseek/deepseek-v4-pro") == pytest.approx(5.28)
+    assert cost_usd(usage, "deepseek/deepseek-v4-pro") != pytest.approx(2.64)
+
+
 def test_an_unpriced_model_costs_nothing_known_rather_than_losing_the_run() -> None:
     """`cost_usd` is called while the summary is assembled, after every turn has
     been spoken and paid for. A raise there throws away the evidence of a run that
