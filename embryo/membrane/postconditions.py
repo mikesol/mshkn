@@ -180,6 +180,23 @@ def page_title(j: Judged) -> dict[str, Any]:
     }
 
 
+def _counted(turns: list[Turn]) -> list[Turn]:
+    """The turns the counter is measured over, in the order they were spoken: row
+    9's continuations, where the model may exercise the counter whose build the
+    driver just delivered, then each count row's latest attempt and its own
+    continuations. A continuation is a turn the driver chose to speak, not a gap in
+    the evidence, and its invocations advance the same chain as any other."""
+    counted: list[Turn] = []
+    for label in ("9", "9-count-1", "9-count-2"):
+        turn = by_label(turns, label)
+        # continuations hang off the attempt that produced them, which a re-ask renames
+        base = turn.label if turn is not None else label
+        if turn is not None and label != "9":
+            counted.append(turn)
+        counted.extend(t for t in turns if t.label.startswith(f"{base}-continue-"))
+    return counted
+
+
 def counter(j: Judged) -> dict[str, Any]:
     # Every invocation across the counted turns, not one per turn (#117): a model
     # that calls its own counter twice to prove the state crossed the chain is doing
@@ -197,13 +214,15 @@ def counter(j: Judged) -> dict[str, Any]:
     counts: list[int | None] = []
     computer_ids: list[str] = []
     chain_heads: list[str | None] = []
-    for label in ("9-count-1", "9-count-2"):
-        for call in tool_computers(by_label(j.turns, label), chain=True):
-            computer_ids.append(call["computer_id"])
-            counts.append(_first_int(j.checks.get(call["computer_id"], {}).get("stdout")))
-            chain_heads.append(call.get("chain_head"))
-    last = by_label(j.turns, "9-count-2") or by_label(j.turns, "9-count-1")
-    counter_name = next((c["name"] for c in tool_computers(last, chain=True)), None)
+    calls = [call for turn in _counted(j.turns) for call in tool_computers(turn, chain=True)]
+    for call in calls:
+        computer_ids.append(call["computer_id"])
+        counts.append(_first_int(j.checks.get(call["computer_id"], {}).get("stdout")))
+        chain_heads.append(call.get("chain_head"))
+    # The verb is named by the last invocation seen, wherever it happened: a count
+    # row that answers from what the turn before it already read calls nothing, and
+    # a window that asked only that row for the name found none and no head either.
+    counter_name = calls[-1]["name"] if calls else None
     final_head = (catalog.get(counter_name or "") or {}).get("chain_head")
     advanced = (
         len(chain_heads) == len(counts)
