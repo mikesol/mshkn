@@ -1474,6 +1474,14 @@ SELF = "Say in your own words what you have become."
 SECURITY = load(CAPABILITIES / "security.md")  # rows 11-14, and the provide phrase
 
 
+REPAIR_PHRASES = frozenset(
+    phrase
+    for repair in (HATCH.repair, SECURITY.repair)
+    for phrase in (repair.build, repair.refused, repair.provide, repair.stalled, repair.silent)
+    if phrase is not None
+)
+
+
 class FakeDoors:
     """A door whose membrane is a small state machine: proposals are made on the
     turns hatch expects them, approvals move them to building, and each
@@ -1496,6 +1504,7 @@ class FakeDoors:
         growing: bool = False,
         secret: bool = False,
         path_in_reply: str | None = "```\n/verb/token\n```",
+        stall_on_repair: bool = False,
     ) -> None:
         # A membrane that grows a verb with a `requires` at row 11 (spec §7.2), and
         # what the replies of rows 11 and 13 say about where root should put the
@@ -1533,6 +1542,9 @@ class FakeDoors:
         self.turn = 0
         self.repairs = 0
         self.count_calls = 0  # invocations of the counter verb, not `count` messages
+        # The agent that answers a repair phrase with prose and no call at all
+        # (2026-09-16-run-2 `3-repair-3`, run-3 `3-repair-1`).
+        self.stall_on_repair = stall_on_repair
 
     def _may_invoke(self, name: str) -> bool:
         """Whether the policy in force lets `ssh:mike` invoke the verb."""
@@ -1626,8 +1638,16 @@ class FakeDoors:
         elif text == "where should I put it?":
             # security's provide phrase: the agent answers with the path alone
             said = "Put it at\n```\n/verb/token\n```"
+        tools = [{"name": "propose", "status": "ok", "id": p["id"]} for p in made]
+        if not tools and text in REPAIR_PHRASES and not self.stall_on_repair:
+            # A repair turn that looked and fixed nothing is not a repair turn that
+            # froze: the driver tells them apart by the tool list (`stalled`), and
+            # before it did, this fake collapsed both into an empty one. The default
+            # is the agent that acted and still did not fix it, which is what every
+            # test written before the distinction existed meant.
+            tools = [{"name": "remember", "status": "ok"}]
         audit = audit_line(
-            tools=[{"name": "propose", "status": "ok", "id": p["id"]} for p in made],
+            tools=tools,
             proposals=[{"id": p["id"], "sha256": "x"} for p in made],
         )
         return self._reply(audit, said)
@@ -2491,6 +2511,72 @@ async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Pat
     assert repairs == ["3-repair-1"], repairs
 
 
+async def test_a_refused_proposal_is_not_approved_again_under_the_same_state(
+    tmp_path: Path,
+) -> None:
+    """`repaired` stops the model being *asked* about a refusal twice; it does not
+    stop the driver *approving* it twice. Every later settle re-offered the same
+    abandoned proposal and the membrane refused it again for the same reason, and
+    each refusal went back into the model's inbox: 2026-09-16-run-3 delivered one
+    `effect communicate` refusal 28 times for a proposal the model had already
+    superseded, which reads in the evidence as 28 fresh mistakes."""
+    doors = FakeDoors(refuse={"p-1"})
+    key_dir, pubkey = _keys(tmp_path)
+    log = io.StringIO()
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
+    )
+    offered = [a["id"] for t in turns for a in t.approvals]
+    # The decide, and the one retry round that settles a refusal. Nothing after.
+    assert offered.count("p-1") == 2, offered
+    assert "not re-approving p-1" in log.getvalue()
+    assert all("refused" in a["result"] for t in turns for a in t.approvals if a["id"] == "p-1")
+
+
+async def test_a_refused_proposal_is_offered_again_once_the_catalog_moves(
+    tmp_path: Path,
+) -> None:
+    """The negative control for the memo above, and the reason the skip is sound
+    rather than a heuristic: `refuse_approval` and `refuse_policy` read the catalog
+    and the policy and nothing else, so the skip holds only while that pair is
+    unchanged. Move it and the same proposal is put to the membrane again, because
+    the answer may now be different."""
+    from membrane.capabilities import Row
+
+    doors = FakeDoors(refuse={"p-1"})
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        made = [doors._propose("verb", text)] if text in ("alpha", "beta") else []
+        return doors._reply(
+            audit_line(
+                tools=[{"name": "propose", "status": "ok", "id": p["id"]} for p in made]
+                or [{"name": "remember", "status": "ok"}],
+                proposals=[{"id": p["id"], "sha256": "x"} for p in made],
+            ),
+            "Done.",
+        )
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(
+        HATCH,
+        rows=(
+            Row("one", "root say", "alpha", ""),  # p-1: refused, and never repaired
+            Row("two", "root say", "beta", ""),  # p-2: builds, so the catalog moves
+        ),
+    )
+    log = io.StringIO()
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
+    )
+    offered = [(t.label, a["id"]) for t in turns for a in t.approvals]
+    # Skipped while the pair held -- row two's own settle still sees an empty catalog
+    assert "not re-approving p-1" in log.getvalue()
+    # and put to the membrane again the moment beta went ready.
+    assert [label for label, pid in offered if pid == "p-1" and label != "one"], offered
+    assert doors.catalog["beta"]["status"] == "ready"
+
+
 async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
     doors = FakeDoors(fail_first={"verify_ssh"})
     key_dir, pubkey = _keys(tmp_path)
@@ -2546,6 +2632,137 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
         ),
     )
     assert result["authentication"]["ok"] is False
+
+
+async def test_a_repair_turn_that_called_no_tool_at_all_is_asked_again(tmp_path: Path) -> None:
+    """Root says `check your inbox`, the model writes prose about what it will do and
+    stops, and nothing truncated it: `unfinished` wants a truncating stop reason and
+    does not see this, so the row used to settle on it in silence. Two runs of the
+    same model produced one each (2026-09-16-run-2 `3-repair-3`, run-3 `3-repair-1`).
+    Read off the audit's tool list, never off the prose that says what it meant."""
+    doors = FakeDoors(refuse={"p-1"}, stall_on_repair=True)
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    repairs = [(t.label, t.words) for t in turns if t.label.startswith("3-repair-")]
+    assert repairs == [
+        ("3-repair-1", HATCH.repair.refused),
+        ("3-repair-2", "you called nothing; act"),
+        ("3-repair-3", "you called nothing; act"),
+    ], repairs
+
+
+async def test_a_repair_turn_that_acted_and_still_failed_is_not_a_stall(tmp_path: Path) -> None:
+    """The negative control: the trigger is the absence of every call, not the
+    absence of a fix. An agent that looked, acted and did not manage it has answered
+    the repair, and telling it `you called nothing` would be a lie it cannot use."""
+    doors = FakeDoors(refuse={"p-1"})  # the same run, with a repair turn that acts
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    repairs = [t.label for t in turns if t.label.startswith("3-repair-")]
+    assert repairs == ["3-repair-1"], repairs
+
+
+async def test_a_proposes_row_that_proposed_nothing_is_asked_again(tmp_path: Path) -> None:
+    """Hatch 2, 6, 7 and 9 cannot reach their outcome without a proposal, and the
+    heading says so. Without the trigger a row ends with the model narrating the
+    verb it intends to grow, having proposed nothing, and the run walks on
+    (2026-09-16-run-3 turn 2: twenty `try` calls and no `propose`). The trigger reads
+    the turn's proposal list, not the sentence about what it was going to do."""
+    from membrane.capabilities import Row
+    from membrane.capability import MAX_REPAIRS
+
+    doors = FakeDoors()
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        return doors._reply(
+            audit_line(tools=[{"name": "try", "status": "ok"}]),
+            "I will grow a verb that does this.",
+        )
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(HATCH, rows=(Row("grow", "root say", "Grow a verb.", "", proposes=True),))
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert [t.words for t in turns if t.label.startswith("3-repair-")] == [
+        "you proposed nothing; propose"
+    ] * MAX_REPAIRS
+
+
+async def test_a_row_that_does_not_propose_is_never_silent(tmp_path: Path) -> None:
+    """The first negative control: the heading is what makes a row answerable this
+    way. Hatch 1, 4, 5 and 8 ask a question whose whole outcome is a reply, and a
+    turn that answers one without proposing is right, not silent."""
+    from membrane.capabilities import Row
+
+    doors = FakeDoors()
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        return doors._reply(
+            audit_line(tools=[{"name": "try", "status": "ok"}]), "Here is my answer."
+        )
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(HATCH, rows=(Row("ask", "root say", "What are you?", ""),))
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert not [t for t in turns if t.label.startswith("3-repair-")]
+
+
+async def test_a_proposes_row_that_proposed_is_not_silent_on_its_continuation(
+    tmp_path: Path,
+) -> None:
+    """The second negative control, and the one that bit. A proposal produces an
+    external result, which buys a continuation, and the continuation is settled by a
+    second call: a row that proposed on its own turn and then continued must not be
+    read as having proposed nothing, so the memo of which rows have proposed outlives
+    the call."""
+    from membrane.capabilities import Row
+
+    doors = FakeDoors()
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        made = [doors._propose("verb", "alpha")] if text == "Grow a verb." else []
+        return doors._reply(
+            audit_line(
+                tools=[{"name": "propose", "status": "ok", "id": p["id"]} for p in made]
+                or [{"name": "try", "status": "ok"}],
+                proposals=[{"id": p["id"], "sha256": "x"} for p in made],
+            ),
+            "Done.",
+        )
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(HATCH, rows=(Row("grow", "root say", "Grow a verb.", "", proposes=True),))
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert any("-continue-" in t.label for t in turns), [t.label for t in turns]
+    assert not [t for t in turns if t.label.startswith("3-repair-")]
+
+
+async def test_a_proposes_row_behind_a_closed_door_is_not_silent(tmp_path: Path) -> None:
+    """The third negative control. Hatch 6, 7 and 9 all speak through the public
+    door, and a run whose identity verb never built leaves all three closed: the
+    membrane answers alone, the agent is never asked anything, and a turn nothing was
+    put to cannot have declined to propose. Root saying `you proposed nothing` there
+    would spend the whole repair budget on rows that never ran."""
+    doors = FakeDoors(open_door=False)
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    closed = [t for t in turns if t.door.startswith("ingress")]
+    assert closed and all(t.audit.get("closed") for t in closed)
+    assert not [t for t in turns if t.label.startswith("3-repair-")]
 
 
 async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -> None:
@@ -4655,7 +4872,14 @@ async def test_public_continuation_repairs_never_escalate_to_root(
         payloads.append(payload)
         if len(payloads) == 1:
             doors._propose("prompt", "self")
-        audit = audit_line(door="ingress", principal="ssh:mike" if signed else "anonymous")
+        audit = audit_line(
+            door="ingress",
+            principal="ssh:mike" if signed else "anonymous",
+            # The repair turn acts and still does not fix it, which is the case this
+            # test is about. A repair turn that calls nothing is a stall, and would
+            # buy two further repairs that have nothing to do with escalation.
+            tools=[{"name": "remember", "status": "ok"}] if len(payloads) > 2 else [],
+        )
         if len(payloads) == 2:
             audit["stopped"] = "deadline"
         return audit, "Done."

@@ -165,6 +165,49 @@ def test_an_unknown_door_is_an_error(tmp_path: Path) -> None:
     assert {"root say", "root list", "signed", "unsigned"} == DOORS
 
 
+def test_a_third_heading_field_says_the_row_cannot_finish_without_proposing(
+    tmp_path: Path,
+) -> None:
+    """The driver's only machine-readable statement of what a row is *for*. The
+    outcome beside a row is prose for a human reader, so nothing else in the file
+    tells a row that must grow the agent from one that merely speaks to it, and a
+    row can end with the model narrating the verb it intends to propose, having
+    proposed nothing, while the run walks on."""
+    text = _text().replace("### 2 · signed", "### 2 · signed · proposes")
+    cap = load(_write(tmp_path, "one", text=text))
+    assert cap.row("2").proposes is True
+    assert [r.label for r in cap.rows if not r.proposes] == ["1", "3", "4"]
+
+
+def test_a_third_heading_field_that_is_not_proposes_is_an_error(tmp_path: Path) -> None:
+    text = _text().replace("### 2 · signed", "### 2 · signed · sometimes")
+    with pytest.raises(
+        CapabilityError, match="row 2: third heading field 'sometimes' is not 'proposes'"
+    ):
+        load(_write(tmp_path, "one", text=text))
+
+
+def test_a_root_list_row_cannot_propose(tmp_path: Path) -> None:
+    """`root list` speaks to nobody -- it is the driver reading the membrane -- so
+    there is no turn on it that could propose anything."""
+    text = _text().replace("### 4 · root list", "### 4 · root list · proposes")
+    with pytest.raises(CapabilityError, match="row 4: a root list row speaks to nobody"):
+        load(_write(tmp_path, "one", text=text))
+
+
+def test_the_stalled_and_silent_phrases_are_optional(tmp_path: Path) -> None:
+    """Both are read off the audit -- a tool list and a proposal list -- and a
+    capability that omits the phrase turns the trigger off rather than falling back
+    on another capability's words."""
+    assert load(_write(tmp_path, "one")).repair.stalled is None
+    text = _text().replace(
+        "- refused: `check your inbox`",
+        "- refused: `check your inbox`\n- stalled: `act`\n- silent: `propose`",
+    )
+    repair = load(_write(tmp_path, "one", text=text)).repair
+    assert repair.stalled == "act" and repair.silent == "propose"
+
+
 def test_a_duplicate_label_is_an_error(tmp_path: Path) -> None:
     text = _text().replace("### 3 · unsigned", "### 2 · unsigned")
     with pytest.raises(CapabilityError, match="row 2 appears twice"):
@@ -283,7 +326,14 @@ def test_hatch_is_the_first_capability() -> None:
     assert hatch.row("5").door == "unsigned" and hatch.row("5").words == hatch.row("4").words
     assert hatch.row("9-count-1").words == "count" == hatch.row("9-count-2").words
     assert hatch.row("10").door == "root list" and hatch.row("10").words == ""
-    assert hatch.repair == Repair(build="check your build", refused="check your inbox")
+    # The rows whose outcome is unreachable without a proposal say so on the heading.
+    assert [r.label for r in hatch.rows if r.proposes] == ["2", "6", "7", "9"]
+    assert hatch.repair == Repair(
+        build="check your build",
+        refused="check your inbox",
+        stalled="you called nothing; act",
+        silent="you proposed nothing; propose",
+    )
     assert catalog()["hatch"] == hatch
 
 
@@ -381,7 +431,12 @@ def test_security_depends_on_hatch_and_names_the_invariants_and_its_own_checks()
     assert "{token}" not in security.row("11").words  # the token never rides in the words
     assert security.row("12").words == "read the page"
     assert security.row("13").words == "Give yourself a second verb that needs the same token."
+    assert [r.label for r in security.rows if r.proposes] == ["11", "13"]
     assert security.repair == Repair(
-        build="check your build", refused="check your inbox", provide="where should I put it?"
+        build="check your build",
+        refused="check your inbox",
+        provide="where should I put it?",
+        stalled="you called nothing; act",
+        silent="you proposed nothing; propose",
     )
     assert order(catalog(), "security") == [catalog()["hatch"], security]
