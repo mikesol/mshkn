@@ -4,6 +4,35 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## Seven of seven from another lab, the cheapest and fastest yet (2026-09-16-run-9) — **promoted**
+
+`openai/gpt-5.6-sol`, `--effort off`, pinned to the `openai` provider.
+**7/7, 45 model calls, 135 in / 109,636 cache write / 77,121 cache read / 16,603
+out, $0.5014 recorded, 881 seconds.**
+
+The point of this run is the lab, not the score. Every run above it was judged by a
+driver an Anthropic model wrote, reached through a relay that speaks the Anthropic
+message shape, by a brain from Anthropic or by cheap models dialled the same way.
+`claude-sonnet-5` and `gpt-5.6-sol` are priced identically by their catalogues
+($2.20/$11.00, both above their own headline), so this run holds cost constant and
+varies only the family — and hatch turns out to be reachable from outside the one
+that wrote the harness. The relay's message shape survived translation with no wire
+errors at any turn.
+
+It is also the fastest and cheapest 7/7 on file: 881 seconds against run 6's 2,700,
+and against `2026-09-13-run-5`'s Opus at $3.18. **One repair in the whole run** —
+`6-repair-1`, the `silent` trigger — six continuations, no re-asks.
+
+**Its recorded cost is 43% too high, and the reason is new.** `PRICES` notes that
+`gpt-5.6-sol` publishes `input_cache_write` at 0.625x of its input price against
+`CACHE_WRITE`'s 1.25x, and dismisses it on the grounds that every gateway run so far
+recorded zero cache creation. This run records 109,636 of it: OpenAI reports through
+the gateway with almost the whole context as cache creation and `input_tokens: 135`
+in total, where DeepSeek's run 6 reported 118,174 input tokens and no creation at
+all. At the published rate the run cost **$0.3506**. The 272,000-token tier did not
+bite — the largest single-turn context was 88,677. `Price` has no cache-write axis;
+until it does, a cost recorded against this model is an upper bound, not a figure.
+
 ## One dropped character (2026-09-16-run-7)
 
 `deepseek/deepseek-v4-pro` again, same flags as run 6, this time with `--keep`.
