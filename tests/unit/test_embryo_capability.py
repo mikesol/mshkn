@@ -206,6 +206,22 @@ def test_sonnet_is_priced_at_its_regional_rate_like_deepseek() -> None:
     assert cost_usd(usage, "anthropic/claude-sonnet-5") != pytest.approx(12.0)
 
 
+def test_gpt_sol_costs_exactly_what_sonnet_costs() -> None:
+    """`openai/gpt-5.6-sol` is here to hold cost constant and vary only the lab. Every
+    run on file was judged by a driver an Anthropic model wrote, spoken to by a relay
+    that speaks the Anthropic message shape; a brain from another lab is the only way
+    to tell a finding about hatch from a finding about one family's habits, and it is
+    worth nothing if the comparison also moves the price. So the equality with sonnet
+    is the point of the row and is asserted directly: if either catalogue entry moves,
+    this fails and the pair stops being a controlled comparison. Its own headline is
+    $2.00/$10.00 against a `regional.us` $2.20/$11.00, the third model in this table
+    to be served above its top line, hence the negative control. Read 2026-09-16."""
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert cost_usd(usage, "openai/gpt-5.6-sol") == pytest.approx(13.20)
+    assert cost_usd(usage, "openai/gpt-5.6-sol") != pytest.approx(12.0)
+    assert cost_usd(usage, "openai/gpt-5.6-sol") == cost_usd(usage, "anthropic/claude-sonnet-5")
+
+
 def test_the_cheapest_backend_on_the_gateway_is_priced_before_it_is_run() -> None:
     """`poolside/laguna-s-2.1` at $0.10/$0.20 is an order of magnitude under the two
     cheap models already here, so an unpriced run would record `cost_usd: null` for

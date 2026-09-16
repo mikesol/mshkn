@@ -218,6 +218,17 @@ PRICES = {
     # to choose. Its published cache read and cache write are exactly a tenth and
     # 1.25x of its input price, which is what CACHE_READ and CACHE_WRITE assume.
     "claude-sonnet-5": Price(input=2.2, output=11.0),
+    # An exact cost twin of the row above from another lab, catalogue read
+    # 2026-09-16: the same `regional` story as deepseek and sonnet, and the headline
+    # $2.00/$10.00 is again not what it is served at. `us` is its only region, so
+    # there is one rate. Two things this table has no axis for, stated rather than
+    # papered over: its `input_cache_write` is 0.625x of input, half of what
+    # CACHE_WRITE applies, so a run that creates cache is over-reported (every
+    # gateway run so far records zero cache creation); and its prices are tiered at
+    # 272,000 tokens in a call, above which input doubles and output goes to 1.5x,
+    # so a run whose context crosses that line costs more than its record says.
+    # `input_cache_read` is a tenth of input, which is what CACHE_READ assumes.
+    "gpt-5.6-sol": Price(input=2.2, output=11.0),
 }
 CACHE_WRITE = 1.25  # of the input price
 CACHE_READ = 0.1
