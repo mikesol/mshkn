@@ -18,8 +18,26 @@ instruction. Nothing about the two transcripts is the same shape.
 
 **The wall does not vary.** Neither run opened the door. Neither ever proposed a
 working identity verb. And both declared the identity hook `effect: communicate`
-— the same wrong effect for a local signature check, refused with the rule
-quoted, twice. That is a stable misconception, not noise.
+— the wrong effect for a local signature check, and one `refuse_approval`
+(§10.8) rejects outright, so the verb can never build and the door can never
+open. That is a stable misconception, not noise.
+
+**And neither run was left alone with it.** The auto-approver re-approves every
+pending proposal each turn, so the refusal `effect communicate is not approved by
+the embryo (only local and read, §10.8)` — the rule and both legal values, in one
+sentence — landed in the inbox **28 times in run 3 and 20 times in run 2**.
+Neither run ever changed the field. Whatever fails here, it is not that the
+membrane withheld the answer. The membrane shouted it.
+
+**What the seed does withhold is smaller.** `effect` is the only field in
+`seed.md`'s verb paragraph with a bare name and no gloss: `params`, `dockerfile`,
+`entrypoint`, `state`, `asserts`, `requires` and `allow` are each explained where
+they are named. `effect` is not, its legal values appear nowhere, and neither
+does §10.8. That asymmetry is real and worth fixing on its own terms. It is not a
+case for putting §10.8 in the seed — the seed's contract is bootstrap and
+*invisible* mechanism, and this is the loudest failure in the system. Opus and
+DeepSeek both cleared it on their first proposal without being told. The gap
+these runs expose is in reading the inbox, not in the genome.
 
 **The no-op turn reproduced.** Run 3's `3-repair-1`: one model call, **zero tool
 calls**, `stopped: "done"`. Run 2's `3-repair-3` did the same. Two runs, two
