@@ -16,28 +16,44 @@ verbs nobody asked for (`ping` and `web` — which is what cost it
 twice without `supersedes`, and shipped a Dockerfile with a bare `printf` as an
 instruction. Nothing about the two transcripts is the same shape.
 
-**The wall does not vary.** Neither run opened the door. Neither ever proposed a
-working identity verb. And both declared the identity hook `effect: communicate`
-— the wrong effect for a local signature check, and one `refuse_approval`
-(§10.8) rejects outright, so the verb can never build and the door can never
-open. That is a stable misconception, not noise.
+**The wall does not vary.** Neither run opened the door, and neither ever
+proposed an identity verb that built. Both spent their first identity proposal on
+`effect: communicate`, which `refuse_approval` rejects outright (§10.8), so that
+verb could never build and the door could never open.
 
-**And neither run was left alone with it.** The auto-approver re-approves every
-pending proposal each turn, so the refusal `effect communicate is not approved by
-the embryo (only local and read, §10.8)` — the rule and both legal values, in one
-sentence — landed in the inbox **28 times in run 3 and 20 times in run 2**.
-Neither run ever changed the field. Whatever fails here, it is not that the
-membrane withheld the answer. The membrane shouted it.
+**But it is not that the model failed to learn the rule.** It is worth being
+precise, because the obvious reading is the wrong one. Run 3 read the refusal,
+diagnosed it in its own words — *"only `local` and `read` effects are allowed by
+the embryo policy (§10.8) … I can fix the `say` verb by changing its effect from
+`communicate` to `local`, and the `web` verb by changing its effect from
+`transact` to `read`"* — and then **did exactly that**: `p-4`/`p-6` came back with
+`local`, and built. The 28 re-refusals of `p-2` in `run.json` are the
+auto-approver re-approving a stale proposal the model had already abandoned, not
+28 fresh mistakes. Same for run 2's 20.
 
-**What the seed does withhold is smaller.** `effect` is the only field in
-`seed.md`'s verb paragraph with a bare name and no gloss: `params`, `dockerfile`,
-`entrypoint`, `state`, `asserts`, `requires` and `allow` are each explained where
-they are named. `effect` is not, its legal values appear nowhere, and neither
-does §10.8. That asymmetry is real and worth fixing on its own terms. It is not a
-case for putting §10.8 in the seed — the seed's contract is bootstrap and
-*invisible* mechanism, and this is the loudest failure in the system. Opus and
-DeepSeek both cleared it on their first proposal without being told. The gap
-these runs expose is in reading the inbox, not in the genome.
+**What it lost was the objective, not the rule.** The verb it corrected was not
+the identity hook. `say` became `ping`, an echo verb; `web` became a URL fetcher;
+neither asserts anything, and the catalog ends the run holding both and no way to
+know who is speaking. The word `asserts` appears five times in the whole run-3
+transcript: once in the seed, and four times in prose where the model works the
+mechanism out correctly and even predicts the right answer — *"if I set up an SSH
+hook with `asserts: \"ssh\"`, the hook's stdout would be something like
+`ssh:mike`"* — and never once inside a `try` or a `propose`. It also proposed *"a
+policy expansion to allow communicate and transact effects"*, which is an attempt
+to legislate around an invariant no policy can reach (§10).
+
+So the failure is not comprehension and not memory. It is that reading, diagnosis
+and a correct plan do not convert into the call that would enact them. Run 3's
+turn 2 is the same failure at the scale of a whole turn: twenty `try` calls, zero
+`propose`.
+
+**A smaller, real gap in the seed, noted separately.** `effect` is the only field
+in `seed.md`'s verb paragraph with a bare name and no gloss — `params`,
+`dockerfile`, `entrypoint`, `state`, `asserts`, `requires` and `allow` are each
+explained where they are named — and its legal values appear nowhere, as does
+§10.8. Worth fixing on its own terms. It is not the cause of anything here: Opus
+and DeepSeek both cleared `effect` on their first proposal from this same seed,
+and run 3 cleared it on its second.
 
 **The no-op turn reproduced.** Run 3's `3-repair-1`: one model call, **zero tool
 calls**, `stopped: "done"`. Run 2's `3-repair-3` did the same. Two runs, two
