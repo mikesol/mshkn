@@ -2630,6 +2630,35 @@ async def test_each_row_gets_its_own_repair_budget(tmp_path: Path) -> None:
     ]
 
 
+async def test_a_build_failure_that_has_not_moved_does_not_earn_a_second_repair(
+    tmp_path: Path,
+) -> None:
+    """A repair is owed by a failure that has moved, not by one that is merely still
+    there. 2026-09-16-run-4: `verify_ssh_sig` failed to build after row 2 and the
+    model never proposed a replacement, so its catalog entry was untouched for the
+    rest of the run -- and the per-row budget then bought three `check your build`
+    turns on every row after it, 24 of the run's 37 turns spent asking about one
+    failure the model had already been told about once."""
+    doors = FakeDoors(fail_first={"verify_ssh"})
+    original = doors.root_say
+
+    async def unrepentant(text: str) -> tuple[dict[str, Any], str]:
+        # The agent looks at the failure and proposes nothing, so the catalog entry
+        # it names is byte-for-byte the one the last repair was spent on.
+        if text == HATCH.repair.build:
+            return doors._reply(
+                audit_line(tools=[{"name": "remember", "status": "ok"}]), "I looked."
+            )
+        return await original(text)
+
+    doors.root_say = unrepentant  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert [t.label for t in turns if t.words == HATCH.repair.build] == ["2-repair-1"]
+
+
 async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Path) -> None:
     doors = FakeDoors(fail_first={"verify_ssh"})
     doors.fail_first = {"verify_ssh"}

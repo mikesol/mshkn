@@ -1352,6 +1352,15 @@ async def speak(
         return bool(turn.audit.get("model_calls"))
 
     repaired: set[str] = set()
+    # Verb name -> the catalog entry the last build repair for it was spent on. A
+    # failed build that has not moved since is the same failure, and saying `check
+    # your build` about it again buys nothing: the model has been told, and if it
+    # proposes a replacement the entry changes and the next one is owed. Keyed on
+    # the whole entry for the same reason `answerable_state` is keyed on the whole
+    # catalog -- any movement at all counts, and no field has to be picked as the
+    # one that means "a new attempt". 2026-09-16-run-4 spent 24 of its 37 turns on
+    # one `verify_ssh_sig` that failed after row 2 and was never proposed again.
+    repaired_builds: dict[str, str] = {}
     # Row label -> repairs spent on it. Per row, and it has to outlive a single
     # `settle_repairs` call, because a continuation is settled by a second call and
     # a row must not get a fresh budget by continuing.
@@ -1396,7 +1405,12 @@ async def speak(
         current = turn
         while True:
             listing, unplaced = await provide_pending(current, listing)
-            failed = sorted(n for n, e in listing["catalog"].items() if e["status"] == "failed")
+            failed = sorted(
+                n
+                for n, e in listing["catalog"].items()
+                if e["status"] == "failed"
+                and repaired_builds.get(n) != json.dumps(e, sort_keys=True)
+            )
             # Once per refusal, not once per settle: a proposal the model never
             # repairs stays pending with its reason forever, and every later
             # settle would otherwise buy it more turns of the model's time
@@ -1431,6 +1445,8 @@ async def speak(
             if repairs.get(row.label, 0) >= MAX_REPAIRS:
                 return Settled(applied, before, listing)
             if failed:
+                for name in failed:
+                    repaired_builds[name] = json.dumps(listing["catalog"][name], sort_keys=True)
                 why, words = f"build failed for {', '.join(failed)}", capability.repair.build
             elif refused:
                 repaired.update(refused)
