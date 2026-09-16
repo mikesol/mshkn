@@ -813,7 +813,7 @@ async def test_teardown_deletes_the_door_the_key_the_chains_and_the_recipes(
             {"id": "p-3", "recipe_id": "rcp-count"},
         ]
     }
-    await doors.teardown(hatched, listing)
+    await doors.teardown(hatched, listing, lineage=None)
     deletes = [p for m, p, _ in api.requests if m == "DELETE"]
     assert deletes[:2] == ["/ingress_rules/rule-1", "/keys/key-1"]
     assert set(deletes[2:5]) == {
@@ -841,7 +841,7 @@ async def test_teardown_never_touches_a_promoted_checkpoint_or_the_recipe_it_nam
     )
     doors = _doors(api, tmp_path)
     hatched = Hatched("http://api/ingress/rule-1", "rule-1", "key-1", "rcp-brain", "ck-work")
-    await doors.teardown(hatched, {"proposals": []})
+    await doors.teardown(hatched, {"proposals": []}, lineage=None)
     deletes = [p for m, p, _ in api.requests if m == "DELETE"]
     assert "/checkpoints/ck-work" in deletes
     assert "/checkpoints/ck-promoted" not in deletes
@@ -852,7 +852,7 @@ async def test_teardown_drops_the_scripted_server_first(tmp_path: Path) -> None:
     api = FakeApi()
     doors = _doors(api, tmp_path)
     hatched = Hatched("u", "rule-1", "key-1", "rcp-brain", "ck-brain", server_id="srv-1")
-    await doors.teardown(hatched, None)
+    await doors.teardown(hatched, None, lineage=None)
     deletes = [p for m, p, _ in api.requests if m == "DELETE"]
     assert deletes[0] == "/computers/srv-1"
     assert deletes[1:3] == ["/ingress_rules/rule-1", "/keys/key-1"]
@@ -862,7 +862,7 @@ async def test_teardown_survives_failing_deletes(tmp_path: Path) -> None:
     api = FakeApi(fail_deletes=True)
     doors = _doors(api, tmp_path)
     hatched = Hatched("u", "rule-1", "key-1", "rcp-brain", "ck-brain")
-    await doors.teardown(hatched, None)
+    await doors.teardown(hatched, None, lineage=None)
     assert [p for m, p, _ in api.requests if m == "DELETE"] == [
         "/ingress_rules/rule-1",
         "/keys/key-1",
@@ -885,7 +885,7 @@ async def test_teardown_deletes_no_recipe_when_the_checkpoints_cannot_be_listed(
     hatched = Hatched("u", "rule-1", "key-1", "rcp-brain", "ck-brain")
     listing = {"proposals": [{"id": "p-1", "recipe_id": "rcp-page"}]}
     log = io.StringIO()
-    await doors.teardown(hatched, listing, log=log)
+    await doors.teardown(hatched, listing, lineage=None, log=log)
     assert [p for m, p, _ in api.requests if m == "DELETE"] == [
         "/ingress_rules/rule-1",
         "/keys/key-1",
@@ -3592,6 +3592,10 @@ async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_i
             return httpx.Response(200, json=[])
         if request.url.path == "/recipes":
             return httpx.Response(200, json=[])
+        if request.url.path == "/keys":
+            return httpx.Response(200, json=[{"id": "key-1"}])
+        if request.url.path == "/ingress_rules":
+            return httpx.Response(200, json=[{"id": "ir_1"}])
         if request.url.path == "/checkpoints/fork":
             command = str(json.loads(request.content)["exec"])
             if command == "membrane root list":
@@ -3710,6 +3714,10 @@ async def test_run_once_of_a_dependent_names_its_lineages_base_url_not_the_calle
             return httpx.Response(200, json=[])
         if request.url.path == "/recipes":
             return httpx.Response(200, json=[])
+        if request.url.path == "/keys":
+            return httpx.Response(200, json=[{"id": "key-1"}])
+        if request.url.path == "/ingress_rules":
+            return httpx.Response(200, json=[{"id": "ir_1"}])
         if request.url.path == "/checkpoints/fork":
             command = str(json.loads(request.content)["exec"])
             if command == "membrane root list":
@@ -4307,7 +4315,9 @@ async def test_teardown_goes_on_when_the_checkpoints_cannot_be_listed(tmp_path: 
         "rule-1",
         Record(tmp_path / "run"),
     )
-    await doors.teardown(Hatched("u", "rule-1", "key-1", "rcp-brain", "ck-brain"), None)
+    await doors.teardown(
+        Hatched("u", "rule-1", "key-1", "rcp-brain", "ck-brain"), None, lineage=None
+    )
 
 
 def test_the_asking_approver_asks_again_after_an_unknown_answer() -> None:
@@ -5017,3 +5027,205 @@ async def test_public_continuation_repairs_never_escalate_to_root(
     assert [t.label for t in turns] == ["request", "request-continue-1", "request-repair-1"]
     assert all(("sig" in payload) == signed for payload in payloads)
     assert payloads[-1]["msg"] == HATCH.repair.build
+
+
+# ---------------------------------------------------------------- undoing a kept run
+
+
+def _kept_run(tmp_path: Path, capability: str, *, started_from: str) -> Path:
+    """A `--keep` run's evidence directory, the two files a teardown reads."""
+    run_dir = tmp_path / "docs" / capability / "2026-01-01-run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "capability": capability,
+                "started_from": started_from,
+                "hatched": {
+                    "ingress_url": "u",
+                    "rule_id": "ir_1",
+                    "key_id": "key-1",
+                    "recipe_id": "rcp-brain",
+                    "checkpoint_id": "ck-0",
+                    "server_id": None,
+                },
+            }
+        )
+    )
+    (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
+    return run_dir
+
+
+def _promotion_at(out: Path, name: str) -> None:
+    from membrane.capability import Promotion, write_promotion
+
+    write_promotion(
+        out,
+        Promotion(
+            capability=name,
+            run=f"{name}/2026-01-01-run-1",
+            membrane={"commit": "abc"},
+            promoted_at="t",
+            labels={"brain": "pb"},
+            rule_id="ir_1",
+            key_id="key-1",
+            brain_recipe="rcp-brain",
+            recipe_ids=("rcp-brain",),
+            key_dir=str(out / "keys"),
+            pubkey="ssh-ed25519 AAAA mike",
+            model="claude-opus-5",
+            default_effort=None,
+            reasks=0,
+            started_from=None,
+        ),
+    )
+
+
+async def test_teardown_will_not_take_the_destructive_branch_by_default(tmp_path: Path) -> None:
+    """`lineage=None` means "this run owns its door and its key, drop them"; it used
+    to also mean "the caller did not think about it", and those two must not be the
+    same keystroke. Undoing `docs/embryo/security/2026-09-16-run-1` by hand from a
+    scratch script is how hatch's promoted ingress rule and the brain's scoped key
+    were deleted: the security run had a lineage, the hand-written call omitted the
+    keyword, and the branch below `if lineage is None` ran against another
+    capability's promotion. The key's secret lives only inside the promoted
+    checkpoint's /brain/.env, so that was not recoverable and the whole lineage had
+    to be hatched again."""
+    doors = _bare_doors(tmp_path, lambda _r: httpx.Response(200, json=[]))
+    hatched = Hatched("u", "ir_1", "key-1", "rcp-brain", "ck-0")
+    with pytest.raises(TypeError, match="lineage"):
+        await doors.teardown(hatched, None)  # type: ignore[call-arg]
+
+
+def test_main_teardown_undoes_a_dependents_run_without_touching_its_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The command that did not exist. The brain guard tells an operator to tear the
+    brain down before measuring again, `--keep` is required to promote, so every
+    promotable run leaves one -- and until this subcommand there was nothing to run.
+    It reads the run's own record, resolves the lineage the way `run_once` does, and
+    hands both to the same `Doors.teardown` a run without `--keep` calls."""
+    out = tmp_path / "docs"
+    _promotion_at(out, "hatch")
+    run_dir = _kept_run(tmp_path, "security", started_from="hatch/2026-01-01-run-1")
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path == "/checkpoints":
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": "w", "label": "brain", "recipe_id": None},
+                    {"id": "p", "label": "capability/hatch/brain", "recipe_id": None},
+                ],
+            )
+        return httpx.Response(200, json={"status": "deleted"})
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=http://api\nMSHKN_API_KEY=k\n")
+    log = io.StringIO()
+    assert main(["teardown", str(run_dir), "--env", str(env), "--out", str(out)], log=log) == 0
+    deleted = [path for method, path in seen if method == "DELETE"]
+    # the working brain went; the lineage's rule, key and promoted head did not
+    assert deleted == ["/checkpoints/w"]
+    assert "/ingress_rules/ir_1" not in deleted
+    assert "/keys/key-1" not in deleted
+
+
+def test_main_teardown_of_a_hatch_drops_the_door_and_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A capability with no `depends` owns what it hatched, so here the destructive
+    branch is right and is taken."""
+    out = tmp_path / "docs"
+    run_dir = _kept_run(tmp_path, "hatch", started_from="hatch")
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path == "/checkpoints":
+            return httpx.Response(200, json=[{"id": "w", "label": "brain", "recipe_id": None}])
+        return httpx.Response(200, json={"status": "deleted"})
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=http://api\nMSHKN_API_KEY=k\n")
+    argv = ["teardown", str(run_dir), "--env", str(env), "--out", str(out)]
+    assert main(argv, log=io.StringIO()) == 0
+    deleted = [path for method, path in seen if method == "DELETE"]
+    assert "/ingress_rules/ir_1" in deleted
+    assert "/keys/key-1" in deleted
+
+
+def test_main_teardown_refuses_a_dependent_whose_promotion_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one case that must never fall back. A dependent run with no promotion on
+    disk cannot be told which rule, key and recipes belong to someone else, and
+    guessing `lineage=None` is precisely the deletion this command exists to
+    prevent. It refuses and deletes nothing."""
+    out = tmp_path / "docs"
+    run_dir = _kept_run(tmp_path, "security", started_from="hatch/2026-01-01-run-1")
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=http://api\nMSHKN_API_KEY=k\n")
+    log = io.StringIO()
+    assert main(["teardown", str(run_dir), "--env", str(env), "--out", str(out)], log=log) == 1
+    assert "has no promotion" in log.getvalue()
+    assert [m for m, _ in seen if m == "DELETE"] == []
+
+
+async def test_a_dependent_checks_its_lineage_is_still_on_the_host_before_it_forks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run_once` already refuses a key file that cannot sign for the lineage before
+    it spends anything. It did not ask whether the host still holds the rule and the
+    key that promotion names, so a lineage deleted out from under it was discovered
+    only when a row was spoken: `2026-09-16-run-2` forked the promoted brain, ran
+    `prepare`, spoke turn 11 and died on `ingress say: HTTP 404`, four minutes and
+    one page server in. Two GETs before the first fork say it instead."""
+    from membrane.capability import check_lineage, read_promotion
+
+    out = tmp_path / "docs"
+    _promotion_at(out, "hatch")
+    lineage = read_promotion(out, "hatch")
+    assert lineage is not None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/keys":
+            return httpx.Response(200, json=[{"id": "key-1"}])
+        return httpx.Response(200, json=[{"id": "ir_OTHER"}])
+
+    doors = _bare_doors(tmp_path, handler)
+    with pytest.raises(RuntimeError, match="ingress rule ir_1"):
+        await check_lineage(doors, lineage)
+
+    def gone(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/keys":
+            return httpx.Response(200, json=[{"id": "key-OTHER"}])
+        return httpx.Response(200, json=[{"id": "ir_1"}])
+
+    with pytest.raises(RuntimeError, match="key key-1"):
+        await check_lineage(_bare_doors(tmp_path, gone), lineage)
+
+    # the negative control: both present and it says nothing at all
+    def held(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/keys":
+            return httpx.Response(200, json=[{"id": "key-1"}])
+        return httpx.Response(200, json=[{"id": "ir_1"}])
+
+    await check_lineage(_bare_doors(tmp_path, held), lineage)
