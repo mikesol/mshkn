@@ -38,12 +38,21 @@ NEEDLE = "/tmp/needle"
 INSPECT = f"grep -rlaF -f {NEEDLE} /brain; echo ---; cut -d= -f1 /brain/.env"
 # The page server is a background process, and the host's idle reaper does not
 # count one as activity: `reap_idle` in `src/mshkn/services/reaper.py` reads
-# `last_exec_at or created_at` against `idle_timeout_seconds` (1800 by default).
-# A run that spans two builds and several turns outlasts that, so the page would
-# be gone halfway through. One trivial command on an interval well under the
-# reaper's window is what keeps it, and it belongs here rather than in a caller:
-# every run of this capability needs it.
-KEEP_ALIVE_INTERVAL = 300.0
+# `last_exec_at or created_at` against `idle_timeout_seconds`. A run that spans
+# two builds and several turns outlasts that, so the page would be gone halfway
+# through. One trivial command on an interval well under the reaper's window is
+# what keeps it, and it belongs here rather than in a caller: every run of this
+# capability needs it.
+#
+# 30 and not the 300 this started at, which was read off `idle_timeout_seconds`'
+# *default* of 1800. The host does not run the default. Probed on 2026-09-16: a
+# computer was destroyed between 131 and 141 seconds after its last touch, and
+# the reaper cycle before that -- 71 to 81 seconds after it -- left it alone,
+# which puts the live timeout in (71, 141]. `2026-09-16-run-1` is what the old
+# number cost: the page's computer was reaped at 19:17:57, before the first
+# touch was even due, and the row that read it got a 200 with an empty body
+# from the route's absence rather than an error.
+KEEP_ALIVE_INTERVAL = 30.0
 KEEP_ALIVE = "true"
 # Every name hatch.sh may write to /brain/.env (spec §7.1): the brain's own keys
 # and its settings. tests/unit/test_embryo_priors.py holds the two together.
@@ -138,9 +147,14 @@ async def _upload(doors: Any, computer_id: str, path: str, data: bytes) -> None:
 async def keep_alive(doors: Any, computer_id: str, log: TextIO) -> None:
     """Touch the page server's computer every `KEEP_ALIVE_INTERVAL` seconds so the
     idle reaper never takes it. The command carries nothing: a failed touch is
-    logged and the next one is tried, and the loop never raises into the run."""
+    logged and the next one is tried, and the loop never raises into the run.
+
+    The first touch comes before the first sleep. The reaper measures from
+    `last_exec_at or created_at`, and until something touches it that is the
+    moment the computer was made -- so a loop that slept first left the page's
+    whole first interval uncovered, which is the interval `2026-09-16-run-1`
+    died in."""
     while True:
-        await asyncio.sleep(KEEP_ALIVE_INTERVAL)
         try:
             touched = await doors.api.post(
                 f"/computers/{computer_id}/exec",
@@ -149,6 +163,7 @@ async def keep_alive(doors: Any, computer_id: str, log: TextIO) -> None:
             touched.raise_for_status()
         except Exception as exc:  # anything but cancellation must not end the loop
             log.write(f"could not keep {computer_id} alive: {type(exc).__name__}: {exc}\n")
+        await asyncio.sleep(KEEP_ALIVE_INTERVAL)
 
 
 async def inspect_brain(doors: Any, token: str, log: TextIO) -> dict[str, Any]:

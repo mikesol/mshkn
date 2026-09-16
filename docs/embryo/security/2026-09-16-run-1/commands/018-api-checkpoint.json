@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-16T19:17:36+00:00",
+ "command": "checkpoint",
+ "computer_id": "comp-ee5c5be82b3f",
+ "detail": {
+  "checkpoint_id": "ckpt-3ff48e676e89",
+  "label": "verb/read_protected_page",
+  "verb": "read_protected_page"
+ },
+ "door": "api",
+ "n": 18,
+ "seconds": 0.277054263278842,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}
