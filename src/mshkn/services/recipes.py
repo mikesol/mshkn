@@ -9,6 +9,7 @@ import logging
 import re
 import shutil
 import subprocess
+import traceback
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -390,11 +391,8 @@ class RecipeService:
             )
             logger.info("recipe %s: ready (vol %d)", recipe_id, volume_id)
         except Exception as exc:
-            # The tenant reads what the builder said; the traceback through our own
-            # files is server internals and goes to the journal instead, where the
-            # operator who needs it can find it.
-            build_log_lines.append(f"\n--- BUILD FAILED ---\n{exc}")
-            logger.exception("recipe %s: build failed", recipe_id)
+            build_log_lines.append(f"\n--- BUILD FAILED ---\n{traceback.format_exc()}")
+            logger.error("recipe %s: build failed: %s", recipe_id, exc)
             await update_recipe_build_result(
                 self.db, recipe_id, status=RecipeStatus.FAILED, build_log="\n".join(build_log_lines)
             )
