@@ -147,16 +147,43 @@ def test_model_api_key_raises_for_a_directly_built_settings_without_a_gateway_ke
         _ = settings.model_api_key
 
 
-def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
+def test_cost_uses_each_models_own_four_published_rates() -> None:
+    """Every token count a turn reports is billed at the rate that model publishes for
+    it. There were two global multipliers here, `CACHE_READ = 0.1` and
+    `CACHE_WRITE = 1.25`, and they happen to be exactly right for the Anthropic rows
+    and wrong for two of the other four, so Opus's arithmetic is unchanged and
+    `gpt-5.6-sol`'s is not: its published cache write is 0.625x of input, and the
+    third assertion is the negative control holding the number the multiplier gave."""
     usage = {
         "input_tokens": 1_000_000,
         "output_tokens": 100_000,
         "cache_creation_input_tokens": 200_000,
         "cache_read_input_tokens": 1_000_000,
     }
-    # 5.00 + 2.50 + 0.25 * 5 + 0.1 * 5 = 5 + 2.5 + 1.25 + 0.5
+    # 1M x 5.00 + 200k x 6.25 + 1M x 0.50 + 100k x 25.00
     assert cost_usd(usage, "claude-opus-5") == pytest.approx(9.25)
     assert cost_usd(zero_usage(), "claude-opus-5") == 0.0
+    # 1M x 2.20 + 200k x 1.375 + 1M x 0.22 + 100k x 11.00
+    assert cost_usd(usage, "openai/gpt-5.6-sol") == pytest.approx(3.795)
+    assert cost_usd(usage, "openai/gpt-5.6-sol") != pytest.approx(4.07)
+
+
+def test_zai_reads_its_cache_at_a_fifth_of_input_not_a_tenth() -> None:
+    """The other direction, and the one no multiplier could have reached: `glm-4.7`
+    publishes `input_cache_read` at $0.12 against a $0.60 input price, a fifth where
+    every other model in the table charges a tenth. The old global `CACHE_READ = 0.1`
+    therefore *under*-charged it, which is why this is worth a test of its own rather
+    than a line in the row above -- an over-report gets noticed when a bill arrives
+    and an under-report does not."""
+    usage = {
+        "input_tokens": 1_000_000,
+        "output_tokens": 100_000,
+        "cache_creation_input_tokens": 200_000,
+        "cache_read_input_tokens": 1_000_000,
+    }
+    # 1M x 0.60 + 200k x 0.60 + 1M x 0.12 + 100k x 2.20
+    assert cost_usd(usage, "zai/glm-4.7") == pytest.approx(1.06)
+    assert cost_usd(usage, "zai/glm-4.7") != pytest.approx(1.03)
 
 
 def test_a_gateway_id_prices_as_the_model_it_names() -> None:

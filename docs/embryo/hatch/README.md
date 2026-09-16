@@ -23,15 +23,28 @@ It is also the fastest and cheapest 7/7 on file: 881 seconds against run 6's 2,7
 and against `2026-09-13-run-5`'s Opus at $3.18. **One repair in the whole run** —
 `6-repair-1`, the `silent` trigger — six continuations, no re-asks.
 
-**Its recorded cost is 43% too high, and the reason is new.** `PRICES` notes that
-`gpt-5.6-sol` publishes `input_cache_write` at 0.625x of its input price against
-`CACHE_WRITE`'s 1.25x, and dismisses it on the grounds that every gateway run so far
-recorded zero cache creation. This run records 109,636 of it: OpenAI reports through
-the gateway with almost the whole context as cache creation and `input_tokens: 135`
-in total, where DeepSeek's run 6 reported 118,174 input tokens and no creation at
-all. At the published rate the run cost **$0.3506**. The 272,000-token tier did not
-bite — the largest single-turn context was 88,677. `Price` has no cache-write axis;
-until it does, a cost recorded against this model is an upper bound, not a figure.
+**Its `run.json` records $0.5014, which is 43% too high, and it is the run that got
+the price table fixed.** `PRICES` used to carry two global multipliers, `CACHE_READ
+= 0.1` and `CACHE_WRITE = 1.25` of the input price. `gpt-5.6-sol` publishes its cache
+write at 0.625x, half of that. It had not mattered because every gateway run until
+this one recorded zero cache creation; this one records **109,636**, because OpenAI
+reports through the gateway with almost the whole context as cache creation and
+`input_tokens: 135` in total, where DeepSeek's run 6 reported 118,174 input tokens and
+no creation at all. At the published rate the run cost **$0.3506**.
+
+`Price` now carries all four published rates per model and there are no multipliers
+(`embryo/membrane/capability.py`). Re-costing every run on file moves exactly two, in
+opposite directions, which is what says the multipliers were wrong rather than merely
+scaled: this run down from $0.5014 to **$0.3506**, and `2026-09-15-run-2` on zai *up*
+from $0.1167 to **$0.1337**, because zai reads its cache at a fifth of its input price
+where every other model here charges a tenth. Every Opus, DeepSeek and Laguna run is
+unchanged — Anthropic's own ratios are exactly 0.1 and 1.25, which is how two wrong
+numbers survived this long. The `run.json` files are left as they were written; they
+record what the driver said at the time, and the corrected figures are here.
+
+One thing is still unmodelled: `gpt-5.6-sol` tiers its prices at 272,000 tokens in a
+call, above which input doubles and output goes to 1.5x. It did not bite here — the
+largest single-turn context was 88,677.
 
 ## One dropped character (2026-09-16-run-7)
 

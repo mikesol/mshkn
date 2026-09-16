@@ -188,50 +188,68 @@ def load_run_settings(
 
 @dataclass(frozen=True)
 class Price:
-    """USD per million tokens, from the model's own published price list."""
+    """USD per million tokens, from the model's own published price list: one rate
+    for each of the four token counts a turn reports, and no multiplier standing in
+    for any of them.
+
+    All four are required, with no defaults, because the two that used to be
+    defaults were wrong for two of the six models here and nothing said so. A global
+    `CACHE_READ = 0.1` under-charged zai, whose published cache read is a *fifth* of
+    its input price; a global `CACHE_WRITE = 1.25` over-charged `gpt-5.6-sol`, whose
+    published cache write is 0.625x, and `2026-09-16-run-9` recorded $0.5014 against
+    a true $0.3506 for it. A row that cannot be added without looking up all four
+    rates cannot quietly inherit a wrong one.
+
+    Where a provider publishes no `input_cache_write`, `cache_write` is its input
+    rate rather than a multiple of it. That is not a guess: the catalogue tags those
+    models `implicit-caching` and not `explicit-caching`, meaning the provider caches
+    on its own account and there is no cache-write product to buy. A token it decided
+    to cache is billed as the ordinary input token it was."""
 
     input: float
     output: float
+    cache_read: float
+    cache_write: float
 
 
 PRICES = {
-    # Claude API reference, cached 2026-06-24.
-    "claude-opus-5": Price(input=5.0, output=25.0),
-    # The gateway's own catalogue, read 2026-09-15. zai publishes no cache-write
-    # tier; CACHE_WRITE below is applied to it all the same, which is this table's
-    # standing approximation and not a claim about what zai charges.
-    "glm-4.7": Price(input=0.6, output=2.2),
+    # Claude API reference, cached 2026-06-24. These are the direct-API rates, which
+    # is where every Opus run on file was spoken: the gateway serves the same model
+    # from `regional` at $5.50/$27.50, 10% above this, and an Opus run dialled
+    # through `--base-url` would be under-reported by that much.
+    "claude-opus-5": Price(input=5.0, output=25.0, cache_read=0.5, cache_write=6.25),
+    # The gateway's own catalogue, read 2026-09-15, rechecked 2026-09-16. `us` is its
+    # only region and prices there match the top line. Its cache read is $0.12, a
+    # *fifth* of its input price and not the tenth every other model here charges --
+    # the one rate in this table that no multiplier would have got right, and
+    # 2026-09-15-run-2's cost is understated because of it.
+    "glm-4.7": Price(input=0.6, output=2.2, cache_read=0.12, cache_write=0.6),
     # The `regional.us` rates, not the headline ones: the catalogue serves this
     # model from `us` only and prices it there at double its own top line. It also
     # carries a 2x peak multiplier on weekday 01:00-04:00 and 06:00-10:00 UTC,
     # which this table has no axis for. A run inside those windows costs twice what
     # its record says, and the record has no way to know it did.
-    "deepseek-v4-pro": Price(input=1.32, output=3.96),
+    "deepseek-v4-pro": Price(input=1.32, output=3.96, cache_read=0.132, cache_write=1.32),
     # The gateway's catalogue, read 2026-09-16, flat: no `regional` block and no peak
-    # multiplier, so unlike the row above this one is the whole story. Its published
-    # `input_cache_read` is a tenth of its input price, which is what CACHE_READ
-    # already assumes; like zai it publishes no cache-write tier.
-    "laguna-s-2.1": Price(input=0.1, output=0.2),
+    # multiplier, so unlike the row above this one is the whole story. It is tagged
+    # for no caching at all, so a cache token from it would be a surprise; priced as
+    # ordinary input if one ever arrives.
+    "laguna-s-2.1": Price(input=0.1, output=0.2, cache_read=0.01, cache_write=0.1),
     # The rung between the cheap models and Opus, catalogue read 2026-09-16. Like
     # deepseek these are the `regional` rates and not the $2.00/$10.00 headline, but
     # here `eu` and `us` carry the same numbers, so there is one rate and no region
-    # to choose. Its published cache read and cache write are exactly a tenth and
-    # 1.25x of its input price, which is what CACHE_READ and CACHE_WRITE assume.
-    "claude-sonnet-5": Price(input=2.2, output=11.0),
+    # to choose.
+    "claude-sonnet-5": Price(input=2.2, output=11.0, cache_read=0.22, cache_write=2.75),
     # An exact cost twin of the row above from another lab, catalogue read
     # 2026-09-16: the same `regional` story as deepseek and sonnet, and the headline
     # $2.00/$10.00 is again not what it is served at. `us` is its only region, so
-    # there is one rate. Two things this table has no axis for, stated rather than
-    # papered over: its `input_cache_write` is 0.625x of input, half of what
-    # CACHE_WRITE applies, so a run that creates cache is over-reported (every
-    # gateway run so far records zero cache creation); and its prices are tiered at
-    # 272,000 tokens in a call, above which input doubles and output goes to 1.5x,
+    # there is one rate. Its cache write is 0.625x of input where the two Anthropic
+    # rows charge 1.25x -- the divergence that cost `2026-09-16-run-9` a 43%
+    # over-report under the old global. One thing still unmodelled: its prices tier
+    # at 272,000 tokens in a call, above which input doubles and output goes to 1.5x,
     # so a run whose context crosses that line costs more than its record says.
-    # `input_cache_read` is a tenth of input, which is what CACHE_READ assumes.
-    "gpt-5.6-sol": Price(input=2.2, output=11.0),
+    "gpt-5.6-sol": Price(input=2.2, output=11.0, cache_read=0.22, cache_write=1.375),
 }
-CACHE_WRITE = 1.25  # of the input price
-CACHE_READ = 0.1
 
 
 def bare_model_id(model_id: str) -> str:
@@ -253,8 +271,8 @@ def cost_usd(usage: Mapping[str, int], model_id: str) -> float | None:
         return None
     return (
         usage.get("input_tokens", 0) * price.input
-        + usage.get("cache_creation_input_tokens", 0) * price.input * CACHE_WRITE
-        + usage.get("cache_read_input_tokens", 0) * price.input * CACHE_READ
+        + usage.get("cache_creation_input_tokens", 0) * price.cache_write
+        + usage.get("cache_read_input_tokens", 0) * price.cache_read
         + usage.get("output_tokens", 0) * price.output
     ) / 1_000_000
 
