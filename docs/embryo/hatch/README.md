@@ -4,6 +4,48 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## The control: same model, same flags, a different road to the same wall (2026-09-16-run-3)
+
+`2026-09-16-run-2` repeated with nothing changed, to ask whether its no-op repair
+turn was pathology or variance. **2/7, 48 model calls, 132,923 in / 79,482 out,
+$0.0359.** The answer is *both*, and the split is the useful part.
+
+**The path varies, wildly.** Run 2 made two proposals; run 3 made six, built two
+verbs nobody asked for (`ping` and `web` — which is what cost it
+`no_undeclared_capability`, and the point it scores below run 2), proposed `ping`
+twice without `supersedes`, and shipped a Dockerfile with a bare `printf` as an
+instruction. Nothing about the two transcripts is the same shape.
+
+**The wall does not vary.** Neither run opened the door. Neither ever proposed a
+working identity verb. And both declared the identity hook `effect: communicate`
+— the same wrong effect for a local signature check, refused with the rule
+quoted, twice. That is a stable misconception, not noise.
+
+**The no-op turn reproduced.** Run 3's `3-repair-1`: one model call, **zero tool
+calls**, `stopped: "done"`. Run 2's `3-repair-3` did the same. Two runs, two
+repair turns that consumed a turn to say something. But run 3's `3-repair-3` did
+make two `propose` calls, so it is not that repair turns always stall — it is
+that this model sometimes answers a prompt-to-act with prose. That is
+mechanically detectable and is worth a re-ask; see below.
+
+**The no-op is not what loses the run, though.** Run 3's turn 2 — the identity
+turn, the one that decides the whole liturgy — made **twenty consecutive `try`
+calls and not one `propose`**, and hit the cap. It spent the entire budget of the
+most important turn trialling, and shipped nothing. That, not the stall, is the
+binding constraint, and unlike the stall it is the kind of thing more turns would
+partly relieve.
+
+**One substrate note.** `p-4`'s build failure arrives in the embryo's inbox as a
+Python traceback naming `src/mshkn/services/recipes.py:367` and `:162` before it
+gets to the line that matters (`dockerfile parse error on line 3: unknown
+instruction: printf`). The cause is the model's, the disclosure is ours: a failed
+build hands the organism our internal file layout.
+
+**What the pair says about the 10x-turns question.** More turns would help the
+cap and would not help the other two. The stall wastes a turn whatever the budget
+is, and `effect: communicate` is not a thing more attempts converge away from —
+run 3 had five more proposals than run 2 to discover otherwise and did not.
+
 ## A model that knows what to do and does not do it (2026-09-16-run-2)
 
 `poolside/laguna-s-2.1`, effort off, provider pinned. **3/7, 51 model calls,

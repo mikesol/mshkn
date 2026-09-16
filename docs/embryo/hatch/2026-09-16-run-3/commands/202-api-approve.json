@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-16T05:16:04+00:00",
+ "command": "approve",
+ "computer_id": "comp-4f09c7fd26f7",
+ "detail": [
+  "p-5"
+ ],
+ "door": "api",
+ "n": 202,
+ "seconds": 2.141909060999751,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-5 refused: verb ping already exists as p-6; propose with supersedes\n"
+}

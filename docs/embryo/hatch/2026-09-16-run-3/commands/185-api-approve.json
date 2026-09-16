@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-16T05:15:15+00:00",
+ "command": "approve",
+ "computer_id": "comp-aefc45afb15c",
+ "detail": [
+  "p-2"
+ ],
+ "door": "api",
+ "n": 185,
+ "seconds": 2.2247188314795494,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)\n"
+}
