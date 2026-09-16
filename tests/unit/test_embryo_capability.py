@@ -192,6 +192,20 @@ def test_deepseek_is_priced_at_the_rate_it_is_actually_served_at() -> None:
     assert cost_usd(usage, "deepseek/deepseek-v4-pro") != pytest.approx(2.64)
 
 
+def test_sonnet_is_priced_at_its_regional_rate_like_deepseek() -> None:
+    """`anthropic/claude-sonnet-5` is the rung between the cheap models and Opus:
+    2026-09-16-run-6 reached 7/7 on DeepSeek for $0.79 and 2026-09-13-run-5 on Opus
+    for $3.18, and nothing on file sits between them. Its catalogue entry has the
+    same shape as DeepSeek's -- a headline $2.00/$10.00 and a `regional` block that
+    is what it is actually served at -- but here `eu` and `us` agree at
+    $2.20/$11.00, so there is one rate and no region to pick. The second assertion
+    is the negative control against taking the headline, which would under-report
+    every run by a tenth. Catalogue read 2026-09-16."""
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert cost_usd(usage, "anthropic/claude-sonnet-5") == pytest.approx(13.20)
+    assert cost_usd(usage, "anthropic/claude-sonnet-5") != pytest.approx(12.0)
+
+
 def test_the_cheapest_backend_on_the_gateway_is_priced_before_it_is_run() -> None:
     """`poolside/laguna-s-2.1` at $0.10/$0.20 is an order of magnitude under the two
     cheap models already here, so an unpriced run would record `cost_usd: null` for

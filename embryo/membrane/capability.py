@@ -212,6 +212,12 @@ PRICES = {
     # `input_cache_read` is a tenth of its input price, which is what CACHE_READ
     # already assumes; like zai it publishes no cache-write tier.
     "laguna-s-2.1": Price(input=0.1, output=0.2),
+    # The rung between the cheap models and Opus, catalogue read 2026-09-16. Like
+    # deepseek these are the `regional` rates and not the $2.00/$10.00 headline, but
+    # here `eu` and `us` carry the same numbers, so there is one rate and no region
+    # to choose. Its published cache read and cache write are exactly a tenth and
+    # 1.25x of its input price, which is what CACHE_READ and CACHE_WRITE assume.
+    "claude-sonnet-5": Price(input=2.2, output=11.0),
 }
 CACHE_WRITE = 1.25  # of the input price
 CACHE_READ = 0.1
