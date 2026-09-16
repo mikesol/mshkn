@@ -4,6 +4,34 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## One dropped character (2026-09-16-run-7)
+
+`deepseek/deepseek-v4-pro` again, same flags as run 6, this time with `--keep`.
+**3/7, 40 model calls, 92,205 in / 185,662 out, $0.950, 54 minutes.**
+Same model, same words, same driver commit as the 7/7 run above, and it went the
+whole distance — all ten rows, eighteen turns, nothing aborted.
+
+It failed on a typo. The `ssh_verify` verb bakes an `allowed_signers` line into
+its Dockerfile, and the model transcribed the public key by hand and dropped one
+character: `…HlBs2XGk…` became `…HlBs2Gk…`, 68 base64 characters down to 67, a
+51-byte key down to 50. `ssh-keygen -Y verify` can only exit non-zero on that, so
+the pre-turn hook exits 255 with empty stdout on every message, every principal
+stays `anonymous`, and `authentication`, `authorization`, `page_title` and
+`counter` all fall behind it.
+
+**The embryo was not wrong anywhere after that point.** Asked on row 8 to run
+`page_title`, it read its own policy back — *"`anonymous`: `invoke: []` … So I
+will not run `page_title` on an unsigned request"* — and told the caller how to
+sign. It is the correct refusal, and it costs four postconditions, because the
+signature it is asking for can never verify. `no_undeclared_capability`,
+`root_unforgeable` and `nothing_by_hand` pass; the catalog ends holding exactly
+`ssh_verify`, `page_title` and `count_calls`.
+
+**The build gate held.** Row 2's build failed exactly as run 4's did, and
+`check your build` was spoken **once** (`2-repair-1`), against twenty-six times in
+run 4 on the same shape. Four repairs in the run, one per row, all of them the
+`silent` trigger except that one.
+
 ## Seven of seven, on a model that is not Opus (2026-09-16-run-6)
 
 `deepseek/deepseek-v4-pro`, `--effort off`, pinned to the `deepseek` provider.

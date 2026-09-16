@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-16T15:20:27+00:00",
+ "command": "approve",
+ "computer_id": "comp-4b055304472e",
+ "detail": [
+  "p-6"
+ ],
+ "door": "api",
+ "n": 420,
+ "seconds": 2.336237581446767,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-6 ready: verb count_calls recipe rcp-07a0c249f959\n"
+}

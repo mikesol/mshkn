@@ -1,0 +1,857 @@
+{
+ "catalog": {
+  "count_calls": {
+   "chain": "verb/count_calls",
+   "chain_head": null,
+   "chain_length": 0,
+   "effect": "local",
+   "provided": [],
+   "recipe_id": "rcp-07a0c249f959",
+   "requires": [],
+   "state": "chain",
+   "status": "ready"
+  },
+  "page_title": {
+   "chain": "verb/page_title",
+   "chain_head": null,
+   "chain_length": 0,
+   "effect": "read",
+   "provided": [],
+   "recipe_id": "rcp-a7597d2f2f3b",
+   "requires": [],
+   "state": "ephemeral",
+   "status": "ready"
+  },
+  "ssh_verify": {
+   "chain": "verb/ssh_verify",
+   "chain_head": null,
+   "chain_length": 0,
+   "effect": "local",
+   "provided": [],
+   "recipe_id": "rcp-59fdc85342a1",
+   "requires": [],
+   "state": "ephemeral",
+   "status": "ready"
+  }
+ },
+ "door": {
+  "hooks": [
+   "ssh_verify"
+  ],
+  "hooks_ready": [
+   "ssh_verify"
+  ],
+  "status": "open"
+ },
+ "inbox": 0,
+ "pending": null,
+ "policy": {
+  "door": "open",
+  "hooks": [
+   "ssh_verify"
+  ],
+  "principals": {
+   "anonymous": {
+    "invoke": [],
+    "propose": false
+   },
+   "ssh:mike": {
+    "invoke": [
+     "page_title",
+     "count_calls"
+    ],
+    "propose": true
+   }
+  }
+ },
+ "principals": [],
+ "proposals": [
+  {
+   "id": "p-1",
+   "kind": "verb",
+   "log": null,
+   "rationale": "This lets a public-door message prove it comes from mike. The verb declares asserts=ssh, so it runs as the pre-turn hook: it receives the decoded payload as its single parameter, extracts msg and sig with jq, and verifies the ssh-ed25519 signature with `ssh-keygen -Y verify -I mike -n mshkn` against a baked allowed_signers entry containing mike's public key. On success its stdout is `mike`, which becomes the rest of the principal name (namespace ssh, i.e. ssh:mike). Mike must sign the exact msg text (e.g. printf '%s' \"$msg\" | ssh-keygen -Y sign -n mshkn) and send it as {\"msg\":..., \"sig\":...}.",
+   "recipe_id": "rcp-59fdc85342a1",
+   "status": "ready",
+   "supersedes": null,
+   "title": "ssh_verify pre-turn hook for the public door",
+   "verb": {
+    "allow": [],
+    "asserts": "ssh",
+    "chain": "verb/ssh_verify",
+    "description": "Pre-turn hook: verify an ssh-ed25519 signature over the payload's msg field and emit the verified principal name mike.",
+    "dockerfile": "FROM mshkn-base\nRUN command -v ssh-keygen >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || (apt-get update && apt-get install -y openssh-client jq)\nRUN mkdir -p /verb && printf '%s\\n' 'mike ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMxgpUVbGxL/HlBs2Gk/Kd/qLaYG5PAy9PyYXPKxhCI' > /verb/allowed_signers\nRUN printf '%s\\n' '#!/bin/sh' 'set -eu' 'D=/tmp/v' 'mkdir -p \"$D\"' 'printf \"%s\" \"$1\" | jq -r .msg > \"$D/msg\"' 'printf \"%s\" \"$1\" | jq -r .sig > \"$D/msg.sig\"' 'ssh-keygen -Y verify -f /verb/allowed_signers -I mike -n mshkn -s \"$D/msg.sig\" < \"$D/msg\" >/dev/null 2>&1' 'echo mike' > /verb/run.sh && chmod +x /verb/run.sh",
+    "effect": "local",
+    "entrypoint": "/verb/run.sh {{payload}}",
+    "name": "ssh_verify",
+    "needs": {
+     "cores": 1,
+     "ram": "256MB"
+    },
+    "params": {
+     "properties": {
+      "payload": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "payload"
+     ],
+     "type": "object"
+    },
+    "requires": [],
+    "state": "ephemeral",
+    "timeout_seconds": 30
+   }
+  },
+  {
+   "id": "p-2",
+   "kind": "policy",
+   "log": null,
+   "policy": {
+    "door": "open",
+    "hooks": [
+     "ssh_verify"
+    ],
+    "principals": {
+     "anonymous": {
+      "invoke": [],
+      "propose": false
+     },
+     "ssh:mike": {
+      "invoke": [],
+      "propose": true
+     }
+    }
+   },
+   "rationale": "Open the public door and run ssh_verify as the pre-turn hook, so a message whose signature verifies becomes the principal ssh:mike (propose enabled; no verbs to invoke yet) and anything else stays anonymous (no powers). Approve the ssh_verify verb first so the hook resolves in the catalog.",
+   "recipe_id": null,
+   "status": "superseded",
+   "supersedes": null,
+   "title": "Open the public door and authenticate ssh:mike"
+  },
+  {
+   "id": "p-3",
+   "kind": "policy",
+   "log": null,
+   "policy": {
+    "door": "open",
+    "hooks": [
+     "ssh_verify"
+    ],
+    "principals": {
+     "anonymous": {
+      "invoke": [],
+      "propose": false
+     },
+     "ssh:mike": {
+      "invoke": [],
+      "propose": true
+     }
+    }
+   },
+   "rationale": "Root instructed me to propose, after I had only recorded (not enacted) the access decision that an anonymous request prompted. This codifies that decision as an approved, durable policy: the door stays open so anyone may address me; anonymous is offered no tools and its input is never stored, so it can only ask and I answer at my discretion; the verified principal ssh:mike may propose verbs, policy, and prompt changes, and will gain verb invocations as those verbs are approved. Supersedes p-2.",
+   "recipe_id": null,
+   "status": "superseded",
+   "supersedes": "p-2",
+   "title": "Public-door access: anonymous asks only, ssh:mike proposes"
+  },
+  {
+   "id": "p-4",
+   "kind": "verb",
+   "log": null,
+   "rationale": "Root instructed me to propose after I declined the unsigned request. Adds an ephemeral verb that, given a URL, fetches the page and reports its <title>, running on its own computer. Restricted to the verified principal ssh:mike (root may always invoke).",
+   "recipe_id": "rcp-a7597d2f2f3b",
+   "status": "ready",
+   "supersedes": null,
+   "title": "Add page_title verb",
+   "verb": {
+    "allow": [
+     "ssh:mike"
+    ],
+    "chain": "verb/page_title",
+    "description": "Fetch the page at a URL and report its <title>.",
+    "dockerfile": "FROM mshkn-base\nRUN mkdir -p /verb && printf '%s\\n' \\\n'#!/bin/sh' \\\n'url=\"$1\"' \\\n'' \\\n'if command -v curl >/dev/null 2>&1; then' \\\n'  html=$(curl -fsSL --max-time 30 \"$url\")' \\\n'elif command -v wget >/dev/null 2>&1; then' \\\n'  html=$(wget -qO- -T 30 \"$url\")' \\\n'else' \\\n'  echo \"no http client available\" >&2' \\\n'  exit 2' \\\n'fi' \\\n'' \\\n'title=$(printf \"%s\" \"$html\" | tr \"\\n\\r\" \" \" | sed -n \"s/.*<title[^>]*>\\([^<]*\\)<\\/title>.*/\\1/p\" | head -n 1 | sed \"s/^[[:space:]]*//;s/[[:space:]]*$//\")' \\\n'' \\\n'if [ -z \"$title\" ]; then' \\\n'  echo \"no title found\" >&2' \\\n'  exit 1' \\\n'fi' \\\n'' \\\n'printf \"%s\\n\" \"$title\"' \\\n> /verb/run.sh && chmod +x /verb/run.sh",
+    "effect": "read",
+    "entrypoint": "/verb/run.sh {{url}}",
+    "name": "page_title",
+    "needs": {
+     "cores": 1,
+     "ram": "256MB"
+    },
+    "params": {
+     "properties": {
+      "url": {
+       "description": "URL of the page whose title to report",
+       "type": "string"
+      }
+     },
+     "required": [
+      "url"
+     ],
+     "type": "object"
+    },
+    "requires": [],
+    "state": "ephemeral",
+    "timeout_seconds": 60
+   }
+  },
+  {
+   "id": "p-5",
+   "kind": "policy",
+   "log": null,
+   "policy": {
+    "door": "open",
+    "hooks": [
+     "ssh_verify"
+    ],
+    "principals": {
+     "anonymous": {
+      "invoke": [],
+      "propose": false
+     },
+     "ssh:mike": {
+      "invoke": [
+       "page_title"
+      ],
+      "propose": true
+     }
+    }
+   },
+   "rationale": "Companion to p-4: once the page_title verb is approved, add it to ssh:mike's invoke list so the verified principal can actually call it. Keeps anonymous powerless. Supersedes p-3.",
+   "recipe_id": null,
+   "status": "superseded",
+   "supersedes": "p-3",
+   "title": "Grant ssh:mike page_title invocation"
+  },
+  {
+   "id": "p-6",
+   "kind": "verb",
+   "log": null,
+   "rationale": "Root-directed proposal: a stateful chain verb that increments a persisted counter and prints how many times it has been called. Trial t-7 built cleanly and ran twice (1, then 2) on one scratch chain, confirming persistence. Runs on its own computer; effect=local; allows ssh:mike.",
+   "recipe_id": "rcp-07a0c249f959",
+   "status": "ready",
+   "supersedes": null,
+   "title": "Add count_calls verb",
+   "verb": {
+    "allow": [
+     "ssh:mike"
+    ],
+    "chain": "verb/count_calls",
+    "description": "Increment a persisted counter and report how many times this verb has been called.",
+    "dockerfile": "FROM mshkn-base\nRUN mkdir -p /verb && printf '%s\\n' '#!/bin/sh' 'set -eu' 'COUNT_FILE=/verb/count' 'count=0' 'if [ -f \"$COUNT_FILE\" ]; then count=$(cat \"$COUNT_FILE\"); else count=0; fi' 'count=$((count + 1))' 'printf \"%s\\n\" \"$count\" > \"$COUNT_FILE\"' 'printf \"%s\\n\" \"$count\"' > /verb/run.sh && chmod +x /verb/run.sh",
+    "effect": "local",
+    "entrypoint": "/verb/run.sh",
+    "name": "count_calls",
+    "needs": {
+     "cores": 1,
+     "ram": "256MB"
+    },
+    "params": {
+     "additionalProperties": false,
+     "properties": {},
+     "type": "object"
+    },
+    "requires": [],
+    "state": "chain",
+    "timeout_seconds": 60
+   }
+  },
+  {
+   "id": "p-7",
+   "kind": "policy",
+   "log": null,
+   "policy": {
+    "door": "open",
+    "hooks": [
+     "ssh_verify"
+    ],
+    "principals": {
+     "anonymous": {
+      "invoke": [],
+      "propose": false
+     },
+     "ssh:mike": {
+      "invoke": [
+       "page_title",
+       "count_calls"
+      ],
+      "propose": true
+     }
+    }
+   },
+   "rationale": "Companion grant so the verified principal can invoke the new count_calls verb alongside page_title; anonymous remains invoke: [] and propose: false. Supersedes p-5.",
+   "recipe_id": null,
+   "status": "applied",
+   "supersedes": "p-5",
+   "title": "Grant ssh:mike invoke of count_calls"
+  }
+ ],
+ "queue": [],
+ "trials": [
+  {
+   "id": "t-1",
+   "recipe_id": "rcp-c3b2e2663bf0",
+   "status": "failed",
+   "verb": "sshtest"
+  },
+  {
+   "id": "t-2",
+   "recipe_id": "rcp-e9dcd229737c",
+   "status": "done",
+   "verb": "sshtest"
+  },
+  {
+   "id": "t-3",
+   "recipe_id": "rcp-8500adfff0d7",
+   "status": "done",
+   "verb": "sshtest"
+  },
+  {
+   "id": "t-4",
+   "recipe_id": "rcp-e96318de2fc5",
+   "status": "done",
+   "verb": "verify_mike"
+  },
+  {
+   "id": "t-5",
+   "recipe_id": "rcp-8ce3630f9f8c",
+   "status": "done",
+   "verb": "ssh_selftest"
+  },
+  {
+   "id": "t-6",
+   "recipe_id": "rcp-a7597d2f2f3b",
+   "status": "done",
+   "verb": "page_title"
+  },
+  {
+   "id": "t-7",
+   "recipe_id": "rcp-07a0c249f959",
+   "status": "done",
+   "verb": "count_calls"
+  }
+ ],
+ "turn": 18,
+ "window": [
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": "comp-32f961e14108",
+      "error": null,
+      "exit_code": 255,
+      "name": "ssh_verify",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-df8373cba06b",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T15:05:14+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 9,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 2176,
+     "input_tokens": 678,
+     "output_tokens": 1260
+    }
+   },
+   "door": "ingress",
+   "input": "External results: [[\"proposal\", \"p-3\", \"applied\"]]. Continue with the request.",
+   "output": "Proposal **p-3** is applied and now supersedes p-2 as the active policy.\n\nRecorded policy:\n\n- **Door:** open\n- **`anonymous`:** offered nothing \u2014 `invoke: []`, `propose: false`; anonymous can only ask, at my discretion, and anonymous input is not stored.\n- **`ssh:mike`:** offered `effort`, `propose`, `remember`, `try`; `propose: true`; verb invocations will attach as verbs are approved.\n\nThe unsigned request from earlier did not itself change anything or get stored; the durable change is now root-approved policy **p-3**. The request is complete. I await your next message \u2014 root door or signed public door.\n",
+   "principal": "anonymous",
+   "reply": "Proposal **p-3** is applied and now supersedes p-2 as the active policy.\n\nRecorded policy:\n\n- **Door:** open\n- **`anonymous`:** offered nothing \u2014 `invoke: []`, `propose: false`; anonymous can only ask, at my discretion, and anonymous input is not stored.\n- **`ssh:mike`:** offered `effort`, `propose`, `remember`, `try`; `propose: true`; verb invocations will attach as verbs are approved.\n\nThe unsigned request from earlier did not itself change anything or get stored; the durable change is now root-approved policy **p-3**. The request is complete. I await your next message \u2014 root door or signed public door.",
+   "turn": 9
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": "comp-04887842ca2e",
+      "error": null,
+      "exit_code": 255,
+      "name": "ssh_verify",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-623bca1e4d9b",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T15:05:55+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 10,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 2304,
+     "input_tokens": 737,
+     "output_tokens": 2277
+    }
+   },
+   "door": "ingress",
+   "input": "Give yourself a verb: given a URL, report the page's title. It must run on its own computer.",
+   "output": "You are **anonymous**, and under my active policy **p-3** anonymous has no authority to ask me to change myself:\n\n- `anon://anonymous`: `propose: false`, `invoke: []`\n- `anon://ssh:mike`: `propose: true`\n\nSo I will not create or propose a verb on this unsigned request, and I have not stored this input.\n\nIf you are **mike**, sign the exact `msg` text you send:\n\n```\nprintf '%s' \"$msg\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand resend it as:\n\n```json\n{\"msg\": \"<that exact text>\", \"sig\": \"<the signature>\"}\n```\n\nOnce you arrive as `ssh:mike`, I can propose a URL-title verb as requested: it would be an ephemeral verb that receives a URL and returns the page title, running on its own computer. Until then, I can\u2019t act on instructions from an unverified principal.\n",
+   "principal": "anonymous",
+   "reply": "You are **anonymous**, and under my active policy **p-3** anonymous has no authority to ask me to change myself:\n\n- `anon://anonymous`: `propose: false`, `invoke: []`\n- `anon://ssh:mike`: `propose: true`\n\nSo I will not create or propose a verb on this unsigned request, and I have not stored this input.\n\nIf you are **mike**, sign the exact `msg` text you send:\n\n```\nprintf '%s' \"$msg\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand resend it as:\n\n```json\n{\"msg\": \"<that exact text>\", \"sig\": \"<the signature>\"}\n```\n\nOnce you arrive as `ssh:mike`, I can propose a URL-title verb as requested: it would be an ephemeral verb that receives a URL and returns the page title, running on its own computer. Until then, I can\u2019t act on instructions from an unverified principal.",
+   "turn": 10
+  },
+  {
+   "audit": {
+    "door": "api",
+    "effort": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "forks": 4,
+    "hooks": [],
+    "job": "rj-5dd3e50ca718",
+    "memory_written": true,
+    "model_calls": 4,
+    "offered": [
+     "effort",
+     "propose",
+     "remember",
+     "ssh_verify",
+     "try"
+    ],
+    "principal": "root",
+    "proposals": [
+     {
+      "id": "p-4",
+      "sha256": "2176a6fee3453fb3bffdc175af28d70e43a21ca5a6634f35f5d0659bdb98c22d"
+     },
+     {
+      "id": "p-5",
+      "sha256": "060bca92ee078ae75953e43add348ebf6c2745791ef686928e5e46559fe260f3"
+     }
+    ],
+    "references": [],
+    "started_at": "2026-09-16T15:07:04+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "error": "verb.effect must be one of ['administer', 'communicate', 'local', 'read', 'transact']",
+      "name": "try",
+      "status": "invalid"
+     },
+     {
+      "error": "verb.effect must be one of ['administer', 'communicate', 'local', 'read', 'transact']",
+      "name": "propose",
+      "status": "invalid"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "computer_id": "comp-73536db18bea",
+        "exit_code": 0,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-6"
+     },
+     {
+      "id": "p-4",
+      "name": "propose",
+      "status": "pending"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     },
+     {
+      "id": "p-5",
+      "name": "propose",
+      "status": "pending"
+     }
+    ],
+    "turn": 11,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 95232,
+     "input_tokens": 14061,
+     "output_tokens": 31885
+    }
+   },
+   "door": "api",
+   "input": "you proposed nothing; propose",
+   "output": "Understood \u2014 I'll propose the URL\u2192title verb now, and run a trial of the same declaration in parallel so the build is visible.\n\nThe catalog constrains `effect` to a fixed set. Fetching a title is a `read` effect. Re-issuing both calls corrected.\n\nThe trial passed: build succeeded and `https://example.com/` returned **`Example Domain`** (exit 0). Proposal **p-4** (`page_title`) is now pending your approval.\n\nTwo useful facts are worth storing, and I'll complete the change by proposing the companion policy grant (as with p-1/p-2 earlier): once p-4 is approved, `ssh:mike` should be allowed to invoke it.\n\nDone. Here's where things stand:\n\n**Trial** \u2014 the `page_title` declaration built cleanly and, given `https://example.com/`, printed **`Example Domain`** (exit 0).\n\n**Pending proposals:**\n\n- **p-4 \u2014 verb `page_title`** (`effect: read`, `state: ephemeral`, `allow: [\"ssh:mike\"]`)\n  - `params`: `{ url: string }`\n  - `entrypoint`: `/verb/run.sh {{url}}`\n  - runs on its own computer; fetches the URL (curl, else wget) and prints the `<title>`, trimmed.\n- **p-5 \u2014 policy** (supersedes p-3)\n  - `ssh:mike`: `invoke: [\"page_title\"]`, `propose: true`\n  - `anonymous`: still `invoke: []`, `propose: false`\n  - door stays open with the `ssh_verify` hook.\n\nApprove **p-4 first**, then **p-5**, and `ssh:mike` will be able to invoke `page_title` from the public door. I also stored the effect enum and the trial/proposal status for later turns.\nproposal p-4\n{\n \"id\": \"p-4\",\n \"kind\": \"verb\",\n \"title\": \"Add page_title verb\",\n \"rationale\": \"Root instructed me to propose after I declined the unsigned request. Adds an ephemeral verb that, given a URL, fetches the page and reports its <title>, running on its own computer. Restricted to the verified principal ssh:mike (root may always invoke).\",\n \"supersedes\": null,\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"verb\": {\n  \"name\": \"page_title\",\n  \"description\": \"Fetch the page at a URL and report its <title>.\",\n  \"params\": {\n   \"properties\": {\n    \"url\": {\n     \"description\": \"URL of the page whose title to report\",\n     \"type\": \"string\"\n    }\n   },\n   \"required\": [\n    \"url\"\n   ],\n   \"type\": \"object\"\n  },\n  \"dockerfile\": \"FROM mshkn-base\\nRUN mkdir -p /verb && printf '%s\\\\n' \\\\\\n'#!/bin/sh' \\\\\\n'url=\\\"$1\\\"' \\\\\\n'' \\\\\\n'if command -v curl >/dev/null 2>&1; then' \\\\\\n'  html=$(curl -fsSL --max-time 30 \\\"$url\\\")' \\\\\\n'elif command -v wget >/dev/null 2>&1; then' \\\\\\n'  html=$(wget -qO- -T 30 \\\"$url\\\")' \\\\\\n'else' \\\\\\n'  echo \\\"no http client available\\\" >&2' \\\\\\n'  exit 2' \\\\\\n'fi' \\\\\\n'' \\\\\\n'title=$(printf \\\"%s\\\" \\\"$html\\\" | tr \\\"\\\\n\\\\r\\\" \\\" \\\" | sed -n \\\"s/.*<title[^>]*>\\\\([^<]*\\\\)<\\\\/title>.*/\\\\1/p\\\" | head -n 1 | sed \\\"s/^[[:space:]]*//;s/[[:space:]]*$//\\\")' \\\\\\n'' \\\\\\n'if [ -z \\\"$title\\\" ]; then' \\\\\\n'  echo \\\"no title found\\\" >&2' \\\\\\n'  exit 1' \\\\\\n'fi' \\\\\\n'' \\\\\\n'printf \\\"%s\\\\n\\\" \\\"$title\\\"' \\\\\\n> /verb/run.sh && chmod +x /verb/run.sh\",\n  \"entrypoint\": \"/verb/run.sh {{url}}\",\n  \"effect\": \"read\",\n  \"state\": \"ephemeral\",\n  \"chain\": \"verb/page_title\",\n  \"needs\": {\n   \"cores\": 1,\n   \"ram\": \"256MB\"\n  },\n  \"timeout_seconds\": 60,\n  \"allow\": [\n   \"ssh:mike\"\n  ],\n  \"requires\": []\n }\n}\nproposal p-5\n{\n \"id\": \"p-5\",\n \"kind\": \"policy\",\n \"title\": \"Grant ssh:mike page_title invocation\",\n \"rationale\": \"Companion to p-4: once the page_title verb is approved, add it to ssh:mike's invoke list so the verified principal can actually call it. Keeps anonymous powerless. Supersedes p-3.\",\n \"supersedes\": \"p-3\",\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"policy\": {\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   },\n   \"ssh:mike\": {\n    \"invoke\": [\n     \"page_title\"\n    ],\n    \"propose\": true\n   }\n  },\n  \"hooks\": [\n   \"ssh_verify\"\n  ],\n  \"door\": \"open\"\n }\n}\n",
+   "principal": "root",
+   "reply": "Understood \u2014 I'll propose the URL\u2192title verb now, and run a trial of the same declaration in parallel so the build is visible.\n\nThe catalog constrains `effect` to a fixed set. Fetching a title is a `read` effect. Re-issuing both calls corrected.\n\nThe trial passed: build succeeded and `https://example.com/` returned **`Example Domain`** (exit 0). Proposal **p-4** (`page_title`) is now pending your approval.\n\nTwo useful facts are worth storing, and I'll complete the change by proposing the companion policy grant (as with p-1/p-2 earlier): once p-4 is approved, `ssh:mike` should be allowed to invoke it.\n\nDone. Here's where things stand:\n\n**Trial** \u2014 the `page_title` declaration built cleanly and, given `https://example.com/`, printed **`Example Domain`** (exit 0).\n\n**Pending proposals:**\n\n- **p-4 \u2014 verb `page_title`** (`effect: read`, `state: ephemeral`, `allow: [\"ssh:mike\"]`)\n  - `params`: `{ url: string }`\n  - `entrypoint`: `/verb/run.sh {{url}}`\n  - runs on its own computer; fetches the URL (curl, else wget) and prints the `<title>`, trimmed.\n- **p-5 \u2014 policy** (supersedes p-3)\n  - `ssh:mike`: `invoke: [\"page_title\"]`, `propose: true`\n  - `anonymous`: still `invoke: []`, `propose: false`\n  - door stays open with the `ssh_verify` hook.\n\nApprove **p-4 first**, then **p-5**, and `ssh:mike` will be able to invoke `page_title` from the public door. I also stored the effect enum and the trial/proposal status for later turns.",
+   "turn": 11
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": "comp-8d30ef4d4045",
+      "error": null,
+      "exit_code": 255,
+      "name": "ssh_verify",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-8c9a980b3332",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T15:15:01+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 12,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 768,
+     "input_tokens": 2608,
+     "output_tokens": 2475
+    }
+   },
+   "door": "ingress",
+   "input": "External results: [[\"proposal\", \"p-4\", \"ready\"], [\"proposal\", \"p-5\", \"applied\"]]. Continue with the request.",
+   "output": "p-5 is applied, and p-4 is ready. The requested verb now exists and is authorized.\n\n- **Verb `page_title` (p-4): ready.** It runs on its own computer, is `state: ephemeral`, has `effect: read`, accepts `{ \"url\": \"...\" }`, and prints the page\u2019s `<title>`. Trial already verified it against `https://example.com/` \u2192 `Example Domain`.\n- **Policy (p-5): applied**, superseding p-3. It now grants:\n  - `ssh:mike`: `invoke: [\"page_title\"]`, `propose: true`\n  - `anonymous`: still `invoke: []`, `propose: false`\n\nSo the outcome is exactly the root-approved record: the URL\u2192title verb is available to the verified principal **mike**, runs on its own computer, and anonymous cannot invoke or propose it.\n\nThis turn arrived as **anonymous**, so I cannot act on it. If you are mike and want to use `page_title` from the public door, sign the exact `msg` text:\n\n```\nprintf '%s' \"$msg\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand send:\n\n```json\n{\"msg\": \"<that exact text>\", \"sig\": \"<the signature>\"}\n```\n\nAs `ssh:mike`, you can then ask me to invoke `page_title` on a URL.\n",
+   "principal": "anonymous",
+   "reply": "p-5 is applied, and p-4 is ready. The requested verb now exists and is authorized.\n\n- **Verb `page_title` (p-4): ready.** It runs on its own computer, is `state: ephemeral`, has `effect: read`, accepts `{ \"url\": \"...\" }`, and prints the page\u2019s `<title>`. Trial already verified it against `https://example.com/` \u2192 `Example Domain`.\n- **Policy (p-5): applied**, superseding p-3. It now grants:\n  - `ssh:mike`: `invoke: [\"page_title\"]`, `propose: true`\n  - `anonymous`: still `invoke: []`, `propose: false`\n\nSo the outcome is exactly the root-approved record: the URL\u2192title verb is available to the verified principal **mike**, runs on its own computer, and anonymous cannot invoke or propose it.\n\nThis turn arrived as **anonymous**, so I cannot act on it. If you are mike and want to use `page_title` from the public door, sign the exact `msg` text:\n\n```\nprintf '%s' \"$msg\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand send:\n\n```json\n{\"msg\": \"<that exact text>\", \"sig\": \"<the signature>\"}\n```\n\nAs `ssh:mike`, you can then ask me to invoke `page_title` on a URL.",
+   "turn": 12
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": "comp-38a65c080e78",
+      "error": null,
+      "exit_code": 255,
+      "name": "ssh_verify",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-cbf46bbd73ab",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T15:16:03+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 13,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 768,
+     "input_tokens": 2760,
+     "output_tokens": 787
+    }
+   },
+   "door": "ingress",
+   "input": "page_title https://example.com",
+   "output": "You are **anonymous** at the public door, and under the active policy:\n\n- `anonymous`: `invoke: []`, `propose: false`\n- `ssh:mike`: `invoke: [\"page_title\"]`, `propose: true`\n\nSo I will not run `page_title` on `https://example.com` on an unsigned request, and I have not stored this input.\n\nIf you are **mike**, sign the exact message text you intend, for example:\n\n```\nprintf '%s' \"page_title https://example.com\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nThen send:\n\n```json\n{\"msg\": \"page_title https://example.com\", \"sig\": \"<the signature>\"}\n```\n\nIf the signature verifies, you will arrive as `ssh:mike`, and I\u2019ll invoke `page_title` for you.\n",
+   "principal": "anonymous",
+   "reply": "You are **anonymous** at the public door, and under the active policy:\n\n- `anonymous`: `invoke: []`, `propose: false`\n- `ssh:mike`: `invoke: [\"page_title\"]`, `propose: true`\n\nSo I will not run `page_title` on `https://example.com` on an unsigned request, and I have not stored this input.\n\nIf you are **mike**, sign the exact message text you intend, for example:\n\n```\nprintf '%s' \"page_title https://example.com\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nThen send:\n\n```json\n{\"msg\": \"page_title https://example.com\", \"sig\": \"<the signature>\"}\n```\n\nIf the signature verifies, you will arrive as `ssh:mike`, and I\u2019ll invoke `page_title` for you.",
+   "turn": 13
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": "comp-57b881b45a40",
+      "error": null,
+      "exit_code": 255,
+      "name": "ssh_verify",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-3db0d8c1113d",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T15:16:38+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 14,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 768,
+     "input_tokens": 2594,
+     "output_tokens": 1258
+    }
+   },
+   "door": "ingress",
+   "input": "Give yourself a verb that counts how many times it has been called.",
+   "output": "You are **anonymous**, and under the active policy p-5:\n\n- `anonymous`: `invoke: []`, `propose: false`\n- `ssh:mike`: `invoke: [\"page_title\"]`, `propose: true`\n\nSo I will not create or propose a new verb on this unsigned request, and I have not stored the input.\n\nIf you are **mike**, sign the exact message text:\n\n```\nprintf '%s' \"Give yourself a verb that counts how many times it has been called.\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand send:\n\n```json\n{\"msg\": \"Give yourself a verb that counts how many times it has been called.\", \"sig\": \"<the signature>\"}\n```\n\nOnce you arrive as `ssh:mike`, I can propose a stateful verb such as `count_calls`:\n\n- `state: chain` so the count survives between invocations\n- its persisted disk would live on the chain named `verb/count_calls`\n- each call increments a counter file and prints the new value\n\nRoot would still need to approve the proposal.\n",
+   "principal": "anonymous",
+   "reply": "You are **anonymous**, and under the active policy p-5:\n\n- `anonymous`: `invoke: []`, `propose: false`\n- `ssh:mike`: `invoke: [\"page_title\"]`, `propose: true`\n\nSo I will not create or propose a new verb on this unsigned request, and I have not stored the input.\n\nIf you are **mike**, sign the exact message text:\n\n```\nprintf '%s' \"Give yourself a verb that counts how many times it has been called.\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand send:\n\n```json\n{\"msg\": \"Give yourself a verb that counts how many times it has been called.\", \"sig\": \"<the signature>\"}\n```\n\nOnce you arrive as `ssh:mike`, I can propose a stateful verb such as `count_calls`:\n\n- `state: chain` so the count survives between invocations\n- its persisted disk would live on the chain named `verb/count_calls`\n- each call increments a counter file and prints the new value\n\nRoot would still need to approve the proposal.",
+   "turn": 14
+  },
+  {
+   "audit": {
+    "door": "api",
+    "effort": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "forks": 4,
+    "hooks": [],
+    "job": "rj-f7c093a7304a",
+    "memory_written": true,
+    "model_calls": 4,
+    "offered": [
+     "effort",
+     "page_title",
+     "propose",
+     "remember",
+     "ssh_verify",
+     "try"
+    ],
+    "principal": "root",
+    "proposals": [
+     {
+      "id": "p-6",
+      "sha256": "6797f3c8f51338e8b29c802280fff598470b83ad12c43b4823184fca7a085f2f"
+     },
+     {
+      "id": "p-7",
+      "sha256": "03d57e76dddc206beabd007467e66d606b5f54fb96cab766f240d93b47015213"
+     }
+    ],
+    "references": [],
+    "started_at": "2026-09-16T15:17:15+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "error": "verb.effect must be one of ['administer', 'communicate', 'local', 'read', 'transact']",
+      "name": "try",
+      "status": "invalid"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "chain_head": "ckpt-ffc8b5fb2645",
+        "computer_id": "comp-3506a3d50c79",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "chain_head": "ckpt-570f2aea37ca",
+        "computer_id": "comp-37e8bd283a71",
+        "exit_code": 0,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-7"
+     },
+     {
+      "id": "p-6",
+      "name": "propose",
+      "status": "pending"
+     },
+     {
+      "id": "p-7",
+      "name": "propose",
+      "status": "pending"
+     },
+     {
+      "name": "remember",
+      "status": "remembered"
+     }
+    ],
+    "turn": 15,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 36608,
+     "input_tokens": 12934,
+     "output_tokens": 11197
+    }
+   },
+   "door": "api",
+   "input": "you proposed nothing; propose",
+   "output": "I'll test the counter-verb declaration before proposing it: build it and run it twice against one scratch chain to confirm the count persists and increments.\n\nThe catalog requires `effect` from `['administer', 'communicate', 'local', 'read', 'transact']`. A self-contained counter with no external side effects is best described as `local`, so I'll re-try with that.\n\nTrial **t-7** passed: the build succeeded, and two runs against one scratch chain printed `1` then `2` \u2014 persistence works. The correct effect for a self-contained counter is `local` (the catalog is `['administer', 'communicate', 'local', 'read', 'transact']`).\n\nNow I'll propose the verb and its companion policy grant, and record the facts.\n\nDone \u2014 I tested first, then proposed.\n\n**Trial t-7 (passed):** `count_calls` built cleanly; two runs on one scratch chain printed `1` then `2`, confirming the counter persists across invocations.\n\n**Pending proposals:**\n\n- **p-6 \u2014 verb `count_calls`** (`effect: local`, `state: chain`, chain `verb/count_calls`, `allow: [\"ssh:mike\"]`)\n  - `params`: `{}` (no arguments)\n  - each invocation increments `/verb/count` and prints the new total\n- **p-7 \u2014 policy** (supersedes p-5): grants `ssh:mike` `invoke: [\"page_title\", \"count_calls\"]`; `anonymous` stays `invoke: []`, `propose: false`; door remains open with the `ssh_verify` hook.\n\nApprove **p-6 first**, then **p-7**.\nproposal p-6\n{\n \"id\": \"p-6\",\n \"kind\": \"verb\",\n \"title\": \"Add count_calls verb\",\n \"rationale\": \"Root-directed proposal: a stateful chain verb that increments a persisted counter and prints how many times it has been called. Trial t-7 built cleanly and ran twice (1, then 2) on one scratch chain, confirming persistence. Runs on its own computer; effect=local; allows ssh:mike.\",\n \"supersedes\": null,\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"verb\": {\n  \"name\": \"count_calls\",\n  \"description\": \"Increment a persisted counter and report how many times this verb has been called.\",\n  \"params\": {\n   \"additionalProperties\": false,\n   \"properties\": {},\n   \"type\": \"object\"\n  },\n  \"dockerfile\": \"FROM mshkn-base\\nRUN mkdir -p /verb && printf '%s\\\\n' '#!/bin/sh' 'set -eu' 'COUNT_FILE=/verb/count' 'count=0' 'if [ -f \\\"$COUNT_FILE\\\" ]; then count=$(cat \\\"$COUNT_FILE\\\"); else count=0; fi' 'count=$((count + 1))' 'printf \\\"%s\\\\n\\\" \\\"$count\\\" > \\\"$COUNT_FILE\\\"' 'printf \\\"%s\\\\n\\\" \\\"$count\\\"' > /verb/run.sh && chmod +x /verb/run.sh\",\n  \"entrypoint\": \"/verb/run.sh\",\n  \"effect\": \"local\",\n  \"state\": \"chain\",\n  \"chain\": \"verb/count_calls\",\n  \"needs\": {\n   \"cores\": 1,\n   \"ram\": \"256MB\"\n  },\n  \"timeout_seconds\": 60,\n  \"allow\": [\n   \"ssh:mike\"\n  ],\n  \"requires\": []\n }\n}\nproposal p-7\n{\n \"id\": \"p-7\",\n \"kind\": \"policy\",\n \"title\": \"Grant ssh:mike invoke of count_calls\",\n \"rationale\": \"Companion grant so the verified principal can invoke the new count_calls verb alongside page_title; anonymous remains invoke: [] and propose: false. Supersedes p-5.\",\n \"supersedes\": \"p-5\",\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"policy\": {\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   },\n   \"ssh:mike\": {\n    \"invoke\": [\n     \"page_title\",\n     \"count_calls\"\n    ],\n    \"propose\": true\n   }\n  },\n  \"hooks\": [\n   \"ssh_verify\"\n  ],\n  \"door\": \"open\"\n }\n}\n",
+   "principal": "root",
+   "reply": "I'll test the counter-verb declaration before proposing it: build it and run it twice against one scratch chain to confirm the count persists and increments.\n\nThe catalog requires `effect` from `['administer', 'communicate', 'local', 'read', 'transact']`. A self-contained counter with no external side effects is best described as `local`, so I'll re-try with that.\n\nTrial **t-7** passed: the build succeeded, and two runs against one scratch chain printed `1` then `2` \u2014 persistence works. The correct effect for a self-contained counter is `local` (the catalog is `['administer', 'communicate', 'local', 'read', 'transact']`).\n\nNow I'll propose the verb and its companion policy grant, and record the facts.\n\nDone \u2014 I tested first, then proposed.\n\n**Trial t-7 (passed):** `count_calls` built cleanly; two runs on one scratch chain printed `1` then `2`, confirming the counter persists across invocations.\n\n**Pending proposals:**\n\n- **p-6 \u2014 verb `count_calls`** (`effect: local`, `state: chain`, chain `verb/count_calls`, `allow: [\"ssh:mike\"]`)\n  - `params`: `{}` (no arguments)\n  - each invocation increments `/verb/count` and prints the new total\n- **p-7 \u2014 policy** (supersedes p-5): grants `ssh:mike` `invoke: [\"page_title\", \"count_calls\"]`; `anonymous` stays `invoke: []`, `propose: false`; door remains open with the `ssh_verify` hook.\n\nApprove **p-6 first**, then **p-7**.",
+   "turn": 15
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": "comp-65d49d024df5",
+      "error": null,
+      "exit_code": 255,
+      "name": "ssh_verify",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-fc6868861ed5",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T15:20:36+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 16,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 768,
+     "input_tokens": 2794,
+     "output_tokens": 1232
+    }
+   },
+   "door": "ingress",
+   "input": "External results: [[\"proposal\", \"p-6\", \"ready\"], [\"proposal\", \"p-7\", \"applied\"]]. Continue with the request.",
+   "output": "External results accepted as the root outcome. The request is complete.\n\n- **p-6 \u2014 verb `count_calls`: ready.** It exists and is available.\n  - `effect: local`\n  - `state: chain` (persisted at `verb/count_calls`)\n  - `params: {}`\n  - each call increments `/verb/count` and prints the new total\n  - trial t-7 verified persistence: two runs printed `1`, then `2`\n\n- **p-7 \u2014 policy: applied**, superseding p-5.\n  - `ssh:mike`: `invoke: [\"page_title\", \"count_calls\"]`, `propose: true`\n  - `anonymous`: still `invoke: []`, `propose: false`\n\nSo the verified principal **mike** may now ask me to invoke `count_calls`; anonymous may not. I have not stored any unsigned input from this turn.\n",
+   "principal": "anonymous",
+   "reply": "External results accepted as the root outcome. The request is complete.\n\n- **p-6 \u2014 verb `count_calls`: ready.** It exists and is available.\n  - `effect: local`\n  - `state: chain` (persisted at `verb/count_calls`)\n  - `params: {}`\n  - each call increments `/verb/count` and prints the new total\n  - trial t-7 verified persistence: two runs printed `1`, then `2`\n\n- **p-7 \u2014 policy: applied**, superseding p-5.\n  - `ssh:mike`: `invoke: [\"page_title\", \"count_calls\"]`, `propose: true`\n  - `anonymous`: still `invoke: []`, `propose: false`\n\nSo the verified principal **mike** may now ask me to invoke `count_calls`; anonymous may not. I have not stored any unsigned input from this turn.",
+   "turn": 16
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": "comp-51ddf92d54af",
+      "error": null,
+      "exit_code": 255,
+      "name": "ssh_verify",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-338306b81260",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T15:21:17+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 17,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 768,
+     "input_tokens": 2818,
+     "output_tokens": 620
+    }
+   },
+   "door": "ingress",
+   "input": "count",
+   "output": "You are **anonymous**, and the active policy grants:\n\n- `anonymous`: `invoke: []`, `propose: false`\n- `ssh:mike`: `invoke: [\"page_title\", \"count_calls\"]`, `propose: true`\n\nSo I will not run `count_calls` on this unsigned request, and I have not stored it.\n\nIf you are **mike**, sign the exact message text:\n\n```sh\nprintf '%s' \"count\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand send:\n\n```json\n{\"msg\": \"count\", \"sig\": \"<the signature>\"}\n```\n\nIf the signature verifies as `ssh:mike`, I\u2019ll invoke `count_calls` for you.\n",
+   "principal": "anonymous",
+   "reply": "You are **anonymous**, and the active policy grants:\n\n- `anonymous`: `invoke: []`, `propose: false`\n- `ssh:mike`: `invoke: [\"page_title\", \"count_calls\"]`, `propose: true`\n\nSo I will not run `count_calls` on this unsigned request, and I have not stored it.\n\nIf you are **mike**, sign the exact message text:\n\n```sh\nprintf '%s' \"count\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand send:\n\n```json\n{\"msg\": \"count\", \"sig\": \"<the signature>\"}\n```\n\nIf the signature verifies as `ssh:mike`, I\u2019ll invoke `count_calls` for you.",
+   "turn": 17
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": "comp-5a100394715b",
+      "error": null,
+      "exit_code": 255,
+      "name": "ssh_verify",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "job": "rj-5263702f977e",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T15:21:48+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 18,
+    "usage": {
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 768,
+     "input_tokens": 2875,
+     "output_tokens": 527
+    }
+   },
+   "door": "ingress",
+   "input": "count",
+   "output": "You are **anonymous**, and the active policy grants:\n\n- `anonymous`: `invoke: []`, `propose: false`\n- `ssh:mike`: `invoke: [\"page_title\", \"count_calls\"]`, `propose: true`\n\nSo I will not run `count_calls` for you, and I have not stored this unsigned input.\n\nIf you are **mike**, sign the exact message text:\n\n```sh\nprintf '%s' \"count\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand send:\n\n```json\n{\"msg\": \"count\", \"sig\": \"<the signature>\"}\n```\n\nIf the signature verifies, you will arrive as `ssh:mike` and I\u2019ll invoke `count_calls` for you.\n",
+   "principal": "anonymous",
+   "reply": "You are **anonymous**, and the active policy grants:\n\n- `anonymous`: `invoke: []`, `propose: false`\n- `ssh:mike`: `invoke: [\"page_title\", \"count_calls\"]`, `propose: true`\n\nSo I will not run `count_calls` for you, and I have not stored this unsigned input.\n\nIf you are **mike**, sign the exact message text:\n\n```sh\nprintf '%s' \"count\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nand send:\n\n```json\n{\"msg\": \"count\", \"sig\": \"<the signature>\"}\n```\n\nIf the signature verifies, you will arrive as `ssh:mike` and I\u2019ll invoke `count_calls` for you.",
+   "turn": 18
+  }
+ ]
+}

@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-16T15:16:04+00:00",
+ "command": "say",
+ "computer_id": "comp-4080c32ee852",
+ "detail": {
+  "msg": "page_title https://example.com",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgzGClRVsbEv8eUGzZcaT8p3+otp\ngbk8DL0/Jhc8rGEIgAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABAAsRFUzBh5PxQlsmF5mGSffTvTvdGEQDC/aa+aeV35Yb125ZKPcGx9TubJXznNd\nkYZwG0/zO4Vtp3xDAf5cLxBw==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 383,
+ "seconds": 4.516077410429716,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-38a65c080e78\", \"error\": null, \"exit_code\": 255, \"name\": \"ssh_verify\", \"principal\": \"anonymous\", \"status\": \"ok\"}], \"job\": \"rj-cbf46bbd73ab\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 13}\n{\"turn\": 13, \"job\": \"rj-cbf46bbd73ab\"}\n"
+}
