@@ -53,6 +53,11 @@ TURN_WAIT = 3600.0
 BUILD_TIMEOUT = 600.0
 CONFLICT_INTERVAL = 3.0
 BUILD_INTERVAL = 5.0
+# Per row, not per run. A run-wide budget lets one row's aftermath spend the whole
+# of it before a later row has run at all: 2026-09-16-run-3 spent all three on row 1
+# and its continuation, so row 2 -- the identity row every public door waits on --
+# could not be repaired even once. A row's repairs are the run's answer to what went
+# wrong *there*, and a row that went well should leave the next one no poorer.
 MAX_REPAIRS = 3
 # A row whose answer a policy change makes possible is asked again, at most twice
 # in a run (#170): the bound is what makes a goto backwards finite.
@@ -1144,7 +1149,7 @@ async def speak(
     continuations: list[str] | None = None,
 ) -> tuple[list[Turn], dict[str, Any] | None, list[str]]:
     """The capability's rows in order, each followed by approvals, a wait for
-    builds and at most MAX_REPAIRS repair turns. A `root list` row takes the
+    builds and at most MAX_REPAIRS repair turns of its own. A `root list` row takes the
     listing and is not a turn; the last one taken is returned as the final state.
 
     Returns the turns, the final listing and the labels re-asked, in order: after
@@ -1347,7 +1352,10 @@ async def speak(
         return bool(turn.audit.get("model_calls"))
 
     repaired: set[str] = set()
-    repairs = 0
+    # Row label -> repairs spent on it. Per row, and it has to outlive a single
+    # `settle_repairs` call, because a continuation is settled by a second call and
+    # a row must not get a fresh budget by continuing.
+    repairs: dict[str, int] = {}
     # Row labels that have proposed at least once, anywhere: the row's own turn, a
     # continuation of it, a repair after it, or a re-ask of it. It has to outlive a
     # single `settle_repairs` call because a continuation is settled by a second
@@ -1369,18 +1377,18 @@ async def speak(
 
     async def settle_repairs(turn: Turn, row: Row, *, continuation: bool = False) -> Settled:
         """Approvals, builds, root's provisions, and at most MAX_REPAIRS repair
-        turns in the whole run for a failed build, a refused approval, a turn that
-        ran out before proposing, or a requirement the reply named no path for
-        (capabilities design §4: every row settles). Returns whether any approval in
-        the settle — the row's own turn or a repair turn — applied a policy, and the
-        listing as it stood before the settle and after it, which is what a re-ask
-        round reads the policy change out of.
+        turns for *this row* for a failed build, a refused approval, a turn that ran
+        out before proposing, a turn that called nothing, or a requirement the reply
+        named no path for (capabilities design §4: every row settles). Returns
+        whether any approval in the settle — the row's own turn or a repair turn —
+        applied a policy, and the listing as it stood before the settle and after it,
+        which is what a re-ask round reads the policy change out of.
 
         A refusal leaves its proposal `pending` with the reason on its `log`, and
         the catalog untouched, so a build-only trigger walks straight past it
         (2026-09-10-postcut-run-2). A repair is spoken through root's door, so it
-        reaches the model whatever door the row used."""
-        nonlocal repairs
+        reaches the model whatever door the row used, and is labelled after the row
+        that earned it: the budget is the row's, so the evidence has to say whose."""
         if turn.audit.get("proposals"):
             proposed_rows.add(row.label)
         before, listing = await approve_pending(turn)
@@ -1420,7 +1428,7 @@ async def speak(
                 and not unplaced
             ):
                 return Settled(applied, before, listing)
-            if repairs >= MAX_REPAIRS:
+            if repairs.get(row.label, 0) >= MAX_REPAIRS:
                 return Settled(applied, before, listing)
             if failed:
                 why, words = f"build failed for {', '.join(failed)}", capability.repair.build
@@ -1443,9 +1451,9 @@ async def speak(
                 return Settled(applied, before, listing)
             else:
                 why, words = f"no path for {', '.join(unplaced)}", capability.repair.provide
-            repairs += 1
-            log.write(f"  {why}; repair {repairs}\n")
-            label = f"3-repair-{repairs}"
+            spent_here = repairs[row.label] = repairs.get(row.label, 0) + 1
+            log.write(f"  {why}; {row.label} repair {spent_here}\n")
+            label = f"{row.label}-repair-{spent_here}"
             if continuation and turn.door != "api":
                 current = await public_turn(label, words, signed=turn.door == "ingress")
             else:

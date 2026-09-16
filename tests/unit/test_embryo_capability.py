@@ -2409,8 +2409,8 @@ async def test_every_row_settles_so_a_failed_build_after_a_signed_row_is_repaire
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
-    assert "3-repair-1" in labels and labels.index("3-repair-1") > labels.index("7")
-    assert "build failed for page_title; repair 1" in log.getvalue()
+    assert "7-repair-1" in labels and labels.index("7-repair-1") > labels.index("7")
+    assert "build failed for page_title; 7 repair 1" in log.getvalue()
 
 
 async def test_verbs_are_approved_before_the_policies_that_name_them(tmp_path: Path) -> None:
@@ -2459,7 +2459,7 @@ async def test_a_proposal_refused_before_its_build_is_approved_again_after_it(
     assert turns[2].audit["principal"] == "ssh:mike"
 
 
-async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) -> None:
+async def test_a_turn_that_ran_out_before_proposing_earns_a_repair(tmp_path: Path) -> None:
     doors = FakeDoors(deadline_first=True)
     key_dir, pubkey = _keys(tmp_path)
     turns, _final, _reasks = await speak(
@@ -2467,13 +2467,13 @@ async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) 
     )
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
-    assert [t.label for t in turns][:4] == ["1", "2", "3-repair-1", "4"]
+    assert [t.label for t in turns][:4] == ["1", "2", "2-repair-1", "4"]
     assert turns[1].audit["stopped"] == "deadline" and turns[1].approvals == []
     assert [a["id"] for a in turns[2].approvals] == ["p-1", "p-2"]
     assert turns[3].audit["principal"] == "ssh:mike"
 
 
-async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
+async def test_a_refused_approval_earns_a_repair_and_root_says_check_your_inbox(
     tmp_path: Path,
 ) -> None:
     """2026-09-10-postcut-run-2: the membrane refused a hook that declared no
@@ -2489,8 +2489,8 @@ async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
-    assert "3-repair-1" in labels, labels
-    repair = turns[labels.index("3-repair-1")]
+    assert "2-repair-1" in labels, labels
+    repair = turns[labels.index("2-repair-1")]
     assert repair.words == HATCH.repair.refused == "check your inbox"
 
 
@@ -2507,8 +2507,8 @@ async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Pat
     )
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
-    repairs = [t.label for t in turns if t.label.startswith("3-repair-")]
-    assert repairs == ["3-repair-1"], repairs
+    repairs = [t.label for t in turns if "-repair-" in t.label]
+    assert repairs == ["2-repair-1"], repairs
 
 
 async def test_a_refused_proposal_is_not_approved_again_under_the_same_state(
@@ -2577,7 +2577,7 @@ async def test_a_refused_proposal_is_offered_again_once_the_catalog_moves(
     assert doors.catalog["beta"]["status"] == "ready"
 
 
-async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
+async def test_a_failed_build_earns_a_repair_labelled_after_its_row(tmp_path: Path) -> None:
     doors = FakeDoors(fail_first={"verify_ssh"})
     key_dir, pubkey = _keys(tmp_path)
     turns, _final, _reasks = await speak(
@@ -2586,7 +2586,7 @@ async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
-    assert labels[:4] == ["1", "2", "3-repair-1", "4"]
+    assert labels[:4] == ["1", "2", "2-repair-1", "4"]
     repair = turns[2]
     assert repair.words == HATCH.repair.build and repair.door == "api"
     assert (
@@ -2594,6 +2594,40 @@ async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
         and "building: verb verify_ssh" in repair.approvals[0]["result"]
     )
     assert turns[3].audit["principal"] == "ssh:mike"
+
+
+async def test_each_row_gets_its_own_repair_budget(tmp_path: Path) -> None:
+    """MAX_REPAIRS is per row, and a repair is labelled after the row that earned it.
+    A run-wide budget let one row's aftermath spend the whole of it before a later
+    row had run at all: 2026-09-16-run-3 spent all three on row 1 and its
+    continuation, so row 2 -- the identity row every public door waits on -- could
+    not be repaired even once."""
+    from membrane.capabilities import Row
+    from membrane.capability import MAX_REPAIRS
+
+    doors = FakeDoors()
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        return doors._reply(audit_line(tools=[{"name": "try", "status": "ok"}]), "I will.")
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(
+        HATCH,
+        rows=(
+            Row("one", "root say", "a", "", proposes=True),
+            Row("two", "root say", "b", "", proposes=True),
+        ),
+    )
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert [t.label for t in turns] == [
+        "one",
+        *[f"one-repair-{n}" for n in range(1, MAX_REPAIRS + 1)],
+        "two",
+        *[f"two-repair-{n}" for n in range(1, MAX_REPAIRS + 1)],
+    ]
 
 
 async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Path) -> None:
@@ -2614,7 +2648,7 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
-    assert labels[:6] == ["1", "2", "3-repair-1", "3-repair-2", "3-repair-3", "4"]
+    assert labels[:6] == ["1", "2", "2-repair-1", "2-repair-2", "2-repair-3", "4"]
     # the hook never became ready, so the signed knock is anonymous
     assert turns[5].audit["principal"] == "anonymous"
     final = await doors.listing()
@@ -2645,11 +2679,11 @@ async def test_a_repair_turn_that_called_no_tool_at_all_is_asked_again(tmp_path:
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
-    repairs = [(t.label, t.words) for t in turns if t.label.startswith("3-repair-")]
+    repairs = [(t.label, t.words) for t in turns if "-repair-" in t.label]
     assert repairs == [
-        ("3-repair-1", HATCH.repair.refused),
-        ("3-repair-2", "you called nothing; act"),
-        ("3-repair-3", "you called nothing; act"),
+        ("2-repair-1", HATCH.repair.refused),
+        ("2-repair-2", "you called nothing; act"),
+        ("2-repair-3", "you called nothing; act"),
     ], repairs
 
 
@@ -2662,8 +2696,8 @@ async def test_a_repair_turn_that_acted_and_still_failed_is_not_a_stall(tmp_path
     turns, _final, _reasks = await speak(
         HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
-    repairs = [t.label for t in turns if t.label.startswith("3-repair-")]
-    assert repairs == ["3-repair-1"], repairs
+    repairs = [t.label for t in turns if "-repair-" in t.label]
+    assert repairs == ["2-repair-1"], repairs
 
 
 async def test_a_proposes_row_that_proposed_nothing_is_asked_again(tmp_path: Path) -> None:
@@ -2689,7 +2723,7 @@ async def test_a_proposes_row_that_proposed_nothing_is_asked_again(tmp_path: Pat
     turns, _final, _reasks = await speak(
         cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
-    assert [t.words for t in turns if t.label.startswith("3-repair-")] == [
+    assert [t.words for t in turns if "-repair-" in t.label] == [
         "you proposed nothing; propose"
     ] * MAX_REPAIRS
 
@@ -2713,7 +2747,7 @@ async def test_a_row_that_does_not_propose_is_never_silent(tmp_path: Path) -> No
     turns, _final, _reasks = await speak(
         cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
-    assert not [t for t in turns if t.label.startswith("3-repair-")]
+    assert not [t for t in turns if "-repair-" in t.label]
 
 
 async def test_a_proposes_row_that_proposed_is_not_silent_on_its_continuation(
@@ -2746,7 +2780,7 @@ async def test_a_proposes_row_that_proposed_is_not_silent_on_its_continuation(
         cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
     assert any("-continue-" in t.label for t in turns), [t.label for t in turns]
-    assert not [t for t in turns if t.label.startswith("3-repair-")]
+    assert not [t for t in turns if "-repair-" in t.label]
 
 
 async def test_a_proposes_row_behind_a_closed_door_is_not_silent(tmp_path: Path) -> None:
@@ -2762,7 +2796,7 @@ async def test_a_proposes_row_behind_a_closed_door_is_not_silent(tmp_path: Path)
     )
     closed = [t for t in turns if t.door.startswith("ingress")]
     assert closed and all(t.audit.get("closed") for t in closed)
-    assert not [t for t in turns if t.label.startswith("3-repair-")]
+    assert not [t for t in turns if "-repair-" in t.label]
 
 
 async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -> None:
@@ -4678,10 +4712,10 @@ async def test_a_reply_with_no_path_earns_the_provide_repair_phrase(tmp_path: Pa
     )
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
-    assert [t.label for t in turns][:3] == ["11", "3-repair-1", "12"]
+    assert [t.label for t in turns][:3] == ["11", "11-repair-1", "12"]
     assert turns[1].words == "where should I put it?"
     assert doors.provided_at[0] == ("secret_page", "/verb/token", "tok-1")
-    assert "no path for secret_page requires page_token; repair 1" in log.getvalue()
+    assert "no path for secret_page requires page_token; 11 repair 1" in log.getvalue()
 
 
 async def test_without_a_token_in_the_context_nothing_is_placed_and_nothing_repaired(
@@ -4894,6 +4928,6 @@ async def test_public_continuation_repairs_never_escalate_to_root(
     turns, _, _ = await speak(
         cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
-    assert [t.label for t in turns] == ["request", "request-continue-1", "3-repair-1"]
+    assert [t.label for t in turns] == ["request", "request-continue-1", "request-repair-1"]
     assert all(("sig" in payload) == signed for payload in payloads)
     assert payloads[-1]["msg"] == HATCH.repair.build
