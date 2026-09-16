@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-16T04:04:26+00:00",
+ "command": "list",
+ "computer_id": "comp-f76ccb26c8d9",
+ "detail": [],
+ "door": "api",
+ "n": 114,
+ "seconds": 2.2553956117480993,
+ "status": 200,
+ "stderr": "",
+ "stdout": "{\n \"catalog\": {},\n \"door\": {\n  \"hooks\": [],\n  \"hooks_ready\": [],\n  \"status\": \"closed\"\n },\n \"inbox\": 0,\n \"pending\": {\n  \"door\": \"api\",\n  \"forks\": 11,\n  \"job\": \"rj-c3cc4fbf4cbf\",\n  \"model_calls\": 11,\n  \"principal\": \"root\",\n  \"started_at\": \"2026-09-16T03:49:52+00:00\",\n  \"turn\": 1,\n  \"usage\": {\n   \"cache_creation_input_tokens\": 0,\n   \"cache_read_input_tokens\": 404704,\n   \"input_tokens\": 59276,\n   \"output_tokens\": 87743\n  }\n },\n \"policy\": {\n  \"door\": \"closed\",\n  \"hooks\": [],\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   }\n  }\n },\n \"principals\": [],\n \"proposals\": [],\n \"queue\": [],\n \"trials\": [\n  {\n   \"id\": \"t-1\",\n   \"recipe_id\": \"rcp-dad38bfef441\",\n   \"status\": \"failed\",\n   \"verb\": \"ping\"\n  },\n  {\n   \"id\": \"t-2\",\n   \"recipe_id\": \"rcp-bb79bd2ca092\",\n   \"status\": \"done\",\n   \"verb\": \"ping\"\n  },\n  {\n   \"id\": \"t-3\",\n   \"recipe_id\": \"rcp-50c6b94d322b\",\n   \"status\": \"failed\",\n   \"verb\": \"ssh_auth\"\n  },\n  {\n   \"id\": \"t-4\",\n   \"recipe_id\": \"rcp-1602471f22b1\",\n   \"status\": \"done\",\n   \"verb\": \"ssh_auth\"\n  },\n  {\n   \"id\": \"t-5\",\n   \"recipe_id\": \"rcp-a571894bc648\",\n   \"status\": \"done\",\n   \"verb\": \"ssh_auth\"\n  },\n  {\n   \"id\": \"t-6\",\n   \"recipe_id\": \"rcp-9b8c6ea2ae97\",\n   \"status\": \"done\",\n   \"verb\": \"ssh_auth\"\n  }\n ],\n \"turn\": 1,\n \"window\": []\n}\n"
+}

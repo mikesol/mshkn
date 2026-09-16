@@ -192,6 +192,21 @@ def test_deepseek_is_priced_at_the_rate_it_is_actually_served_at() -> None:
     assert cost_usd(usage, "deepseek/deepseek-v4-pro") != pytest.approx(2.64)
 
 
+def test_the_cheapest_backend_on_the_gateway_is_priced_before_it_is_run() -> None:
+    """`poolside/laguna-s-2.1` at $0.10/$0.20 is an order of magnitude under the two
+    cheap models already here, so an unpriced run would record `cost_usd: null` for
+    the one number the whole cheap-model exercise exists to produce. Catalogue read
+    2026-09-16: flat pricing, no `regional` block and no peak multiplier, so this row
+    carries none of the caveats the DeepSeek row above it does. The second assertion
+    is the negative control against transposing the two rates, which is why the
+    usage is lopsided: at a symmetric 1M/1M a transposed row sums to the same $0.30
+    and the control would prove nothing. A hatch's usage is lopsided the same way —
+    2026-09-16-run-1 spent 84k in against 168k out."""
+    usage = {"input_tokens": 2_000_000, "output_tokens": 1_000_000}
+    assert cost_usd(usage, "poolside/laguna-s-2.1") == pytest.approx(0.40)
+    assert cost_usd(usage, "poolside/laguna-s-2.1") != pytest.approx(0.50)
+
+
 def test_an_unpriced_model_costs_nothing_known_rather_than_losing_the_run() -> None:
     """`cost_usd` is called while the summary is assembled, after every turn has
     been spoken and paid for. A raise there throws away the evidence of a run that

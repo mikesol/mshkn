@@ -202,6 +202,11 @@ PRICES = {
     # which this table has no axis for. A run inside those windows costs twice what
     # its record says, and the record has no way to know it did.
     "deepseek-v4-pro": Price(input=1.32, output=3.96),
+    # The gateway's catalogue, read 2026-09-16, flat: no `regional` block and no peak
+    # multiplier, so unlike the row above this one is the whole story. Its published
+    # `input_cache_read` is a tenth of its input price, which is what CACHE_READ
+    # already assumes; like zai it publishes no cache-write tier.
+    "laguna-s-2.1": Price(input=0.1, output=0.2),
 }
 CACHE_WRITE = 1.25  # of the input price
 CACHE_READ = 0.1

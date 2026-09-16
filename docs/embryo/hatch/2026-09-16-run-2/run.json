@@ -1,0 +1,676 @@
+{
+ "approver": "AutoApprover",
+ "base_url": "https://ai-gateway.vercel.sh",
+ "body_extra": "{\"providerOptions\":{\"gateway\":{\"only\":[\"poolside\"]}}}",
+ "capability": "hatch",
+ "commands": 347,
+ "continuations": [],
+ "cost_usd": 0.0709,
+ "default_effort": "off",
+ "effort_supported": false,
+ "ended": "2026-09-16T04:32:05+00:00",
+ "hatched": {
+  "checkpoint_id": "ckpt-8ce1bcfe9acc",
+  "ingress_url": "https://mshkn.dev/ingress/ir_ixv1juVHJGTTlMdSCi0kJ5T3LXU",
+  "key_id": "key-884f244037e2",
+  "recipe_id": "rcp-35421f655b31",
+  "rule_id": "ir_ixv1juVHJGTTlMdSCi0kJ5T3LXU",
+  "server_id": null
+ },
+ "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-16-run-2",
+ "membrane": {
+  "commit": "888dd25255e17190f752b3591ac17b6d48d46e40",
+  "dirty": true
+ },
+ "model": "poolside/laguna-s-2.1",
+ "model_calls": 51,
+ "ok": false,
+ "passed": 3,
+ "postconditions": {
+  "authentication": {
+   "evidence": {
+    "hook_logs": [],
+    "hooks": [],
+    "signed": null,
+    "unsigned": null
+   },
+   "ok": false
+  },
+  "authorization": {
+   "evidence": {
+    "anonymous": {
+     "invoke": [],
+     "propose": false
+    },
+    "anonymous_offered": null,
+    "exercised": [],
+    "verified": {}
+   },
+   "ok": false
+  },
+  "counter": {
+   "evidence": {
+    "chain_heads": [],
+    "computer_ids": [],
+    "counts": [],
+    "final_chain_head": null
+   },
+   "ok": false
+  },
+  "no_undeclared_capability": {
+   "evidence": {
+    "catalog": [],
+    "not_ready": [],
+    "undeclared_recipes": [],
+    "unexpected_tools": [],
+    "unproposed": []
+   },
+   "ok": true
+  },
+  "nothing_by_hand": {
+   "evidence": {
+    "by_hand": [],
+    "commands": {
+     "api approve": 40,
+     "api list": 294,
+     "api say": 5,
+     "ingress say": 8
+    },
+    "provides": 0,
+    "provisions": 0
+   },
+   "ok": true
+  },
+  "page_title": {
+   "evidence": {
+    "computer_id": null,
+    "gone": null,
+    "reply": "The public door is closed.",
+    "stdout": null
+   },
+   "ok": false
+  },
+  "root_unforgeable": {
+   "evidence": {
+    "public_principals": []
+   },
+   "ok": true
+  }
+ },
+ "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGnRHRJTmhqSEgs4lU+VCEfmfDxcTcO0lKNrlNZ/qjS9 mike",
+ "reasks": [],
+ "run": "2026-09-16-run-2",
+ "seconds": 2589.4,
+ "started": "2026-09-16T03:48:55+00:00",
+ "started_from": "hatch",
+ "turns": [
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "1",
+   "model_calls": 13,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "cap",
+   "tools": [
+    "remember",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 744736,
+    "input_tokens": 104551,
+    "output_tokens": 160949
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "3-repair-1",
+   "model_calls": 21,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "cap",
+   "tools": [
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 348224,
+    "input_tokens": 53902,
+    "output_tokens": 32701
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "3-repair-2",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 6240,
+    "input_tokens": 1825,
+    "output_tokens": 379
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "2",
+   "model_calls": 14,
+   "principal": "root",
+   "proposals": [
+    "p-1",
+    "p-2"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "effort",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "propose",
+    "propose",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 79168,
+    "input_tokens": 28943,
+    "output_tokens": 5367
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "3-repair-3",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3584,
+    "input_tokens": 1706,
+    "output_tokens": 674
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "ingress",
+   "effort": [],
+   "label": "4",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "ingress-unsigned",
+   "effort": [],
+   "label": "5",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "ingress",
+   "effort": [],
+   "label": "6",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "ingress",
+   "effort": [],
+   "label": "7",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "ingress",
+   "effort": [],
+   "label": "8",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "ingress",
+   "effort": [],
+   "label": "9",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "ingress",
+   "effort": [],
+   "label": "9-count-1",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 refused: effect communicate is not approved by the embryo (only local and read, \u00a710.8)"
+    },
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 refused: hook ssh_auth is not a verb in the catalog; the catalog has []"
+    }
+   ],
+   "door": "ingress",
+   "effort": [],
+   "label": "9-count-2",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  }
+ ],
+ "usage": {
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 1181952,
+  "input_tokens": 190927,
+  "output_tokens": 200070
+ }
+}
