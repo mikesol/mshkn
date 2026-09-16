@@ -4,6 +4,63 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## Seven of seven, on a model that is not Opus (2026-09-16-run-6)
+
+`deepseek/deepseek-v4-pro`, `--effort off`, pinned to the `deepseek` provider.
+**7/7, 49 model calls, 118,174 in / 136,863 out, $0.789, 45 minutes.**
+`2026-09-13-run-5` reached 7/7 before it, on Opus at medium effort for $3.18;
+this is the first run to do it on one of the cheap models the gateway round was
+opened to test, at a quarter of the cost.
+
+Nineteen turns, three continuations, four re-asks (`4`, `6`, `4`, `6`) and **two
+repairs in the whole run**, both on row 6. The catalog ends holding exactly
+`verify_mike`, `get_title` and `count` and nothing else; `nothing_by_hand` records
+16 approvals, 5 root `say`s and 14 `ingress say`s, no provision and nothing placed
+by hand; `counter` reads 1, 2, 3 off three chained checkpoints.
+
+**Both repairs were triggers added the same day, and they fire in sequence.** Row
+6 is a `proposes` row, and the turn called tools but proposed nothing, so `silent`
+spent repair 1 (`you proposed nothing; propose`). The model then proposed `p-3`,
+a second `verify_mike`, which the membrane refused — *"verb verify_mike already
+exists as p-1; propose with supersedes"* — and the refusal path spent repair 2.
+The model's own account of it, on turn 7: *"My `p-3` on turn 7 was a duplicate
+born of my mistaken claim that I'd never proposed anything. It was rightly
+refused."* Without `silent` the row would have been judged having proposed
+nothing; without the inbox skip the abandoned `p-3` would have been re-offered on
+every later settle, as it was 28 times in run 3.
+
+## One failure, twenty-six turns (2026-09-16-run-4 and -run-5)
+
+`poolside/laguna-s-2.1` again, on the driver carrying the three new triggers.
+**2/7, 66 model calls, $0.0246.** It proposed `verify_ssh_sig` with a Dockerfile
+reading `COPY ./verify.sh /verb/verify.sh` and no `verify.sh` in the proposal, so
+the build failed on `stat verify.sh: file does not exist`; the model was told
+`check your build` twenty-six times and never proposed a replacement. The run
+holds exactly one proposal and one approval against 149 `api list` calls.
+
+The count, not the score, is the finding. The per-row repair budget, which had
+just replaced a run-wide one, let every row after the failure buy its own three
+turns on the same unchanged catalog entry — 24 of the run's 37 turns. A repair is
+now owed by a failure that has *moved*, keyed on the whole catalog entry, the way
+`answerable_state` is keyed on the whole catalog. Run 6 spent 2 repairs where this
+run spent 26.
+
+It also read a Python traceback through `src/mshkn/services/recipes.py` before it
+read the docker error, because that is what the `except` arm wrote into
+`build_log`. That arm now writes what the builder said, and the traceback goes to
+the journal. The fix is on the substrate and takes effect only once the host runs
+it, which it did not for `run-5` or `run-6`.
+
+**2026-09-16-run-5** is DeepSeek on the same driver and is not a score. It aborted
+at row 6 on `api list on comp-9e18a9bcca07: exit -1` — one command of 637 that
+took 168.6 s against a median of 2.36 s and came back killed by a signal
+(`asyncssh`, `src/mshkn/host/ssh.py:243` passes a negative `exit_status`
+through). Transient, and the cause is in the host's journal, not here. It is kept
+because it is the first evidence this model clears the identity row:
+`verify_mike` built at row 2, and rows 4 and 5 answered `mshkn:mike` and
+`anonymous` correctly. `Doors._turn` retries a transport error but treats any
+non-zero exit as fatal, so a killed read-only `list` ends a run.
+
 ## The control: same model, same flags, a different road to the same wall (2026-09-16-run-3)
 
 `2026-09-16-run-2` repeated with nothing changed, to ask whether its no-op repair

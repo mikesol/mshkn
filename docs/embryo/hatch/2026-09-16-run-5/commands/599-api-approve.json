@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-16T09:52:40+00:00",
+ "command": "approve",
+ "computer_id": "comp-d78ae870f8f9",
+ "detail": [
+  "p-1"
+ ],
+ "door": "api",
+ "n": 599,
+ "seconds": 3.273876080289483,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-1 ready: verb verify_mike recipe rcp-ae1511681c0e\n"
+}

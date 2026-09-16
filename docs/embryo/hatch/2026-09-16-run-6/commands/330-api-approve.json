@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-16T13:47:05+00:00",
+ "command": "approve",
+ "computer_id": "comp-2d49dfd6ead1",
+ "detail": [
+  "p-3"
+ ],
+ "door": "api",
+ "n": 330,
+ "seconds": 2.3301323149353266,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-3 refused: verb verify_mike already exists as p-1; propose with supersedes\n"
+}
