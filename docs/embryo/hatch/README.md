@@ -47,13 +47,24 @@ and a correct plan do not convert into the call that would enact them. Run 3's
 turn 2 is the same failure at the scale of a whole turn: twenty `try` calls, zero
 `propose`.
 
-**A smaller, real gap in the seed, noted separately.** `effect` is the only field
-in `seed.md`'s verb paragraph with a bare name and no gloss — `params`,
-`dockerfile`, `entrypoint`, `state`, `asserts`, `requires` and `allow` are each
-explained where they are named — and its legal values appear nowhere, as does
-§10.8. Worth fixing on its own terms. It is not the cause of anything here: Opus
-and DeepSeek both cleared `effect` on their first proposal from this same seed,
-and run 3 cleared it on its second.
+**A smaller gap in the seed, noted separately — and it was deliberate.** Of the
+twelve verb fields `seed.md:17` names, seven are explained where they are named
+(`params`, `dockerfile`, `entrypoint`, `state`, `asserts`, `allow`, `requires`)
+and five are not (`name`, `description`, `effect`, `needs`, `timeout_seconds`).
+Four of those five are readable from the field name. `effect` is not: it is a
+closed enum whose legal values appear nowhere in the seed, and neither does
+§10.8, which restricts the embryo to `local` and `read`.
+
+Commit `178a54b` (#123, #125) cut both the enum and the sentence that followed
+it — *"The embryo may be granted only `local` and `read` effects. Verbs that
+`communicate`, `transact` or `administer` wait for a confirmation protocol that
+does not exist yet; do not propose them."* — under the rule that `seed.md` holds
+irreducible bootstrap and invisible mechanism only, each cut paid for by a
+constructive refusal, by `PROPOSE_TOOL`'s description, or by turn 2 of the
+liturgy. The refusal does teach: Opus and DeepSeek both cleared `effect` on their
+first proposal from this same seed, and run 3 read the refusal, diagnosed it and
+cleared it on its second. It is not the cause of anything here. What it costs is
+one proposal per run.
 
 **The no-op turn reproduced.** Run 3's `3-repair-1`: one model call, **zero tool
 calls**, `stopped: "done"`. Run 2's `3-repair-3` did the same. Two runs, two
