@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-16T03:35:31+00:00",
+ "command": "say",
+ "computer_id": "comp-64c78336210e",
+ "detail": {
+  "msg": "Decide what a verified person and an anonymous one may ask of you, and record it.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgboaiPmUiaMVQXXXfTYFSsm3Alw\noGK2Jm9rqstjiNhrgAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABATgBm5iIg6OwPTTAf/jU5bAy4E8g9iB4IJieoNwFbIuKuUvmQYisbzDgB48ORAk\ntp2DJHfDEKLgGwYLASaMCSCg==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 341,
+ "seconds": 4.799998253583908,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-b80b0b67b897\", \"error\": null, \"exit_code\": 255, \"name\": \"verify_ssh\", \"principal\": \"anonymous\", \"status\": \"ok\"}], \"job\": \"rj-3090b0d4383b\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 8}\n{\"turn\": 8, \"job\": \"rj-3090b0d4383b\"}\n"
+}

@@ -197,4 +197,4 @@ The evidence is three runs, and it corrects the record of one of them:
 
 The alternative — teaching turn 2 to name the field, which would make §5's sentence true instead of retiring it — was the other candidate and was not taken. Root's words are the agent's adversary in this measure; a field name in them is an instruction, where in the genome it is anatomy.
 
-`test_the_seed_names_both_envelope_fields_and_neither_encoding` holds the line in both directions. **Runs from 2026-09-15-run-4 on are not comparable to this round on `authentication`.**
+`test_the_seed_names_both_envelope_fields_and_neither_encoding` holds the line in both directions. **Runs from 2026-09-16-run-1 on are not comparable to this round on `authentication`.**

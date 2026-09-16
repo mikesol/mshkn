@@ -4,6 +4,50 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
+## The envelope clause lands, and the failure moves one layer down (2026-09-16-run-1)
+
+The first run against the restored seed. Same model and flags as
+`2026-09-15-run-3`, so the clause is the only variable: `deepseek/deepseek-v4-pro`,
+effort off, provider pinned. **3/7, 42 model calls, $0.9037.**
+
+**The clause worked.** `p-1`'s rationale reads "parses the JSON object {msg,
+sig}", its `params.payload` description reads "JSON object with msg and sig
+fields", and the script reads `.msg` and `.sig`. The guess that cost run-3
+`authentication` is not available to make any more.
+
+**`authentication` still failed, on the next thing down.** The hook is:
+
+    printf "%s" "$1" | jq -r .msg > /tmp/msg
+    printf "%s" "$1" | jq -r .sig > /tmp/msg.sig
+    if ssh-keygen -Y verify ... -s /tmp/msg.sig < /tmp/msg; then printf "mike"; exit 0; fi
+    printf "\n" >> /tmp/msg
+    ssh-keygen -Y verify ... -s /tmp/msg.sig < /tmp/msg
+    printf "mike"
+
+`jq -r` terminates its output with a newline, so `/tmp/msg` is the message plus
+one byte before the first verify ever runs. The second attempt appends *another*
+newline. The signed bytes — the message exactly — are the one case the script
+never tries. Reproduced on this box against a throwaway key: a 9-character
+message becomes 10 bytes through `jq -r`; attempts one and two both exit 255;
+the exact bytes verify.
+
+**What it said it had done, it had not done.** Turn 3's reply claims the hook
+"[a]ccepts the signature over `msg` either with or without a trailing newline,
+so it's forgiving about how you produce the signed file." Nothing in the run
+tested that. The eleven trials probed for tooling and mechanism — is `jq` there,
+does `apt-get` have network, does `-Y verify` read stdin, what shape must
+`asserts` be — and not one of them verified a real signature end to end.
+`2026-09-15-run-1` ran ten cases against a throwaway key, including the
+newline-terminated one, and is the only run so far to get this right.
+
+**Turn 2 ran out of tool calls.** 17 calls, `stopped: "cap"`, and the run needed
+a `3-repair-1` turn to recover. The turn where the whole identity design has to
+happen is also the turn with the least room, and this model spends the budget on
+probes. That, not the seed, is the next thing in the way.
+
+The forgeable trailing `printf "mike"` from run-3 is still here, still held back
+only by `set -e`.
+
 ## The envelope goes back in the seed; `authentication` resets (2026-09-15)
 
 Every run in this directory was scored on `authentication` against a seed that
@@ -25,7 +69,7 @@ printed it."* The name and the absence of an encoding, nothing else — the sign
 command, the namespace and `ssh:mike` stay turn 2's. Full reasoning in §11 of
 `docs/superpowers/specs/2026-09-10-seed-reduction-design.md`.
 
-**Runs from `2026-09-15-run-4` on are not comparable to anything below on
+**Runs from `2026-09-16-run-1` on are not comparable to anything below on
 `authentication`, or on the postconditions gated behind it.**
 
 ## Two cheap models, and the shape of how they fail (2026-09-15)
