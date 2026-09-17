@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from membrane.config import parse_env
 from membrane.page import serve
-from membrane.postconditions import CHECKS, Judged, by_label, tool_computers
+from membrane.postconditions import CHECKS, Judged, by_label, tool_computers, trial_runs
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
@@ -99,41 +99,63 @@ def _results(stdout: str) -> list[dict[str, Any]]:
     return found
 
 
-def _refusals(j: Judged, turn_label: str) -> list[str]:
-    """The provider's 401 or 403, from the record of a row: the exec log of every
-    computer the row's calls ran on, and the row's reply only as the fallback for
-    a model that reported the refusal without leaving a log behind."""
+def _needed_the_key(j: Judged, turn_label: str) -> dict[str, Any]:
+    """What a row shows of an attempt made before the key was there.
+
+    Two things count, and the row asks for neither by name:
+
+    `refusals` -- the provider's 401 or 403, from the exec log of every computer
+    the row ran on, invocations and trials alike, with the row's reply as the
+    fallback for a model that reported the refusal without leaving a log behind.
+
+    `blocked` -- a trial of a verb on its own chain that exited non-zero. This is
+    what run-1 produced and what the first draft of this check could not accept.
+    The agent's verb read its secret path, found nothing there, and exited 3 before
+    it ever reached the provider; there is no HTTP status to find because the verb
+    is a good one. Demanding the 401 demands a verb that sends an unauthenticated
+    request, which is the opposite of what this capability is about."""
     turn = by_label(j.turns, turn_label)
+    trials = trial_runs(turn)
     logs = [
-        j.checks.get(call["computer_id"], {}).get("stdout") or "" for call in tool_computers(turn)
+        j.checks.get(call["computer_id"], {}).get("stdout") or ""
+        for call in [*tool_computers(turn), *trials]
     ]
     logs.append(turn.reply if turn else "")
-    return [code for code in ("401", "403") if any(code in text for text in logs)]
+    return {
+        "refusals": [code for code in ("401", "403") if any(code in text for text in logs)],
+        "blocked": [
+            run["computer_id"]
+            for run in trial_runs(turn, chain=True)
+            if run.get("exit_code") not in (0, None)
+        ],
+    }
 
 
 def searched(j: Judged) -> dict[str, Any]:
     """Design §6: row 12's reply carries results; the call ran on the search verb's
     chain from a computer that is now gone; its output holds a result shape with
     at least one entry carrying a URL; and the key was needed -- row 11's record
-    holds the provider's 401 or 403 from an attempt made before the key was there.
+    holds an attempt made before the key was there that could not succeed.
 
     That last clause is what separates "the key was used" from "the verb happened
-    to work". It asks the agent for something row 11 invites and does not command,
-    and whether that is too much to ask of a model is what the first run answers."""
+    to work". It asks the agent for something row 11 invites and does not command:
+    that it try the verb before asking for the key. What the attempt *looks* like
+    is the agent's business -- the provider's 401, or the verb's own refusal to run
+    without its secret -- and `_needed_the_key` takes either."""
     twelve = by_label(j.turns, "12")
     calls = tool_computers(twelve, chain=True)
     call = calls[0] if calls else None
     check = j.checks.get(call["computer_id"], {}) if call else {}
     stdout = check.get("stdout") or ""
     results = _results(stdout)
-    refusals = _refusals(j, "11")
+    tried = _needed_the_key(j, "11")
     reply = twelve.reply if twelve else ""
     return {
         "ok": bool(call)
         and check.get("gone") is True
         and bool(results)
         and bool(URL_RE.search(reply))
-        and bool(refusals),
+        and bool(tried["refusals"] or tried["blocked"]),
         "evidence": {
             "reply": reply.strip() if twelve else None,
             "computer_id": call["computer_id"] if call else None,
@@ -142,7 +164,7 @@ def searched(j: Judged) -> dict[str, Any]:
             "results": len(results),
             "first_result": results[0] if results else None,
             "stdout": stdout[:STDOUT_EVIDENCE],
-            "refused_before_the_key": refusals,
+            "tried_before_the_key": tried,
         },
     }
 

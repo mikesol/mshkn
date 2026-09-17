@@ -787,7 +787,13 @@ async def test_web_search(
         assert {name: v["ok"] for name, v in verdict.items()} == dict.fromkeys(
             SEARCH.postconditions, True
         ), verdict
-        assert verdict["searched"]["evidence"]["refused_before_the_key"] == ["401"]
+        # Both halves of the clause, because in run-1 only the reply carried the
+        # 401 and the check passed on that fallback alone while the log path was
+        # dead: `blocked` can be produced by nothing but `trial_runs`, so asserting
+        # it pins the trial's computer being read at all.
+        tried = verdict["searched"]["evidence"]["tried_before_the_key"]
+        assert tried["refusals"] == ["401"]
+        assert len(tried["blocked"]) == 1
         assert set(final["catalog"]) == {"verify_ssh", "web_search", "read_url"}
     finally:
         for name in ("searched", "read_page"):

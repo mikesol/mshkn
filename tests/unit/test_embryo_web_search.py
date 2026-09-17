@@ -155,10 +155,22 @@ def _searched(
     gone: bool = True,
     chain: bool = True,
     refusal: str = "the service answered 401 Unauthorized",
+    exit_code: int = 22,
 ) -> Judged:
     """A run that searched: row 11 tried the verb before the key was there and was
-    refused, row 12 ran it on the verb's chain and answered."""
-    tried = {"name": "search", "computer_id": "comp-try", "chain_head": "ck-try"}
+    refused, row 12 ran it on the verb's chain and answered.
+
+    Row 11's call is shaped the way the app really records a `try` -- name `try`,
+    no `computer_id` of its own, the computer under `runs` -- because the first
+    draft of this fixture put the computer at the top level, which no trial does,
+    and that fiction is what hid `_needed_the_key` reading nothing for a whole
+    live run."""
+    tried = {
+        "name": "try",
+        "status": "done",
+        "trial": "t-1",
+        "runs": [{"computer_id": "comp-try", "chain_head": "ck-try", "exit_code": exit_code}],
+    }
     call = {"name": "search", "status": "ok", "computer_id": "comp-s"}
     if chain:
         call["chain_head"] = "ck-s"
@@ -182,7 +194,10 @@ def test_searched_wants_a_result_shape_from_a_gone_chain_computer_and_a_refusal_
     assert verdict["evidence"]["computer_id"] == "comp-s"
     assert verdict["evidence"]["results"] == 2
     assert verdict["evidence"]["first_result"]["url"].startswith("https://")
-    assert verdict["evidence"]["refused_before_the_key"] == ["401"]
+    assert verdict["evidence"]["tried_before_the_key"] == {
+        "refusals": ["401"],
+        "blocked": ["comp-try"],
+    }
     # not on the chain, not gone, no result shape, or no URL in the reply: not ok
     assert web_search.searched(_searched(chain=False))["ok"] is False
     assert web_search.searched(_searched(gone=False))["ok"] is False
@@ -195,8 +210,9 @@ def test_searched_needs_the_key_to_have_been_needed(web_search: Any) -> None:
     """The clause that separates "the key was used" from "the verb happened to
     work": without a refusal before the placement, a verb that never sent the key
     at all would pass."""
-    no_refusal = web_search.searched(_searched(refusal="built"))
-    assert no_refusal["ok"] is False and no_refusal["evidence"]["refused_before_the_key"] == []
+    nothing = web_search.searched(_searched(refusal="built", exit_code=0))
+    assert nothing["ok"] is False
+    assert nothing["evidence"]["tried_before_the_key"] == {"refusals": [], "blocked": []}
     # a model that reported the refusal without leaving an exec log behind counts
     turns = [
         _turn("11", {"tools": []}, "my first call came back 403 Forbidden, so it needs the key"),
@@ -204,6 +220,29 @@ def test_searched_needs_the_key_to_have_been_needed(web_search: Any) -> None:
     ]
     reply_only = _judged(turns, {"comp-s": {"gone": True, "stdout": RESULTS}})
     assert web_search.searched(reply_only)["ok"] is True
+
+
+def test_searched_takes_a_verb_that_refused_itself_instead_of_the_providers_401(
+    web_search: Any,
+) -> None:
+    """2026-09-17 run-1: the agent's verb read its secret path, found nothing and
+    exited 3 without ever reaching the provider, so there was no HTTP status to
+    find. That is the better verb, not the worse one -- demanding the 401 demands
+    a verb that sends an unauthenticated request -- so a non-zero trial on the
+    verb's own chain is evidence enough that the key was needed."""
+    blocked = web_search.searched(
+        _searched(refusal="error: Tavily API key is not provisioned", exit_code=3)
+    )
+    assert blocked["ok"] is True
+    assert blocked["evidence"]["tried_before_the_key"] == {
+        "refusals": [],
+        "blocked": ["comp-try"],
+    }
+    # but only on the verb's own chain: a scratch trial proves nothing about a
+    # secret, since root places a secret on a chain and nowhere else.
+    off_chain = _searched(refusal="boom", exit_code=3)
+    off_chain.turns[0].audit["tools"][0]["runs"][0].pop("chain_head")
+    assert web_search.searched(off_chain)["ok"] is False
 
 
 def test_searched_finds_the_result_shape_whatever_the_verb_printed_around_it(

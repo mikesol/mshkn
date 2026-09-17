@@ -8,7 +8,16 @@ import json
 from typing import Any
 
 import pytest
-from membrane.postconditions import CHECKS, EXERCISES, INVARIANTS, Judged, Turn, judge
+from membrane.postconditions import (
+    CHECKS,
+    EXERCISES,
+    INVARIANTS,
+    Judged,
+    Turn,
+    judge,
+    tool_computers,
+    trial_runs,
+)
 
 from tests.support_embryo import audit_line
 
@@ -697,3 +706,27 @@ def test_no_foreign_credential_on_brain_is_an_exercise_not_an_invariant() -> Non
     make every capability that places nothing pass it vacuously."""
     assert "no_foreign_credential_on_brain" in EXERCISES
     assert "no_foreign_credential_on_brain" not in INVARIANTS
+
+
+def test_trial_runs_reads_the_computers_tool_computers_cannot_see() -> None:
+    """A `try` carries no `computer_id`; its computers are under `runs`. A check
+    that wants what an agent *tried* has to look there, and web-search's first
+    live run failed a clause that looked anywhere else."""
+    audit = {
+        "tools": [
+            {"name": "try", "status": "invalid", "error": "verb.needs must be an object"},
+            {"name": "try", "status": "failed", "trial": "t-1"},
+            {"name": "try", "trial": "t-2", "runs": [{"computer_id": "c-1", "exit_code": 0}]},
+            {
+                "name": "try",
+                "trial": "t-3",
+                "runs": [{"computer_id": "c-2", "chain_head": "ck", "exit_code": 3}],
+            },
+            {"name": "search", "computer_id": "c-3", "chain_head": "ck"},
+        ]
+    }
+    turn = _turn("11", "ingress", audit, "")
+    assert [c["computer_id"] for c in tool_computers(turn)] == ["c-3"]
+    assert [r["computer_id"] for r in trial_runs(turn)] == ["c-1", "c-2"]
+    assert [r["computer_id"] for r in trial_runs(turn, chain=True)] == ["c-2"]
+    assert trial_runs(None) == []

@@ -105,6 +105,26 @@ def tool_computer(turn: Turn | None, chain: bool = False) -> dict[str, Any] | No
     return calls[0] if calls else None
 
 
+def trial_runs(turn: Turn | None, chain: bool = False) -> list[dict[str, Any]]:
+    """Every computer a `try` of the turn ran on, in order.
+
+    A trial is not an invocation and is shaped differently in the audit: `try`
+    carries no `computer_id` of its own, it carries `runs`, one entry per attempt,
+    and it is those entries that hold `computer_id`, `exit_code` and `chain_head`.
+    `tool_computers` therefore cannot see a trial at all, which is what made
+    web-search's first run judge a row whose only computers were trials against an
+    empty list. A check that wants what the agent *tried* wants this."""
+    if turn is None:
+        return []
+    return [
+        dict(run)
+        for call in turn.audit.get("tools", [])
+        if call.get("name") == "try"
+        for run in call.get("runs", [])
+        if "computer_id" in run and (not chain or "chain_head" in run)
+    ]
+
+
 def _first_int(text: str | None) -> int | None:
     match = INT_RE.search(text or "")
     return int(match.group()) if match else None
