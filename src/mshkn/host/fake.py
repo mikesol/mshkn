@@ -361,6 +361,9 @@ class FakeProxy(_Failable):
     async def remove_route(self, computer_id: str) -> None:
         self.routes.pop(computer_id, None)
 
+    async def list_route_ids(self) -> list[str]:
+        return [f"route-{computer_id}" for computer_id in self.routes]
+
     async def healthy(self) -> bool:
         return self.is_healthy
 
