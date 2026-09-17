@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-17T12:50:06+00:00",
+ "command": "approve",
+ "computer_id": "comp-84c47bf95f93",
+ "detail": [
+  "p-11"
+ ],
+ "door": "api",
+ "n": 107,
+ "seconds": 2.325315684080124,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-11 refused: verb web_search already exists as p-10; propose with supersedes\n"
+}

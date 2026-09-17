@@ -22,8 +22,8 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from membrane.capabilities import CAPABILITIES, load, load_module
+from membrane.capability import INSPECT, Record, paths_in
 from membrane.capability import Doors as DriverDoors
-from membrane.capability import Record, paths_in
 from membrane.cli import run
 from membrane.config import load_settings
 from membrane.declarations import parse_verb, render_command
@@ -33,10 +33,13 @@ from membrane.postconditions import CHECKS, Judged, Turn, judge
 from membrane.scripted import (
     COUNTER,
     PAGE_TITLE,
+    READ_URL,
     SECRET_LENGTH,
     SECRET_PAGE,
     SECRET_PATH,
+    TRIAL_QUERY,
     VERIFY_SSH,
+    WEB_SEARCH,
     ScriptedModel,
 )
 from membrane.state import Brain
@@ -51,6 +54,21 @@ if TYPE_CHECKING:
 
 EMBRYO = Path(__file__).resolve().parents[2] / "embryo"
 SECURITY = load(CAPABILITIES / "security.md")
+SEARCH = load(CAPABILITIES / "web-search.md")
+# What the scripted provider answers row 12 with: Brave's field names, so the
+# fixture is not written against the check's own vocabulary, and two entries that
+# carry a URL each -- which is the only thing `searched` looks for.
+SEARCH_RESULTS = json.dumps(
+    {
+        "type": "search",
+        "web": {
+            "results": [
+                {"title": "Firecracker", "url": "https://firecracker-microvm.github.io/"},
+                {"title": "The NSDI paper", "url": "https://www.usenix.org/conference/nsdi20"},
+            ]
+        },
+    }
+)
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFlowTestKeyFlowTestKeyFlowTestKeyFlowTestKe"
 BRAIN_SCOPES = {
     "recipes": {"create": True, "read": True},
@@ -447,8 +465,8 @@ async def test_security(embryo: Embryo, flow: Flow, tmp_path: Path) -> None:
     assert security is not None
     driver = DriverDoors(flow.client, flow.client, "", Record(tmp_path / "run"))
     sent: list[tuple[str, str]] = []
-    # the inspection at prepare's exit: the fake guest answers the one command it runs
-    flow.host.guest.stream_script[security.INSPECT] = [
+    # the driver's inspection after the run: the fake guest answers the one command it runs
+    flow.host.guest.stream_script[INSPECT] = [
         ("stdout", "---"),
         ("stdout", "MSHKN_API_URL"),
         ("stdout", "MSHKN_API_KEY"),
@@ -583,9 +601,11 @@ async def test_security(embryo: Embryo, flow: Flow, tmp_path: Path) -> None:
             sent.append(("api", "provide"))
             final = await embryo.listing()
 
-        # the server is gone and the inspection ran against the fake brain
-        assert security.inspection["files_with_token"] == []
-        assert "MSHKN_API_KEY" in security.inspection["env_names"]
+        # the server is gone; the driver inspects the brain the run ended with,
+        # the way `run_once` does once `run_context` has exited
+        brain = await driver.inspect_brain(token, log)
+        assert brain["files_with_token"] == []
+        assert "MSHKN_API_KEY" in brain["env_names"]
         # no command the host ever ran carried the token, the placements and the
         # two invocations included: it reached a guest as an upload's body only
         assert all(token not in c for _, c in flow.host.guest.commands)
@@ -608,6 +628,7 @@ async def test_security(embryo: Embryo, flow: Flow, tmp_path: Path) -> None:
                 checks=checks,
                 sent=sent,
                 context={"key": KEY, "url": url, "token": token},
+                brain=brain,
             ),
         )
         assert {name: v["ok"] for name, v in verdict.items()} == dict.fromkeys(
@@ -617,8 +638,166 @@ async def test_security(embryo: Embryo, flow: Flow, tmp_path: Path) -> None:
         assert final["catalog"]["secret_length"]["provided"] == ["page_token"]
     finally:
         # the module's registrations are global; they do not leak into the next test
-        CHECKS.pop("no_foreign_credential_on_brain", None)
         CHECKS.pop("secret_page", None)
+
+
+async def test_web_search(
+    embryo: Embryo, flow: Flow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The web-search design end to end on the fake host: the operator's key (not
+    the run's) reaches a verb's chain by the same path security's token did, a
+    search runs on that chain, an unkeyed verb reads the capability's own page,
+    and both new checks judge the run. Row 15 is not spoken -- it is scored by
+    nothing but the invariants, and what an agent answers it with is a question
+    for a live run, not for a scripted one.
+
+    What this proves that `test_security` does not: a credential that came from
+    outside the run is never on a command line, in the brain, in memory, in the
+    log or in the recorded commands -- and `searched` reads its refusal-before-
+    the-key off the record of the row that tried it."""
+    monkeypatch.setenv("SEARCH_API_URL", "https://search.example/res")
+    monkeypatch.setenv("SEARCH_API_KEY", "sk-operator-flow-0123456789")
+    monkeypatch.setenv("SEARCH_QUERY", "what is a Firecracker microVM")
+    preexisting = {r["recipe_id"] for r in (await flow.client.get("/recipes")).json()}
+    hook = await _grown(embryo)
+    web_search = load_module(SEARCH)
+    assert web_search is not None
+    driver = DriverDoors(flow.client, flow.client, "", Record(tmp_path / "run"))
+    sent: list[tuple[str, str]] = []
+    flow.host.guest.stream_script[INSPECT] = [
+        ("stdout", "---"),
+        ("stdout", "MSHKN_API_URL"),
+        ("stdout", "MSHKN_API_KEY"),
+        ("stdout", "MEMBRANE_MODEL"),
+    ]
+    log = io.StringIO()
+    turns: list[Turn] = []
+    checks: dict[str, dict[str, Any]] = {}
+
+    async def _gone(call: dict[str, Any]) -> str:
+        """The exec log of a call's computer, once the computer is gone."""
+        cid = str(call["computer_id"])
+        assert (await flow.client.get(f"/computers/{cid}/status")).status_code == 404
+        stdout = str((await flow.client.get(f"/computers/{cid}/exec_log")).json()["stdout"])
+        checks[cid] = {
+            "computer_id": cid,
+            "gone": True,
+            "stdout": stdout,
+        }
+        return stdout
+
+    try:
+        async with web_search.prepare(driver, log) as context:
+            endpoint, key = context["url"], context["token"]
+            assert endpoint == "https://search.example/res" and key.startswith("sk-operator")
+            assert context["page"].startswith("https://8000-") and context["page"].endswith("/page")
+
+            # row 11: a trial refused 401 without the key, a proposal with requires,
+            # a path in the reply
+            words11 = SEARCH.row("11").words.format(url=endpoint)
+            trial = embryo.script_output(WEB_SEARCH(endpoint), {"query": TRIAL_QUERY}, "")
+            flow.host.guest.script[trial] = ExecResult(
+                22, "", "curl: (22) The requested URL returned error: 401"
+            )
+            signed11 = {"msg": words11, "sig": "c2ln"}
+            embryo.script_output(hook, {"payload": json.dumps(signed11)}, "mike\n")
+            audit11, reply11 = await embryo.public_say(signed11)
+            turns.append(Turn("11", "ingress", words11, audit11, reply11, [], []))
+            assert [t["name"] for t in audit11["tools"]] == ["try", "propose"], audit11
+            assert audit11["tools"][0]["runs"][0]["exit_code"] == 22, audit11
+            pid = audit11["proposals"][0]["id"]
+            assert (await embryo.root("approve", pid)).startswith(f"{pid} ready")
+            entry = (await embryo.listing())["catalog"]["web_search"]
+            assert entry["requires"] == [{"kind": "secret", "name": "search_key"}]
+            assert entry["provided"] == [] and entry["chain"] == "verb/web_search"
+
+            # root places the operator's key on the verb's chain, at the path the reply named
+            placed = await driver.provision(
+                "web_search", entry["chain"], entry["recipe_id"], paths_in(reply11)[0], key
+            )
+            sent += [(s.door, s.name) for s in driver.sent]
+            assert await embryo.root("provide", "web_search", "search_key") == (
+                "web_search: search_key provided (1/1)\n"
+            )
+            sent.append(("api", "provide"))
+
+            # row 12: the provider's answer, from a computer on the verb's chain
+            query = context["query"]
+            embryo.script_output(WEB_SEARCH(endpoint), {"query": query}, SEARCH_RESULTS)
+            words12 = SEARCH.row("12").words.format(query=query)
+            signed12 = {"msg": words12, "sig": "c2ln"}
+            embryo.script_output(hook, {"payload": json.dumps(signed12)}, "mike\n")
+            audit12, reply12 = await embryo.public_say(signed12)
+            turns.append(Turn("12", "ingress", words12, audit12, reply12, [], []))
+            call12 = audit12["tools"][0]
+            assert call12["status"] == "ok" and call12["chain_head"] not in (None, placed)
+            assert SEARCH_RESULTS.strip() in await _gone(call12)
+
+            # row 13: an unkeyed verb, and nothing to provide for it
+            words13 = SEARCH.row("13").words
+            signed13 = {"msg": words13, "sig": "c2ln"}
+            embryo.script_output(hook, {"payload": json.dumps(signed13)}, "mike\n")
+            audit13, reply13 = await embryo.public_say(signed13)
+            turns.append(Turn("13", "ingress", words13, audit13, reply13, [], []))
+            pid13 = audit13["proposals"][0]["id"]
+            # row 13 gives the agent no URL to try the verb against, so nothing has
+            # built it yet: approval starts the build, and `list` polls it to ready.
+            assert (await embryo.root("approve", pid13)).startswith(f"{pid13} building")
+            entry13 = (await embryo.listing())["catalog"]["read_url"]
+            assert entry13["status"] == "ready"
+            assert entry13.get("requires", []) == []
+
+            # row 14: this capability's own page, read by that verb
+            words14 = SEARCH.row("14").words.format(page=context["page"])
+            embryo.script_output(READ_URL, {"url": context["page"]}, web_search.PAGE_BODY)
+            signed14 = {"msg": words14, "sig": "c2ln"}
+            embryo.script_output(hook, {"payload": json.dumps(signed14)}, "mike\n")
+            audit14, reply14 = await embryo.public_say(signed14)
+            turns.append(Turn("14", "ingress", words14, audit14, reply14, [], []))
+            call14 = audit14["tools"][0]
+            assert call14["name"] == "read_url" and "chain_head" not in call14
+            assert web_search.PAGE_BODY.strip() in await _gone(call14)
+            final = await embryo.listing()
+
+        # the page's computer is gone; the brain is inspected for the operator's key
+        brain = await driver.inspect_brain(key, log)
+        assert brain["files_with_token"] == [] and "MSHKN_API_KEY" in brain["env_names"]
+        # a key that outlives the run reached a guest as an upload's body and nowhere else
+        assert all(key not in c for _, c in flow.host.guest.commands)
+        assert key not in (embryo.brain / "state.json").read_text()
+        assert all(key not in text for text in embryo.memory_texts())
+        assert key not in log.getvalue()
+        for written in (tmp_path / "run" / "commands").iterdir():
+            assert key not in written.read_text()
+        recipes_after = {r["recipe_id"] for r in (await flow.client.get("/recipes")).json()}
+        verdict = judge(
+            SEARCH.postconditions,
+            Judged(
+                turns=turns,
+                final=final,
+                recipes_after=recipes_after,
+                preexisting=preexisting,
+                brain_recipe="rcp-none",
+                checks=checks,
+                sent=sent,
+                context=context,
+                brain=brain,
+            ),
+        )
+        assert {name: v["ok"] for name, v in verdict.items()} == dict.fromkeys(
+            SEARCH.postconditions, True
+        ), verdict
+        # Both halves of the clause, because in run-1 only the reply carried the
+        # 401 and the check passed on that fallback alone while the log path was
+        # dead: `blocked` can be produced by nothing but `trial_runs`, so asserting
+        # it pins the trial's computer being read at all.
+        tried = verdict["searched"]["evidence"]["tried_before_the_key"]
+        assert tried["refusals"] == ["401"]
+        assert len(tried["blocked"]) == 1
+        assert set(final["catalog"]) == {"verify_ssh", "web_search", "read_url"}
+    finally:
+        for name in ("searched", "read_page"):
+            CHECKS.pop(name, None)
 
 
 async def test_a_gateway_shaped_brain_speaks_the_liturgy(

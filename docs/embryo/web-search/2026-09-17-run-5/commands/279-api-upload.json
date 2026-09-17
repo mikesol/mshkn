@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-17T15:04:01+00:00",
+ "command": "upload",
+ "computer_id": "comp-23071a39951b",
+ "detail": {
+  "bytes": 57,
+  "path": "/bin/sh",
+  "verb": "web_search"
+ },
+ "door": "api",
+ "n": 279,
+ "seconds": 0.17134040221571922,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

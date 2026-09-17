@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-17T12:46:34+00:00",
+ "command": "upload",
+ "computer_id": "comp-1fb8dcdde0cd",
+ "detail": {
+  "bytes": 57,
+  "path": "/state/TAVILY_API_KEY",
+  "verb": "web_search"
+ },
+ "door": "api",
+ "n": 80,
+ "seconds": 0.1659470833837986,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

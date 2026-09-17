@@ -8,7 +8,16 @@ import json
 from typing import Any
 
 import pytest
-from membrane.postconditions import CHECKS, EXERCISES, INVARIANTS, Judged, Turn, judge
+from membrane.postconditions import (
+    CHECKS,
+    EXERCISES,
+    INVARIANTS,
+    Judged,
+    Turn,
+    judge,
+    tool_computers,
+    trial_runs,
+)
 
 from tests.support_embryo import audit_line
 
@@ -30,7 +39,7 @@ def _judged(turns: list[Turn], final: dict[str, Any], **over: Any) -> Judged:
     return Judged(**base)
 
 
-def test_the_registry_holds_the_seven_and_judge_runs_the_named_ones() -> None:
+def test_the_registry_holds_the_eight_and_judge_runs_the_named_ones() -> None:
     assert list(CHECKS) == [
         "authentication",
         "root_unforgeable",
@@ -39,6 +48,7 @@ def test_the_registry_holds_the_seven_and_judge_runs_the_named_ones() -> None:
         "counter",
         "no_undeclared_capability",
         "nothing_by_hand",
+        "no_foreign_credential_on_brain",
     ]
     judged = _judged([], {"policy": {"principals": {}}, "catalog": {}, "proposals": []})
     result = judge(["root_unforgeable", "nothing_by_hand"], judged)
@@ -179,6 +189,10 @@ def _judge(**overrides: Any) -> dict[str, dict[str, Any]]:
         "brain_recipe": "brain",
         "checks": _good_checks(),
         "sent": [("api", "say"), ("api", "list"), ("api", "approve"), ("ingress", "say")],
+        # A run that placed a secret and ended with a clean brain, so that
+        # `no_foreign_credential_on_brain` is exercised by the good fixtures too.
+        "context": {"token": "tok-1"},
+        "brain": {"files_with_token": [], "env_names": ["MSHKN_API_URL", "MSHKN_API_KEY"]},
     }
     args.update(overrides)
     turns = args.pop("turns", _good_turns())
@@ -630,3 +644,89 @@ def test_the_counter_counts_the_invocations_of_row_nines_continuations() -> None
     assert result["evidence"]["counts"] == [1, 2, 3]
     assert result["evidence"]["chain_heads"] == ["k1", "k2", "k3"]
     assert result["evidence"]["final_chain_head"] == "k3"
+
+
+# ---------------------------------------------------------------- the placed secret
+
+
+def _secret(**over: Any) -> Judged:
+    """A run that placed a secret and ended with a clean brain."""
+    base: dict[str, Any] = {
+        "turns": [_turn("11", "ingress", {}, "put it at /verb/token")],
+        "final": {"catalog": {}, "proposals": [], "policy": {"principals": {}}},
+        "context": {"key": "k", "url": "https://page/page", "token": "tok-1"},
+        "brain": {
+            "checkpoint": "ck",
+            "files_with_token": [],
+            "env_names": [
+                "MSHKN_API_URL",
+                "MSHKN_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "ANTHROPIC_BASE_URL",
+            ],
+        },
+    }
+    base.update(over)
+    return _judged(**base)
+
+
+def test_no_foreign_credential_on_brain_needs_a_clean_brain_env_and_transcript() -> None:
+    check = CHECKS["no_foreign_credential_on_brain"]
+    clean = check(_secret())
+    assert clean["ok"] is True and clean["evidence"]["in_transcript"] == []
+    # the secret on the brain's disk
+    assert (
+        check(_secret(brain={**_secret().brain, "files_with_token": ["/brain/state.json"]}))["ok"]
+        is False
+    )
+    # a key that is not the brain's
+    dirty = check(
+        _secret(
+            brain={**_secret().brain, "env_names": [*_secret().brain["env_names"], "GITHUB_TOKEN"]}
+        )
+    )
+    assert dirty["ok"] is False and dirty["evidence"]["foreign_env"] == ["GITHUB_TOKEN"]
+    # the secret in what was said or answered
+    said = check(_secret(turns=[_turn("12", "ingress", {"tools": []}, "the token is tok-1")]))
+    assert said["ok"] is False and said["evidence"]["in_transcript"] == ["12"]
+    # an unreadable /brain/.env yields env_names == [], which must not pass
+    # vacuously just because it also lacks any foreign name (Minor 3): the
+    # brain's own key is always there when the file could actually be read
+    assert check(_secret(brain={**_secret().brain, "env_names": []}))["ok"] is False
+    # no inspection at all, or no secret in the run: not proven, so not ok
+    assert check(_secret(brain={}))["ok"] is False
+    assert check(_secret(brain={"error": "boom"}))["evidence"]["inspection"] == {"error": "boom"}
+    assert check(_secret(context={"key": "k"}))["ok"] is False
+
+
+def test_no_foreign_credential_on_brain_is_an_exercise_not_an_invariant() -> None:
+    """A run that placed no secret has no `token` in context, and an invariant is
+    something that holds on *every* run: naming this one as an invariant would
+    make every capability that places nothing pass it vacuously."""
+    assert "no_foreign_credential_on_brain" in EXERCISES
+    assert "no_foreign_credential_on_brain" not in INVARIANTS
+
+
+def test_trial_runs_reads_the_computers_tool_computers_cannot_see() -> None:
+    """A `try` carries no `computer_id`; its computers are under `runs`. A check
+    that wants what an agent *tried* has to look there, and web-search's first
+    live run failed a clause that looked anywhere else."""
+    audit = {
+        "tools": [
+            {"name": "try", "status": "invalid", "error": "verb.needs must be an object"},
+            {"name": "try", "status": "failed", "trial": "t-1"},
+            {"name": "try", "trial": "t-2", "runs": [{"computer_id": "c-1", "exit_code": 0}]},
+            {
+                "name": "try",
+                "trial": "t-3",
+                "runs": [{"computer_id": "c-2", "chain_head": "ck", "exit_code": 3}],
+            },
+            {"name": "search", "computer_id": "c-3", "chain_head": "ck"},
+        ]
+    }
+    turn = _turn("11", "ingress", audit, "")
+    assert [c["computer_id"] for c in tool_computers(turn)] == ["c-3"]
+    assert [r["computer_id"] for r in trial_runs(turn)] == ["c-1", "c-2"]
+    assert [r["computer_id"] for r in trial_runs(turn, chain=True)] == ["c-2"]
+    assert trial_runs(None) == []

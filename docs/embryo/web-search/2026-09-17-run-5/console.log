@@ -1,0 +1,143 @@
+starting from hatch/2026-09-16-run-10 (f8f72a76ef76cf1170df5aff7111af116cd36b40)
+started brain from capability/hatch/brain (ckpt-d56010c609e0)
+started verb/call_counter from capability/hatch/verb/call_counter (ckpt-0f1ea76179b0)
+hatched: {"ingress_url": "", "rule_id": "ir_t3cTQGIw-tHvgh4hAWqzdNJP1SU", "key_id": "key-5d3f734ba5b6", "recipe_id": "rcp-6e586c3878f2", "checkpoint_id": "ckpt-d56010c609e0", "server_id": null}
+the page is at https://8000-comp-70cdfbce578d.mshkn.dev/page (computer comp-70cdfbce578d)
+Turn 11 (ingress): Give yourself a verb that searches the web. The service is at https://api.tavily
+  principal ssh:mike; Proposed **`web_search`** as **p-8**.
+
+To provide the key securely:
+
+1. Open proposal **p-8** in the root/admin interfac
+  p-8 approve: p-8 ready: verb web_search recipe rcp-3a944054d263
+  no path for web_search requires TAVILY_API_KEY; 11 repair 1
+Turn 11-repair-1 (root): where should I put it?
+  1 model calls, done; Provision it as the root-managed secret **`TAVILY_API_KEY`** for the **`web_search`** verb (proposal **p-8**). Use the p
+  the turn called nothing; 11 repair 2
+Turn 11-repair-2 (root): you called nothing; act
+  2 model calls, done; Acted: proposed policy **p-9** to permit authenticated `ssh:mike` to invoke the approved `web_search` verb, while preser
+  p-9 approve: p-9 applied: policy replaced; effective from the next turn
+  no path for web_search requires TAVILY_API_KEY; 11 repair 3
+Turn 11-repair-3 (root): where should I put it?
+  2 model calls, done; I invoked `web_search`; it is blocked with:
+
+> `web_search requires TAVILY_API_KEY; root places it and says provide`
+
+Pu
+Turn 11-continue-1 (ingress): External results: [["proposal", "p-8", "ready"], ["proposal", "p-9", "applied"]]
+  principal ssh:mike; The verb and policy are approved, but the test confirms the required secret is still unprovisioned:
+
+```text
+blocked: we
+Turn 12 (ingress): search for what is a Firecracker microVM and tell me the first three results.
+  principal ssh:mike; I attempted the search, but the verb is still blocked because **`TAVILY_API_KEY` has not been provisioned**. Once root p
+  no path for web_search requires TAVILY_API_KEY; 12 repair 1
+Turn 12-repair-1 (root): where should I put it?
+  1 model calls, done; Provision it as a file inside the `web_search` invocation container at:
+
+```text
+/run/secrets/TAVILY_API_KEY
+```
+
+The fi
+  provided TAVILY_API_KEY for web_search at /run/secrets/TAVILY_API_KEY (ckpt-70e2d222fe48): web_search: TAVILY_API_KEY provided (1/1)
+  the turn called nothing; 12 repair 2
+Turn 12-repair-2 (root): you called nothing; act
+  9 model calls, done; I acted:
+
+- Invoked `web_search` for **“what is a Firecracker microVM”**.
+- It failed because the approved implementatio
+  p-10 approve: p-10 refused: verb web_search already exists as p-8; propose with supersedes
+  p-10 approve: p-10 refused: verb web_search already exists as p-8; propose with supersedes
+  approval refused for p-10; 12 repair 3
+Turn 12-repair-3 (root): check your inbox
+could not keep comp-70cdfbce578d alive: RemoteProtocolError: Server disconnected without sending a response.
+  8 model calls, done; Inbox checked. Proposal **p-10** was refused because it did not declare which existing proposal it replaced.
+
+I correcte
+  not re-approving p-10: refused already under this state
+  p-11 approve: p-11 building: verb web_search recipe rcp-1bc8be0a0932
+Turn 12-continue-1 (ingress): External results: [["proposal", "p-11", "ready"]]. Continue with the request.
+  principal ssh:mike; I retried the requested search. The repaired verb is ready, but execution is still blocked because root has not provided
+  p-10 approve: p-10 refused: verb web_search already exists as p-11; propose with supersedes
+  p-10 approve: p-10 refused: verb web_search already exists as p-11; propose with supersedes
+Turn 13 (ingress): Give yourself a verb that reads the page at a URL I give it.
+  principal ssh:mike; Acted:
+
+- Tested `read_page` successfully against `https://example.com`.
+- Proposed the verb as **p-12**.
+- Proposed its
+  not re-approving p-10: refused already under this state
+  p-12 approve: p-12 ready: verb read_page recipe rcp-dd3db3c00477
+  p-13 approve: p-13 applied: policy replaced; effective from the next turn
+  no path for web_search requires TAVILY_API_KEY; 13 repair 1
+Turn 13-repair-1 (root): where should I put it?
+  2 model calls, done; I retried it; the runtime confirms the missing requirement:
+
+```text
+web_search requires TAVILY_API_KEY; root places it 
+  p-10 approve: p-10 refused: verb web_search already exists as p-11; propose with supersedes
+  p-10 approve: p-10 refused: verb web_search already exists as p-11; propose with supersedes
+  no path for web_search requires TAVILY_API_KEY; 13 repair 2
+Turn 13-repair-2 (root): where should I put it?
+  2 model calls, done; I tested `web_search`; it remains blocked because the requirement is not provided.
+
+Put the key in the runtime’s **root-
+  not re-approving p-10: refused already under this state
+  no path for web_search requires TAVILY_API_KEY; 13 repair 3
+Turn 13-repair-3 (root): where should I put it?
+  7 model calls, done; I invoked `web_search`; it is still blocked. The runtime’s validator clarifies the location:
+
+```text
+Chain:       verb/
+  not re-approving p-10: refused already under this state
+Turn 13-continue-1 (ingress): External results: [["proposal", "p-12", "ready"], ["proposal", "p-13", "applied"
+  principal ssh:mike; The `read_page` verb is approved and operational. I tested it successfully on `https://example.com`; it returned the pag
+  not re-approving p-10: refused already under this state
+Turn 14 (ingress): read https://8000-comp-70cdfbce578d.mshkn.dev/page and tell me what it says.
+  principal ssh:mike; The page says: **“The page anyone may read says: perfect number 33550336.”**
+  not re-approving p-10: refused already under this state
+  no path for web_search requires TAVILY_API_KEY; 14 repair 1
+Turn 14-repair-1 (root): where should I put it?
+  2 model calls, done; Put the Tavily key in:
+
+```text
+/run/secrets/TAVILY_API_KEY
+```
+
+for the `web_search` verb, then mark the `TAVILY_API_KE
+  not re-approving p-10: refused already under this state
+  provided TAVILY_API_KEY for web_search at /run/secrets/TAVILY_API_KEY (ckpt-cdee7359f94e): web_search: TAVILY_API_KEY provided (1/1)
+Turn 14-continue-1 (ingress): External results: [["provided", "web_search", "TAVILY_API_KEY"]]. Continue with 
+  principal ssh:mike; The secret is now correctly provisioned. I invoked `web_search`, but found its approved image is broken: `/web-search` d
+  p-10 approve: p-10 refused: verb web_search already exists as p-11; propose with supersedes
+  p-14 approve: p-14 ready: verb web_search recipe rcp-61f27e04745c
+  p-10 approve: p-10 refused: verb web_search already exists as p-14; propose with supersedes
+  provided TAVILY_API_KEY for web_search at /web-search (ckpt-12cbc17fc649): web_search: TAVILY_API_KEY provided (1/1)
+Turn 14-continue-2 (ingress): External results: [["proposal", "p-14", "ready"]]. Continue with the request.
+  principal ssh:mike; The approved **p-14** still fails with:
+
+```text
+/web-search: Permission denied
+```
+
+I diagnosed two issues: its entrypo
+  p-10 approve: p-10 refused: verb web_search already exists as p-14; propose with supersedes
+  p-15 approve: p-15 building: verb web_search recipe rcp-d4005a424cbe
+  p-10 approve: p-10 refused: verb web_search already exists as p-15; propose with supersedes
+  provided TAVILY_API_KEY for web_search at /bin/sh (ckpt-48299a3cb41a): web_search: TAVILY_API_KEY provided (1/1)
+Turn 14-continue-3 (ingress): External results: [["proposal", "p-15", "ready"]]. Continue with the request.
+  principal ssh:mike; The approved p-15 still incorrectly treats the API key as a shell command. I diagnosed the state-chain requirement issue
+  p-10 approve: p-10 refused: verb web_search already exists as p-15; propose with supersedes
+  p-16 approve: p-16 building: verb web_search recipe rcp-72566b3da284
+  p-10 approve: p-10 refused: verb web_search already exists as p-16; propose with supersedes
+  no path for web_search requires TAVILY_API_KEY; 14 repair 2
+Turn 14-repair-2 (ingress): where should I put it?
+  principal ssh:mike; You don’t need to put it anywhere now. `TAVILY_API_KEY` has already been provisioned for the `web_search` verb, and the 
+  not re-approving p-10: refused already under this state
+  the turn called nothing; 14 repair 3
+Turn 14-repair-3 (ingress): you called nothing; act
+keeping the brain (--keep)
+2026-09-17-run-5 aborted: RuntimeError: api list on comp-a3ee03a843d5: exit -1
+stdout: 
+stderr: 
