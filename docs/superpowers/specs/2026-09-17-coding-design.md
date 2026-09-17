@@ -229,10 +229,16 @@ agent's help.
 secret.
 
 `verify` does one thing. It reads row 20's reply for a command in a code block,
-finds the verb chains on the account (the checkpoint labels under `verb/`) and
-picks one: the chain whose verb name appears in the command when one does,
-otherwise the only chain when there is only one. Two candidates and nothing to
-choose between them is recorded as such and fails the checks rather than being
+takes the candidate chains from the final listing's catalog — the `chain` of every
+verb declared `state: chain`, and not the checkpoint labels on the account,
+because every catalog entry carries a `chain` name whether or not anything ever
+checkpointed onto it, so an ephemeral verb's unused label would turn a one-chain
+run into an ambiguous one — and picks one: the chain whose verb name appears in
+the command when one does, taking the longest where one name contains another
+(`total` and `subtotal`) and reading past `/tmp/amounts` itself, which every
+command carries and a verb named `amounts` would otherwise win; failing that,
+the only chain when there is only one. Two candidates and nothing to choose
+between them is recorded as such and fails the checks rather than being
 guessed at. On a fork of that chain's head, with the account key and through no
 door, it:
 
