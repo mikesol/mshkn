@@ -185,7 +185,7 @@ prose is not evidence.
 
 **20 · signed.** *"Suppose I have that disk in front of me and no way to reach
 you. What command totals a file of amounts I leave at /tmp/amounts? Give me the
-command alone, in a code block."*
+command alone, on one line I can paste, in a code block."*
 
 The path is root's, not the agent's: it is where root will put his own file. The
 code block is read by a script, exactly as security's path is, so the convention
