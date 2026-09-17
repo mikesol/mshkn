@@ -2146,6 +2146,81 @@ def _promote(args: argparse.Namespace, log: TextIO) -> int:
     return 0
 
 
+def _last_listing(run_dir: Path) -> dict[str, Any] | None:
+    """The newest `list` in the run's command log, parsed.
+
+    `final-list.json` is written when a run ends, so an interrupted run has none.
+    Every `list` it did send is on disk, though, and the last one names the
+    proposals whose recipes teardown drops. An older listing names fewer recipes
+    than the run really made, never more, so recovering from it under-deletes --
+    which is the side to be wrong on."""
+    newest = sorted(run_dir.glob("commands/*-api-list.json"))
+    for path in reversed(newest):
+        try:
+            stdout = json.loads(path.read_text())["stdout"]
+            listing = json.loads(stdout)
+        except (KeyError, OSError, TypeError, ValueError):
+            continue
+        if isinstance(listing, dict) and "proposals" in listing:
+            return listing
+    return None
+
+
+def _interrupted(run_dir: Path, out: Path, *, log: TextIO) -> tuple[Hatched, Capability] | None:
+    """What a run killed before it wrote `run.json` left on the account.
+
+    Only a dependent can be recovered, and only because it makes none of the
+    three things the record would have named: a dependent forks the lineage's
+    promoted brain, so `recipe_id` is the lineage's `brain_recipe`, and it speaks
+    through the lineage's ingress rule and scoped key rather than hatching its
+    own. All three are in that capability's PROMOTED.md, and a finished
+    dependent's `run.json` repeats them verbatim -- this reads the same values
+    from the same file rather than inferring anything.
+
+    `server_id` is the scripted model's server, which a live run never has; the
+    fields teardown does not read with a lineage in hand are left empty rather
+    than filled with a plausible-looking guess.
+
+    A hatch run is refused. Its rule, key and recipe are its own creations and
+    nothing outside the record it never wrote names them, so root cannot tell
+    them from another run's and deleting nothing is the safe answer."""
+    name = run_dir.parent.name
+    capability = catalog().get(name)
+    if capability is None:
+        log.write(
+            f"teardown failed: {run_dir} has no run.json, and its parent directory "
+            f"{name!r} is not a capability, so root cannot tell what it was\n"
+        )
+        return None
+    if not capability.depends:
+        log.write(
+            f"teardown failed: {run_dir} has no run.json and {name} starts from nothing, "
+            f"so the ingress rule, scoped key and brain recipe it made are named in that "
+            f"record and nowhere else; deleting nothing is the safe answer\n"
+        )
+        return None
+    start = capability.depends[-1]
+    lineage = read_promotion(out, start)
+    if lineage is None:
+        log.write(
+            f"teardown failed: {run_dir} has no run.json and {start} has no promotion "
+            f"under {out} to recover it from\n"
+        )
+        return None
+    log.write(
+        f"{run_dir.name} was interrupted before it wrote run.json; recovering what it "
+        f"forked from {start}'s promotion ({lineage.brain_recipe})\n"
+    )
+    return Hatched(
+        ingress_url="",
+        rule_id=lineage.rule_id,
+        key_id=lineage.key_id,
+        recipe_id=lineage.brain_recipe,
+        checkpoint_id="",
+        server_id=None,
+    ), capability
+
+
 def _teardown(args: argparse.Namespace, log: TextIO) -> int:
     """Undo a run that was kept. `--keep` is required to promote and the brain
     guard in `run_once` refuses to measure while a brain is on the account, so
@@ -2159,20 +2234,36 @@ def _teardown(args: argparse.Namespace, log: TextIO) -> int:
     entry of the capability's `depends`, read off that capability's PROMOTED.md
     -- and a dependent whose promotion is not on disk is refused rather than
     torn down as if it owned the door: that guess is exactly the deletion this
-    command exists to prevent."""
+    command exists to prevent.
+
+    A run killed before it could write `run.json` used to be untearable, which
+    left the account wedged -- its brain blocks the next run's guard, and the one
+    command that undoes a brain refused to read a directory with no record in it.
+    `_interrupted` reconstructs what teardown actually needs for a *dependent*,
+    whose brain recipe, ingress rule and scoped key are all the lineage's and are
+    therefore on disk already. A hatch run is refused as before: the key, rule and
+    recipe it made are its own, and nothing outside its unwritten record names
+    them."""
     values = parse_env(args.env.read_text()) if args.env.exists() else {}
     values.update({k: v for k, v in os.environ.items() if k in ("MSHKN_API_URL", "MSHKN_API_KEY")})
     missing = [k for k in ("MSHKN_API_URL", "MSHKN_API_KEY") if not values.get(k)]
     if missing:
         log.write(f"missing {', '.join(missing)}: put them in {args.env} or the environment\n")
         return 2
-    try:
-        record = json.loads((args.run_dir / "run.json").read_text())
-        hatched = Hatched(**record["hatched"])
-        capability = catalog()[record["capability"]]
-    except (KeyError, OSError, TypeError, ValueError) as exc:
-        log.write(f"teardown failed: {args.run_dir} is not a run record: {exc}\n")
-        return 1
+    record_path = args.run_dir / "run.json"
+    if record_path.exists():
+        try:
+            record = json.loads(record_path.read_text())
+            hatched = Hatched(**record["hatched"])
+            capability = catalog()[record["capability"]]
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            log.write(f"teardown failed: {args.run_dir} is not a run record: {exc}\n")
+            return 1
+    else:
+        recovered = _interrupted(args.run_dir, args.out, log=log)
+        if recovered is None:
+            return 1
+        hatched, capability = recovered
     lineage: Promotion | None = None
     if capability.depends:
         start = capability.depends[-1]
@@ -2185,7 +2276,7 @@ def _teardown(args: argparse.Namespace, log: TextIO) -> int:
             )
             return 1
     final = args.run_dir / "final-list.json"
-    listing = json.loads(final.read_text()) if final.exists() else None
+    listing = json.loads(final.read_text()) if final.exists() else _last_listing(args.run_dir)
 
     async def go() -> None:
         async with httpx.AsyncClient(

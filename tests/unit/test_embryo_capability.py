@@ -29,6 +29,8 @@ from membrane.capability import (
     Hatched,
     Record,
     RunSettings,
+    _interrupted,
+    _last_listing,
     bare_model_id,
     cost_usd,
     hatch,
@@ -5293,3 +5295,105 @@ async def test_inspect_brain_needs_a_brain_and_destroys_the_fork_when_the_comman
     with pytest.raises(httpx.HTTPStatusError):
         await page_doors(failing, tmp_path).inspect_brain("tok-1", io.StringIO())
     assert "/computers/comp-1" in failing.deleted
+
+
+# ------------------------------------------------- tearing down an interrupted run
+
+
+def _killed_run(tmp_path: Path, capability: str = "web-search") -> Path:
+    """A run directory shaped the way a killed run leaves one: the commands it
+    managed to send, and no `run.json` or `final-list.json`."""
+    run_dir = tmp_path / "docs" / capability / "2026-09-17-run-3"
+    (run_dir / "commands").mkdir(parents=True)
+    return run_dir
+
+
+def _lineage(tmp_path: Path, out: Path) -> Any:
+    from membrane.capability import Promotion, write_promotion
+
+    key_dir = tmp_path / "lineage-keys"
+    key_dir.mkdir()
+    promotion = Promotion(
+        capability="hatch",
+        run="hatch/2026-09-16-run-10",
+        membrane={"commit": "abc", "dirty": False},
+        promoted_at="t",
+        labels={"brain": "ckpt-promoted"},
+        rule_id="ir_lineage",
+        key_id="key-lineage",
+        brain_recipe="rcp-lineage-brain",
+        recipe_ids=("rcp-lineage-brain",),
+        key_dir=str(key_dir),
+        pubkey=new_key(key_dir),
+        model="openai/gpt-5.6-sol",
+        default_effort=None,
+        reasks=0,
+        started_from=None,
+    )
+    write_promotion(out, promotion)
+    return promotion
+
+
+def test_interrupted_recovers_a_dependent_from_the_promotion_it_forked(tmp_path: Path) -> None:
+    """The three things `run.json` would have named are the lineage's, not this
+    run's: a dependent forks the promoted brain and speaks through the promoted
+    rule and key. Reading them back off PROMOTED.md is not a guess -- a finished
+    dependent's record repeats the same values."""
+    out = tmp_path / "out"
+    lineage = _lineage(tmp_path, out)
+    recovered = _interrupted(_killed_run(tmp_path), out, log=io.StringIO())
+    assert recovered is not None
+    hatched, capability = recovered
+    assert capability.name == "web-search"
+    assert hatched.rule_id == lineage.rule_id
+    assert hatched.key_id == lineage.key_id
+    assert hatched.recipe_id == lineage.brain_recipe
+    # never guessed: teardown does not read these with a lineage in hand, and a
+    # plausible-looking value here would be a fabrication
+    assert hatched.server_id is None
+    assert hatched.checkpoint_id == ""
+
+
+def test_interrupted_refuses_a_hatch_run_whose_key_and_rule_are_its_own(tmp_path: Path) -> None:
+    """hatch makes its own ingress rule, scoped key and brain recipe. They are
+    named in the record it never wrote and nowhere else, so root cannot tell them
+    from another run's and deletes nothing."""
+    out = tmp_path / "out"
+    _lineage(tmp_path, out)
+    log = io.StringIO()
+    assert _interrupted(_killed_run(tmp_path, "hatch"), out, log=log) is None
+    assert "starts from nothing" in log.getvalue()
+
+
+def test_interrupted_refuses_what_it_cannot_identify(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    # a directory that is not a capability's
+    log = io.StringIO()
+    assert _interrupted(_killed_run(tmp_path, "not-a-capability"), out, log=log) is None
+    assert "is not a capability" in log.getvalue()
+    # a dependent whose lineage was never promoted
+    log = io.StringIO()
+    assert _interrupted(_killed_run(tmp_path), out, log=log) is None
+    assert "has no promotion" in log.getvalue()
+
+
+def test_last_listing_recovers_the_proposals_from_the_command_log(tmp_path: Path) -> None:
+    """`final-list.json` is written at the end, so an interrupted run has none;
+    the `list` calls it did send are on disk and name the proposals whose recipes
+    teardown drops."""
+    run_dir = _killed_run(tmp_path)
+    commands = run_dir / "commands"
+    (commands / "002-api-list.json").write_text(
+        json.dumps({"stdout": json.dumps({"catalog": {}, "proposals": [{"recipe_id": "rcp-old"}]})})
+    )
+    (commands / "010-api-list.json").write_text(
+        json.dumps({"stdout": json.dumps({"catalog": {}, "proposals": [{"recipe_id": "rcp-new"}]})})
+    )
+    listing = _last_listing(run_dir)
+    assert listing is not None
+    assert listing["proposals"] == [{"recipe_id": "rcp-new"}]
+    # a truncated or non-JSON tail is skipped for the newest one that parses
+    (commands / "011-api-list.json").write_text('{"stdout": "{\\"proposals\\": ')
+    assert _last_listing(run_dir) == listing
+    # nothing readable at all: teardown falls back to deleting no proposal recipe
+    assert _last_listing(_killed_run(tmp_path, "security")) is None
