@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-17T14:11:49+00:00",
+ "command": "create",
+ "computer_id": "comp-1dd05ad37add",
+ "detail": {
+  "from": "rcp-618aa415d574",
+  "verb": "web_search"
+ },
+ "door": "api",
+ "n": 33,
+ "seconds": 3.715970328077674,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

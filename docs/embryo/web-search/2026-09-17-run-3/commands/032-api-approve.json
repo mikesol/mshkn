@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-17T12:41:48+00:00",
+ "command": "approve",
+ "computer_id": "comp-693b30eaf611",
+ "detail": [
+  "p-8"
+ ],
+ "door": "api",
+ "n": 32,
+ "seconds": 2.320842320099473,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-8 ready: verb web_search recipe rcp-36c8be4ef79d\n"
+}

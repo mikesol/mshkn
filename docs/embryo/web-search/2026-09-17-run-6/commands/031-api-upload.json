@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-17T15:52:55+00:00",
+ "command": "upload",
+ "computer_id": "comp-6ac2a43a6928",
+ "detail": {
+  "bytes": 57,
+  "path": "/state/secrets/tavily_api_key",
+  "verb": "tavily_search"
+ },
+ "door": "api",
+ "n": 31,
+ "seconds": 0.12344353273510933,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}
