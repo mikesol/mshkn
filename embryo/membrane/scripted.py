@@ -170,6 +170,64 @@ PLACEMENT = (
     f"```\n{SECRET_PATH}\n```\n\nand say provide."
 )
 
+# web-search (docs/superpowers/specs/2026-09-17-web-search-design.md): the same
+# two shapes one capability further on -- a chain verb whose secret is the
+# operator's provider key rather than a token the run minted, and an unkeyed verb
+# that reads a URL. The placement reply above is the answer to both capabilities'
+# `requires` proposal, so nothing about the secret path is scripted twice.
+SEARCH_URL_RE = re.compile(r"The service is at (\S+) and wants an API key")
+SEARCH_RE = re.compile(r"^search for (.+) and tell me the first three results\.$")
+READ_URL_RE = re.compile(r"^read (\S+) and tell me what it says\.$")
+TRIAL_QUERY = "a probe before the key is placed"
+
+
+def WEB_SEARCH(url: str) -> dict[str, Any]:  # noqa: N802 — a declaration constant with one parameter
+    """Row 11's scripted answer: a chain verb that sends whatever root placed on
+    its chain as a header. An empty header when the key is not there yet, so the
+    trial sees the provider's 401 and `-f` exits 22."""
+    return {
+        "name": "web_search",
+        "description": "Searches the web through the provider root holds the key for.",
+        "params": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+        "dockerfile": (
+            "FROM mshkn-base\n"
+            "RUN mkdir -p /verb && "
+            + _script(
+                "#!/bin/bash",
+                "set -euo pipefail",
+                'curl -fsS --max-time 20 -G --data-urlencode "q=$1" '
+                f'-H "Authorization: Bearer $(cat {SECRET_PATH} 2>/dev/null || true)" "{url}"',
+            )
+            + " > /verb/search.sh && chmod +x /verb/search.sh\n"
+        ),
+        "entrypoint": "/verb/search.sh {{query}}",
+        "effect": "read",
+        "state": "chain",
+        "requires": [{"kind": "secret", "name": "search_key"}],
+    }
+
+
+READ_URL: dict[str, Any] = {
+    "name": "read_url",
+    "description": "Reads the page at a URL and prints what it says.",
+    "params": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+    "dockerfile": (
+        "FROM mshkn-base\n"
+        "RUN mkdir -p /verb && "
+        + _script("#!/bin/bash", "set -euo pipefail", 'curl -fsS --max-time 20 "$1"')
+        + " > /verb/read_url.sh && chmod +x /verb/read_url.sh\n"
+    ),
+    "entrypoint": "/verb/read_url.sh {{url}}",
+    "effect": "read",
+    # Ephemeral, and nothing required: row 13 asks for the cheapest verb there is,
+    # and a verb that holds no secret has no reason to hold a chain either.
+    "state": "ephemeral",
+}
+
 
 def OPEN_DOOR_POLICY(principal: str) -> dict[str, Any]:  # noqa: N802
     # Ruling P1: the principal named in the door proposal gets propose rights
@@ -453,6 +511,29 @@ class ScriptedModel:
                     self._call("propose", **_proposal("verb", "secret_length", decl)),
                 ]
             )
+        service = SEARCH_URL_RE.search(message)
+        if service and can_propose:
+            decl = WEB_SEARCH(service.group(1))
+            return self._calls(
+                [
+                    self._call("try", verb=decl, params={"query": TRIAL_QUERY}),
+                    self._call("propose", **_proposal("verb", "web_search", decl)),
+                ]
+            )
+        query = SEARCH_RE.match(message)
+        if query:
+            if "web_search" not in offered:
+                return self._text("I have no web_search verb yet.")
+            return self._calls([self._call("web_search", query=query.group(1))])
+        if "reads the page at a URL I give it" in message and can_propose:
+            # No trial: the row names no URL to try it against, and an unkeyed
+            # verb has nothing for a trial to show that the invocation will not.
+            return self._calls([self._call("propose", **_proposal("verb", "read_url", READ_URL))])
+        read = READ_URL_RE.match(message)
+        if read:
+            if "read_url" not in offered:
+                return self._text("I have no read_url verb yet.")
+            return self._calls([self._call("read_url", url=read.group(1))])
         if "counts how many times" in message and can_propose:
             return self._calls(
                 [

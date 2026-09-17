@@ -409,7 +409,7 @@ def test_a_row_may_template_the_token_a_module_prepares(tmp_path: Path) -> None:
     names is fine, because `speak` checks the words against the run's context."""
     text = _text().replace("Hello {key}", "Hello {key} {url} {token}")
     assert load(_write(tmp_path, "one", text=text)).row("1").words == "Hello {key} {url} {token}"
-    assert {"key", "url", "token"} == TEMPLATES
+    assert {"key", "url", "token", "query", "page"} == TEMPLATES
 
 
 def test_security_depends_on_hatch_and_names_the_invariants_and_its_own_checks() -> None:
@@ -440,3 +440,29 @@ def test_security_depends_on_hatch_and_names_the_invariants_and_its_own_checks()
         silent="you proposed nothing; propose",
     )
     assert order(catalog(), "security") == [catalog()["hatch"], security]
+
+
+def test_web_search_depends_on_hatch_and_names_the_membranes_credential_check() -> None:
+    """The web-search design (§4) and #167: it starts from hatch's promotion, not
+    security's -- the secret path is the driver's, so the two lineages stay
+    independent -- and it names `no_foreign_credential_on_brain`, which is the
+    membrane's rather than security's precisely so a second capability can."""
+    web_search = load(CAPABILITIES / "web-search.md")
+    assert web_search.name == "web-search" and web_search.depends == ("hatch",)
+    assert web_search.postconditions == (
+        "root_unforgeable",
+        "no_undeclared_capability",
+        "nothing_by_hand",
+        "no_foreign_credential_on_brain",
+        "searched",
+        "read_page",
+    )
+    assert [r.label for r in web_search.rows] == ["11", "12", "13", "14", "15", "16"]
+    assert [r.label for r in web_search.rows if r.proposes] == ["11", "13", "15"]
+    assert web_search.rows[-1].door == "root list"
+    # the endpoint and the page ride in the words; the key never does
+    assert "{url}" in web_search.row("11").words and "{token}" not in web_search.row("11").words
+    assert "{query}" in web_search.row("12").words
+    assert "{page}" in web_search.row("14").words
+    assert web_search.repair.provide == "where should I put it?"
+    assert order(catalog(), "web-search") == [catalog()["hatch"], web_search]

@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-17T16:02:32+00:00",
+ "command": "approve",
+ "computer_id": "comp-c91c7d96051a",
+ "detail": [
+  "p-12"
+ ],
+ "door": "api",
+ "n": 116,
+ "seconds": 2.6924210246652365,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-12 building: verb tavily_extract recipe rcp-150fca486978\n"
+}

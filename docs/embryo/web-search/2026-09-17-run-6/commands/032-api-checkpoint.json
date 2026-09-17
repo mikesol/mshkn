@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-17T15:52:55+00:00",
+ "command": "checkpoint",
+ "computer_id": "comp-6ac2a43a6928",
+ "detail": {
+  "checkpoint_id": "ckpt-bbcd968b1890",
+  "label": "verb/tavily_search",
+  "verb": "tavily_search"
+ },
+ "door": "api",
+ "n": 32,
+ "seconds": 0.29214446246623993,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

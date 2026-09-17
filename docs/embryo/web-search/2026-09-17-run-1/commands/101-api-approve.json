@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-17T11:53:25+00:00",
+ "command": "approve",
+ "computer_id": "comp-50162ca8a001",
+ "detail": [
+  "p-12"
+ ],
+ "door": "api",
+ "n": 101,
+ "seconds": 2.9561540745198727,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-12 building: verb web_extract recipe rcp-2a9acec752e5\n"
+}

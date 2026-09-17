@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-17T15:52:56+00:00",
+ "command": "destroy",
+ "computer_id": "comp-6ac2a43a6928",
+ "detail": {
+  "verb": "tavily_search"
+ },
+ "door": "api",
+ "n": 33,
+ "seconds": 0.6440674979239702,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

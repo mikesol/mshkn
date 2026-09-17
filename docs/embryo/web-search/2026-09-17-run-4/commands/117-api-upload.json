@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-17T14:20:56+00:00",
+ "command": "upload",
+ "computer_id": "comp-ed74b2ab5dfc",
+ "detail": {
+  "bytes": 57,
+  "path": "/extract",
+  "verb": "tavily_extract"
+ },
+ "door": "api",
+ "n": 117,
+ "seconds": 0.14419416710734367,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}
