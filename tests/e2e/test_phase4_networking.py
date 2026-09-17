@@ -68,6 +68,17 @@ class TestT41AutoHttps:
                 assert resp.status_code == 200
                 assert "Directory listing" in resp.text or "<html" in resp.text.lower()
 
+        # The computer is destroyed now and its route is gone. The same URL must
+        # say so: before the terminal route (#189) it answered 200 with an empty
+        # body, so `curl --fail` exited 0 and a tenant read an absent computer as
+        # an empty resource. A live computer with a dead port still gives 502.
+        async with httpx.AsyncClient(timeout=10.0) as external:
+            gone = await external.get(url)
+            assert gone.status_code == 404, (
+                f"a destroyed computer's URL answered {gone.status_code} "
+                f"with {len(gone.content)} bytes; it must 404"
+            )
+
 
 # ---------------------------------------------------------------------------
 # T4.2 — Multiple Ports: servers on 3000, 5000, 8080

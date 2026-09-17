@@ -118,7 +118,7 @@ The production host is built once by `mshkn.host.firecracker_host.firecracker_ho
 | `BlockStore` | `snap`, `activate`, `deactivate`, `remove`, `mkfs`, `mounted`, `max_volume_id`, `usage` | `mshkn.host.dmthin.DmThinBlockStore` | `FakeBlockStore` (a temp directory per volume, reached through stable per-device mounts) |
 | `Guest` | `exec`, `stream`, `exec_bg`, `upload`, `download`, `metrics`, `warm`, `evict`, `close` | `mshkn.host.ssh.SshGuest` (connection pool, real line streaming) | `FakeGuest` (scripted output, minted pids from 4000) |
 | `ObjectStore` | `upload_dir`, `download_dir`, `delete_prefix` | `mshkn.host.r2.RcloneObjectStore` | `FakeObjectStore` |
-| `Proxy` | `add_route`, `remove_route`, `healthy`, `close` | `mshkn.host.caddy.CaddyProxy` (admin API) | `FakeProxy` |
+| `Proxy` | `ensure_terminal_route`, `add_route`, `remove_route`, `healthy`, `close` | `mshkn.host.caddy.CaddyProxy` (admin API) | `FakeProxy` |
 
 Shared result types live beside the protocols: `RunningVM(pid, socket_path, slot, vm_ip, tap_device)`, `SnapshotFiles`, `ExecResult(exit_code, stdout, stderr)`, `VmMetrics`, `PoolUsage`.
 
@@ -222,7 +222,7 @@ An ingress rule has a Starlark `transform(request)` returning either `{"action":
 
 ## 10. Networking
 
-Slot N gives host address `172.16.N.1`, VM address `172.16.N.2`, tap `tapN` and MAC `06:00:AC:10:NN:02` (NN in hex). Egress is host NAT: `scripts/mshkn-pool-up` masquerades `172.16.0.0/12` out of the default interface and re-allows return traffic to `tap+`, which Docker's `FORWARD` DROP policy would otherwise eat; each tap gets a `FORWARD` pair that accepts its VM's traffic to the outside and drops it towards other VMs. Inbound traffic reaches a VM only through Caddy: `CaddyProxy.add_route` creates a route with id `route-<computer id>` matching `*-<computer id>.<domain>`, and the request's port prefix selects the VM port. Slot 254 is reserved for staging.
+Slot N gives host address `172.16.N.1`, VM address `172.16.N.2`, tap `tapN` and MAC `06:00:AC:10:NN:02` (NN in hex). Egress is host NAT: `scripts/mshkn-pool-up` masquerades `172.16.0.0/12` out of the default interface and re-allows return traffic to `tap+`, which Docker's `FORWARD` DROP policy would otherwise eat; each tap gets a `FORWARD` pair that accepts its VM's traffic to the outside and drops it towards other VMs. Inbound traffic reaches a VM only through Caddy: `CaddyProxy.add_route` creates a route with id `route-<computer id>` matching `*-<computer id>.<domain>`, and the request's port prefix selects the VM port. The route is inserted at the head of the list, because the list ends in `route-terminal`, a matcher-less `static_response` 404 that `CaddyProxy.ensure_terminal_route` re-installs on every `Runtime.start`. Without it a name matching no route falls off the end and Caddy answers 200 with an empty body, so a destroyed computer reads to a tenant as an empty resource rather than an absent one; a live computer with a dead port stays 502. Slot 254 is reserved for staging.
 
 ## 11. Failure handling and cleanup guarantees
 
