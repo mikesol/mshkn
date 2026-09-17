@@ -31,20 +31,24 @@ from membrane.capability import (
     RunSettings,
     _interrupted,
     _last_listing,
+    _next_run_dir,
     bare_model_id,
     cost_usd,
     hatch,
+    kept_path,
     load_key,
     load_run_settings,
     main,
     membrane_version,
     new_key,
+    read_kept,
     run_once,
     sign,
     speak,
     split_output,
     sse_stdout,
     transport_for,
+    write_kept,
 )
 from membrane.config import EFFORT_OFF
 from membrane.model import zero_usage
@@ -320,6 +324,19 @@ def test_record_writes_every_command_the_transcript_and_the_summary(tmp_path: Pa
     assert json.loads(record.final_list(listing).read_text()) == listing
     summary = {"ok": False, "postconditions": {}}
     assert json.loads(record.summary(summary).read_text()) == summary
+
+
+def test_a_record_that_wrote_nothing_leaves_no_directory_to_explain(tmp_path: Path) -> None:
+    """A run that falls over at the brain guard sends nothing, so the run number
+    it was handed is still free for the next attempt (#193)."""
+    out = tmp_path / "hatch"
+    out.mkdir()
+    first = _next_run_dir(out, "2026-09-17")
+    Record(first)
+    assert not first.exists()
+    assert _next_run_dir(out, "2026-09-17") == first
+    Record(first).command("api", "say", {}, "", 200, 0.0)
+    assert _next_run_dir(out, "2026-09-17") == out / "2026-09-17-run-2"
 
 
 # ---------------------------------------------------------------- the promotion record
@@ -985,8 +1002,9 @@ async def test_working_labels_are_brain_and_the_verb_chains_without_trials(tmp_p
 # ---------------------------------------------------------------- promote, start_from, lineage
 
 
-async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_labels(
+async def test_promote_copies_the_heads_drops_the_working_labels_and_forgets_the_pointer(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from membrane.capability import promote, promotion_path, read_promotion
 
@@ -1042,6 +1060,8 @@ async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_
             return httpx.Response(200, json={"status": "deleted"})
         raise AssertionError(request.url.path)
 
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    write_kept(run_dir, "hatch", "https://api.example")
     doors = _bare_doors(tmp_path, handler)
     p = await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
     assert p.labels == {"brain": "promoted-brain", "verb/counter": "promoted-counter"}
@@ -1058,6 +1078,9 @@ async def test_promote_copies_the_heads_writes_the_record_and_drops_the_working_
     # the working checkpoints went; the key, the rule and the recipes stayed
     assert ("DELETE", "/checkpoints/ck-b") in seen and ("DELETE", "/checkpoints/ck-c") in seen
     assert not any(path.startswith(("/keys", "/ingress_rules", "/recipes")) for _, path in seen)
+    # `brain` is now a promoted label, so nothing blocks the next run and the
+    # pointer must stop claiming this run's brain is on the account (#193)
+    assert read_kept() is None
     assert ("DELETE", "/checkpoints/ck-old") not in seen  # not a working label: left alone
 
 
@@ -3199,25 +3222,110 @@ async def test_run_once_records_effort_unsupported_when_the_run_was_given_off(
     assert summary["effort_supported"] is False
 
 
-async def test_run_once_refuses_an_account_that_already_has_a_brain(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": "r"}])
+async def _guarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api: FakeApi, *, out: Path | None = None
+) -> dict[str, Any]:
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
     monkeypatch.setattr(
         "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
-    with pytest.raises(RuntimeError, match="already has a brain"):
-        await run_once(
-            _settings(),
-            HATCH,
-            tmp_path / "run",
-            AutoApprover(),
-            hatch_script=_stub_hatch(tmp_path),
-            key_dir=tmp_path / "keys",
-            keep=False,
-            log=io.StringIO(),
-            out=tmp_path,
-        )
+    return await run_once(
+        _settings(),
+        HATCH,
+        tmp_path / "docs" / "hatch" / "2026-01-02-run-1",
+        AutoApprover(),
+        hatch_script=_stub_hatch(tmp_path),
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=io.StringIO(),
+        out=out or tmp_path / "docs",
+    )
+
+
+async def test_run_once_refuses_a_brain_no_record_explains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#193: an unexplained brain is a hazard, not a corpse. Nothing on the account
+    says which run made it -- a checkpoint carries a label, a recipe and a parent,
+    and `brain` is the label every run uses -- so with no pointer on the operator's
+    machine root does not know whose it is and will not delete it."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": "r"}])
+    with pytest.raises(RuntimeError, match="does not say which run kept it"):
+        await _guarded(tmp_path, monkeypatch, api)
+    assert [m for m, _p, _b in api.requests if m == "DELETE"] == []
+
+
+async def test_run_once_tears_down_the_brain_of_a_run_that_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#193: `--keep` is required to be promotable, so every promotable run leaves a
+    brain and the next run's guard finds it. web-search run-1 scored 5/6, the fix
+    landed, and the re-run aborted before doing any work. A failed run's brain is a
+    dead end that will never be promoted; the teardown belongs at the start of the
+    next run rather than the end of the failed one, so the evidence survives for as
+    long as nobody needs the account."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    out = tmp_path / "docs"
+    failed = _kept_run(tmp_path, "hatch", started_from="hatch", ok=False)
+    write_kept(failed, "hatch", "http://api")
+    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": None}])
+    summary = await _guarded(tmp_path, monkeypatch, api, out=out)
+    deleted = [p for m, p, _b in api.requests if m == "DELETE"]
+    # the failed run's brain, and the door and key it hatched for itself
+    assert "/checkpoints/ck" in deleted
+    assert "/ingress_rules/ir_1" in deleted and "/keys/key-1" in deleted
+    # and the run it was blocking went on to hatch, speak and record
+    assert summary["capability"] == "hatch"
+    # the pointer no longer claims a brain is on the account
+    assert read_kept() is None
+
+
+async def test_run_once_refuses_the_brain_of_a_run_that_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The case the guard was written for, and it does not change: a passing run is
+    promotable and its brain is not ours to delete. The message names both commands
+    that resolve it."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    passed = _kept_run(tmp_path, "hatch", started_from="hatch", ok=True)
+    write_kept(passed, "hatch", "http://api")
+    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": None}])
+    with pytest.raises(RuntimeError, match="which passed"):
+        await _guarded(tmp_path, monkeypatch, api)
+    assert [m for m, _p, _b in api.requests if m == "DELETE"] == []
+    assert read_kept() is not None
+
+
+async def test_run_once_refuses_a_brain_kept_against_another_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pointer is one file on one machine and the operator has more than one
+    account to point it at. A brain kept against a different API is not the brain in
+    this run's way, and deleting by a record that describes somewhere else is the
+    mistake this whole path exists to prevent."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    elsewhere = _kept_run(tmp_path, "hatch", started_from="hatch", ok=False)
+    write_kept(elsewhere, "hatch", "https://api.mshkn.dev")
+    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": None}])
+    with pytest.raises(RuntimeError, match="speaks to http://api"):
+        await _guarded(tmp_path, monkeypatch, api)
+    assert [m for m, _p, _b in api.requests if m == "DELETE"] == []
+
+
+async def test_run_once_refuses_when_the_kept_runs_record_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pointer at a run whose `run.json` is gone says a brain is out there and
+    nothing about whether it was promotable. That is the no-record case again."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    empty = tmp_path / "docs" / "hatch" / "2026-01-01-run-9"
+    empty.mkdir(parents=True)
+    write_kept(empty, "hatch", "http://api")
+    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": None}])
+    with pytest.raises(RuntimeError, match="cannot be read"):
+        await _guarded(tmp_path, monkeypatch, api)
+    assert [m for m, _p, _b in api.requests if m == "DELETE"] == []
 
 
 async def test_an_aborted_run_writes_what_it_had_and_tears_down(
@@ -3414,8 +3522,15 @@ async def test_an_aborted_run_keeps_the_re_asks_it_had_already_spoken(
     assert summary["ok"] is False and summary["reasks"] == ["8"]
 
 
-async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_keep_skips_the_teardown_and_says_whose_brain_is_on_the_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The write side of #193. Nothing on the account attributes a brain to a run,
+    so the run that kept one writes down that it did -- beside the keys, never in
+    the repository -- and the next run's guard reads that record to decide whether
+    what is in its way is promotable or a dead end."""
     monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     api = FakeApi()
     monkeypatch.setattr(
         "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
@@ -3432,6 +3547,11 @@ async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.Monke
         out=tmp_path,
     )
     assert not [p for m, p, _ in api.requests if m == "DELETE"]
+    kept = read_kept()
+    assert kept is not None
+    assert kept["run_dir"] == str((tmp_path / "run").resolve())
+    assert kept["capability"] == "hatch" and kept["api_url"] == "http://api"
+    assert kept_path() == tmp_path / "home" / ".mshkn" / "kept.json"
 
 
 async def test_run_once_of_a_dependent_without_a_promotion_names_both_commands(
@@ -5038,7 +5158,7 @@ async def test_public_continuation_repairs_never_escalate_to_root(
 # ---------------------------------------------------------------- undoing a kept run
 
 
-def _kept_run(tmp_path: Path, capability: str, *, started_from: str) -> Path:
+def _kept_run(tmp_path: Path, capability: str, *, started_from: str, ok: bool = False) -> Path:
     """A `--keep` run's evidence directory, the two files a teardown reads."""
     run_dir = tmp_path / "docs" / capability / "2026-01-01-run-1"
     run_dir.mkdir(parents=True)
@@ -5047,6 +5167,7 @@ def _kept_run(tmp_path: Path, capability: str, *, started_from: str) -> Path:
             {
                 "capability": capability,
                 "started_from": started_from,
+                "ok": ok,
                 "hatched": {
                     "ingress_url": "u",
                     "rule_id": "ir_1",
@@ -5167,6 +5288,40 @@ def test_main_teardown_of_a_hatch_drops_the_door_and_the_key(
     deleted = [path for method, path in seen if method == "DELETE"]
     assert "/ingress_rules/ir_1" in deleted
     assert "/keys/key-1" in deleted
+
+
+def test_main_teardown_forgets_the_pointer_only_when_it_names_that_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#193: the pointer says which run's brain is on the account, so a teardown
+    that removes that brain must remove it -- and a teardown of some *other* run
+    must not, or the account would look free while a kept brain is still on it."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    out = tmp_path / "docs"
+    run_dir = _kept_run(tmp_path, "hatch", started_from="hatch")
+    other = tmp_path / "docs" / "hatch" / "2026-01-01-run-2"
+    other.mkdir(parents=True)
+    write_kept(other, "hatch", "http://api")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/checkpoints":
+            return httpx.Response(200, json=[{"id": "w", "label": "brain", "recipe_id": None}])
+        return httpx.Response(200, json={"status": "deleted"})
+
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(handler)
+    )
+    env = tmp_path / ".env"
+    env.write_text("MSHKN_API_URL=http://api\nMSHKN_API_KEY=k\n")
+    argv = ["teardown", str(run_dir), "--env", str(env), "--out", str(out)]
+    assert main(argv, log=io.StringIO()) == 0
+    # the pointer names run-2, and run-1 was torn down: it still stands
+    kept = read_kept()
+    assert kept is not None and kept["run"] == "2026-01-01-run-2"
+    # now tear down the run it does name
+    write_kept(run_dir, "hatch", "http://api")
+    assert main(argv, log=io.StringIO()) == 0
+    assert read_kept() is None
 
 
 def test_main_teardown_refuses_a_dependent_whose_promotion_is_missing(

@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 DEFAULT_BRAIN_API_URL = "https://api.mshkn.dev"
 DEFAULT_OUT = Path("docs/embryo")
 KEYS = (".mshkn", "keys")  # under the operator's home; never under the repository
+KEPT = (".mshkn", "kept.json")  # live account state, so beside the keys and not in the repo
 REQUIRED = ("MSHKN_API_URL", "MSHKN_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 OPTIONAL = ("BRAIN_API_URL", "ANTHROPIC_BASE_URL", "AI_GATEWAY_API_KEY", "MEMBRANE_BODY_EXTRA")
 HATCH = Path(__file__).resolve().parents[1] / "hatch.sh"
@@ -303,13 +304,22 @@ class Sent:
 class Record:
     """One run's evidence directory: `commands/NNN-<door>-<name>.json` for every
     command sent (every `list` included), `transcript.md`, `final-list.json`,
-    `run.json`."""
+    `run.json`.
+
+    The directory is made when the first thing is written to it, not here. A run
+    that falls over before it sends anything -- at the brain guard, say -- then
+    leaves nothing behind, and `_next_run_dir` hands its number to the next
+    attempt instead of leaving an empty `run-N/commands/` to be explained (#193)."""
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.commands_dir = directory / "commands"
-        self.commands_dir.mkdir(parents=True, exist_ok=True)
         self.n = 0
+
+    @staticmethod
+    def _ready(directory: Path) -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     def command(
         self,
@@ -336,7 +346,7 @@ class Record:
             "stdout": stdout,
             "stderr": stderr,
         }
-        path = self.commands_dir / f"{self.n:03d}-{door}-{name}.json"
+        path = self._ready(self.commands_dir) / f"{self.n:03d}-{door}-{name}.json"
         path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
         return self.n
 
@@ -360,19 +370,77 @@ class Record:
                 lines.append("")
             commands = ", ".join(f"{n:03d}" for n in turn.commands)
             lines += [f"Commands: {commands}", ""]
-        path = self.directory / "transcript.md"
+        path = self._ready(self.directory) / "transcript.md"
         path.write_text("\n".join(lines))
         return path
 
     def final_list(self, listing: dict[str, Any]) -> Path:
-        path = self.directory / "final-list.json"
+        path = self._ready(self.directory) / "final-list.json"
         path.write_text(json.dumps(listing, indent=1, sort_keys=True) + "\n")
         return path
 
     def summary(self, doc: dict[str, Any]) -> Path:
-        path = self.directory / "run.json"
+        path = self._ready(self.directory) / "run.json"
         path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
         return path
+
+
+# ------------------------------------------------ which run's brain is on the account
+
+
+def kept_path() -> Path:
+    return Path.home().joinpath(*KEPT)
+
+
+def write_kept(run_dir: Path, capability: str, api_url: str) -> Path:
+    """Name the run whose brain `--keep` just left on the account.
+
+    `--keep` is required to promote, so every promotable run leaves a working
+    brain and the next run's guard finds it. The guard's decision turns on
+    whether that run passed, which its `run.json` says -- but nothing on the
+    account says *which* run it was: a checkpoint carries a label, a recipe and
+    a parent, and `brain` is the label every run uses. So the operator's machine
+    writes down what it did, beside the keys and never in the repository, and
+    the next run reads it.
+
+    Deliberately not inferred from the evidence on disk instead: the newest
+    `run.json` is usually the right answer and occasionally a brain someone
+    hatched by hand, and the cost of being wrong is a deleted promotion. This
+    file is written when a brain is kept and removed when one is torn down or
+    promoted, so its absence means "root does not know", which the guard refuses
+    on rather than guessing."""
+    path = kept_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    doc = {
+        "api_url": api_url,
+        "capability": capability,
+        "kept_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "run": run_dir.name,
+        "run_dir": str(run_dir.resolve()),
+    }
+    path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
+    return path
+
+
+def read_kept() -> dict[str, Any] | None:
+    try:
+        doc = json.loads(kept_path().read_text())
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def clear_kept(run_dir: Path | None = None) -> None:
+    """Forget the pointer, or forget it only when it names `run_dir`: tearing
+    down one run must not make the account look free while another run's brain is
+    the one actually on it."""
+    kept = read_kept()
+    if kept is None:
+        return
+    if run_dir is not None and kept.get("run_dir") != str(run_dir.resolve()):
+        return
+    with suppress(OSError):
+        kept_path().unlink()
 
 
 # ---------------------------------------------------------------- the doors
@@ -1212,6 +1280,10 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
                 log.write(f"could not drop {label} ({ckpt['id']}): {exc}\n")
             else:
                 log.write(f"dropped {label} ({ckpt['id']})\n")
+    # The working brain this run kept is now a promoted label and no longer
+    # `brain`, so nothing blocks the next run and the pointer must stop saying
+    # this run's brain is on the account (#193).
+    clear_kept(run_dir)
     return record
 
 
@@ -1807,6 +1879,66 @@ def _usage_total(turns: list[Turn]) -> tuple[dict[str, int], int]:
     return usage, calls
 
 
+async def clear_failed_brain(doors: Doors, out: Path, api_url: str, *, log: TextIO) -> None:
+    """A brain is already on the account. Take it off if it belongs to a run that
+    failed; otherwise refuse to measure (#193).
+
+    `--keep` is required for a run to be promotable, so every promotable run
+    leaves a brain behind. Refusing is right for a run that *passed* -- its brain
+    is about to be promoted and must not be clobbered. It is wrong for one that
+    failed: that brain is a dead end that will never be promoted, and all it does
+    is block the next attempt until a human remembers `capability teardown`.
+
+    The teardown moved here, to the start of the next run, rather than to the end
+    of the failed one, because ending a failed run by deleting its brain burns
+    the evidence. When the failure is in a check, everything needed is already on
+    disk; when it is in the agent, the thing you want is to boot that brain and
+    ask it what it thought it was doing, and only a live checkpoint gives you
+    that. A failed run's leavings now survive exactly as long as nobody needs the
+    account -- which is the window in which anyone is going to inspect them.
+
+    Three ways to refuse, and all of them say what to run:
+
+    - no pointer, or one written against another server: root does not know whose
+      brain this is, and an unexplained brain is a hazard, not a corpse.
+    - the run it names has no readable `run.json`: same.
+    - that run passed: it is promotable and its brain is not ours to delete."""
+    advice = (
+        "tear it down before measuring (`capability teardown <run-dir>` for the run that kept it)"
+    )
+    kept = read_kept()
+    if kept is None or not kept.get("run_dir"):
+        raise RuntimeError(
+            f"the account already has a brain and {kept_path()} does not say which run "
+            f"kept it; {advice}"
+        )
+    if kept.get("api_url") != api_url:
+        raise RuntimeError(
+            f"the account already has a brain; {kept_path()} names {kept['run']}, kept "
+            f"against {kept.get('api_url')}, and this run speaks to {api_url}; {advice}"
+        )
+    run_dir = Path(kept["run_dir"])
+    try:
+        record = json.loads((run_dir / "run.json").read_text())
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"the account already has a brain, kept by {kept['run']}, whose run.json "
+            f"cannot be read ({type(exc).__name__}); {advice}"
+        ) from exc
+    if record.get("ok") is not False:
+        raise RuntimeError(
+            f"the account already has a brain, kept by {kept['run']}, which passed: "
+            f"promote it (`capability promote {record.get('capability')} {run_dir}`) or "
+            f"tear it down (`capability teardown {run_dir}`)"
+        )
+    log.write(f"{kept['run']} failed and its brain is still on the account; tearing it down\n")
+    if not await teardown_run(doors, run_dir, out, log=log):
+        raise RuntimeError(
+            f"the account already has a brain, kept by {kept['run']}, which failed but "
+            f"could not be torn down (above); {advice}"
+        )
+
+
 async def run_once(
     settings: RunSettings,
     capability: Capability,
@@ -1884,10 +2016,7 @@ async def run_once(
     ):
         doors = Doors(api, public, "", record)
         if await doors.checkpoints("brain"):
-            raise RuntimeError(
-                "the account already has a brain; tear it down before measuring "
-                "(`capability teardown <run-dir>` for the run that kept it)"
-            )
+            await clear_failed_brain(doors, out, settings.api_url, log=log)
         preexisting = await doors.recipes()
         if lineage is not None:
             log.write(f"starting from {lineage.run} ({lineage.membrane.get('commit')})\n")
@@ -2050,6 +2179,10 @@ async def run_once(
         finally:
             if keep:
                 log.write("keeping the brain (--keep)\n")
+                # After the record is written, pass or fail: the next run's guard
+                # reads that record to decide whether this brain is promotable or
+                # a dead end in its way (#193).
+                write_kept(out_dir, capability.name, settings.api_url)
             else:
                 await doors.teardown(hatched, final, lineage=lineage, log=log)
 
@@ -2221,75 +2354,88 @@ def _interrupted(run_dir: Path, out: Path, *, log: TextIO) -> tuple[Hatched, Cap
     ), capability
 
 
-def _teardown(args: argparse.Namespace, log: TextIO) -> int:
-    """Undo a run that was kept. `--keep` is required to promote and the brain
-    guard in `run_once` refuses to measure while a brain is on the account, so
-    every promotable run leaves one behind and something has to take it off;
-    until this subcommand there was nothing, and the call was written by hand
-    each time. One of those hand-written calls omitted `lineage=` and deleted
+async def teardown_run(doors: Doors, run_dir: Path, out: Path, *, log: TextIO) -> bool:
+    """Undo one run's leavings, reading what it made from its own record. The
+    single path by which a brain comes off the account: `capability teardown`
+    calls it, and so does the brain guard in `run_once` when the brain in its way
+    belongs to a run that failed.
+
+    The lineage is resolved the way `run_once` resolves it -- the last entry of
+    the capability's `depends`, read off that capability's PROMOTED.md -- and a
+    dependent whose promotion is not on disk is refused rather than torn down as
+    if it owned the door: that guess is exactly the deletion this exists to
+    prevent. One hand-written teardown call omitted `lineage=` and deleted
     hatch's promoted ingress rule and the brain's scoped key, whose secret is
     inside the promoted checkpoint's /brain/.env and nowhere else.
 
-    The lineage is resolved here the way `run_once` resolves it -- the last
-    entry of the capability's `depends`, read off that capability's PROMOTED.md
-    -- and a dependent whose promotion is not on disk is refused rather than
-    torn down as if it owned the door: that guess is exactly the deletion this
-    command exists to prevent.
-
     A run killed before it could write `run.json` used to be untearable, which
-    left the account wedged -- its brain blocks the next run's guard, and the one
-    command that undoes a brain refused to read a directory with no record in it.
-    `_interrupted` reconstructs what teardown actually needs for a *dependent*,
-    whose brain recipe, ingress rule and scoped key are all the lineage's and are
-    therefore on disk already. A hatch run is refused as before: the key, rule and
-    recipe it made are its own, and nothing outside its unwritten record names
-    them."""
-    values = parse_env(args.env.read_text()) if args.env.exists() else {}
-    values.update({k: v for k, v in os.environ.items() if k in ("MSHKN_API_URL", "MSHKN_API_KEY")})
-    missing = [k for k in ("MSHKN_API_URL", "MSHKN_API_KEY") if not values.get(k)]
-    if missing:
-        log.write(f"missing {', '.join(missing)}: put them in {args.env} or the environment\n")
-        return 2
-    record_path = args.run_dir / "run.json"
+    left the account wedged. `_interrupted` reconstructs what teardown needs for
+    a *dependent*, whose brain recipe, ingress rule and scoped key are all the
+    lineage's and are therefore on disk already. A hatch run is refused: the key,
+    rule and recipe it made are its own, and nothing outside its unwritten record
+    names them.
+
+    Returns whether it ran. Anything that stops it is written to `log`."""
+    record_path = run_dir / "run.json"
     if record_path.exists():
         try:
             record = json.loads(record_path.read_text())
             hatched = Hatched(**record["hatched"])
             capability = catalog()[record["capability"]]
         except (KeyError, OSError, TypeError, ValueError) as exc:
-            log.write(f"teardown failed: {args.run_dir} is not a run record: {exc}\n")
-            return 1
+            log.write(f"teardown failed: {run_dir} is not a run record: {exc}\n")
+            return False
     else:
-        recovered = _interrupted(args.run_dir, args.out, log=log)
+        recovered = _interrupted(run_dir, out, log=log)
         if recovered is None:
-            return 1
+            return False
         hatched, capability = recovered
     lineage: Promotion | None = None
     if capability.depends:
         start = capability.depends[-1]
-        lineage = read_promotion(args.out, start)
+        lineage = read_promotion(out, start)
         if lineage is None:
             log.write(
                 f"teardown failed: {capability.name} starts from {start}, which has no "
-                f"promotion under {args.out}; without it root cannot tell this run's "
+                f"promotion under {out}; without it root cannot tell this run's "
                 f"leavings from the lineage's, and deleting nothing is the safe answer\n"
             )
-            return 1
-    final = args.run_dir / "final-list.json"
-    listing = json.loads(final.read_text()) if final.exists() else _last_listing(args.run_dir)
+            return False
+    final = run_dir / "final-list.json"
+    listing = json.loads(final.read_text()) if final.exists() else _last_listing(run_dir)
+    await doors.teardown(hatched, listing, lineage=lineage, log=log)
+    # The account no longer holds this run's brain, so the pointer must not say
+    # it does -- and only if it is this run's: another run's kept brain is not
+    # undone by tearing this one down.
+    clear_kept(run_dir)
+    return True
 
-    async def go() -> None:
+
+def _teardown(args: argparse.Namespace, log: TextIO) -> int:
+    """`capability teardown <run-dir>`. `--keep` is required to promote and the
+    brain guard in `run_once` refuses to measure while a brain is on the account,
+    so every promotable run leaves one behind and something has to take it off;
+    until this subcommand there was nothing, and the call was written by hand each
+    time."""
+    values = parse_env(args.env.read_text()) if args.env.exists() else {}
+    values.update({k: v for k, v in os.environ.items() if k in ("MSHKN_API_URL", "MSHKN_API_KEY")})
+    missing = [k for k in ("MSHKN_API_URL", "MSHKN_API_KEY") if not values.get(k)]
+    if missing:
+        log.write(f"missing {', '.join(missing)}: put them in {args.env} or the environment\n")
+        return 2
+
+    async def go() -> bool:
         async with httpx.AsyncClient(
             base_url=values["MSHKN_API_URL"],
             headers={"Authorization": f"Bearer {values['MSHKN_API_KEY']}"},
             timeout=TURN_TIMEOUT,
             transport=transport_for(values["MSHKN_API_URL"]),
         ) as api:
-            doors = Doors(api, api, "", None)
-            await doors.teardown(hatched, listing, lineage=lineage, log=log)
+            return await teardown_run(Doors(api, api, "", None), args.run_dir, args.out, log=log)
 
     try:
-        asyncio.run(go())
+        if not asyncio.run(go()):
+            return 1
     except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
         log.write(f"teardown failed: {exc}\n")
         return 1
