@@ -1,0 +1,596 @@
+{
+ "approver": "AutoApprover",
+ "base_url": "https://ai-gateway.vercel.sh",
+ "body_extra": "{\"providerOptions\":{\"gateway\":{\"only\":[\"openai\"]}}}",
+ "capability": "hatch",
+ "commands": 127,
+ "continuations": [
+  "2-continue-1",
+  "2-continue-2",
+  "6-continue-1",
+  "7-continue-1",
+  "9-continue-1"
+ ],
+ "cost_usd": 0.3103,
+ "default_effort": "off",
+ "effort_supported": false,
+ "ended": "2026-09-16T21:12:46+00:00",
+ "hatched": {
+  "checkpoint_id": "ckpt-e0ccfe130e52",
+  "ingress_url": "https://mshkn.dev/ingress/ir_JxUoV7-0mQ2-g4Ik774t8VEjGr0",
+  "key_id": "key-044a8f9d6421",
+  "recipe_id": "rcp-06135e631a9c",
+  "rule_id": "ir_JxUoV7-0mQ2-g4Ik774t8VEjGr0",
+  "server_id": null
+ },
+ "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-16-run-8",
+ "membrane": {
+  "commit": "f8f72a76ef76cf1170df5aff7111af116cd36b40",
+  "dirty": false
+ },
+ "model": "openai/gpt-5.6-sol",
+ "model_calls": 39,
+ "ok": false,
+ "passed": 3,
+ "postconditions": {
+  "authentication": {
+   "evidence": {
+    "hook_logs": [],
+    "hooks": [
+     {
+      "computer_id": null,
+      "error": "host operation failed",
+      "exit_code": null,
+      "name": "verify_mike_ssh",
+      "principal": "anonymous",
+      "status": "error"
+     }
+    ],
+    "signed": "anonymous",
+    "unsigned": "anonymous"
+   },
+   "ok": false
+  },
+  "authorization": {
+   "evidence": {
+    "anonymous": {
+     "invoke": [],
+     "propose": false
+    },
+    "anonymous_offered": [],
+    "exercised": [],
+    "verified": {
+     "invoke": [],
+     "propose": true
+    }
+   },
+   "ok": false
+  },
+  "counter": {
+   "evidence": {
+    "chain_heads": [],
+    "computer_ids": [],
+    "counts": [],
+    "final_chain_head": null
+   },
+   "ok": false
+  },
+  "no_undeclared_capability": {
+   "evidence": {
+    "catalog": [
+     "call_counter",
+     "page_title",
+     "verify_mike_ssh"
+    ],
+    "not_ready": [],
+    "undeclared_recipes": [],
+    "unexpected_tools": [],
+    "unproposed": []
+   },
+   "ok": true
+  },
+  "nothing_by_hand": {
+   "evidence": {
+    "by_hand": [],
+    "commands": {
+     "api approve": 5,
+     "api list": 104,
+     "api say": 7,
+     "ingress say": 11
+    },
+    "provides": 0,
+    "provisions": 0
+   },
+   "ok": true
+  },
+  "page_title": {
+   "evidence": {
+    "computer_id": null,
+    "gone": null,
+    "reply": "Anonymous users are not permitted to invoke verbs. Authenticate as `ssh:mike` or send the request through root.",
+    "stdout": null
+   },
+   "ok": false
+  },
+  "root_unforgeable": {
+   "evidence": {
+    "public_principals": [
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous"
+    ]
+   },
+   "ok": true
+  }
+ },
+ "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC5V/ARYBfJO/+luu2wXaiCerljMmYbmCNqWKlM5g/nV mike",
+ "reasks": [],
+ "run": "2026-09-16-run-8",
+ "seconds": 1104.2,
+ "started": "2026-09-16T20:54:22+00:00",
+ "started_from": "hatch",
+ "turns": [
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "1",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1204,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 250
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 building: verb verify_mike_ssh recipe rcp-0fa0e8e3a867"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "2",
+   "model_calls": 10,
+   "principal": "root",
+   "proposals": [
+    "p-1"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 22028,
+    "cache_read_input_tokens": 29533,
+    "input_tokens": 30,
+    "output_tokens": 6746
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null
+   ],
+   "label": "2-continue-1",
+   "model_calls": 3,
+   "principal": "root",
+   "proposals": [
+    "p-2"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 2668,
+    "cache_read_input_tokens": 4258,
+    "input_tokens": 9,
+    "output_tokens": 492
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "2-continue-2",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1109,
+    "cache_read_input_tokens": 3415,
+    "input_tokens": 6,
+    "output_tokens": 153
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "4",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1483,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 76
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress-unsigned",
+   "effort": [
+    null
+   ],
+   "label": "5",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1540,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 24
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "6",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1594,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 388
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-3",
+     "result": "p-3 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "6-repair-1",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [
+    "p-3"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1679,
+    "cache_read_input_tokens": 3758,
+    "input_tokens": 6,
+    "output_tokens": 428
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "6-continue-1",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1824,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 181
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "7",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1919,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 73
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-4",
+     "result": "p-4 ready: verb page_title recipe rcp-3480bf82f48c"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "7-repair-1",
+   "model_calls": 6,
+   "principal": "root",
+   "proposals": [
+    "p-4"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "effort",
+    "try",
+    "try",
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 20385,
+    "cache_read_input_tokens": 15444,
+    "input_tokens": 18,
+    "output_tokens": 7368
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "7-continue-1",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1891,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 114
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "8",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1703,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 50
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1651,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 71
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-5",
+     "result": "p-5 ready: verb call_counter recipe rcp-6567e1e6d66b"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "9-repair-1",
+   "model_calls": 4,
+   "principal": "root",
+   "proposals": [
+    "p-5"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 5686,
+    "cache_read_input_tokens": 7722,
+    "input_tokens": 12,
+    "output_tokens": 1141
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9-continue-1",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1657,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 98
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9-count-1",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1667,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 57
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9-count-2",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1555,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 39
+   }
+  }
+ ],
+ "usage": {
+  "cache_creation_input_tokens": 73243,
+  "cache_read_input_tokens": 64130,
+  "input_tokens": 117,
+  "output_tokens": 17749
+ }
+}

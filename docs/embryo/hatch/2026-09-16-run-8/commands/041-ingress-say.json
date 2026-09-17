@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-16T21:00:35+00:00",
+ "command": "say",
+ "computer_id": "comp-0329ad8b1c37",
+ "detail": {
+  "msg": "Who am I?",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgLlX8BFgF8k7/6W67bBdqIJ6uWM\nyZhuYI2pYqUzmD+dUAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABAbX9jN9SkmVqVMZ9r/hlLkGVRmI7oP8HDMw1vjGu+Zj8Y4DLgfUS1DLhmoq16cU\n+R1imbMR1IaGDc0dipqAtCDg==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 41,
+ "seconds": 35.10024622827768,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": null, \"error\": \"host operation failed\", \"exit_code\": null, \"name\": \"verify_mike_ssh\", \"principal\": \"anonymous\", \"status\": \"error\"}], \"job\": \"rj-ede8f253e04a\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 5}\n{\"turn\": 5, \"job\": \"rj-ede8f253e04a\"}\n"
+}

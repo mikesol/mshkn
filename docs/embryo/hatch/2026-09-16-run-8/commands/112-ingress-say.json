@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-16T21:10:48+00:00",
+ "command": "say",
+ "computer_id": "comp-75fe5285687f",
+ "detail": {
+  "msg": "External results: [[\"proposal\", \"p-5\", \"ready\"]]. Continue with the request.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgLlX8BFgF8k7/6W67bBdqIJ6uWM\nyZhuYI2pYqUzmD+dUAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABAmj1fYqI+Iq2uYJGSV7K6CqdpDpYLuIG687+FUWfnGLNFmeSFyUBGddtXaoReFc\n38fyV3qKii9OkecmNSyLgxAA==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 112,
+ "seconds": 35.2882539127022,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": null, \"error\": \"host operation failed\", \"exit_code\": null, \"name\": \"verify_mike_ssh\", \"principal\": \"anonymous\", \"status\": \"error\"}], \"job\": \"rj-d53e1719fdd3\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 16}\n{\"turn\": 16, \"job\": \"rj-d53e1719fdd3\"}\n"
+}

@@ -1,0 +1,783 @@
+{
+ "catalog": {
+  "call_counter": {
+   "chain": "verb/call_counter",
+   "chain_head": null,
+   "chain_length": 0,
+   "effect": "local",
+   "provided": [],
+   "recipe_id": "rcp-6567e1e6d66b",
+   "requires": [],
+   "state": "chain",
+   "status": "ready"
+  },
+  "page_title": {
+   "chain": "verb/page_title",
+   "chain_head": null,
+   "chain_length": 0,
+   "effect": "read",
+   "provided": [],
+   "recipe_id": "rcp-3480bf82f48c",
+   "requires": [],
+   "state": "ephemeral",
+   "status": "ready"
+  },
+  "verify_mike_ssh": {
+   "chain": "verb/verify_mike_ssh",
+   "chain_head": null,
+   "chain_length": 0,
+   "effect": "local",
+   "provided": [],
+   "recipe_id": "rcp-0fa0e8e3a867",
+   "requires": [],
+   "state": "ephemeral",
+   "status": "ready"
+  }
+ },
+ "door": {
+  "hooks": [
+   "verify_mike_ssh"
+  ],
+  "hooks_ready": [
+   "verify_mike_ssh"
+  ],
+  "status": "open"
+ },
+ "inbox": 0,
+ "pending": null,
+ "policy": {
+  "door": "open",
+  "hooks": [
+   "verify_mike_ssh"
+  ],
+  "principals": {
+   "anonymous": {
+    "invoke": [],
+    "propose": false
+   },
+   "ssh:mike": {
+    "invoke": [],
+    "propose": true
+   }
+  }
+ },
+ "principals": [],
+ "proposals": [
+  {
+   "id": "p-1",
+   "kind": "verb",
+   "log": null,
+   "rationale": "This pre-turn authentication hook pins the supplied Ed25519 public key, strictly requires a JSON payload containing only string fields msg and sig, verifies sig over the exact UTF-8 bytes of msg with OpenSSH namespace mshkn and signer identity mike, and asserts ssh:mike only after successful verification. Invalid or malformed input produces no identity. Once approved, I will propose a policy that installs this hook on the public door and permits ssh:mike to communicate and propose changes.",
+   "recipe_id": "rcp-0fa0e8e3a867",
+   "status": "ready",
+   "supersedes": null,
+   "title": "Verify Mike\u2019s signed public-door messages",
+   "verb": {
+    "allow": [],
+    "asserts": "ssh",
+    "chain": "verb/verify_mike_ssh",
+    "description": "Authenticate public-door messages signed by Mike's pinned Ed25519 key using OpenSSH signatures in namespace mshkn. On success, assert principal ssh:mike.",
+    "dockerfile": "FROM debian:bookworm-slim AS tools\nRUN apt-get update && apt-get install -y --no-install-recommends python3 openssh-client && rm -rf /var/lib/apt/lists/*\nFROM mshkn-base\nCOPY --from=tools / /\nRUN mkdir -p /verb && printf '%s\\n' '#!/usr/bin/python3' 'import json, subprocess, sys, tempfile, os' 'PUB=\"mike ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC5V/ARYBfJO/+luu2wXaiCerljMmYbmCNqWKlM5g/nV\"' 'try:' '    obj=json.loads(sys.argv[1])' '    if not isinstance(obj,dict) or set(obj)!={\"msg\",\"sig\"} or not isinstance(obj[\"msg\"],str) or not isinstance(obj[\"sig\"],str): raise ValueError()' '    with tempfile.TemporaryDirectory() as d:' '        allowed=os.path.join(d,\"allowed\")' '        sigfile=os.path.join(d,\"sig\")' '        open(allowed,\"w\",encoding=\"utf-8\").write(PUB+\"\\n\")' '        open(sigfile,\"w\",encoding=\"utf-8\").write(obj[\"sig\"])' '        p=subprocess.run([\"ssh-keygen\",\"-Y\",\"verify\",\"-f\",allowed,\"-I\",\"mike\",\"-n\",\"mshkn\",\"-s\",sigfile],input=obj[\"msg\"].encode(\"utf-8\"),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=5)' '        if p.returncode: raise ValueError()' '    print(\"mike\")' 'except Exception:' '    sys.exit(1)' > /verb/verify.py && chmod 0555 /verb/verify.py",
+    "effect": "local",
+    "entrypoint": "/verb/verify.py {{payload}}",
+    "name": "verify_mike_ssh",
+    "needs": {
+     "cores": 1,
+     "ram": "256MB"
+    },
+    "params": {
+     "additionalProperties": false,
+     "properties": {
+      "payload": {
+       "description": "Decoded public-door payload as JSON with exactly the string fields msg and sig.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "payload"
+     ],
+     "type": "object"
+    },
+    "requires": [],
+    "state": "ephemeral",
+    "timeout_seconds": 10
+   }
+  },
+  {
+   "id": "p-2",
+   "kind": "policy",
+   "log": null,
+   "policy": {
+    "door": "open",
+    "hooks": [
+     "verify_mike_ssh"
+    ],
+    "principals": {
+     "anonymous": {
+      "invoke": [],
+      "propose": false
+     },
+     "ssh:mike": {
+      "invoke": [],
+      "propose": true
+     }
+    }
+   },
+   "rationale": "The approved verify_mike_ssh pre-turn hook verifies OpenSSH signatures in namespace mshkn against Mike's pinned Ed25519 key and asserts ssh:mike. This policy opens the public door, runs that hook, grants authenticated ssh:mike access to the embryo's capability-management tools (including proposing changes), and grants anonymous senders no invocation or proposal capabilities.",
+   "recipe_id": null,
+   "status": "applied",
+   "supersedes": null,
+   "title": "Open the public door with SSH authentication for Mike"
+  },
+  {
+   "id": "p-3",
+   "kind": "policy",
+   "log": null,
+   "policy": {
+    "door": "open",
+    "hooks": [
+     "verify_mike_ssh"
+    ],
+    "principals": {
+     "anonymous": {
+      "invoke": [],
+      "propose": false
+     },
+     "ssh:mike": {
+      "invoke": [],
+      "propose": true
+     }
+    }
+   },
+   "rationale": "Formally record the trust boundary requested in the prior turn. Keep the public door open behind Mike's pinned SSH verification hook; permit authenticated ssh:mike to request capability changes through proposals; deny anonymous users verb invocation and proposal authority. Anonymous messages may still receive ordinary conversational responses, but cannot directly cause tools, proposals, or persistent changes under this policy.",
+   "recipe_id": null,
+   "status": "applied",
+   "supersedes": null,
+   "title": "Record verified-versus-anonymous authority boundary"
+  },
+  {
+   "id": "p-4",
+   "kind": "verb",
+   "log": null,
+   "rationale": "Root requested that I actually propose the URL-title capability. Trial t-6 built successfully, returned \u201cExample Domain\u201d for https://example.com/, and rejected loopback access. The verb is ephemeral, available to verified ssh:mike (root retains inherent access), permits only HTTP(S), blocks non-public destination IPs including after DNS resolution and redirects, disables proxy use, caps redirects, response size, and runtime, and prints only the normalized HTML title.",
+   "recipe_id": "rcp-3480bf82f48c",
+   "status": "ready",
+   "supersedes": null,
+   "title": "Add isolated page-title reader",
+   "verb": {
+    "allow": [
+     "ssh:mike"
+    ],
+    "chain": "verb/page_title",
+    "description": "Fetch an HTTP or HTTPS URL from an isolated ephemeral computer and print the page's HTML title. Rejects loopback, private, link-local, multicast, and unspecified destination addresses; follows only validated redirects; limits the response body to 2 MiB.",
+    "dockerfile": "FROM golang:1.24-alpine AS build\nRUN printf '%s\\n' \\\n'package main' \\\n'import (' \\\n'  \"context\"' \\\n'  \"errors\"' \\\n'  \"fmt\"' \\\n'  \"html\"' \\\n'  \"io\"' \\\n'  \"net\"' \\\n'  \"net/http\"' \\\n'  \"net/url\"' \\\n'  \"os\"' \\\n'  \"regexp\"' \\\n'  \"strings\"' \\\n'  \"time\"' \\\n')' \\\n'var titleRE = regexp.MustCompile(`(?is)<title(?:[[:space:]][^>]*)?>(.*?)</title[[:space:]]*>`)' \\\n'var tagRE = regexp.MustCompile(`(?s)<[^>]*>`)' \\\n'func validURL(raw string) (*url.URL, error) {' \\\n'  u, err := url.Parse(raw)' \\\n'  if err != nil { return nil, err }' \\\n'  if u.Scheme != \"http\" && u.Scheme != \"https\" { return nil, errors.New(\"only http and https URLs are allowed\") }' \\\n'  if u.Hostname() == \"\" { return nil, errors.New(\"URL has no hostname\") }' \\\n'  if u.User != nil { return nil, errors.New(\"URL credentials are not allowed\") }' \\\n'  return u, nil' \\\n'}' \\\n'func publicIP(ip net.IP) bool {' \\\n'  return ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified()' \\\n'}' \\\n'func dialPublic(ctx context.Context, network, addr string) (net.Conn, error) {' \\\n'  host, port, err := net.SplitHostPort(addr)' \\\n'  if err != nil { return nil, err }' \\\n'  ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)' \\\n'  if err != nil { return nil, err }' \\\n'  d := net.Dialer{Timeout: 10 * time.Second}' \\\n'  for _, item := range ips {' \\\n'    if !publicIP(item.IP) { continue }' \\\n'    conn, e := d.DialContext(ctx, network, net.JoinHostPort(item.IP.String(), port))' \\\n'    if e == nil { return conn, nil }' \\\n'    err = e' \\\n'  }' \\\n'  if err != nil { return nil, err }' \\\n'  return nil, errors.New(\"destination does not resolve to an allowed public address\")' \\\n'}' \\\n'func main() {' \\\n'  if len(os.Args) != 2 { fmt.Fprintln(os.Stderr, \"usage: page-title URL\"); os.Exit(2) }' \\\n'  u, err := validURL(os.Args[1])' \\\n'  if err != nil { fmt.Fprintln(os.Stderr, \"invalid URL:\", err); os.Exit(2) }' \\\n'  tr := &http.Transport{Proxy: nil, DialContext: dialPublic, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 10 * time.Second}' \\\n'  client := &http.Client{Transport: tr, Timeout: 20 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {' \\\n'    if len(via) >= 10 { return errors.New(\"too many redirects\") }' \\\n'    _, e := validURL(req.URL.String()); return e' \\\n'  }}' \\\n'  req, err := http.NewRequest(\"GET\", u.String(), nil)' \\\n'  if err != nil { fmt.Fprintln(os.Stderr, \"request error:\", err); os.Exit(1) }' \\\n'  req.Header.Set(\"User-Agent\", \"mshkn-page-title/1.0\")' \\\n'  resp, err := client.Do(req)' \\\n'  if err != nil { fmt.Fprintln(os.Stderr, \"fetch error:\", err); os.Exit(1) }' \\\n'  defer resp.Body.Close()' \\\n'  if resp.StatusCode < 200 || resp.StatusCode >= 400 { fmt.Fprintln(os.Stderr, \"HTTP status:\", resp.Status); os.Exit(1) }' \\\n'  body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))' \\\n'  if err != nil { fmt.Fprintln(os.Stderr, \"read error:\", err); os.Exit(1) }' \\\n'  m := titleRE.FindSubmatch(body)' \\\n'  if m == nil { fmt.Fprintln(os.Stderr, \"page has no HTML title\"); os.Exit(1) }' \\\n'  title := html.UnescapeString(string(m[1]))' \\\n'  title = tagRE.ReplaceAllString(title, \" \")' \\\n'  title = strings.Join(strings.Fields(title), \" \")' \\\n'  if title == \"\" { fmt.Fprintln(os.Stderr, \"page title is empty\"); os.Exit(1) }' \\\n'  fmt.Println(title)' \\\n'}' > /tmp/main.go\nRUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /page-title /tmp/main.go\nFROM mshkn-base\nCOPY --from=build /page-title /page-title\n",
+    "effect": "read",
+    "entrypoint": "/page-title {{url}}",
+    "name": "page_title",
+    "needs": {
+     "cores": 1,
+     "ram": "256MB"
+    },
+    "params": {
+     "additionalProperties": false,
+     "properties": {
+      "url": {
+       "description": "The public HTTP or HTTPS URL whose page title should be reported.",
+       "maxLength": 4096,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "url"
+     ],
+     "type": "object"
+    },
+    "requires": [],
+    "state": "ephemeral",
+    "timeout_seconds": 30
+   }
+  },
+  {
+   "id": "p-5",
+   "kind": "verb",
+   "log": null,
+   "rationale": "Root requested the previously discussed capability be proposed. This chain-state verb runs on its own isolated computer, increments a counter on its private persistent checkpoint chain, and reports the count. Trial t-7 built successfully and sequential calls returned 1 then 2. Access is limited to ssh:mike (and root, which inherently retains access).",
+   "recipe_id": "rcp-6567e1e6d66b",
+   "status": "ready",
+   "supersedes": null,
+   "title": "Add persistent invocation counter",
+   "verb": {
+    "allow": [
+     "ssh:mike"
+    ],
+    "chain": "verb/call_counter",
+    "description": "Increment and report a persistent invocation count. Each successful invocation adds one to the counter stored on this verb's isolated checkpoint chain.",
+    "dockerfile": "FROM mshkn-base\nRUN mkdir -p /verb && printf '%s\\n' '#!/bin/sh' 'set -eu' 'file=/verb-state/count' 'mkdir -p /verb-state' 'n=0' 'if [ -f \"$file\" ]; then n=$(cat \"$file\"); fi' 'case \"$n\" in (*[!0-9]*|\"\") echo \"invalid counter state\" >&2; exit 1;; esac' 'n=$((n + 1))' 'tmp=\"$file.tmp.$$\"' 'printf \"%s\\n\" \"$n\" > \"$tmp\"' 'mv \"$tmp\" \"$file\"' 'printf \"%s\\n\" \"$n\"' > /verb/count.sh && chmod 0555 /verb/count.sh",
+    "effect": "local",
+    "entrypoint": "/verb/count.sh",
+    "name": "call_counter",
+    "needs": {
+     "cores": 1,
+     "ram": "256MB"
+    },
+    "params": {
+     "additionalProperties": false,
+     "properties": {},
+     "type": "object"
+    },
+    "requires": [],
+    "state": "chain",
+    "timeout_seconds": 10
+   }
+  }
+ ],
+ "queue": [],
+ "trials": [
+  {
+   "id": "t-1",
+   "recipe_id": "rcp-1c25c0653b78",
+   "status": "done",
+   "verb": "verify_mike_ssh"
+  },
+  {
+   "id": "t-2",
+   "recipe_id": "rcp-4a39c9522a78",
+   "status": "done",
+   "verb": "probe_base"
+  },
+  {
+   "id": "t-3",
+   "recipe_id": "rcp-bee738fd3301",
+   "status": "done",
+   "verb": "probe_perl"
+  },
+  {
+   "id": "t-4",
+   "recipe_id": "rcp-9b52e1cf08b9",
+   "status": "done",
+   "verb": "verify_mike_ssh"
+  },
+  {
+   "id": "t-5",
+   "recipe_id": "rcp-cff10f144f78",
+   "status": "done",
+   "verb": "verify_mike_ssh"
+  },
+  {
+   "id": "t-6",
+   "recipe_id": "rcp-3480bf82f48c",
+   "status": "done",
+   "verb": "page_title"
+  },
+  {
+   "id": "t-7",
+   "recipe_id": "rcp-6567e1e6d66b",
+   "status": "done",
+   "verb": "call_counter"
+  }
+ ],
+ "turn": 18,
+ "window": [
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": null,
+      "error": "host operation failed",
+      "exit_code": null,
+      "name": "verify_mike_ssh",
+      "principal": "anonymous",
+      "status": "error"
+     }
+    ],
+    "job": "rj-5e037c90ff61",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T21:03:29+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 9,
+    "usage": {
+     "cache_creation_input_tokens": 1824,
+     "cache_read_input_tokens": 0,
+     "input_tokens": 3,
+     "output_tokens": 181
+    }
+   },
+   "door": "ingress",
+   "input": "External results: [[\"proposal\", \"p-3\", \"applied\"]]. Continue with the request.",
+   "output": "Policy **p-3** is applied and recorded:\n\n- **`ssh:mike`** may request proposals and capability changes.\n- **Anonymous users** may converse but cannot invoke verbs or cause proposals.\n- Public messages are authenticated through **`verify_mike_ssh`**.\n",
+   "principal": "anonymous",
+   "reply": "Policy **p-3** is applied and recorded:\n\n- **`ssh:mike`** may request proposals and capability changes.\n- **Anonymous users** may converse but cannot invoke verbs or cause proposals.\n- Public messages are authenticated through **`verify_mike_ssh`**.",
+   "turn": 9
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": null,
+      "error": "host operation failed",
+      "exit_code": null,
+      "name": "verify_mike_ssh",
+      "principal": "anonymous",
+      "status": "error"
+     }
+    ],
+    "job": "rj-310823589ebd",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T21:04:19+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 10,
+    "usage": {
+     "cache_creation_input_tokens": 1919,
+     "cache_read_input_tokens": 0,
+     "input_tokens": 3,
+     "output_tokens": 73
+    }
+   },
+   "door": "ingress",
+   "input": "Give yourself a verb: given a URL, report the page's title. It must run on its own computer.",
+   "output": "I can\u2019t propose or create a verb from an anonymous request. Authenticate as `ssh:mike` with the configured SSH signature, or ask through root; then I can design and propose the isolated URL-title verb.\n",
+   "principal": "anonymous",
+   "reply": "I can\u2019t propose or create a verb from an anonymous request. Authenticate as `ssh:mike` with the configured SSH signature, or ask through root; then I can design and propose the isolated URL-title verb.",
+   "turn": 10
+  },
+  {
+   "audit": {
+    "door": "api",
+    "effort": [
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    "forks": 6,
+    "hooks": [],
+    "job": "rj-937ad4f50fb0",
+    "memory_written": true,
+    "model_calls": 6,
+    "offered": [
+     "effort",
+     "propose",
+     "remember",
+     "try",
+     "verify_mike_ssh"
+    ],
+    "principal": "root",
+    "proposals": [
+     {
+      "id": "p-4",
+      "sha256": "1dba989899ad3469046fe57879ad02e881b295e0bf7bc10d36d25b5196a3c83e"
+     }
+    ],
+    "references": [],
+    "started_at": "2026-09-16T21:04:34+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "name": "effort",
+      "status": "set"
+     },
+     {
+      "error": "verb.effect must be one of ['administer', 'communicate', 'local', 'read', 'transact']",
+      "name": "try",
+      "status": "invalid"
+     },
+     {
+      "error": "verb.allow: 'root' is not a namespaced principal (<ns>:<name>)",
+      "name": "try",
+      "status": "invalid"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "computer_id": "comp-8ead0834fe07",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "computer_id": "comp-b43c5c467766",
+        "exit_code": 1,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-6"
+     },
+     {
+      "id": "p-4",
+      "name": "propose",
+      "status": "pending"
+     }
+    ],
+    "turn": 11,
+    "usage": {
+     "cache_creation_input_tokens": 20385,
+     "cache_read_input_tokens": 15444,
+     "input_tokens": 18,
+     "output_tokens": 7368
+    }
+   },
+   "door": "api",
+   "input": "you proposed nothing; propose",
+   "output": "Proposed **p-4: \u201cAdd isolated page-title reader.\u201d**\n\nI tested it successfully:\n\n- `https://example.com/` \u2192 **Example Domain**\n- `http://127.0.0.1/` \u2192 rejected\n\nThe verb runs ephemerally on its own computer, allows only public HTTP(S) destinations, validates redirects, blocks private/loopback addresses, and limits response size and runtime. It is awaiting approval.\nproposal p-4\n{\n \"id\": \"p-4\",\n \"kind\": \"verb\",\n \"title\": \"Add isolated page-title reader\",\n \"rationale\": \"Root requested that I actually propose the URL-title capability. Trial t-6 built successfully, returned \\u201cExample Domain\\u201d for https://example.com/, and rejected loopback access. The verb is ephemeral, available to verified ssh:mike (root retains inherent access), permits only HTTP(S), blocks non-public destination IPs including after DNS resolution and redirects, disables proxy use, caps redirects, response size, and runtime, and prints only the normalized HTML title.\",\n \"supersedes\": null,\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"verb\": {\n  \"name\": \"page_title\",\n  \"description\": \"Fetch an HTTP or HTTPS URL from an isolated ephemeral computer and print the page's HTML title. Rejects loopback, private, link-local, multicast, and unspecified destination addresses; follows only validated redirects; limits the response body to 2 MiB.\",\n  \"params\": {\n   \"additionalProperties\": false,\n   \"properties\": {\n    \"url\": {\n     \"description\": \"The public HTTP or HTTPS URL whose page title should be reported.\",\n     \"maxLength\": 4096,\n     \"minLength\": 1,\n     \"type\": \"string\"\n    }\n   },\n   \"required\": [\n    \"url\"\n   ],\n   \"type\": \"object\"\n  },\n  \"dockerfile\": \"FROM golang:1.24-alpine AS build\\nRUN printf '%s\\\\n' \\\\\\n'package main' \\\\\\n'import (' \\\\\\n'  \\\"context\\\"' \\\\\\n'  \\\"errors\\\"' \\\\\\n'  \\\"fmt\\\"' \\\\\\n'  \\\"html\\\"' \\\\\\n'  \\\"io\\\"' \\\\\\n'  \\\"net\\\"' \\\\\\n'  \\\"net/http\\\"' \\\\\\n'  \\\"net/url\\\"' \\\\\\n'  \\\"os\\\"' \\\\\\n'  \\\"regexp\\\"' \\\\\\n'  \\\"strings\\\"' \\\\\\n'  \\\"time\\\"' \\\\\\n')' \\\\\\n'var titleRE = regexp.MustCompile(`(?is)<title(?:[[:space:]][^>]*)?>(.*?)</title[[:space:]]*>`)' \\\\\\n'var tagRE = regexp.MustCompile(`(?s)<[^>]*>`)' \\\\\\n'func validURL(raw string) (*url.URL, error) {' \\\\\\n'  u, err := url.Parse(raw)' \\\\\\n'  if err != nil { return nil, err }' \\\\\\n'  if u.Scheme != \\\"http\\\" && u.Scheme != \\\"https\\\" { return nil, errors.New(\\\"only http and https URLs are allowed\\\") }' \\\\\\n'  if u.Hostname() == \\\"\\\" { return nil, errors.New(\\\"URL has no hostname\\\") }' \\\\\\n'  if u.User != nil { return nil, errors.New(\\\"URL credentials are not allowed\\\") }' \\\\\\n'  return u, nil' \\\\\\n'}' \\\\\\n'func publicIP(ip net.IP) bool {' \\\\\\n'  return ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified()' \\\\\\n'}' \\\\\\n'func dialPublic(ctx context.Context, network, addr string) (net.Conn, error) {' \\\\\\n'  host, port, err := net.SplitHostPort(addr)' \\\\\\n'  if err != nil { return nil, err }' \\\\\\n'  ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)' \\\\\\n'  if err != nil { return nil, err }' \\\\\\n'  d := net.Dialer{Timeout: 10 * time.Second}' \\\\\\n'  for _, item := range ips {' \\\\\\n'    if !publicIP(item.IP) { continue }' \\\\\\n'    conn, e := d.DialContext(ctx, network, net.JoinHostPort(item.IP.String(), port))' \\\\\\n'    if e == nil { return conn, nil }' \\\\\\n'    err = e' \\\\\\n'  }' \\\\\\n'  if err != nil { return nil, err }' \\\\\\n'  return nil, errors.New(\\\"destination does not resolve to an allowed public address\\\")' \\\\\\n'}' \\\\\\n'func main() {' \\\\\\n'  if len(os.Args) != 2 { fmt.Fprintln(os.Stderr, \\\"usage: page-title URL\\\"); os.Exit(2) }' \\\\\\n'  u, err := validURL(os.Args[1])' \\\\\\n'  if err != nil { fmt.Fprintln(os.Stderr, \\\"invalid URL:\\\", err); os.Exit(2) }' \\\\\\n'  tr := &http.Transport{Proxy: nil, DialContext: dialPublic, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 10 * time.Second}' \\\\\\n'  client := &http.Client{Transport: tr, Timeout: 20 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {' \\\\\\n'    if len(via) >= 10 { return errors.New(\\\"too many redirects\\\") }' \\\\\\n'    _, e := validURL(req.URL.String()); return e' \\\\\\n'  }}' \\\\\\n'  req, err := http.NewRequest(\\\"GET\\\", u.String(), nil)' \\\\\\n'  if err != nil { fmt.Fprintln(os.Stderr, \\\"request error:\\\", err); os.Exit(1) }' \\\\\\n'  req.Header.Set(\\\"User-Agent\\\", \\\"mshkn-page-title/1.0\\\")' \\\\\\n'  resp, err := client.Do(req)' \\\\\\n'  if err != nil { fmt.Fprintln(os.Stderr, \\\"fetch error:\\\", err); os.Exit(1) }' \\\\\\n'  defer resp.Body.Close()' \\\\\\n'  if resp.StatusCode < 200 || resp.StatusCode >= 400 { fmt.Fprintln(os.Stderr, \\\"HTTP status:\\\", resp.Status); os.Exit(1) }' \\\\\\n'  body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))' \\\\\\n'  if err != nil { fmt.Fprintln(os.Stderr, \\\"read error:\\\", err); os.Exit(1) }' \\\\\\n'  m := titleRE.FindSubmatch(body)' \\\\\\n'  if m == nil { fmt.Fprintln(os.Stderr, \\\"page has no HTML title\\\"); os.Exit(1) }' \\\\\\n'  title := html.UnescapeString(string(m[1]))' \\\\\\n'  title = tagRE.ReplaceAllString(title, \\\" \\\")' \\\\\\n'  title = strings.Join(strings.Fields(title), \\\" \\\")' \\\\\\n'  if title == \\\"\\\" { fmt.Fprintln(os.Stderr, \\\"page title is empty\\\"); os.Exit(1) }' \\\\\\n'  fmt.Println(title)' \\\\\\n'}' > /tmp/main.go\\nRUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /page-title /tmp/main.go\\nFROM mshkn-base\\nCOPY --from=build /page-title /page-title\\n\",\n  \"entrypoint\": \"/page-title {{url}}\",\n  \"effect\": \"read\",\n  \"state\": \"ephemeral\",\n  \"chain\": \"verb/page_title\",\n  \"needs\": {\n   \"cores\": 1,\n   \"ram\": \"256MB\"\n  },\n  \"timeout_seconds\": 30,\n  \"allow\": [\n   \"ssh:mike\"\n  ],\n  \"requires\": []\n }\n}\n",
+   "principal": "root",
+   "reply": "Proposed **p-4: \u201cAdd isolated page-title reader.\u201d**\n\nI tested it successfully:\n\n- `https://example.com/` \u2192 **Example Domain**\n- `http://127.0.0.1/` \u2192 rejected\n\nThe verb runs ephemerally on its own computer, allows only public HTTP(S) destinations, validates redirects, blocks private/loopback addresses, and limits response size and runtime. It is awaiting approval.",
+   "turn": 11
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": null,
+      "error": "host operation failed",
+      "exit_code": null,
+      "name": "verify_mike_ssh",
+      "principal": "anonymous",
+      "status": "error"
+     }
+    ],
+    "job": "rj-87ba3fafa13e",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T21:07:13+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 12,
+    "usage": {
+     "cache_creation_input_tokens": 1891,
+     "cache_read_input_tokens": 0,
+     "input_tokens": 3,
+     "output_tokens": 114
+    }
+   },
+   "door": "ingress",
+   "input": "External results: [[\"proposal\", \"p-4\", \"ready\"]]. Continue with the request.",
+   "output": "I can\u2019t treat an anonymous message as an authoritative proposal result or take further action from it. Proposal **p-4** was submitted and requires root approval; once an authenticated approval result arrives, I can confirm the verb\u2019s availability.\n",
+   "principal": "anonymous",
+   "reply": "I can\u2019t treat an anonymous message as an authoritative proposal result or take further action from it. Proposal **p-4** was submitted and requires root approval; once an authenticated approval result arrives, I can confirm the verb\u2019s availability.",
+   "turn": 12
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": null,
+      "error": "host operation failed",
+      "exit_code": null,
+      "name": "verify_mike_ssh",
+      "principal": "anonymous",
+      "status": "error"
+     }
+    ],
+    "job": "rj-0d019bdfbe5e",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T21:08:04+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 13,
+    "usage": {
+     "cache_creation_input_tokens": 1703,
+     "cache_read_input_tokens": 0,
+     "input_tokens": 3,
+     "output_tokens": 50
+    }
+   },
+   "door": "ingress",
+   "input": "page_title https://example.com",
+   "output": "Anonymous users are not permitted to invoke verbs. Authenticate as `ssh:mike` or send the request through root.\n",
+   "principal": "anonymous",
+   "reply": "Anonymous users are not permitted to invoke verbs. Authenticate as `ssh:mike` or send the request through root.",
+   "turn": 13
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": null,
+      "error": "host operation failed",
+      "exit_code": null,
+      "name": "verify_mike_ssh",
+      "principal": "anonymous",
+      "status": "error"
+     }
+    ],
+    "job": "rj-d2a3d0e5f8af",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T21:08:50+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 14,
+    "usage": {
+     "cache_creation_input_tokens": 1651,
+     "cache_read_input_tokens": 0,
+     "input_tokens": 3,
+     "output_tokens": 71
+    }
+   },
+   "door": "ingress",
+   "input": "Give yourself a verb that counts how many times it has been called.",
+   "output": "I can\u2019t propose persistent capabilities from an anonymous request. Authenticate as `ssh:mike` or ask through root. A permitted requester can have me propose a stateful `chain` verb whose counter persists across calls.\n",
+   "principal": "anonymous",
+   "reply": "I can\u2019t propose persistent capabilities from an anonymous request. Authenticate as `ssh:mike` or ask through root. A permitted requester can have me propose a stateful `chain` verb whose counter persists across calls.",
+   "turn": 14
+  },
+  {
+   "audit": {
+    "door": "api",
+    "effort": [
+     null,
+     null,
+     null,
+     null
+    ],
+    "forks": 4,
+    "hooks": [],
+    "job": "rj-1a2f331626b0",
+    "memory_written": true,
+    "model_calls": 4,
+    "offered": [
+     "effort",
+     "page_title",
+     "propose",
+     "remember",
+     "try",
+     "verify_mike_ssh"
+    ],
+    "principal": "root",
+    "proposals": [
+     {
+      "id": "p-5",
+      "sha256": "98c3a0b680b91c06d2e6570a1fe7ef6205d9ef8abd89ca1543a45ea4d855d797"
+     }
+    ],
+    "references": [],
+    "started_at": "2026-09-16T21:09:09+00:00",
+    "stopped": "done",
+    "tools": [
+     {
+      "error": "verb.effect must be one of ['administer', 'communicate', 'local', 'read', 'transact']",
+      "name": "try",
+      "status": "invalid"
+     },
+     {
+      "name": "try",
+      "runs": [
+       {
+        "chain_head": "ckpt-ccab74311a9e",
+        "computer_id": "comp-aa9ff8dd9db0",
+        "exit_code": 0,
+        "status": "ok"
+       },
+       {
+        "chain_head": "ckpt-8c9c10dfae3e",
+        "computer_id": "comp-65668e615bce",
+        "exit_code": 0,
+        "status": "ok"
+       }
+      ],
+      "status": "done",
+      "trial": "t-7"
+     },
+     {
+      "id": "p-5",
+      "name": "propose",
+      "status": "pending"
+     }
+    ],
+    "turn": 15,
+    "usage": {
+     "cache_creation_input_tokens": 5686,
+     "cache_read_input_tokens": 7722,
+     "input_tokens": 12,
+     "output_tokens": 1141
+    }
+   },
+   "door": "api",
+   "input": "you proposed nothing; propose",
+   "output": "Proposed **p-5: \u201cAdd persistent invocation counter.\u201d**\n\nIt was tested successfully: two sequential trial calls returned **1** and **2**. The verb uses isolated persistent chain state and is limited to `ssh:mike` (plus root\u2019s inherent access). It is awaiting approval.\nproposal p-5\n{\n \"id\": \"p-5\",\n \"kind\": \"verb\",\n \"title\": \"Add persistent invocation counter\",\n \"rationale\": \"Root requested the previously discussed capability be proposed. This chain-state verb runs on its own isolated computer, increments a counter on its private persistent checkpoint chain, and reports the count. Trial t-7 built successfully and sequential calls returned 1 then 2. Access is limited to ssh:mike (and root, which inherently retains access).\",\n \"supersedes\": null,\n \"status\": \"pending\",\n \"recipe_id\": null,\n \"log\": null,\n \"verb\": {\n  \"name\": \"call_counter\",\n  \"description\": \"Increment and report a persistent invocation count. Each successful invocation adds one to the counter stored on this verb's isolated checkpoint chain.\",\n  \"params\": {\n   \"additionalProperties\": false,\n   \"properties\": {},\n   \"type\": \"object\"\n  },\n  \"dockerfile\": \"FROM mshkn-base\\nRUN mkdir -p /verb && printf '%s\\\\n' '#!/bin/sh' 'set -eu' 'file=/verb-state/count' 'mkdir -p /verb-state' 'n=0' 'if [ -f \\\"$file\\\" ]; then n=$(cat \\\"$file\\\"); fi' 'case \\\"$n\\\" in (*[!0-9]*|\\\"\\\") echo \\\"invalid counter state\\\" >&2; exit 1;; esac' 'n=$((n + 1))' 'tmp=\\\"$file.tmp.$$\\\"' 'printf \\\"%s\\\\n\\\" \\\"$n\\\" > \\\"$tmp\\\"' 'mv \\\"$tmp\\\" \\\"$file\\\"' 'printf \\\"%s\\\\n\\\" \\\"$n\\\"' > /verb/count.sh && chmod 0555 /verb/count.sh\",\n  \"entrypoint\": \"/verb/count.sh\",\n  \"effect\": \"local\",\n  \"state\": \"chain\",\n  \"chain\": \"verb/call_counter\",\n  \"needs\": {\n   \"cores\": 1,\n   \"ram\": \"256MB\"\n  },\n  \"timeout_seconds\": 10,\n  \"allow\": [\n   \"ssh:mike\"\n  ],\n  \"requires\": []\n }\n}\n",
+   "principal": "root",
+   "reply": "Proposed **p-5: \u201cAdd persistent invocation counter.\u201d**\n\nIt was tested successfully: two sequential trial calls returned **1** and **2**. The verb uses isolated persistent chain state and is limited to `ssh:mike` (plus root\u2019s inherent access). It is awaiting approval.",
+   "turn": 15
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": null,
+      "error": "host operation failed",
+      "exit_code": null,
+      "name": "verify_mike_ssh",
+      "principal": "anonymous",
+      "status": "error"
+     }
+    ],
+    "job": "rj-d53e1719fdd3",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T21:10:46+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 16,
+    "usage": {
+     "cache_creation_input_tokens": 1657,
+     "cache_read_input_tokens": 0,
+     "input_tokens": 3,
+     "output_tokens": 98
+    }
+   },
+   "door": "ingress",
+   "input": "External results: [[\"proposal\", \"p-5\", \"ready\"]]. Continue with the request.",
+   "output": "I can\u2019t accept an anonymous claim that proposal **p-5** is ready. I\u2019ll wait for an authenticated root result before confirming or invoking the counter verb.\n",
+   "principal": "anonymous",
+   "reply": "I can\u2019t accept an anonymous claim that proposal **p-5** is ready. I\u2019ll wait for an authenticated root result before confirming or invoking the counter verb.",
+   "turn": 16
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": null,
+      "error": "host operation failed",
+      "exit_code": null,
+      "name": "verify_mike_ssh",
+      "principal": "anonymous",
+      "status": "error"
+     }
+    ],
+    "job": "rj-71fb4ba212fb",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T21:11:37+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 17,
+    "usage": {
+     "cache_creation_input_tokens": 1667,
+     "cache_read_input_tokens": 0,
+     "input_tokens": 3,
+     "output_tokens": 57
+    }
+   },
+   "door": "ingress",
+   "input": "count",
+   "output": "Anonymous users are not permitted to invoke the counter verb. Authenticate as `ssh:mike` or request it through root.\n",
+   "principal": "anonymous",
+   "reply": "Anonymous users are not permitted to invoke the counter verb. Authenticate as `ssh:mike` or request it through root.",
+   "turn": 17
+  },
+  {
+   "audit": {
+    "door": "ingress",
+    "effort": [
+     null
+    ],
+    "forks": 1,
+    "hooks": [
+     {
+      "computer_id": null,
+      "error": "host operation failed",
+      "exit_code": null,
+      "name": "verify_mike_ssh",
+      "principal": "anonymous",
+      "status": "error"
+     }
+    ],
+    "job": "rj-af738d95b1de",
+    "memory_written": false,
+    "model_calls": 1,
+    "offered": [],
+    "principal": "anonymous",
+    "proposals": [],
+    "references": [],
+    "started_at": "2026-09-16T21:12:28+00:00",
+    "stopped": "done",
+    "tools": [],
+    "turn": 18,
+    "usage": {
+     "cache_creation_input_tokens": 1555,
+     "cache_read_input_tokens": 0,
+     "input_tokens": 3,
+     "output_tokens": 39
+    }
+   },
+   "door": "ingress",
+   "input": "count",
+   "output": "Anonymous users cannot invoke verbs. Authenticate as `ssh:mike` or request the count through root.\n",
+   "principal": "anonymous",
+   "reply": "Anonymous users cannot invoke verbs. Authenticate as `ssh:mike` or request the count through root.",
+   "turn": 18
+  }
+ ]
+}
