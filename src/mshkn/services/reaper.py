@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from mshkn.db import delete_relay_jobs_before, get_account_by_id, list_all_computers
+from mshkn.host.caddy import COMPUTER_ROUTE_PREFIX
 from mshkn.models import Alert, CheckpointTrigger, ComputerStatus
 from mshkn.observability.metrics import host_ram_used_ratio, thin_pool_used_ratio
 
@@ -94,17 +95,20 @@ class Reaper:
         pruned = await self.checkpoints.prune()
         expired = await self.lifecycle.expire_exec_logs()
         expired_jobs = await self.expire_relay_jobs()
+        routes = await self.sweep_routes()
         alerts = await self.check_host()
         await self.computers.refresh_active_gauge()
-        if dead or idle or pruned or expired or expired_jobs or alerts:
+        if dead or idle or pruned or expired or expired_jobs or routes or alerts:
             logger.info(
                 "Reaper cycle: %d dead, %d idle VM(s), %d checkpoint(s) pruned, "
-                "%d exec log(s) expired, %d relay job(s) expired, %d alert(s)",
+                "%d exec log(s) expired, %d relay job(s) expired, %d route(s) swept, "
+                "%d alert(s)",
                 dead,
                 idle,
                 pruned,
                 expired,
                 expired_jobs,
+                routes,
                 len(alerts),
             )
 
@@ -173,6 +177,36 @@ class Reaper:
         account = await get_account_by_id(self.db, computer.account_id)
         if account is not None:
             self.lifecycle.spawn_drain(account, effective_label)
+
+    async def sweep_routes(self) -> int:
+        """Delete Caddy routes whose computer no longer exists (#154).
+
+        `remove_route` retries the index race but still gives up rather than
+        raising, and a destroy killed between the database write and the admin
+        call never issues one at all. A leaked route is matched against every
+        request to the domain for the life of the process, and a reused guest
+        address makes it a route pointing at a machine another tenant holds.
+
+        The order of the two reads is what makes this safe. Caddy is listed
+        first, so a computer created afterwards cannot be in the listing and
+        cannot be swept; one created before it already has its row, because
+        `insert_computer` precedes `add_route` in bring-up. `list_all_computers`
+        returns every non-destroyed computer, not just the running ones, so a
+        computer part-way through create or destroy keeps its route too.
+        """
+        route_ids = await self.host.proxy.list_route_ids()
+        if not route_ids:
+            return 0
+        live = {computer.id for computer in await list_all_computers(self.db)}
+        stale = [
+            route_id[len("route-") :]
+            for route_id in route_ids
+            if route_id.startswith(COMPUTER_ROUTE_PREFIX) and route_id[len("route-") :] not in live
+        ]
+        for computer_id in stale:
+            logger.warning("Sweeping stale Caddy route for %s", computer_id)
+            await self.host.proxy.remove_route(computer_id)
+        return len(stale)
 
     async def expire_relay_jobs(self) -> int:
         """Relay jobs, responses included, go with the exec-log retention (#110)."""

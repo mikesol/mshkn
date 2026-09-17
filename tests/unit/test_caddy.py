@@ -158,13 +158,154 @@ async def test_remove_route_treats_404_as_success(caplog: pytest.LogCaptureFixtu
 async def test_remove_route_logs_warning_on_other_bad_status(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """A 500 that is not the index race is reported once and not retried.
+
+    This is the boundary of the retry added for #154: retrying a genuine
+    failure would triple the admin API load for nothing.
+    """
+    seen: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
         return httpx.Response(500, text="boom")
 
     proxy = make_proxy(httpx.MockTransport(handler))
     with caplog.at_level(logging.WARNING):
         await proxy.remove_route("comp-1")  # does not raise
+    assert len(seen) == 1, "only the index race is worth retrying"
     assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+async def test_remove_route_retries_when_concurrent_deletes_shift_the_index(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression test for #154.
+
+    Caddy resolves an `@id` to an index in the routes array and deletes by
+    index. Concurrent deletes shift those indexes under each other, so a
+    delete can resolve an id to a slot that no longer holds it and answer 500
+    `array index out of bounds`. The route is still there afterwards and
+    nothing retried, so it leaked for good. Re-issuing the DELETE resolves the
+    id afresh against the settled array, which is why a retry — not a
+    different verb — is the fix: PATCH by `@id` resolves the index the same
+    way.
+    """
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) < 3:
+            return httpx.Response(
+                500,
+                text='{"error":"[/config/apps/http/servers/main/routes/533] '
+                'array index out of bounds: 533"}',
+            )
+        return httpx.Response(200)
+
+    proxy = make_proxy(httpx.MockTransport(handler))
+    with caplog.at_level(logging.WARNING):
+        await proxy.remove_route("comp-1")
+    assert [(r.method, r.url.path) for r in seen] == [("DELETE", "/id/route-comp-1")] * 3
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records), (
+        "a delete that succeeded on a retry is not a failure"
+    )
+
+
+async def test_remove_route_stops_retrying_the_index_error_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The retry is bounded: a route Caddy will not drop must not spin forever."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(500, text="array index out of bounds: 533")
+
+    proxy = make_proxy(httpx.MockTransport(handler))
+    with caplog.at_level(logging.WARNING):
+        await proxy.remove_route("comp-1")  # does not raise
+    assert len(seen) == 3
+    assert "Failed to remove Caddy route for comp-1" in caplog.text
+
+
+async def test_remove_route_stops_retrying_once_the_route_is_gone() -> None:
+    """A retry that finds a 404 is a success, not another attempt.
+
+    The losing side of the race deleted the route; there is nothing left to do.
+    """
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            return httpx.Response(500, text="array index out of bounds: 7")
+        return httpx.Response(404, text="unknown object id")
+
+    proxy = make_proxy(httpx.MockTransport(handler))
+    await proxy.remove_route("comp-1")
+    assert len(seen) == 2
+
+
+async def test_list_route_ids_returns_the_installed_ids() -> None:
+    """The sweep needs to know what Caddy is actually holding, not what we think."""
+    routes = [
+        {"@id": "route-comp-1", "handle": []},
+        {"handle": []},  # a route nobody named
+        {"@id": "route-api"},
+        {"@id": "route-terminal"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert (request.method, request.url.path) == (
+            "GET",
+            "/config/apps/http/servers/main/routes",
+        )
+        return httpx.Response(200, json=routes)
+
+    proxy = make_proxy(httpx.MockTransport(handler))
+    assert await proxy.list_route_ids() == ["route-comp-1", "route-api", "route-terminal"]
+
+
+async def test_list_route_ids_is_empty_when_the_admin_api_is_unreachable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """It feeds a best-effort sweep, so it reports nothing rather than raising.
+
+    An empty list makes the sweep a no-op. Raising would fail the whole reaper
+    cycle over a maintenance task.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    proxy = make_proxy(httpx.MockTransport(handler))
+    with caplog.at_level(logging.WARNING):
+        assert await proxy.list_route_ids() == []
+    assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+async def test_list_route_ids_is_empty_on_a_bad_status(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    proxy = make_proxy(httpx.MockTransport(lambda _: httpx.Response(500, text="boom")))
+    with caplog.at_level(logging.WARNING):
+        assert await proxy.list_route_ids() == []
+    assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+async def test_list_route_ids_tolerates_an_empty_route_list() -> None:
+    """Caddy answers `null`, not `[]`, for a server with no routes configured.
+
+    The body is passed as raw bytes: `httpx.Response(json=None)` means "no JSON
+    body at all" and would exercise the unparseable-body path instead.
+    """
+    proxy = make_proxy(httpx.MockTransport(lambda _: httpx.Response(200, content=b"null")))
+    assert await proxy.list_route_ids() == []
+
+
+async def test_list_route_ids_tolerates_a_body_that_is_not_json() -> None:
+    proxy = make_proxy(httpx.MockTransport(lambda _: httpx.Response(200, text="<html>")))
+    assert await proxy.list_route_ids() == []
 
 
 async def test_healthy_reflects_admin_api() -> None:

@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 
 ROUTES = "/config/apps/http/servers/main/routes"
 TERMINAL_ROUTE_ID = "route-terminal"
+# Every computer route is `route-` + a computer id, and every computer id is
+# `comp-` + hex (`ComputerService._bring_up`). The sweep matches on this rather
+# than on "not a route I recognise" so that an unfamiliar route — route-api,
+# anything a human installed by hand — is never a deletion candidate.
+COMPUTER_ROUTE_PREFIX = "route-comp-"
+_INDEX_RACE = "array index out of bounds"
+_REMOVE_ATTEMPTS = 3
 
 
 class CaddyProxy:
@@ -123,25 +130,66 @@ class CaddyProxy:
         A 404 means the route is already absent — the expected outcome when
         two deletes of the same computer race — so it is treated as success
         rather than logged as a failure.
+
+        Caddy resolves an `@id` to an index in the routes array and deletes by
+        index. Concurrent deletes shift those indexes under each other, so a
+        delete can name a slot that no longer holds its route and answer 500
+        `array index out of bounds`; the route then stays for good (#154).
+        Re-issuing the DELETE resolves the id afresh, which is why this is a
+        retry and not a different verb — PATCH by `@id` resolves the index the
+        same way. Only that error is retried: a genuine failure would cost
+        three admin calls for nothing. The reaper's sweep covers whatever the
+        retries still lose.
         """
         route_id = f"route-{computer_id}"
+        failure = ""
+        for attempt in range(_REMOVE_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(0.05 * attempt)
+            try:
+                resp = await self._client.delete(f"/id/{route_id}")
+            except httpx.HTTPError as exc:
+                logger.warning("Failed to remove Caddy route for %s: %s", computer_id, exc)
+                return
+            if resp.status_code == 404:
+                logger.info("Caddy route for %s already absent", computer_id)
+                return
+            if resp.status_code < 400:
+                logger.info("Removed Caddy route for %s", computer_id)
+                return
+            failure = f"{resp.status_code} {resp.text}"
+            if _INDEX_RACE not in resp.text:
+                break
+        logger.warning("Failed to remove Caddy route for %s: %s", computer_id, failure)
+
+    async def list_route_ids(self) -> list[str]:
+        """Every `@id` currently installed, in list order. Never raises.
+
+        Feeds the reaper's sweep, which is maintenance: an unreachable or
+        unreadable admin API yields an empty list, making the sweep a no-op,
+        rather than failing the whole cycle.
+        """
         try:
-            resp = await self._client.delete(f"/id/{route_id}")
+            resp = await self._client.get(ROUTES)
         except httpx.HTTPError as exc:
-            logger.warning("Failed to remove Caddy route for %s: %s", computer_id, exc)
-            return
-        if resp.status_code == 404:
-            logger.info("Caddy route for %s already absent", computer_id)
-            return
+            logger.warning("Failed to list Caddy routes: %s", exc)
+            return []
         if resp.status_code >= 400:
-            logger.warning(
-                "Failed to remove Caddy route for %s: %s %s",
-                computer_id,
-                resp.status_code,
-                resp.text,
-            )
-            return
-        logger.info("Removed Caddy route for %s", computer_id)
+            logger.warning("Failed to list Caddy routes: %s %s", resp.status_code, resp.text)
+            return []
+        try:
+            routes = resp.json()
+        except ValueError:
+            logger.warning("Caddy route listing was not JSON")
+            return []
+        # Caddy answers `null`, not `[]`, for a server with no routes.
+        if not isinstance(routes, list):
+            return []
+        return [
+            route["@id"]
+            for route in routes
+            if isinstance(route, dict) and isinstance(route.get("@id"), str)
+        ]
 
     async def healthy(self) -> bool:
         if self._client.is_closed:
