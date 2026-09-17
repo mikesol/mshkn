@@ -302,10 +302,12 @@ The three invariants come from the framework unchanged.
 - **Unit.** The reading of a command out of a reply (fenced block, inline code,
   neither, several); each check over a synthetic `Judged` with findings that pass,
   findings that fail, and findings that are missing.
-- **Flow.** A capability that defines `verify` has it called after the listing
-  and before judging, with the turns and the listing it was given; one that
-  defines neither hook still runs; a `verify` that raises leaves the run's
-  evidence intact and fails its checks.
+- **Flow.** Coding's `verify` against the real app and the fake host: a checkpoint
+  on a verb chain is forked, the three files are uploaded, the command runs on each
+  and the fork is destroyed leaving the chain with the head it started with. The
+  hook's own contract — called with the turns and the listing, absent hook a no-op,
+  a raising hook recorded and not fatal — is unit-tested, because no flow test
+  drives a whole run for the call site to sit inside.
 - **Docs.** `tests/unit/test_docs.py` polices the indexed documents, so the
   `verify` hook is documented in `embryo/README.md` only with names that exist
   once the code lands.
