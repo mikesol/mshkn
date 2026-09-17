@@ -9,7 +9,6 @@ import logging
 import re
 import shutil
 import subprocess
-import traceback
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -391,8 +390,14 @@ class RecipeService:
             )
             logger.info("recipe %s: ready (vol %d)", recipe_id, volume_id)
         except Exception as exc:
-            build_log_lines.append(f"\n--- BUILD FAILED ---\n{traceback.format_exc()}")
-            logger.error("recipe %s: build failed: %s", recipe_id, exc)
+            # The tenant reads this log and nothing else about the failure, so it
+            # carries the builder's own message — docker's output, formatted by
+            # docker_build_image — and not mshkn's stack, which buries the
+            # actionable line and names the server's install path. The stack is
+            # not lost: logger.exception puts it in the journal, where an
+            # operator looks and a tenant does not.
+            build_log_lines.append(f"\n--- BUILD FAILED ---\n{exc}")
+            logger.exception("recipe %s: build failed", recipe_id)
             await update_recipe_build_result(
                 self.db, recipe_id, status=RecipeStatus.FAILED, build_log="\n".join(build_log_lines)
             )
