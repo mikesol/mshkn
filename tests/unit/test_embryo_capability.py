@@ -3200,6 +3200,11 @@ async def test_run_once_records_effort_unsupported_when_the_run_was_given_off(
     assert summary["effort_supported"] is False
 
 
+# A brain older than the record that claims it: the leavings of a run that has
+# finished, which is the only kind #193 clears.
+_MADE = {"created_at": "2026-09-17T09:00:00+00:00"}
+
+
 def _record_of(
     out: Path,
     capability: str,
@@ -3239,7 +3244,7 @@ async def test_run_once_refuses_a_brain_no_run_record_claims(
 ) -> None:
     """An unexplained brain is a hazard, not a corpse (#193): nothing on disk says
     which run built it or whether that run passed, so root is not going to guess."""
-    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": "r"}])
+    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": "r", **_MADE}])
     monkeypatch.setattr(
         "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
@@ -3271,7 +3276,9 @@ async def test_run_once_tears_down_the_brain_of_a_failed_run_and_measures(
     monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
     out = tmp_path / "docs"
     stale = _record_of(out, "hatch", "2026-09-17-run-1", ok=False)
-    api = FakeApi(checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain"}])
+    api = FakeApi(
+        checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain", **_MADE}]
+    )
     monkeypatch.setattr(
         "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
@@ -3302,7 +3309,9 @@ async def test_run_once_refuses_the_brain_of_the_newest_run_when_it_passed(
     out = tmp_path / "docs"
     _record_of(out, "hatch", "2026-09-17-run-1", ok=False, ended="2026-09-17T10:00:00+00:00")
     _record_of(out, "hatch", "2026-09-17-run-2", ok=True, ended="2026-09-17T12:00:00+00:00")
-    api = FakeApi(checkpoints=[{"id": "ck-good", "label": "brain", "recipe_id": "rcp-brain"}])
+    api = FakeApi(
+        checkpoints=[{"id": "ck-good", "label": "brain", "recipe_id": "rcp-brain", **_MADE}]
+    )
     monkeypatch.setattr(
         "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
@@ -3329,7 +3338,9 @@ async def test_run_once_refuses_when_the_blocking_runs_own_lineage_is_not_on_dis
     that lineage's promotion, and without it deleting nothing is the safe answer."""
     out = tmp_path / "docs"
     _record_of(out, "security", "2026-09-17-run-1", ok=False)
-    api = FakeApi(checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain"}])
+    api = FakeApi(
+        checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain", **_MADE}]
+    )
     monkeypatch.setattr(
         "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
@@ -3338,6 +3349,71 @@ async def test_run_once_refuses_when_the_blocking_runs_own_lineage_is_not_on_dis
             _settings(),
             HATCH,
             out / "hatch" / "2026-09-17-run-1",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+
+
+async def test_run_once_refuses_a_brain_younger_than_the_record_that_claims_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run writes `run.json` when it ends, so a run still speaking is claimed by
+    no record and its brain looks like the last failure's leavings. Tearing that
+    down would empty a running measure's account. The clock separates them: the
+    brain of a finished run cannot be younger than the record that claims it.
+
+    Read off the live account on 2026-09-17, where eight `brain` checkpoints
+    minutes old belonged to a run then in flight."""
+    out = tmp_path / "docs"
+    _record_of(out, "hatch", "2026-09-17-run-1", ok=False, ended="2026-09-17T10:00:00+00:00")
+    api = FakeApi(
+        checkpoints=[
+            {
+                "id": "ck-live",
+                "label": "brain",
+                "recipe_id": "rcp-brain",
+                "created_at": "2026-09-17T15:52:24.501213+00:00",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="a run is in flight"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-2",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+
+
+async def test_run_once_refuses_a_brain_the_api_gives_no_creation_time_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A time that cannot be read is never treated as an old one."""
+    out = tmp_path / "docs"
+    _record_of(out, "hatch", "2026-09-17-run-1", ok=False)
+    api = FakeApi(checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain"}])
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="not a corpse to clear"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-2",
             AutoApprover(),
             hatch_script=_stub_hatch(tmp_path),
             key_dir=tmp_path / "keys",
@@ -3358,7 +3434,7 @@ async def test_run_once_refuses_when_the_teardown_leaves_the_brain_behind(
     out = tmp_path / "docs"
     _record_of(out, "hatch", "2026-09-17-run-1", ok=False)
     api = FakeApi(
-        checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain"}],
+        checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain", **_MADE}],
         fail_deletes=True,
     )
     monkeypatch.setattr(

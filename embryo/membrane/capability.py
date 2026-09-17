@@ -1738,6 +1738,15 @@ def _usage_total(turns: list[Turn]) -> tuple[dict[str, int], int]:
     return usage, calls
 
 
+def at(value: Any) -> datetime | None:
+    """An ISO timestamp from the API or a run record, or `None` when it is absent
+    or unreadable. A time that cannot be read is never treated as an old one."""
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def blocking_run(out: Path, brains: list[dict[str, Any]]) -> tuple[Path, dict[str, Any]] | None:
     """Which run left the brain that is on the account, and what that run's
     `run.json` says. A brain is built from the recipe its run's record names, so
@@ -1816,6 +1825,21 @@ async def clear_brain(doors: Doors, out: Path, *, log: TextIO) -> None:
             f"the account already has a brain, kept by {run_dir.name}, which passed: promote it "
             f"(`capability promote {record['capability']} {run_dir}`) or tear it down "
             f"(`capability teardown {run_dir}`) before measuring"
+        )
+    # A run writes its record when it ends, so a run that is still speaking is
+    # attributable to nothing on disk and its brain looks exactly like the last
+    # failure's leavings. The clock tells them apart: a finished run's brain
+    # cannot be younger than the record that claims it. Read off the live account
+    # on 2026-09-17, where eight `brain` checkpoints minutes old belonged to a run
+    # then in flight -- the case this branch exists to refuse.
+    stamps = [at(b.get("created_at")) for b in brains]
+    ended = at(record.get("ended"))
+    if ended is None or any(t is None or t > ended for t in stamps):
+        raise RuntimeError(
+            f"the account has a brain checkpoint that {run_dir.name} -- the newest record "
+            f"claiming it, ended {record.get('ended')} -- does not account for: a run is in "
+            f"flight, or one died without writing its record; either way this brain is not a "
+            f"corpse to clear"
         )
     log.write(f"tearing down {run_dir.name}, which failed and will not be promoted\n")
     await teardown_run(doors, out, run_dir, record, log=log)
