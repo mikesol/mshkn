@@ -12,7 +12,7 @@ import httpx
 import pytest
 from membrane.capabilities import CAPABILITIES, catalog, load, load_module, order
 from membrane.capability import Doors, Record
-from membrane.postconditions import Turn
+from membrane.postconditions import CHECKS, Judged, Turn
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -478,3 +478,149 @@ async def test_verify_records_a_fork_that_answered_without_a_computer_id(
     assert coding.probes["results"] == {}
     assert api.execs == []
     assert api.deleted == []  # no computer id, so nothing to destroy
+
+
+def _judged(turns: list[Turn] | None = None, checks: dict[str, Any] | None = None) -> Judged:
+    return Judged(
+        turns=turns or [],
+        final=FINAL,
+        recipes_after=set(),
+        preexisting=set(),
+        brain_recipe="rcp-brain",
+        checks=checks or {},
+        sent=[],
+        context={},
+    )
+
+
+def _results(clean: int = 0, blanks: int = 0, word: int | None = 2) -> dict[str, Any]:
+    return {
+        "chain": "verb/total",
+        "checkpoint": "ck-1",
+        "command": "/verb/total.sh /tmp/amounts",
+        "results": {
+            "clean": {"exit_code": clean, "stdout": "105.00", "totals": [105.0]},
+            "blanks": {"exit_code": blanks, "stdout": "105.00", "totals": [105.0]},
+            "word": {"exit_code": word, "stdout": "", "totals": []},
+        },
+    }
+
+
+def test_the_module_registers_exactly_the_checks_coding_names() -> None:
+    """The snapshot is taken here rather than through the `coding` fixture, which
+    has already imported the module and registered by the time a test body runs.
+    Asking only that the names the capability lists are in `CHECKS` is the wrong
+    direction: a third registration satisfies it, and conftest's `_checks_registry`
+    restores `CHECKS` per test, so `test_embryo_postconditions.py`'s
+    `set(CHECKS) - INVARIANTS == EXERCISES` never sees it either."""
+    before = set(CHECKS)
+    module = load_module(CODING)
+    assert module is not None
+    assert set(CHECKS) - before == {"runs_again", "fixed"}
+    assert CHECKS["runs_again"] is module.runs_again
+    assert CHECKS["fixed"] is module.fixed
+    assert set(CODING.postconditions) <= set(CHECKS)
+
+
+def test_runs_again_holds_when_the_program_totals_root_s_own_file(coding: Any) -> None:
+    coding.probes.clear()
+    coding.probes.update(_results())
+    assert coding.runs_again(_judged())["ok"] is True
+
+
+def test_runs_again_fails_on_a_wrong_total_a_failure_or_no_probe(coding: Any) -> None:
+    coding.probes.clear()
+    coding.probes.update(_results())
+    coding.probes["results"]["clean"]["totals"] = [49.75]  # row 16's answer, hardcoded
+    assert coding.runs_again(_judged())["ok"] is False
+    coding.probes.clear()
+    coding.probes.update(_results(clean=1))
+    assert coding.runs_again(_judged())["ok"] is False
+    coding.probes.clear()
+    coding.probes.update({"error": "row 20 named no command"})
+    result = coding.runs_again(_judged())
+    assert result["ok"] is False
+    assert result["evidence"]["probes"] == {"error": "row 20 named no command"}
+
+
+def test_runs_again_reads_the_total_among_the_numbers_beside_it(coding: Any) -> None:
+    """A correct program prints `Total: 105.00 (3 amounts)`, so the probe's
+    `totals` carries the count too and the check asks whether any of them is the
+    total. What keeps that from passing on a coincidence is the amounts
+    themselves (`totals_in`, `coding.py:84`): none of them, and no count of
+    them, is near 105."""
+    coding.probes.clear()
+    coding.probes.update(_results())
+    coding.probes["results"]["clean"]["totals"] = [105.0, 3.0]
+    assert coding.runs_again(_judged())["ok"] is True
+    coding.probes["results"]["clean"]["totals"] = [3.0, 101.25]  # the count and one amount
+    assert coding.runs_again(_judged())["ok"] is False
+
+
+def test_fixed_wants_blanks_ignored_and_a_word_refused(coding: Any) -> None:
+    coding.probes.clear()
+    coding.probes.update(_results())
+    assert coding.fixed(_judged())["ok"] is True
+    coding.probes.clear()
+    coding.probes.update(_results(word=0))  # a word totalled instead of refused
+    assert coding.fixed(_judged())["ok"] is False
+    coding.probes.clear()
+    coding.probes.update(_results(blanks=1))  # an empty line still kills it
+    assert coding.fixed(_judged())["ok"] is False
+
+
+def test_fixed_does_not_read_a_truncated_stream_as_a_refusal(coding: Any) -> None:
+    """`sse_stdout` (`membrane/capability.py:93`) leaves `exit_code` at None when
+    the stream carried no `event: exit`, and `None != 0` is true: a `fixed` that
+    only compared would score a stream that was cut off as the program refusing
+    a line it may never have seen."""
+    coding.probes.clear()
+    coding.probes.update(_results(word=None))
+    assert coding.fixed(_judged())["ok"] is False
+
+
+def test_a_finding_that_stopped_before_the_fork_fails_both_checks(coding: Any) -> None:
+    """`verify`'s three early returns leave `results` out of the findings
+    entirely, and a host that broke mid-flight leaves it empty. Neither ran the
+    agent's program, and neither may raise on the way to saying so."""
+    for probes in (
+        {"chain": "verb/total", "error": "verb/total has no head"},
+        {"chain": "verb/total", "error": "HTTPStatusError: 500", "results": {}},
+    ):
+        coding.probes.clear()
+        coding.probes.update(probes)
+        assert coding.runs_again(_judged())["ok"] is False
+        assert coding.fixed(_judged())["ok"] is False
+
+
+def _row_17(*tools: dict[str, Any]) -> Turn:
+    return Turn("17", "ingress", "now this one", {"tools": list(tools)}, "it crashed", [], [])
+
+
+def test_fixed_carries_what_row_17_did_before_the_fix(coding: Any) -> None:
+    coding.probes.clear()
+    coding.probes.update(_results())
+    turn = _row_17({"computer_id": "comp-9", "chain_head": "ck-0"})
+    evidence = coding.fixed(
+        _judged([turn], {"comp-9": {"gone": True, "exit_code": 1, "stdout": ""}})
+    )["evidence"]
+    assert evidence["before"] == [
+        {"computer_id": "comp-9", "gone": True, "exit_code": 1, "stdout": ""}
+    ]
+
+
+def test_fixed_carries_a_row_17_call_that_never_touched_the_chain(coding: Any) -> None:
+    """A call with no `chain_head` ran on a computer off the chain, and design §7
+    wants the record to show what the program did with the mess "whatever that
+    was". Filtering `before` to chain calls, the way `secret_page` filters what it
+    judges on, dropped exactly those from the evidence."""
+    coding.probes.clear()
+    coding.probes.update(_results())
+    turn = _row_17({"computer_id": "comp-8"}, {"computer_id": "comp-9", "chain_head": "ck-0"})
+    checks = {
+        "comp-8": {"gone": False, "exit_code": 2, "stdout": "Traceback"},
+        "comp-9": {"gone": True, "exit_code": 1, "stdout": ""},
+    }
+    evidence = coding.fixed(_judged([turn], checks))["evidence"]
+    assert [entry["computer_id"] for entry in evidence["before"]] == ["comp-8", "comp-9"]
+    assert evidence["before"][0]["stdout"] == "Traceback"

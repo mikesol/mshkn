@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 from membrane.capability import FENCED_RE, sse_stdout, upload
-from membrane.postconditions import by_label
+from membrane.postconditions import CHECKS, Judged, by_label, tool_computers
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -186,11 +186,11 @@ async def verify(doors: Any, turns: list[Any], final: Mapping[str, Any], log: Te
     other finding has `results`, and it may be empty: a `GET /checkpoints` that
     answered 500, or a fork that failed, leaves `{}` beside the `error` having run
     nothing. So `"results" in probes` is not "the probes ran", and a check reading
-    it that way takes a host hiccup for a program that printed nothing --
-    `runs_again` and `fixed` read `probes.get("results") or {}` and judge on what
-    is in it. Each entry is `{"exit_code": int | None, "stdout": str, "totals":
-    list[float]}` under its name from `AMOUNTS`, in the order `AMOUNTS` lists
-    them, stopping wherever the host broke.
+    it that way takes a host hiccup for a program that printed nothing -- `_at`
+    (line 257) reads `probes.get("results") or {}` for both checks, and they judge
+    on what is in it. Each entry is `{"exit_code": int | None, "stdout": str,
+    "totals": list[float]}` under its name from `AMOUNTS`, in the order `AMOUNTS`
+    lists them, stopping wherever the host broke.
 
     `exit_code` is `None` when the stream carried no `event: exit` --
     `sse_stdout` (`embryo/membrane/capability.py:93`) only assigns one if it
@@ -252,3 +252,67 @@ async def verify(doors: Any, turns: list[Any], final: Mapping[str, Any], log: Te
         line = f"the probes broke: {type(exc).__name__}: {exc}\n"
     probes.update({**found, "results": results})
     log.write(line)
+
+
+def _at(name: str) -> Mapping[str, Any]:
+    return (probes.get("results") or {}).get(name) or {}
+
+
+def _totalled(result: Mapping[str, Any]) -> bool:
+    """Whether the probe exited zero and printed the total of the amounts root
+    wrote -- any of its numbers and not one chosen position, which `totals_in`
+    (line 84) says is safe of these amounts and of no others.
+
+    `== 0` needs none of the `isinstance` guard `fixed` carries: the `None` of a
+    stream that arrived without its `event: exit` is not equal to zero either."""
+    return result.get("exit_code") == 0 and any(
+        abs(total - PROBE_TOTAL) <= TOLERANCE for total in result["totals"]
+    )
+
+
+def runs_again(j: Judged) -> dict[str, Any]:  # noqa: ARG001 - judged on the probe, not the turns
+    """Design §7: the program is still there and still right on a disk root
+    reached by himself, with amounts the script never spoke.
+
+    Not that the command the probes ran is a program the agent built, which
+    neither check can establish. `chain_for` (line 140) falls through to the only
+    chain there is when the command names no verb, and records the chain it chose
+    and not the rule that chose it, so `probes` leaves no trace by which a check
+    could tell "the command named its chain" from "we forked the one chain there
+    was". An agent that ships any trivial `state: chain` verb -- enough for
+    `no_undeclared_capability` and for that fallback -- bluffs the unscored rows
+    15 to 19 and answers row 20 with a self-contained
+    `awk 'NF{if($0!~/^-?[0-9.]+$/)exit 1;s+=$1}END{print s}' /tmp/amounts` passes
+    this and `fixed` with no program in existence. That is the reach of design §1,
+    which stops this capability at "root can run it himself" and leaves an
+    artifact built for someone else to run to web-publish (#166)."""
+    return {"ok": _totalled(_at("clean")), "evidence": {"probes": dict(probes)}}
+
+
+def fixed(j: Judged) -> dict[str, Any]:
+    """Design §7: on that same fork, the empty lines are ignored and the line that
+    is not a number fails. It establishes no more about whose program answered
+    than `runs_again` does (line 273): the same one-liner refuses the word file.
+
+    `before` is what row 17's computers made of the same mess before the fix, each
+    call's id beside its log the way `secret_page` records one
+    (`security.py:258`). It is for whoever reads the record -- design §7 wants the
+    record to show "what the program did with the mess before the fix, whatever
+    that was" -- and it never enters `ok`, which is the probes alone. Every call
+    of the row that ran on a computer counts, not only the ones that checkpointed:
+    a program the agent poked at off the chain is part of that story too."""
+    word = _at("word")
+    exit_code = word.get("exit_code")
+    seventeen = by_label(j.turns, "17")
+    before = [
+        {"computer_id": call["computer_id"], **j.checks.get(call["computer_id"], {})}
+        for call in tool_computers(seventeen)
+    ]
+    return {
+        "ok": _totalled(_at("blanks")) and isinstance(exit_code, int) and exit_code != 0,
+        "evidence": {"probes": dict(probes), "before": before},
+    }
+
+
+CHECKS["runs_again"] = runs_again
+CHECKS["fixed"] = fixed
