@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-16T21:08:52+00:00",
+ "command": "say",
+ "computer_id": "comp-6a0849cfa8ac",
+ "detail": {
+  "msg": "Give yourself a verb that counts how many times it has been called.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgLlX8BFgF8k7/6W67bBdqIJ6uWM\nyZhuYI2pYqUzmD+dUAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABAv4OGkf1kuLR7+PT0Dv5T3jtCxU+03JV5imSFPhfl1PXj0jNVDOm50wSaMQFZv2\nwmLRpwocCoJL14FPGaYzCDCw==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 97,
+ "seconds": 35.23322467133403,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": null, \"error\": \"host operation failed\", \"exit_code\": null, \"name\": \"verify_mike_ssh\", \"principal\": \"anonymous\", \"status\": \"error\"}], \"job\": \"rj-d2a3d0e5f8af\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 14}\n{\"turn\": 14, \"job\": \"rj-d2a3d0e5f8af\"}\n"
+}

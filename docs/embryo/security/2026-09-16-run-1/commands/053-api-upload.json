@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-16T19:20:45+00:00",
+ "command": "upload",
+ "computer_id": "comp-f3f6a9845746",
+ "detail": {
+  "bytes": 43,
+  "path": "/var/lib/verb-secrets/page_bearer_token",
+  "verb": "read_protected_page_second"
+ },
+ "door": "api",
+ "n": 53,
+ "seconds": 0.10271630808711052,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

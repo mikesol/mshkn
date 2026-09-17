@@ -825,7 +825,7 @@ class Doors:
         hatched: Hatched,
         listing: dict[str, Any] | None,
         *,
-        lineage: Promotion | None = None,
+        lineage: Promotion | None,
         log: TextIO = sys.stderr,
     ) -> None:
         """The account as the run found it, best effort. Without a lineage: the
@@ -835,6 +835,16 @@ class Doors:
         the lineage's key, rule, recipes and promoted labels stay, since the
         next run of a dependent starts from them. A failing delete does not stop
         the ones after it.
+
+        `lineage` has no default. It used to, and `lineage=None` therefore said
+        two unrelated things: "this run hatched its own door and key, drop them"
+        and "the caller did not think about it". Undoing a kept security run
+        from a scratch script omitted the keyword, and the destructive branch
+        ran against hatch's promotion -- deleting the ingress rule and the
+        scoped key whose secret exists only inside the promoted brain's
+        /brain/.env, which ended that lineage. Callers with nothing to keep
+        write `lineage=None` and mean it; `capability teardown` resolves it from
+        the run's own record rather than leaving it to be remembered.
 
         A promoted checkpoint is never dropped, whatever recipe it names, and
         neither is a recipe one of them was built from. That is not caution: the
@@ -1126,6 +1136,37 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
             else:
                 log.write(f"dropped {label} ({ckpt['id']})\n")
     return record
+
+
+async def check_lineage(doors: Doors, promotion: Promotion) -> None:
+    """The host still holds the key and the rule the promotion names, checked
+    before a dependent forks anything.
+
+    `run_once` already refuses a key *file* that cannot sign for the lineage
+    before it spends a cent. The host's side of the same promotion went
+    unchecked, so a lineage deleted out from under a run surfaced only when a
+    row was spoken through the door: `2026-09-16-run-2` forked the promoted
+    brain, started a page server, spoke turn 11 and died on
+    `ingress say: HTTP 404`, four minutes in. Both of these are one GET.
+
+    The key is not merely named here, it is the brain's: its secret is in the
+    promoted checkpoint's /brain/.env and nowhere else (`POST /keys` returns a
+    secret once and there is no way to set one), so a missing key means the
+    lineage is over, not that something needs re-pointing. The message says so
+    rather than suggesting a repair that does not exist."""
+    for path, wanted, what in (
+        ("/keys", promotion.key_id, f"key {promotion.key_id}"),
+        ("/ingress_rules", promotion.rule_id, f"ingress rule {promotion.rule_id}"),
+    ):
+        response = await doors.api.get(path)
+        response.raise_for_status()
+        if wanted not in {str(item["id"]) for item in response.json()}:
+            raise RuntimeError(
+                f"{promotion.capability}'s promotion ({promotion.run}) names {what}, "
+                f"which the host no longer has. The promotion cannot be repaired -- the "
+                f"brain's key secret lives only inside its checkpoint -- so hatch "
+                f"{promotion.capability} again and promote the new run."
+            )
 
 
 async def start_from(doors: Doors, promotion: Promotion, *, log: TextIO) -> Hatched:
@@ -1766,10 +1807,14 @@ async def run_once(
     ):
         doors = Doors(api, public, "", record)
         if await doors.checkpoints("brain"):
-            raise RuntimeError("the account already has a brain; tear it down before measuring")
+            raise RuntimeError(
+                "the account already has a brain; tear it down before measuring "
+                "(`capability teardown <run-dir>` for the run that kept it)"
+            )
         preexisting = await doors.recipes()
         if lineage is not None:
             log.write(f"starting from {lineage.run} ({lineage.membrane.get('commit')})\n")
+            await check_lineage(doors, lineage)
             hatched = await start_from(doors, lineage, log=log)
         else:
             pubkey = new_key(key_dir)
@@ -1972,9 +2017,17 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
     promote_p.add_argument("run_dir", type=Path, help="the run's evidence directory")
     promote_p.add_argument("--env", type=Path, default=Path(".env"))
     promote_p.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    teardown_p = sub.add_parser(
+        "teardown", help="undo a run that was kept with --keep, leaving its lineage alone"
+    )
+    teardown_p.add_argument("run_dir", type=Path, help="the run's evidence directory")
+    teardown_p.add_argument("--env", type=Path, default=Path(".env"))
+    teardown_p.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args(argv)
     if args.command == "promote":
         return _promote(args, log)
+    if args.command == "teardown":
+        return _teardown(args, log)
     return _run(args, log)
 
 
@@ -2001,6 +2054,66 @@ def _promote(args: argparse.Namespace, log: TextIO) -> int:
     except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
         log.write(f"promote failed: {exc}\n")
         return 1
+    return 0
+
+
+def _teardown(args: argparse.Namespace, log: TextIO) -> int:
+    """Undo a run that was kept. `--keep` is required to promote and the brain
+    guard in `run_once` refuses to measure while a brain is on the account, so
+    every promotable run leaves one behind and something has to take it off;
+    until this subcommand there was nothing, and the call was written by hand
+    each time. One of those hand-written calls omitted `lineage=` and deleted
+    hatch's promoted ingress rule and the brain's scoped key, whose secret is
+    inside the promoted checkpoint's /brain/.env and nowhere else.
+
+    The lineage is resolved here the way `run_once` resolves it -- the last
+    entry of the capability's `depends`, read off that capability's PROMOTED.md
+    -- and a dependent whose promotion is not on disk is refused rather than
+    torn down as if it owned the door: that guess is exactly the deletion this
+    command exists to prevent."""
+    values = parse_env(args.env.read_text()) if args.env.exists() else {}
+    values.update({k: v for k, v in os.environ.items() if k in ("MSHKN_API_URL", "MSHKN_API_KEY")})
+    missing = [k for k in ("MSHKN_API_URL", "MSHKN_API_KEY") if not values.get(k)]
+    if missing:
+        log.write(f"missing {', '.join(missing)}: put them in {args.env} or the environment\n")
+        return 2
+    try:
+        record = json.loads((args.run_dir / "run.json").read_text())
+        hatched = Hatched(**record["hatched"])
+        capability = catalog()[record["capability"]]
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        log.write(f"teardown failed: {args.run_dir} is not a run record: {exc}\n")
+        return 1
+    lineage: Promotion | None = None
+    if capability.depends:
+        start = capability.depends[-1]
+        lineage = read_promotion(args.out, start)
+        if lineage is None:
+            log.write(
+                f"teardown failed: {capability.name} starts from {start}, which has no "
+                f"promotion under {args.out}; without it root cannot tell this run's "
+                f"leavings from the lineage's, and deleting nothing is the safe answer\n"
+            )
+            return 1
+    final = args.run_dir / "final-list.json"
+    listing = json.loads(final.read_text()) if final.exists() else None
+
+    async def go() -> None:
+        async with httpx.AsyncClient(
+            base_url=values["MSHKN_API_URL"],
+            headers={"Authorization": f"Bearer {values['MSHKN_API_KEY']}"},
+            timeout=TURN_TIMEOUT,
+            transport=transport_for(values["MSHKN_API_URL"]),
+        ) as api:
+            doors = Doors(api, api, "", None)
+            await doors.teardown(hatched, listing, lineage=lineage, log=log)
+
+    try:
+        asyncio.run(go())
+    except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
+        log.write(f"teardown failed: {exc}\n")
+        return 1
+    log.write(f"tore down {args.run_dir.name}\n")
     return 0
 
 

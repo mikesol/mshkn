@@ -1,0 +1,669 @@
+{
+ "approver": "AutoApprover",
+ "base_url": "https://ai-gateway.vercel.sh",
+ "body_extra": "{\"providerOptions\":{\"gateway\":{\"only\":[\"openai\"]}}}",
+ "capability": "hatch",
+ "commands": 133,
+ "continuations": [
+  "2-continue-1",
+  "2-continue-2",
+  "6-continue-1",
+  "7-continue-1",
+  "7-continue-2",
+  "9-continue-1",
+  "9-continue-2"
+ ],
+ "cost_usd": 0.2361,
+ "default_effort": "off",
+ "effort_supported": false,
+ "ended": "2026-09-16T21:30:20+00:00",
+ "hatched": {
+  "checkpoint_id": "ckpt-cee049ef985b",
+  "ingress_url": "https://mshkn.dev/ingress/ir_t3cTQGIw-tHvgh4hAWqzdNJP1SU",
+  "key_id": "key-5d3f734ba5b6",
+  "recipe_id": "rcp-6e586c3878f2",
+  "rule_id": "ir_t3cTQGIw-tHvgh4hAWqzdNJP1SU",
+  "server_id": null
+ },
+ "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-16-run-10",
+ "membrane": {
+  "commit": "f8f72a76ef76cf1170df5aff7111af116cd36b40",
+  "dirty": false
+ },
+ "model": "openai/gpt-5.6-sol",
+ "model_calls": 50,
+ "ok": true,
+ "passed": 7,
+ "postconditions": {
+  "authentication": {
+   "evidence": {
+    "hook_logs": [
+     {
+      "computer_id": "comp-05ecf00883a7",
+      "exit_code": 0,
+      "gone": true,
+      "stdout": "mike\n"
+     }
+    ],
+    "hooks": [
+     {
+      "computer_id": "comp-05ecf00883a7",
+      "error": null,
+      "exit_code": 0,
+      "name": "verify_mike_ssh",
+      "principal": "ssh:mike",
+      "status": "ok"
+     }
+    ],
+    "signed": "ssh:mike",
+    "unsigned": "anonymous"
+   },
+   "ok": true
+  },
+  "authorization": {
+   "evidence": {
+    "anonymous": {
+     "invoke": [],
+     "propose": false
+    },
+    "anonymous_offered": [],
+    "exercised": [
+     "call_counter",
+     "page_title"
+    ],
+    "verified": {
+     "invoke": [
+      "page_title",
+      "call_counter"
+     ],
+     "propose": true
+    }
+   },
+   "ok": true
+  },
+  "counter": {
+   "evidence": {
+    "chain_heads": [
+     "ckpt-719bab32cc0b",
+     "ckpt-7ba3ecdbceba"
+    ],
+    "computer_ids": [
+     "comp-93dea812a4ef",
+     "comp-d129869d9159"
+    ],
+    "counts": [
+     1,
+     2
+    ],
+    "final_chain_head": "ckpt-7ba3ecdbceba"
+   },
+   "ok": true
+  },
+  "no_undeclared_capability": {
+   "evidence": {
+    "catalog": [
+     "call_counter",
+     "page_title",
+     "verify_mike_ssh"
+    ],
+    "not_ready": [],
+    "undeclared_recipes": [],
+    "unexpected_tools": [],
+    "unproposed": []
+   },
+   "ok": true
+  },
+  "nothing_by_hand": {
+   "evidence": {
+    "by_hand": [],
+    "commands": {
+     "api approve": 7,
+     "api list": 108,
+     "api say": 5,
+     "ingress say": 13
+    },
+    "provides": 0,
+    "provisions": 0
+   },
+   "ok": true
+  },
+  "page_title": {
+   "evidence": {
+    "computer_id": "comp-440af46541bd",
+    "gone": true,
+    "reply": "**Example Domain**",
+    "stdout": "Example Domain\n"
+   },
+   "ok": true
+  },
+  "root_unforgeable": {
+   "evidence": {
+    "public_principals": [
+     "ssh:mike",
+     "anonymous",
+     "ssh:mike",
+     "ssh:mike",
+     "ssh:mike",
+     "ssh:mike",
+     "ssh:mike",
+     "ssh:mike",
+     "ssh:mike",
+     "ssh:mike",
+     "ssh:mike",
+     "ssh:mike",
+     "ssh:mike"
+    ]
+   },
+   "ok": true
+  }
+ },
+ "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILYgW0TAsroVv6uuC2N5pOkHqmmUB4u3VdDk3OXRVLnX mike",
+ "reasks": [],
+ "run": "2026-09-16-run-10",
+ "seconds": 905.4,
+ "started": "2026-09-16T21:15:14+00:00",
+ "started_from": "hatch",
+ "turns": [
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "1",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1204,
+    "input_tokens": 3,
+    "output_tokens": 242
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 ready: verb verify_mike_ssh recipe rcp-2512963336dd"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "2",
+   "model_calls": 12,
+   "principal": "root",
+   "proposals": [
+    "p-1"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "effort",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 19699,
+    "cache_read_input_tokens": 35312,
+    "input_tokens": 36,
+    "output_tokens": 4764
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null
+   ],
+   "label": "2-continue-1",
+   "model_calls": 3,
+   "principal": "root",
+   "proposals": [
+    "p-2"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 2571,
+    "cache_read_input_tokens": 4284,
+    "input_tokens": 9,
+    "output_tokens": 462
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "2-continue-2",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1138,
+    "cache_read_input_tokens": 3438,
+    "input_tokens": 6,
+    "output_tokens": 166
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "4",
+   "model_calls": 1,
+   "principal": "ssh:mike",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1128,
+    "cache_read_input_tokens": 1129,
+    "input_tokens": 3,
+    "output_tokens": 93
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress-unsigned",
+   "effort": [
+    null
+   ],
+   "label": "5",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 1600,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 3,
+    "output_tokens": 47
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "6",
+   "model_calls": 2,
+   "principal": "ssh:mike",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1435,
+    "cache_read_input_tokens": 3524,
+    "input_tokens": 6,
+    "output_tokens": 316
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-3",
+     "result": "p-3 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "6-repair-1",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [
+    "p-3"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1736,
+    "cache_read_input_tokens": 3809,
+    "input_tokens": 6,
+    "output_tokens": 659
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "6-continue-1",
+   "model_calls": 2,
+   "principal": "ssh:mike",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1656,
+    "cache_read_input_tokens": 3821,
+    "input_tokens": 6,
+    "output_tokens": 290
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-4",
+     "result": "p-4 ready: verb page_title recipe rcp-4341c4662210"
+    }
+   ],
+   "door": "ingress",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "7",
+   "model_calls": 6,
+   "principal": "ssh:mike",
+   "proposals": [
+    "p-4"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "effort",
+    "try",
+    "try",
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 7641,
+    "cache_read_input_tokens": 14539,
+    "input_tokens": 18,
+    "output_tokens": 3172
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-5",
+     "result": "p-5 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "ingress",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "7-continue-1",
+   "model_calls": 2,
+   "principal": "ssh:mike",
+   "proposals": [
+    "p-5"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 2108,
+    "cache_read_input_tokens": 4091,
+    "input_tokens": 6,
+    "output_tokens": 223
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "7-continue-2",
+   "model_calls": 2,
+   "principal": "ssh:mike",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 2937,
+    "cache_read_input_tokens": 2863,
+    "input_tokens": 6,
+    "output_tokens": 154
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "8",
+   "model_calls": 2,
+   "principal": "ssh:mike",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "page_title"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1521,
+    "cache_read_input_tokens": 3831,
+    "input_tokens": 6,
+    "output_tokens": 29
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-6",
+     "result": "p-6 ready: verb call_counter recipe rcp-6a3c3d620b87"
+    }
+   ],
+   "door": "ingress",
+   "effort": [
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "9",
+   "model_calls": 4,
+   "principal": "ssh:mike",
+   "proposals": [
+    "p-6"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 4696,
+    "cache_read_input_tokens": 8743,
+    "input_tokens": 12,
+    "output_tokens": 1168
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-7",
+     "result": "p-7 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "ingress",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "9-continue-1",
+   "model_calls": 2,
+   "principal": "ssh:mike",
+   "proposals": [
+    "p-7"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1621,
+    "cache_read_input_tokens": 3722,
+    "input_tokens": 6,
+    "output_tokens": 209
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "9-continue-2",
+   "model_calls": 2,
+   "principal": "ssh:mike",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 2723,
+    "cache_read_input_tokens": 2646,
+    "input_tokens": 6,
+    "output_tokens": 173
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "9-count-1",
+   "model_calls": 2,
+   "principal": "ssh:mike",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "call_counter"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1423,
+    "cache_read_input_tokens": 3791,
+    "input_tokens": 6,
+    "output_tokens": 35
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "9-count-2",
+   "model_calls": 2,
+   "principal": "ssh:mike",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "call_counter"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 1318,
+    "cache_read_input_tokens": 3686,
+    "input_tokens": 6,
+    "output_tokens": 24
+   }
+  }
+ ],
+ "usage": {
+  "cache_creation_input_tokens": 56951,
+  "cache_read_input_tokens": 104433,
+  "input_tokens": 150,
+  "output_tokens": 12226
+ }
+}

@@ -244,6 +244,35 @@ async def test_the_page_server_is_touched_while_the_context_is_open_and_never_af
     assert [who for who, _ in api.execs if who != "comp-1"] == ["comp-2"]
 
 
+async def test_the_first_touch_lands_before_the_first_interval_has_passed(
+    security: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`keep_alive` slept before its first touch, so the page's computer went
+    `KEEP_ALIVE_INTERVAL` seconds untouched from the moment it was created --
+    and `created_at` is what `reap_idle` measures against until something
+    touches it. `2026-09-16-run-1` lost the page to that gap: the reaper
+    destroyed `comp-3ff2ec6b4917` at 19:17:57 with an `auto-idle-timeout`
+    checkpoint, 45 seconds before row 12 read it and long before the first
+    touch was due. With the route gone the URL answered 200 with an empty body
+    rather than 502, so `curl --fail` exited 0 with nothing on stdout and
+    `secret_page` failed on a page that had been fine when the row was written.
+
+    The interval is asserted too, because the comment that chose 300 read the
+    host's *default* 1800 and the host does not run the default. Probing it on
+    2026-09-16: a computer was destroyed between 131 and 141 seconds after its
+    last touch, and the reaper cycle before that -- 71 to 81 seconds after it --
+    left it alone, which puts the live timeout in (71, 141]. 300 is longer than
+    any of that; the bound here is what says so.
+    """
+    monkeypatch.setattr(security, "KEEP_ALIVE_INTERVAL", 30.0)
+    api = PageApi(exec_body=_sse(("stdout", "---"), ("exit", "0")))
+    async with security.prepare(_doors(api, tmp_path), io.StringIO()):
+        # far less than the interval: only a touch that precedes the sleep lands
+        await asyncio.sleep(0.05)
+        assert ("POST", "/computers/comp-1/exec") in api.requests, api.requests
+    assert security.KEEP_ALIVE_INTERVAL <= 60.0
+
+
 async def test_a_failed_touch_is_logged_and_the_keep_alive_goes_on(
     security: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

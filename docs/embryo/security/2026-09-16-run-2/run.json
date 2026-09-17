@@ -1,0 +1,31 @@
+{
+ "base_url": "https://ai-gateway.vercel.sh",
+ "body_extra": "{\"providerOptions\":{\"gateway\":{\"only\":[\"openai\"]}}}",
+ "capability": "security",
+ "commands": 1,
+ "continuations": [],
+ "default_effort": "off",
+ "effort_supported": false,
+ "ended": "2026-09-16T19:50:31+00:00",
+ "error": "RuntimeError: ingress say: HTTP 404 {\"detail\":\"Ingress rule not found\"}",
+ "hatched": {
+  "checkpoint_id": "ckpt-87a279e87841",
+  "ingress_url": "",
+  "key_id": "key-95bbb8b78e33",
+  "recipe_id": "rcp-06135e631a9c",
+  "rule_id": "ir_b5dUoYn2kz_M2oMRcgQpQD2RUM8",
+  "server_id": null
+ },
+ "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-16-run-9",
+ "membrane": {
+  "commit": "a67dad29988791a64f1d4cb03faadc5b2f7e8fcb",
+  "dirty": false
+ },
+ "model": "openai/gpt-5.6-sol",
+ "ok": false,
+ "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA0N9MFCw7jQoKSDhpaifVtGiStOti7YH5Ab4NuQ+gic mike",
+ "reasks": [],
+ "run": "2026-09-16-run-2",
+ "started": "2026-09-16T19:50:25+00:00",
+ "started_from": "hatch/2026-09-16-run-9"
+}

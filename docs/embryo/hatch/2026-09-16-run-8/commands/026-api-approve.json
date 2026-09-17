@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-16T20:58:51+00:00",
+ "command": "approve",
+ "computer_id": "comp-c588470fdc54",
+ "detail": [
+  "p-1"
+ ],
+ "door": "api",
+ "n": 26,
+ "seconds": 2.325956815853715,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-1 building: verb verify_mike_ssh recipe rcp-0fa0e8e3a867\n"
+}
