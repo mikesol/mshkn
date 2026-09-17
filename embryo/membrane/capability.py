@@ -721,7 +721,15 @@ class Doors:
             await self.sleep(BUILD_INTERVAL)
 
     async def check_computer(self, computer_id: str) -> dict[str, Any]:
-        """Whether a verb's computer is gone (self-destructed) and what its exec log holds."""
+        """Whether a verb's computer is gone (self-destructed) and what its exec log holds.
+
+        `truncated` is the API's own `stdout_truncated`: the exec log keeps at most
+        `EXEC_LOG_OUTPUT_BYTES` of output, head and tail with the middle dropped, and
+        says so in the response. Without it a check reading `stdout` cannot tell a
+        verb that printed little from one whose payload was cut -- web-search run-4
+        read `results: 0` off a stdout whose outer JSON object had been destroyed
+        that way (#196). It is for the reader of the evidence, not for a parser:
+        `None` when there is no log to read at all."""
         status = await self.api.get(f"/computers/{computer_id}/status")
         log = await self.api.get(f"/computers/{computer_id}/exec_log")
         body = log.json() if log.status_code == 200 else {}
@@ -730,6 +738,7 @@ class Doors:
             "gone": status.status_code == 404,
             "stdout": body.get("stdout"),
             "exit_code": body.get("exit_code"),
+            "truncated": body.get("stdout_truncated"),
         }
 
     async def upload(self, computer_id: str, path: str, data: bytes) -> None:

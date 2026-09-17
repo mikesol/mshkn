@@ -774,7 +774,9 @@ async def test_wait_builds_gives_up_at_the_build_timeout(tmp_path: Path) -> None
 
 async def test_computer_checks_read_status_and_exec_log(tmp_path: Path) -> None:
     api = FakeApi(
-        exec_logs={"comp-1": {"stdout": "Example Domain\n", "exit_code": 0}},
+        exec_logs={
+            "comp-1": {"stdout": "Example Domain\n", "exit_code": 0, "stdout_truncated": False}
+        },
         gone={"comp-1"},
     )
     doors = _doors(api, tmp_path)
@@ -783,13 +785,36 @@ async def test_computer_checks_read_status_and_exec_log(tmp_path: Path) -> None:
         "gone": True,
         "stdout": "Example Domain\n",
         "exit_code": 0,
+        "truncated": False,
     }
     assert await doors.check_computer("comp-2") == {
         "computer_id": "comp-2",
         "gone": False,
         "stdout": None,
         "exit_code": None,
+        "truncated": None,
     }
+
+
+async def test_computer_checks_carry_the_apis_truncation_flag(tmp_path: Path) -> None:
+    """#196: `/exec_log` keeps at most `EXEC_LOG_OUTPUT_BYTES`, head and tail with
+    the middle dropped, and reports the cut in `stdout_truncated`. The embryo used
+    to read `stdout` and throw the flag away, so a check could not tell a short
+    answer from a butchered one -- which is how web-search run-4 read `results: 0`
+    off a payload whose outer JSON object had been destroyed."""
+    api = FakeApi(
+        exec_logs={
+            "comp-cut": {
+                "stdout": "{'head'...[mshkn: 4321 bytes truncated]...'tail'}",
+                "exit_code": 0,
+                "stdout_truncated": True,
+                "stderr_truncated": False,
+            }
+        },
+        gone={"comp-cut"},
+    )
+    doors = _doors(api, tmp_path)
+    assert (await doors.check_computer("comp-cut"))["truncated"] is True
 
 
 async def test_recipes_and_checkpoints(tmp_path: Path) -> None:
