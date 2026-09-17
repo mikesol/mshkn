@@ -161,6 +161,23 @@ async def test_start_spawns_the_reaper_and_close_tears_everything_down(
     assert runtime.http.is_closed
 
 
+async def test_start_installs_the_terminal_route(runtime: Runtime) -> None:
+    """The catch-all is re-installed on every start, so a restart leaves it last.
+
+    It is also in DEPLOY.md's caddy.json, but a host whose Caddy was reloaded
+    from an older config, or replaced, would otherwise serve 200-empty for every
+    unrouted name until someone noticed (#189).
+    """
+    proxy = runtime.host.proxy
+    assert proxy.terminal_routes == 0  # type: ignore[attr-defined]
+
+    await runtime.start()
+    try:
+        assert proxy.terminal_routes == 1  # type: ignore[attr-defined]
+    finally:
+        await runtime.close()
+
+
 async def test_start_reaps_a_vm_whose_process_died_while_the_server_was_down(
     runtime: Runtime, caplog: pytest.LogCaptureFixture
 ) -> None:

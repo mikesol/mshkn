@@ -165,10 +165,18 @@ printf 'CLOUDFLARE_API_TOKEN=%s\n' '<token with Zone:Read and DNS:Edit on mshkn.
     },
     "http": {"servers": {"main": {"listen": [":443", ":80"],
       "routes": [{"@id": "route-api", "match": [{"host": ["api.mshkn.dev"]}],
-        "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": "localhost:8000"}]}]}]}}}
+        "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": "localhost:8000"}]}]},
+        {"@id": "route-terminal",
+          "handle": [{"handler": "static_response", "status_code": 404, "body": "no such computer route\n"}]}]}}}
   }
 }
 ```
+
+`route-terminal` has no matcher and so must stay last: without it a `Host` matching
+no route falls off the end of the list and Caddy answers 200 with an empty body, which
+a tenant's `curl --fail` reads as success against a computer that no longer exists.
+Computer routes are inserted at the head of the list, never appended, so they always
+precede it, and mshkn re-installs it on every start.
 
 `/etc/systemd/system/caddy.service`:
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 
@@ -11,6 +12,9 @@ import httpx
 from mshkn.errors import HostError
 
 logger = logging.getLogger(__name__)
+
+ROUTES = "/config/apps/http/servers/main/routes"
+TERMINAL_ROUTE_ID = "route-terminal"
 
 
 class CaddyProxy:
@@ -25,11 +29,47 @@ class CaddyProxy:
         self.domain = domain
         self._client = httpx.AsyncClient(base_url=admin_url, timeout=10.0, transport=transport)
 
+    async def ensure_terminal_route(self) -> None:
+        """Install the catch-all 404 at the end of the route list.
+
+        Every computer route is a matcher plus a reverse_proxy, so a request
+        whose Host matches none of them falls off the end and Caddy answers 200
+        with an empty body. A tenant's `curl --fail` then exits 0 against a
+        computer that was destroyed, while a live computer with a dead port
+        returns 502 — the absent case reads as success and the reachable
+        failure reads as an error, which is backwards. 404 rather than 502
+        because the name resolves to no computer at all; 502 stays the dial
+        failure, and the two must remain distinguishable.
+
+        Deleting before appending keeps this idempotent and keeps the route
+        last: `add_route` inserts at the head, so nothing lands behind it.
+        """
+        with contextlib.suppress(httpx.HTTPError):
+            await self._client.delete(f"/id/{TERMINAL_ROUTE_ID}")
+        route = {
+            "@id": TERMINAL_ROUTE_ID,
+            "handle": [
+                {
+                    "handler": "static_response",
+                    "status_code": 404,
+                    "body": "no such computer route\n",
+                },
+            ],
+        }
+        try:
+            resp = await self._client.post(ROUTES, json=route)
+        except httpx.HTTPError as exc:
+            raise HostError(f"Caddy ensure_terminal_route failed: {exc!r}") from exc
+        if resp.status_code >= 400:
+            raise HostError(f"Caddy ensure_terminal_route failed: {resp.status_code} {resp.text}")
+        logger.info("Installed Caddy terminal route: unrouted names answer 404")
+
     async def add_route(self, computer_id: str, vm_ip: str) -> None:
         """Add a reverse proxy route for a computer.
 
         Creates a Caddy route that matches {port}-{computer_id}.{domain}
-        and proxies to {vm_ip}:{port}.
+        and proxies to {vm_ip}:{port}. It is inserted at the head of the list,
+        so it precedes the matcher-less terminal route that must stay last.
         """
         route_id = f"route-{computer_id}"
         # Escape dots in domain for regex
@@ -55,10 +95,7 @@ class CaddyProxy:
         }
         for attempt in range(3):
             try:
-                resp = await self._client.post(
-                    "/config/apps/http/servers/main/routes",
-                    json=route,
-                )
+                resp = await self._client.put(f"{ROUTES}/0", json=route)
                 if resp.status_code >= 400:
                     logger.error(
                         "Failed to add Caddy route for %s: %s %s",

@@ -199,6 +199,11 @@ class Runtime:
 
     async def start(self) -> None:
         """Recover host state and start the reaper. Called from the app lifespan."""
+        # Before anything can be routed: an unrouted name must 404, not 200
+        # (#189). Raising here refuses to serve rather than serving a host that
+        # reports absent computers as empty successes, and is consistent with
+        # add_route, which already fails every create when Caddy is unreachable.
+        await self.host.proxy.ensure_terminal_route()
         await self.allocator.initialize(self.db, self.host.blocks)
         resumed = await self.computers.resume_teardowns()
         if resumed:

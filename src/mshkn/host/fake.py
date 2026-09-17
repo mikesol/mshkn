@@ -348,6 +348,11 @@ class FakeProxy(_Failable):
         super().__init__()
         self.routes: dict[str, str] = {}
         self.is_healthy = True
+        self.terminal_routes = 0
+
+    async def ensure_terminal_route(self) -> None:
+        self._maybe_fail("ensure_terminal_route")
+        self.terminal_routes += 1
 
     async def add_route(self, computer_id: str, vm_ip: str) -> None:
         self._maybe_fail("add_route")
