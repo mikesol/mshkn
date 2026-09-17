@@ -247,14 +247,19 @@ command, or no `verb/` chain exists, the findings record that absence and the
 checks fail with it as evidence.
 
 **`runs_again`** (exercise). The program is still there and still right on a disk
-root reached by himself: probe 1 exited zero and its stdout holds the total of
-the amounts `verify` wrote. Evidence: the checkpoint forked, the command run, the
-stdout.
+root reached by himself: probe 1 exited zero and *some* number in its stdout is
+the total of the amounts `verify` wrote, within tolerance. `totals_in` returns
+every number the output holds rather than picking one, because a correct program
+plausibly prints `Total: 105.00 (3 amounts)` and taking the last number would
+read that as 3. Nothing in the probe's amounts is near their total and a total
+under 1000 carries no thousands separator, so a number that matches is the total.
+Evidence: the checkpoint forked, the command run, the stdout.
 
 **`fixed`** (exercise). The behaviour root asked for in row 18 holds on that same
-fork: probe 2 exits zero and totals only the numbers, probe 3 exits nonzero. The
-evidence also carries row 17's exec log, so the record shows what the program did
-with the mess before the fix, whatever that was.
+fork: probe 2 exits zero and some number in its stdout is again the total of only
+the numbers, probe 3 exits nonzero. The evidence also carries row 17's exec log,
+so the record shows what the program did with the mess before the fix, whatever
+that was.
 
 The three invariants come from the framework unchanged.
 
