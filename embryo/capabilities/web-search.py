@@ -179,6 +179,12 @@ def searched(j: Judged) -> dict[str, Any]:
             "gone": check.get("gone"),
             "results": len(results),
             "first_result": results[0] if results else None,
+            # Whether the exec log dropped the middle of what the verb printed
+            # (#196). Run-4's `results: 0` was read off a cut payload and took an
+            # afternoon to explain; this says so on the face of the evidence. The
+            # parser above does not branch on it -- it scans for whole documents
+            # whether or not anything was cut.
+            "truncated": check.get("truncated"),
             "stdout": stdout[:STDOUT_EVIDENCE],
             "tried_before_the_key": tried,
         },

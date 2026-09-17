@@ -156,6 +156,7 @@ def _searched(
     chain: bool = True,
     refusal: str = "the service answered 401 Unauthorized",
     exit_code: int = 22,
+    truncated: bool = False,
 ) -> Judged:
     """A run that searched: row 11 tried the verb before the key was there and was
     refused, row 12 ran it on the verb's chain and answered.
@@ -181,7 +182,12 @@ def _searched(
         ],
         {
             "comp-try": {"computer_id": "comp-try", "gone": True, "stdout": refusal},
-            "comp-s": {"computer_id": "comp-s", "gone": gone, "stdout": results},
+            "comp-s": {
+                "computer_id": "comp-s",
+                "gone": gone,
+                "stdout": results,
+                "truncated": truncated,
+            },
         },
     )
 
@@ -288,6 +294,18 @@ def test_searched_reads_a_response_the_exec_log_cut_open(web_search: Any) -> Non
     assert verdict["evidence"]["first_result"]["url"] == "https://fly.io/learn/firecracker-vm"
     # the empty list that used to win is not mistaken for a result set on its own
     assert web_search.searched(_searched(results='{"images": [], "resu'))["ok"] is False
+
+
+def test_searched_says_on_its_face_whether_the_payload_was_cut(web_search: Any) -> None:
+    """#196: the verdict does not turn on the flag -- the parser scans for whole
+    documents whether or not anything was dropped -- but the evidence carries it,
+    so a `results: 0` read months later says whether it was read off a whole
+    payload. Diagnosing run-4 meant re-parsing the recorded stdout by hand to
+    discover it had been cut."""
+    assert web_search.searched(_searched(truncated=True))["evidence"]["truncated"] is True
+    assert web_search.searched(_searched())["evidence"]["truncated"] is False
+    # a check the driver never filled in says nothing rather than "whole"
+    assert web_search.searched(_judged([], {}))["evidence"]["truncated"] is None
 
 
 def test_results_are_not_double_counted_when_documents_nest(web_search: Any) -> None:
