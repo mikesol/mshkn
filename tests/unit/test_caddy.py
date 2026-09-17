@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -123,7 +124,7 @@ async def test_remove_route_never_raises(caplog: pytest.LogCaptureFixture) -> No
 
     Callers do not guard `remove_route`, so it must not raise. Asserting only
     that would hold just as well for a body that never sent the request, so the
-    single DELETE aimed at this computer's route id is what is pinned.
+    DELETEs aimed at this computer's route id are what is pinned.
     """
     seen: list[httpx.Request] = []
 
@@ -134,10 +135,90 @@ async def test_remove_route_never_raises(caplog: pytest.LogCaptureFixture) -> No
     proxy = make_proxy(httpx.MockTransport(handler))
     with caplog.at_level(logging.WARNING):
         await proxy.remove_route("comp-1")
-    assert [(r.method, r.url.path) for r in seen] == [("DELETE", "/id/route-comp-1")], (
-        "one delete, aimed at this computer's route, and no retry"
+    assert [(r.method, r.url.path) for r in seen] == [("DELETE", "/id/route-comp-1")] * 3, (
+        "every attempt aims at this computer's route, and the retry is bounded"
     )
     assert "Failed to remove Caddy route for comp-1" in caplog.text
+
+
+async def test_remove_route_retries_a_connection_caddy_closed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression test for #154.
+
+    Caddy closes idle keep-alive connections, so a delete can pick up a pooled
+    connection the server has already dropped and fail with "Server
+    disconnected without sending a response". `add_route` retried this from the
+    start; `remove_route` did not, and the route leaked. Once the mutations are
+    serialised this is the only failure left in practice, and it is transient:
+    the retry opens a fresh connection.
+    """
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response")
+        return httpx.Response(200)
+
+    proxy = make_proxy(httpx.MockTransport(handler))
+    with caplog.at_level(logging.WARNING):
+        await proxy.remove_route("comp-1")
+    assert len(seen) == 2
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records), (
+        "a delete that succeeded on a retry is not a failure"
+    )
+
+
+async def test_remove_route_does_not_retry_a_timeout(caplog: pytest.LogCaptureFixture) -> None:
+    """A read or write timeout is reported, not re-sent.
+
+    The request may already have been applied server-side, so re-sending it is
+    not obviously safe — unlike a connection that was closed before the request
+    went out. The reaper's sweep covers the route if it did leak.
+    """
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        raise httpx.ReadTimeout("admin API stalled")
+
+    proxy = make_proxy(httpx.MockTransport(handler))
+    with caplog.at_level(logging.WARNING):
+        await proxy.remove_route("comp-1")  # does not raise
+    assert len(seen) == 1
+    assert "Failed to remove Caddy route for comp-1" in caplog.text
+
+
+async def test_config_mutations_are_serialised() -> None:
+    """Regression test for #154, and the fix the issue is actually about.
+
+    Caddy's admin API resolves an `@id` to an index in the routes array and
+    then applies the change by index, and the two steps are not atomic.
+    Overlapping writes shift the indexes under each other: measured against
+    Caddy 2.11.4, 60 concurrent deletes leave 40-47 routes behind and destroy
+    2-5 routes nobody targeted. Serialised, the same 60 leave none and destroy
+    none. So no two mutations may be in flight at once — which is what this
+    pins, by failing if a second request arrives before the first has answered.
+    """
+    in_flight = 0
+    overlapped = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal in_flight, overlapped
+        in_flight += 1
+        overlapped = overlapped or in_flight > 1
+        await asyncio.sleep(0)  # hand control to the other tasks
+        in_flight -= 1
+        return httpx.Response(200)
+
+    proxy = make_proxy(httpx.MockTransport(handler))
+    await asyncio.gather(
+        *(proxy.add_route(f"comp-{i}", "172.16.1.2") for i in range(10)),
+        *(proxy.remove_route(f"comp-{i}") for i in range(10, 20)),
+        proxy.ensure_terminal_route(),
+    )
+    assert not overlapped, "two config mutations were in flight at once"
 
 
 async def test_remove_route_treats_404_as_success(caplog: pytest.LogCaptureFixture) -> None:
@@ -179,16 +260,16 @@ async def test_remove_route_logs_warning_on_other_bad_status(
 async def test_remove_route_retries_when_concurrent_deletes_shift_the_index(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Regression test for #154.
+    """The 500 the issue named, which is the minority failure and not the fix.
 
-    Caddy resolves an `@id` to an index in the routes array and deletes by
-    index. Concurrent deletes shift those indexes under each other, so a
-    delete can resolve an id to a slot that no longer holds it and answer 500
-    `array index out of bounds`. The route is still there afterwards and
-    nothing retried, so it leaked for good. Re-issuing the DELETE resolves the
-    id afresh against the settled array, which is why a retry — not a
-    different verb — is the fix: PATCH by `@id` resolves the index the same
-    way.
+    A delete that resolves an id to a slot no longer holding it answers 500
+    `array index out of bounds`, and nothing retried, so the route leaked for
+    good. Re-issuing resolves the id afresh, which is why this is a retry
+    rather than a different verb — PATCH by `@id` resolves the index the same
+    way. It is kept because another writer (a hand-run curl, a second process)
+    can still provoke it, but on its own it fixes nothing: measured, the retry
+    alone left 35-49 of 60 routes behind, versus 46-50 without it. The lock in
+    `test_config_mutations_are_serialised` is what closes #154.
     """
     seen: list[httpx.Request] = []
 
