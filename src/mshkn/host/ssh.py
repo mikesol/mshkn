@@ -74,8 +74,17 @@ class _ReaderDone:
     error: Exception | None
 
 
-def _exit_code(process: asyncssh.SSHClientProcess[str]) -> str:
-    """The exit event's payload: 128 + the signal, else the status, else 255.
+class _Completed(Protocol):
+    """The exit fields shared by asyncssh's process and completed-process types."""
+
+    @property
+    def returncode(self) -> int | None: ...
+    @property
+    def exit_status(self) -> int | None: ...
+
+
+def _exit_code_of(result: _Completed) -> int:
+    """128 + the signal, else the status, else 255.
 
     asyncssh's SSHClientChannel.get_exit_status() returns -1, not None,
     once an exit-signal has arrived (get_exit_signal() carries the signal
@@ -83,17 +92,17 @@ def _exit_code(process: asyncssh.SSHClientProcess[str]) -> str:
     apart, returning the negative signal number when signalled and the
     non-negative exit status otherwise. A command the guest's `timeout`
     killed comes back through the status branch — `--preserve-status` makes
-    137 an ordinary exit status. The signal branch is for the host's
-    backstop: `process.kill()`, on an sshd that honours the signal request,
-    signals the process, and checking exit_status first would misread the
-    -1 that leaves behind as a real (and wrong) status.
+    137 an ordinary exit status. The signal branch is for a kill the guest
+    made itself (its OOM killer, or `process.kill()` on an sshd that honours
+    the signal request), and checking exit_status first would misread the -1
+    that leaves behind as a real (and wrong) status.
     """
-    returncode = process.returncode
+    returncode = result.returncode
     if returncode is not None and returncode < 0:
-        return str(128 - returncode)
-    if process.exit_status is not None and process.exit_status >= 0:
-        return str(process.exit_status)
-    return "255"
+        return 128 - returncode
+    if result.exit_status is not None and result.exit_status >= 0:
+        return result.exit_status
+    return 255
 
 
 class ConnectFn(Protocol):
@@ -239,10 +248,12 @@ class SshGuest:
         conn: asyncssh.SSHClientConnection, command: str, timeout: float
     ) -> ExecResult:
         result = await asyncio.wait_for(conn.run(command, check=False), timeout=timeout)
+        signal = result.exit_signal
         return ExecResult(
-            exit_code=result.exit_status or 0,
+            exit_code=_exit_code_of(result),
             stdout=str(result.stdout) if result.stdout else "",
             stderr=str(result.stderr) if result.stderr else "",
+            exit_signal=None if signal is None else str(signal[0]),
         )
 
     async def stream(
@@ -392,7 +403,7 @@ class SshGuest:
             # A reader died mid-command. Reporting a clean exit here would make
             # a dropped connection indistinguishable from a successful run.
             raise reader_error
-        yield ("exit", _exit_code(process))
+        yield ("exit", str(_exit_code_of(process)))
 
     async def exec_bg(self, vm_ip: str, command: str) -> int:
         async with _host_errors("exec_bg"):

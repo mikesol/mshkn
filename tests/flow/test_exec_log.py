@@ -18,6 +18,7 @@ EXEC_LOG_KEYS = {
     "label",
     "command",
     "exit_code",
+    "exit_signal",
     "stdout",
     "stderr",
     "stdout_truncated",
@@ -66,6 +67,41 @@ async def test_exec_log_survives_the_self_destructed_computer(flow: Flow) -> Non
     chain = (await flow.client.get("/checkpoints", params={"label": "brain"})).json()
     created = next(c for c in chain if c["id"] == body["created_checkpoint_id"])
     assert created["computer_id"] == body["computer_id"]
+
+
+async def test_a_killed_command_names_its_signal_on_the_fork_and_in_the_log(flow: Flow) -> None:
+    """A run the guest killed says so, not just a code a normal exit could carry (#197).
+
+    137 alone is ambiguous: `exit 137` produces it too. The signal name is the
+    only field that distinguishes the guest killing the command — an OOM kill,
+    which is what ended web-search run-5 — from the command failing.
+    """
+    flow.host.guest.script["sync"] = ExecResult(0, "", "")
+    flow.host.guest.script["membrane root list"] = ExecResult(137, "", "", exit_signal="KILL")
+    cid = (await flow.client.post("/computers", json={})).json()["computer_id"]
+    ckpt = (await flow.client.post(f"/computers/{cid}/checkpoint", json={"label": "brain"})).json()[
+        "checkpoint_id"
+    ]
+    await flow.client.delete(f"/computers/{cid}")
+    fork = (
+        await flow.client.post(
+            f"/checkpoints/{ckpt}/fork",
+            json={"exec": "membrane root list", "self_destruct": True},
+        )
+    ).json()
+    assert (fork["exec_exit_code"], fork["exec_exit_signal"]) == (137, "KILL")
+
+    log = (await flow.client.get(f"/computers/{fork['computer_id']}/exec_log")).json()
+    assert (log["exit_code"], log["exit_signal"]) == (137, "KILL")
+
+
+async def test_a_command_that_exited_on_its_own_has_no_signal(flow: Flow) -> None:
+    """The field is the distinction, so it must be empty for an ordinary failure."""
+    flow.host.guest.script["false"] = ExecResult(1, "", "")
+    cid = (await flow.client.post("/computers", json={"exec": "false"})).json()
+    assert (cid["exec_exit_code"], cid["exec_exit_signal"]) == (1, None)
+    log = (await flow.client.get(f"/computers/{cid['computer_id']}/exec_log")).json()
+    assert (log["exit_code"], log["exit_signal"]) == (1, None)
 
 
 async def test_exec_log_is_404_for_other_accounts_and_unknown_computers(flow: Flow) -> None:

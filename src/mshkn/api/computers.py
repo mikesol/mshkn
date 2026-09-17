@@ -174,6 +174,7 @@ async def exec_log(
         label=log.label,
         command=log.command,
         exit_code=log.exit_code,
+        exit_signal=log.exit_signal,
         stdout=log.stdout,
         stderr=log.stderr,
         stdout_truncated=log.stdout_truncated,
