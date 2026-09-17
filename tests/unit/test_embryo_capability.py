@@ -530,7 +530,14 @@ class FakeApi:
             self.checkpoints.append(ck)
             return httpx.Response(200, json={"checkpoint_id": ck["id"]})
         if request.method == "DELETE":
-            return httpx.Response(500 if self.fail_deletes else 200, json={})
+            if self.fail_deletes:
+                return httpx.Response(500, json={})
+            # a deleted checkpoint stops being listed: what the account holds is
+            # what the next `GET /checkpoints` says it holds, not what was asked for
+            if path.startswith("/checkpoints/"):
+                gone = path.split("/")[2]
+                self.checkpoints = [c for c in self.checkpoints if c["id"] != gone]
+            return httpx.Response(200, json={})
         return httpx.Response(404, json={"detail": f"unrouted {request.method} {path}"})
 
 
@@ -3193,24 +3200,181 @@ async def test_run_once_records_effort_unsupported_when_the_run_was_given_off(
     assert summary["effort_supported"] is False
 
 
-async def test_run_once_refuses_an_account_that_already_has_a_brain(
+def _record_of(
+    out: Path,
+    capability: str,
+    name: str,
+    *,
+    ok: bool,
+    recipe: str = "rcp-brain",
+    ended: str = "2026-09-17T10:00:00+00:00",
+) -> Path:
+    """A run's evidence on disk, as `run_once` wrote it: enough of `run.json` for
+    the next run to say whose the brain on the account is and how it ended."""
+    run_dir = out / capability / name
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run": name,
+                "capability": capability,
+                "ok": ok,
+                "ended": ended,
+                "hatched": {
+                    "ingress_url": "",
+                    "rule_id": "rule-1",
+                    "key_id": "key-1",
+                    "recipe_id": recipe,
+                    "checkpoint_id": "ck-brain",
+                    "server_id": None,
+                },
+            }
+        )
+    )
+    return run_dir
+
+
+async def test_run_once_refuses_a_brain_no_run_record_claims(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """An unexplained brain is a hazard, not a corpse (#193): nothing on disk says
+    which run built it or whether that run passed, so root is not going to guess."""
     api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": "r"}])
     monkeypatch.setattr(
         "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
-    with pytest.raises(RuntimeError, match="already has a brain"):
+    out_dir = tmp_path / "docs" / "hatch" / "2026-09-17-run-2"
+    with pytest.raises(RuntimeError, match="no run record"):
         await run_once(
             _settings(),
             HATCH,
-            tmp_path / "run",
+            out_dir,
             AutoApprover(),
             hatch_script=_stub_hatch(tmp_path),
             key_dir=tmp_path / "keys",
             keep=False,
             log=io.StringIO(),
-            out=tmp_path,
+            out=tmp_path / "docs",
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+    # the number is taken when the run writes, so an abort at the guard does not
+    # burn one on an empty directory (#193, "Also")
+    assert not out_dir.exists()
+
+
+async def test_run_once_tears_down_the_brain_of_a_failed_run_and_measures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed run's brain will never be promoted, so it is not worth a human
+    remembering `capability teardown` before the next attempt (#193). Its evidence
+    survives on disk for exactly as long as nobody needs the account."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    out = tmp_path / "docs"
+    stale = _record_of(out, "hatch", "2026-09-17-run-1", ok=False)
+    api = FakeApi(checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain"}])
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    log = io.StringIO()
+    summary = await run_once(
+        _settings(),
+        HATCH,
+        out / "hatch" / "2026-09-17-run-2",
+        AutoApprover(),
+        hatch_script=_stub_hatch(tmp_path),
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=log,
+        out=out,
+    )
+    assert summary["run"] == "2026-09-17-run-2"  # it got past the guard and measured
+    assert "/checkpoints/ck-stale" in [p for m, p, _ in api.requests if m == "DELETE"]
+    assert "2026-09-17-run-1" in log.getvalue()
+    assert (stale / "run.json").exists()  # the evidence, not the account state
+
+
+async def test_run_once_refuses_the_brain_of_the_newest_run_when_it_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A passing run is promotable and its brain is not ours to delete -- and the
+    brain on the account is the newest kept run's, so an older failure sharing the
+    same recipe does not license a teardown."""
+    out = tmp_path / "docs"
+    _record_of(out, "hatch", "2026-09-17-run-1", ok=False, ended="2026-09-17T10:00:00+00:00")
+    _record_of(out, "hatch", "2026-09-17-run-2", ok=True, ended="2026-09-17T12:00:00+00:00")
+    api = FakeApi(checkpoints=[{"id": "ck-good", "label": "brain", "recipe_id": "rcp-brain"}])
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="2026-09-17-run-2, which passed"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-3",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+
+
+async def test_run_once_refuses_when_the_blocking_runs_own_lineage_is_not_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The brain is torn down as its own run's capability, not as the one about to
+    measure: a dependent's leavings can only be told from its lineage's by reading
+    that lineage's promotion, and without it deleting nothing is the safe answer."""
+    out = tmp_path / "docs"
+    _record_of(out, "security", "2026-09-17-run-1", ok=False)
+    api = FakeApi(checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain"}])
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="security starts from hatch, which has no promotion"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-1",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+
+
+async def test_run_once_refuses_when_the_teardown_leaves_the_brain_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Doors.teardown` is best effort and swallows a failing delete, so a run that
+    proceeded on its word could measure on another run's brain. The guard reads the
+    account again rather than the teardown's silence."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    out = tmp_path / "docs"
+    _record_of(out, "hatch", "2026-09-17-run-1", ok=False)
+    api = FakeApi(
+        checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain"}],
+        fail_deletes=True,
+    )
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="still has a brain"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-2",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
         )
 
 
