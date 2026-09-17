@@ -221,3 +221,71 @@ async def test_the_cycle_expires_relay_jobs_with_the_exec_log_retention(
     )
     assert await reaper.expire_relay_jobs() == 0, "0 keeps every job"
     await reaper.cycle()  # the cycle runs it without raising
+
+
+async def test_sweep_routes_drops_routes_whose_computer_is_gone(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """Regression test for #154: a leaked route is reclaimed by the next cycle.
+
+    `remove_route` retries the index race now, but it still gives up rather
+    than raising, and a destroy that dies between the DB write and the admin
+    call never issues one at all. Without a sweep those routes stay in Caddy
+    for the life of the process: every request to the domain is matched
+    against them, and a recycled address means a stale route pointing at a
+    machine some other tenant now holds.
+    """
+    reaper, computers, _, host = await _reaper(db, tmp_path)
+    live = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    host.proxy.routes["comp-dead"] = "172.16.9.9"  # a delete that never landed
+    host.proxy.routes["api"] = "127.0.0.1"  # route-api: not a computer, not ours to drop
+    assert await reaper.sweep_routes() == 1
+    assert set(host.proxy.routes) == {live.id, "api"}
+
+
+async def test_sweep_routes_reclaims_the_route_of_a_destroyed_computer(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """The real shape of the leak: destroy ran, the route survived it."""
+    reaper, computers, _, host = await _reaper(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    await computers.destroy(computer.id)
+    host.proxy.routes[computer.id] = computer.vm_ip  # as if the DELETE had 500'd
+    assert await reaper.sweep_routes() == 1
+    assert host.proxy.routes == {}
+
+
+async def test_sweep_routes_leaves_a_computer_mid_teardown_alone(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    """A route is stale only when its computer is destroyed, not when it is busy dying.
+
+    The sweep reads every non-destroyed computer rather than only the running
+    ones, so a computer part-way through create or destroy keeps its route. It
+    also reads Caddy before it reads the database: a computer created after
+    the listing cannot appear in it, and one created before the listing
+    already has its row (`insert_computer` precedes `add_route`). Either way
+    the sweep cannot delete a live computer's route.
+    """
+    reaper, computers, _, host = await _reaper(db, tmp_path)
+    computer = await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    await db.execute("UPDATE computers SET status = 'destroying' WHERE id = ?", (computer.id,))
+    assert await reaper.sweep_routes() == 0
+    assert set(host.proxy.routes) == {computer.id}
+
+
+async def test_sweep_routes_is_a_no_op_with_nothing_stale(
+    db: aiosqlite.Connection, tmp_path: Path
+) -> None:
+    reaper, computers, _, _ = await _reaper(db, tmp_path)
+    await computers.create(ACCOUNT, recipe_id=None, resources=DEFAULT_RESOURCES)
+    assert await reaper.sweep_routes() == 0
+    assert await reaper.sweep_routes() == 0, "the sweep is idempotent"
+
+
+async def test_the_cycle_sweeps_routes(db: aiosqlite.Connection, tmp_path: Path) -> None:
+    """The sweep has to be wired in, not merely available."""
+    reaper, _, _, host = await _reaper(db, tmp_path)
+    host.proxy.routes["comp-dead"] = "172.16.9.9"
+    await reaper.cycle()
+    assert host.proxy.routes == {}
