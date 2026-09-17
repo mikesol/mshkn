@@ -92,6 +92,12 @@ async def test_failed_build_records_the_log_and_leaves_no_device(
     stored = await get_recipe(db, recipe.id)
     assert stored is not None and stored.status is RecipeStatus.FAILED
     assert stored.build_log is not None and "boom" in stored.build_log
+    # The log is the tenant's only account of why their build failed (#188). It
+    # carries the builder's own output and nothing of mshkn's: a stack whose
+    # frames name the server's install path buries the actionable line and
+    # discloses internals to any account that can create a recipe.
+    assert "Traceback (most recent call last)" not in stored.build_log
+    assert "recipes.py" not in stored.build_log
     assert stored.base_volume_id is None
     assert host.blocks.active == {}
 
