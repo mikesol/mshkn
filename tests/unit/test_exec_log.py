@@ -42,7 +42,12 @@ ACCOUNT = account_row(api_key="k")
 OTHER = account_row(id="acct-2", api_key="k2")
 
 
-def _row(computer_id: str = "comp-1", *, created_at: str = "2026-09-08T00:00:00+00:00") -> ExecLog:
+def _row(
+    computer_id: str = "comp-1",
+    *,
+    created_at: str = "2026-09-08T00:00:00+00:00",
+    exit_signal: str | None = None,
+) -> ExecLog:
     return ExecLog(
         computer_id=computer_id,
         account_id="acct-1",
@@ -51,6 +56,7 @@ def _row(computer_id: str = "comp-1", *, created_at: str = "2026-09-08T00:00:00+
         label="chain",
         command="echo hi",
         exit_code=0,
+        exit_signal=exit_signal,
         stdout="hi\n",
         stderr="",
         stdout_truncated=False,
@@ -103,6 +109,15 @@ async def test_exec_log_roundtrip_and_checkpoint_link(db: aiosqlite.Connection) 
     stored = await get_exec_log(db, "comp-1")
     assert stored is not None and stored.created_checkpoint_id == "ckpt-9"
     assert await get_exec_log(db, "comp-none") is None
+
+
+async def test_exec_log_keeps_the_signal_that_killed_the_command(
+    db: aiosqlite.Connection,
+) -> None:
+    """The column is the record of an OOM kill after the computer is gone (#197)."""
+    await insert_exec_log(db, _row("comp-killed", exit_signal="KILL"))
+    stored = await get_exec_log(db, "comp-killed")
+    assert stored is not None and stored.exit_signal == "KILL"
 
 
 async def test_delete_exec_logs_before_removes_only_older_rows(db: aiosqlite.Connection) -> None:

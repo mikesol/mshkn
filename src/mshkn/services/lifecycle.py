@@ -79,7 +79,7 @@ class Lifecycle:
         source_checkpoint: Checkpoint | None,
     ) -> EphemeralResult:
         if spec.command is None:
-            return EphemeralResult(computer.id, None, None, None, None)
+            return EphemeralResult(computer.id, None, None, None, None, None)
         result = await self.computers.exec(computer, spec.command)
         label = source_checkpoint.label if source_checkpoint is not None else spec.label
         # Recorded before the self-destruct, so a checkpoint that fails to be
@@ -99,6 +99,7 @@ class Lifecycle:
                     "checkpoint_id": source_checkpoint.id if source_checkpoint else None,
                     "label": label,
                     "exec_exit_code": result.exit_code,
+                    "exec_exit_signal": result.exit_signal,
                     "exec_stdout": result.stdout,
                     "exec_stderr": result.stderr,
                     "created_checkpoint_id": created_checkpoint_id,
@@ -117,6 +118,7 @@ class Lifecycle:
         return EphemeralResult(
             computer_id=computer.id,
             exec_exit_code=result.exit_code,
+            exec_exit_signal=result.exit_signal,
             exec_stdout=result.stdout,
             exec_stderr=result.stderr,
             created_checkpoint_id=created_checkpoint_id,
@@ -142,6 +144,7 @@ class Lifecycle:
                 label=label,
                 command=command,
                 exit_code=result.exit_code,
+                exit_signal=result.exit_signal,
                 stdout=stdout,
                 stderr=stderr,
                 stdout_truncated=stdout_truncated,
