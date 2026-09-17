@@ -189,8 +189,15 @@ The two new checks, in `embryo/capabilities/web_search.py`:
   before the key was placed. The last clause is what distinguishes "the key was
   used" from "the verb happened to work".
 - **`read_page`.** Row 14's reply contains the page's fixed body, the fetch verb's
-  call ran on its chain, and that computer is gone — `secret_page`'s structure
-  with no credential in it.
+  call ran, and that computer is gone.
+
+  Corrected while implementing, 2026-09-17: this said "ran on its chain", copied
+  from `secret_page`. A chain is how a *secret* survives an invocation, and row
+  13's verb holds none — the natural answer to "read the page at a URL I give it"
+  is an ephemeral verb, as hatch's `page_title` is. Requiring a chain there would
+  have judged an implementation choice the row never asks for, so the check is
+  `page_title`'s structure, not `secret_page`'s. `searched` keeps the clause,
+  because the secret path requires the search verb to be a `chain` verb.
 
 `searched` is the only check that touches the live web, and it asserts nothing
 about *what* was found. That is deliberate: a postcondition that asserts the

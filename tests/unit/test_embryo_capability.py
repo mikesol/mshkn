@@ -18,7 +18,9 @@ import pytest
 from membrane.capabilities import CAPABILITIES, load
 from membrane.capability import (
     CONFLICT_INTERVAL,
+    INSPECT,
     MAX_REASKS,
+    NEEDLE,
     TRANSPORT_RETRIES,
     TURN_WAIT,
     AskApprover,
@@ -39,13 +41,14 @@ from membrane.capability import (
     sign,
     speak,
     split_output,
+    sse_stdout,
     transport_for,
 )
 from membrane.config import EFFORT_OFF
 from membrane.model import zero_usage
 from membrane.postconditions import CHECKS, Judged, Turn, by_label, judge, tool_computers
 
-from tests.support_embryo import HATCH, WORDS, audit_line, b64
+from tests.support_embryo import HATCH, WORDS, PageApi, audit_line, b64, page_doors, sse
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -2114,7 +2117,7 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
         ]
     }
     result = judge(
-        list(CHECKS),
+        list(HATCH.postconditions),
         Judged(
             turns=turns,
             final=final,
@@ -2126,7 +2129,7 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
             context={},
         ),
     )
-    assert list(result) == list(CHECKS)
+    assert list(result) == list(HATCH.postconditions)
     assert all(v["ok"] for v in result.values()), {k: v for k, v in result.items() if not v["ok"]}
     assert result["page_title"]["evidence"]["computer_id"] == "comp-title"
     assert result["counter"]["evidence"]["counts"] == [1, 2]
@@ -2185,7 +2188,7 @@ async def test_a_policy_change_makes_the_driver_re_ask_the_rows_that_called_no_v
         for cid in [c["computer_id"] for t in turns for c in tool_computers(t)]
     }
     result = judge(
-        list(CHECKS),
+        list(HATCH.postconditions),
         Judged(
             turns=turns,
             final=final,
@@ -2739,7 +2742,7 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
     assert turns[5].audit["principal"] == "anonymous"
     final = await doors.listing()
     result = judge(
-        list(CHECKS),
+        list(HATCH.postconditions),
         Judged(
             turns=turns,
             final=final,
@@ -2897,7 +2900,7 @@ async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -
     assert public and all(t.audit["principal"] is None for t in public)
     final = await doors.listing()
     result = judge(
-        list(CHECKS),
+        list(HATCH.postconditions),
         Judged(
             turns=turns,
             final=final,
@@ -3060,9 +3063,10 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     # every membrane command was answered by the fake's default (a root reply), so the
     # door was never opened and the postconditions that need it fail honestly
     assert summary["ok"] is False and summary["model"] == "claude-opus-5"
-    assert summary["hatched"]["rule_id"] == "rule-1" and summary["passed"] < len(CHECKS)
+    assert summary["hatched"]["rule_id"] == "rule-1"
+    assert summary["passed"] < len(HATCH.postconditions)
     assert summary["usage"]["input_tokens"] > 0 and summary["cost_usd"] > 0
-    assert set(summary["postconditions"]) == set(CHECKS)
+    assert set(summary["postconditions"]) == set(HATCH.postconditions)
     assert summary["capability"] == "hatch" and summary["started_from"] == "hatch"
     assert (out_dir / "run.json").exists() and (out_dir / "transcript.md").exists()
     assert (out_dir / "final-list.json").exists() and any((out_dir / "commands").iterdir())
@@ -5229,3 +5233,63 @@ async def test_a_dependent_checks_its_lineage_is_still_on_the_host_before_it_for
         return httpx.Response(200, json=[{"id": "ir_1"}])
 
     await check_lineage(_bare_doors(tmp_path, held), lineage)
+
+
+# ---------------------------------------------------------------- the brain inspection
+
+
+def test_sse_stdout_reads_crlf_and_lf_streams() -> None:
+    assert sse_stdout(sse(("stdout", "a"), ("stderr", "x"), ("stdout", "b"), ("exit", "0"))) == (
+        "a\nb",
+        0,
+    )
+    assert sse_stdout("event: stdout\ndata: only\n\nevent: exit\ndata: 3\n\n") == ("only", 3)
+    assert sse_stdout("") == ("", None)
+
+
+async def test_inspect_brain_forks_the_head_greps_for_the_secret_and_destroys_the_fork(
+    tmp_path: Path,
+) -> None:
+    api = PageApi(
+        exec_body=sse(
+            ("stdout", "---"),
+            ("stdout", "MSHKN_API_URL"),
+            ("stdout", "MSHKN_API_KEY"),
+            ("exit", "0"),
+        )
+    )
+    doors = page_doors(api, tmp_path)
+    log = io.StringIO()
+    found = await doors.inspect_brain("tok-1", log)
+    assert found == {
+        "checkpoint": "ck-brain",
+        "files_with_token": [],
+        "env_names": ["MSHKN_API_URL", "MSHKN_API_KEY"],
+    }
+    assert ("POST", "/checkpoints/ck-brain/fork") in api.requests
+    # the secret reached the fork as an upload's body; the command names neither it nor a value
+    assert api.uploads[("comp-1", NEEDLE)] == b"tok-1"
+    assert api.execs == [("comp-1", INSPECT)]
+    assert "tok-1" not in INSPECT and "tok-1" not in log.getvalue()
+    assert "/computers/comp-1" in api.deleted
+    # scaffolding, not a command root sent: nothing here may count for nothing_by_hand
+    assert doors.sent == []
+
+
+async def test_inspect_brain_needs_a_brain_and_destroys_the_fork_when_the_command_fails(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(RuntimeError, match="no brain to inspect"):
+        await Doors(
+            httpx.AsyncClient(
+                base_url="http://api",
+                transport=httpx.MockTransport(PageApi(checkpoints=[]).handler),
+            ),
+            httpx.AsyncClient(base_url="http://api"),
+            "rule",
+            None,
+        ).inspect_brain("tok-1", io.StringIO())
+    failing = PageApi(fail="/exec")
+    with pytest.raises(httpx.HTTPStatusError):
+        await page_doors(failing, tmp_path).inspect_brain("tok-1", io.StringIO())
+    assert "/computers/comp-1" in failing.deleted
