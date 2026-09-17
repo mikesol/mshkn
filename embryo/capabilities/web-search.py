@@ -29,7 +29,7 @@ from membrane.page import serve
 from membrane.postconditions import CHECKS, Judged, by_label, tool_computers, trial_runs
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncIterator, Iterator, Mapping
     from typing import TextIO
 
 # The operator's, read from where the driver reads its own keys (`--env`'s
@@ -68,10 +68,21 @@ async def prepare(doors: Any, log: TextIO) -> AsyncIterator[Mapping[str, str]]:
         }
 
 
-def _first_json(text: str) -> Any:
-    """The first JSON document in `text`, or None. The verb is the agent's own
-    build and may print anything around its answer, so the check finds the
-    document rather than demanding the output be one."""
+def _documents(text: str) -> Iterator[Any]:
+    """Every JSON document that starts somewhere in `text`, outermost first.
+
+    The verb is the agent's own build and may print anything around its answer,
+    so the check finds the documents rather than demanding the output be one --
+    and it must find *all* of them, because the one wrapping the answer is not
+    always parseable. `/exec_log` stores at most `EXEC_LOG_OUTPUT_BYTES`, head and
+    tail with the middle cut out, so a verb that pretty-prints a large response
+    has its outer object destroyed while whole result objects survive inside the
+    head. Returning only the first document that parsed made that case read as an
+    empty result set: the first thing to decode in a cut-open response was the
+    `[]` of an empty `images` field (2026-09-17 run-4).
+
+    Nested documents are yielded too and are the caller's problem to dedupe;
+    outermost first means the wrapper wins whenever it survived."""
     decoder = json.JSONDecoder()
     for i, character in enumerate(text):
         if character in "{[":
@@ -79,23 +90,28 @@ def _first_json(text: str) -> Any:
                 value, _ = decoder.raw_decode(text[i:])
             except ValueError:
                 continue
-            return value
-    return None
+            yield value
 
 
 def _results(stdout: str) -> list[dict[str, Any]]:
     """Every mapping in the verb's output that carries a URL: a result shape,
-    named by no provider."""
+    named by no provider. Deduped on the mapping itself, since a document and the
+    documents nested inside it are all scanned and yield the same entries."""
     found: list[dict[str, Any]] = []
-    stack: list[Any] = [_first_json(stdout)]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, dict):
-            if any(isinstance(v, str) and URL_RE.fullmatch(v) for v in node.values()):
-                found.append(node)
-            stack.extend(node.values())
-        elif isinstance(node, list):
-            stack.extend(node)
+    seen: set[str] = set()
+    for document in _documents(stdout):
+        stack: list[Any] = [document]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, dict):
+                if any(isinstance(v, str) and URL_RE.fullmatch(v) for v in node.values()):
+                    key = json.dumps(node, sort_keys=True, default=str)
+                    if key not in seen:
+                        seen.add(key)
+                        found.append(node)
+                stack.extend(node.values())
+            elif isinstance(node, list):
+                stack.extend(node)
     return found
 
 

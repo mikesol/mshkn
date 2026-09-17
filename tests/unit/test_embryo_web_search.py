@@ -262,6 +262,42 @@ def test_searched_finds_the_result_shape_whatever_the_verb_printed_around_it(
     assert len(evidence["stdout"]) == web_search.STDOUT_EVIDENCE
 
 
+def test_searched_reads_a_response_the_exec_log_cut_open(web_search: Any) -> None:
+    """2026-09-17 run-4: `/exec_log` stores `EXEC_LOG_OUTPUT_BYTES` as head plus
+    tail with the middle dropped, so a verb that pretty-printed a large response
+    had its outer object destroyed. Scanning only to the first document that
+    parsed then found the `[]` of an empty `images` field and called the run
+    resultless -- judging how the agent chose to format its output. Whole result
+    objects survive inside the head, and one of those is what the row asks for."""
+    body = {
+        "query": "firecracker",
+        "images": [],
+        "results": [
+            {"title": "Fly", "url": "https://fly.io/learn/firecracker-vm", "content": "y" * 200},
+            {"title": "Official", "url": "https://firecracker-microvm.github.io/", "c": "z" * 4000},
+        ],
+    }
+    whole = json.dumps(body, indent=2)
+    head, tail = whole[: len(whole) // 2], whole[-40:]
+    cut = f"{head}\n[mshkn: 4321 bytes truncated]\n{tail}"
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(cut)  # the wrapper really is gone, not merely shortened
+    verdict = web_search.searched(_searched(results=cut))
+    assert verdict["ok"] is True
+    assert verdict["evidence"]["results"] == 1
+    assert verdict["evidence"]["first_result"]["url"] == "https://fly.io/learn/firecracker-vm"
+    # the empty list that used to win is not mistaken for a result set on its own
+    assert web_search.searched(_searched(results='{"images": [], "resu'))["ok"] is False
+
+
+def test_results_are_not_double_counted_when_documents_nest(web_search: Any) -> None:
+    """Every document that starts anywhere in the text is scanned, so a wrapper
+    and the entries inside it are both decoded; an entry must still be counted
+    once."""
+    verdict = web_search.searched(_searched())
+    assert verdict["evidence"]["results"] == 2
+
+
 def test_read_page_reads_row_14_from_a_gone_computer(web_search: Any) -> None:
     body = web_search.PAGE_BODY.strip()
     call = {"name": "read_url", "computer_id": "comp-f"}
