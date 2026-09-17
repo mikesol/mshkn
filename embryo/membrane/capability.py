@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
     from types import ModuleType
 
-    from membrane.capabilities import Capability, Prepare, Row
+    from membrane.capabilities import Capability, Prepare, Row, Verify
 
 DEFAULT_BRAIN_API_URL = "https://api.mshkn.dev"
 DEFAULT_OUT = Path("docs/embryo")
@@ -1755,6 +1755,27 @@ async def run_context(
         yield {"key": pubkey, **extra}
 
 
+async def run_verify(
+    module: ModuleType | None,
+    doors: Doors,
+    turns: list[Turn],
+    final: dict[str, Any],
+    *,
+    log: TextIO,
+) -> None:
+    """The module's second hook (coding design §6): the run is over, the listing
+    is recorded, and the capability probes what it left behind before its checks
+    are judged. A failure here is recorded and not raised: a broken probe costs
+    the check that reads it, never the run's evidence."""
+    verify: Verify | None = None if module is None else getattr(module, "verify", None)
+    if verify is None:
+        return
+    try:
+        await verify(doors, turns, final, log)
+    except Exception as exc:  # a probe's failure is a finding, not the run's end
+        log.write(f"verify failed: {type(exc).__name__}: {exc}\n")
+
+
 def _usage_total(turns: list[Turn]) -> tuple[dict[str, int], int]:
     usage = zero_usage()
     calls = 0
@@ -1906,6 +1927,7 @@ async def run_once(
                 )
                 raise
             record.final_list(final)
+            await run_verify(module, doors, turns, final, log=log)
             computer_ids = [c["computer_id"] for t in turns for c in tool_computers(t)]
             # the hook computers of every turn, not row 4's alone (#167): a
             # dependent capability's identity hook may run on a row hatch never

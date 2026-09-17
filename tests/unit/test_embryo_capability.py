@@ -4383,11 +4383,13 @@ if TYPE_CHECKING:
 
 FLAG = Path("__FLAG__")
 EXTRA = __EXTRA__
+PROBED: dict[str, Any] = {}
 
 
 def served_page(judged: Any) -> dict[str, Any]:
-    """What the run was spoken with is what this check is judged on."""
-    return {"ok": judged.context.get("url") == "http://page", "evidence": {}}
+    """What the run was spoken with is what this check is judged on; what the
+    probe left in module state is the evidence beside it."""
+    return {"ok": judged.context.get("url") == "http://page", "evidence": dict(PROBED)}
 
 
 CHECKS["served_page"] = served_page
@@ -4400,6 +4402,18 @@ async def prepare(doors: Any, log: Any) -> AsyncIterator[Mapping[str, str]]:
         yield EXTRA
     finally:
         FLAG.write_text("torn down")
+
+
+async def verify(doors: Any, turns: Any, final: Any, log: Any) -> None:
+    """What the run left behind, stashed where this module's check reads it."""
+    PROBED.update(
+        {
+            "spoke": [turn.label for turn in turns],
+            "listed": sorted(final),
+            "recorded": (doors.record.directory / "final-list.json").exists(),
+        }
+    )
+    log.write("the page was probed after the listing\\n")
 '''
 
 CHECK_MODULE = """from membrane.postconditions import CHECKS
@@ -4472,6 +4486,43 @@ async def test_run_once_speaks_what_the_modules_prepare_yields_and_exits_it(
     assert summary["postconditions"]["served_page"]["ok"] is True
     assert (tmp_path / "exited").read_text() == "torn down"
     assert "the page is served (0 commands so far)" in log.getvalue()
+
+
+async def test_run_once_hands_the_modules_verify_the_turns_and_the_recorded_listing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The module's second hook (coding design §6): the driver calls `verify` after
+    the final listing is recorded and before the checks are judged, handing it the
+    run's own turns and that listing. What the probe stashes in module state is
+    what its check is judged on, so a probe that never ran costs the check."""
+    from membrane.capabilities import load, load_module
+
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    monkeypatch.setitem(CHECKS, "served_page", lambda _judged: {"ok": False, "evidence": {}})
+    capability = load(_served(tmp_path, '{"url": "http://page"}'))
+    api = FakeApi()
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    log = io.StringIO()
+    summary = await run_once(
+        _settings(),
+        capability,
+        tmp_path / "run",
+        AutoApprover(),
+        hatch_script=_stub_hatch(tmp_path),
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=log,
+        out=tmp_path,
+        module=load_module(capability),
+    )
+    probed = summary["postconditions"]["served_page"]["evidence"]
+    # the run's real turns, the real listing, and `final-list.json` already written
+    assert probed["spoke"] == ["1"]
+    assert probed["listed"] == ["catalog", "pending", "policy", "proposals", "queue", "window"]
+    assert probed["recorded"] is True
+    assert "the page was probed after the listing" in log.getvalue()
 
 
 async def test_a_modules_prepare_may_not_take_the_runs_key(
@@ -5241,3 +5292,45 @@ def test_sse_stdout_reads_the_stdout_lines_and_the_exit_code() -> None:
     assert sse_stdout(stream) == ("a\nb", 0)
     assert sse_stdout("event: stdout\ndata: only\n\nevent: exit\ndata: 3\n\n") == ("only", 3)
     assert sse_stdout("") == ("", None)
+
+
+async def test_run_verify_hands_the_module_the_turns_and_the_listing() -> None:
+    from types import SimpleNamespace
+
+    from membrane.capability import run_verify
+
+    seen: dict[str, Any] = {}
+
+    async def verify(doors: Any, turns: Any, final: Any, log: Any) -> None:
+        seen.update({"doors": doors, "turns": turns, "final": final})
+        log.write("probed\n")
+
+    log = io.StringIO()
+    module = SimpleNamespace(verify=verify)
+    await run_verify(module, "doors", ["a-turn"], {"catalog": {}}, log=log)  # type: ignore[arg-type, list-item]
+    assert seen == {"doors": "doors", "turns": ["a-turn"], "final": {"catalog": {}}}
+    assert log.getvalue() == "probed\n"
+
+
+async def test_run_verify_is_a_no_op_without_a_module_or_without_the_hook() -> None:
+    from types import SimpleNamespace
+
+    from membrane.capability import run_verify
+
+    log = io.StringIO()
+    await run_verify(None, "doors", [], {}, log=log)  # type: ignore[arg-type]
+    await run_verify(SimpleNamespace(), "doors", [], {}, log=log)  # type: ignore[arg-type]
+    assert log.getvalue() == ""
+
+
+async def test_a_verify_that_raises_is_recorded_and_does_not_end_the_run() -> None:
+    from types import SimpleNamespace
+
+    from membrane.capability import run_verify
+
+    async def verify(doors: Any, turns: Any, final: Any, log: Any) -> None:
+        raise RuntimeError("no chain")
+
+    log = io.StringIO()
+    await run_verify(SimpleNamespace(verify=verify), "doors", [], {}, log=log)  # type: ignore[arg-type]
+    assert "verify failed: RuntimeError: no chain" in log.getvalue()

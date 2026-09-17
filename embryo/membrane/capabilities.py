@@ -18,9 +18,11 @@ having proposed nothing, and the run walks on (2026-09-16-run-3, turn 2: twenty
 
 A capability may pair with `embryo/capabilities/<name>.py` beside its markdown:
 its own apparatus, not the driver's. The module may define `prepare(doors, log)`,
-an async context manager over the extra context its rows template, and may
-register the checks only it needs by assigning into `postconditions.CHECKS` at
-import.
+an async context manager over the extra context its rows template, and
+`verify(doors, turns, final, log)`, called after the final listing with what was
+said, for a capability whose evidence is what root can still do afterwards. The
+module may also register the checks only it needs by assigning into
+`postconditions.CHECKS` at import.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Awaitable, Mapping
     from contextlib import AbstractAsyncContextManager
     from types import ModuleType
     from typing import TextIO
@@ -61,6 +63,25 @@ class Prepare(Protocol):
     def __call__(
         self, doors: Any, log: TextIO
     ) -> AbstractAsyncContextManager[Mapping[str, str]]: ...
+
+
+class Verify(Protocol):
+    """A capability module's `verify`: an async function called once, after the
+    final listing and before the checks are judged, and handed the turns and that
+    listing. It returns nothing — its findings reach its own checks through module
+    state, the way `prepare`'s do. It must work with the account key and through no
+    door: `sent` is snapshotted after it returns, so a probe that reaches for
+    `doors.root` or `doors.provision` is charged to the agent by `nothing_by_hand`.
+
+    A probe that can fail must catch its own failure and write it into that state,
+    as `security.prepare` writes an `error` into `inspection`. The driver logs what
+    escapes, but its log is not the committed record, so a check reading state left
+    empty by a broken probe records that the agent's program does not run — which
+    is not what happened."""
+
+    def __call__(
+        self, doors: Any, turns: list[Any], final: dict[str, Any], log: TextIO
+    ) -> Awaitable[None]: ...
 
 
 @dataclass(frozen=True)
