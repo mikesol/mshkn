@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-16T21:20:09+00:00",
+ "command": "say",
+ "computer_id": "comp-c6dfc561ed6a",
+ "detail": "External results: [[\"proposal\", \"p-2\", \"applied\"]]. Continue with the request.",
+ "door": "api",
+ "n": 35,
+ "seconds": 3.817574556916952,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\n",
+ "stdout": "audit {\"door\": \"api\", \"hooks\": [], \"job\": \"rj-d6859505c74e\", \"offered\": [\"effort\", \"propose\", \"remember\", \"try\", \"verify_mike_ssh\"], \"principal\": \"root\", \"started\": true, \"turn\": 4}\n{\"turn\": 4, \"job\": \"rj-d6859505c74e\"}\n"
+}
