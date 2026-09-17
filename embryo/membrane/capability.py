@@ -520,6 +520,48 @@ def ancestry(out: Path, name: str) -> list[str]:
     return chain
 
 
+INDEX_HEADER = "| Capability | Depends on | Directory | Promoted |"
+
+
+def index_table(out: Path) -> list[str]:
+    """The DAG index's table, derived: one row per capability in the catalog, each
+    `Promoted` cell read off that capability's `PROMOTED.md` rather than written by
+    hand.
+
+    The column drifted because `promote` writes the record and a human wrote the
+    row: web-search was promoted on 2026-09-17 and the index said "not yet" until
+    #204, which is the cell a fresh session reads to decide what can be built
+    next."""
+    rows = [INDEX_HEADER, "|---|---|---|---|"]
+    for name, capability in sorted(catalog().items()):
+        promotion = read_promotion(out, name)
+        cell = (
+            "not yet"
+            if promotion is None
+            else f"[`{promotion.run.split('/')[-1]}`]({name}/PROMOTED.md)"
+        )
+        depends = ", ".join(capability.depends)
+        rows.append(f"| {name} | {depends} | `{out.as_posix()}/{name}/` | {cell} |")
+    return rows
+
+
+def write_index(out: Path) -> Path:
+    """Replace the table in `<out>/README.md` with `index_table`, leaving the prose
+    around it alone: the table is the only part of that document derivable from
+    disk, and rewriting the whole file would throw away the reading notes under
+    it."""
+    path = out / "README.md"
+    lines = path.read_text().splitlines()
+    if INDEX_HEADER not in lines:
+        raise RuntimeError(f"{path} has no capability index: no line reads {INDEX_HEADER!r}")
+    start = lines.index(INDEX_HEADER)
+    end = start
+    while end < len(lines) and lines[end].startswith("|"):
+        end += 1
+    path.write_text("\n".join([*lines[:start], *index_table(out), *lines[end:]]) + "\n")
+    return path
+
+
 def b64(obj: Any) -> str:
     text = obj if isinstance(obj, str) else json.dumps(obj)
     return base64.b64encode(text.encode()).decode()
@@ -2266,12 +2308,30 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
     teardown_p.add_argument("run_dir", type=Path, help="the run's evidence directory")
     teardown_p.add_argument("--env", type=Path, default=Path(".env"))
     teardown_p.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    index_p = sub.add_parser(
+        "index", help="rewrite the capability index's table from the promotions on disk"
+    )
+    index_p.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args(argv)
     if args.command == "promote":
         return _promote(args, log)
     if args.command == "teardown":
         return _teardown(args, log)
+    if args.command == "index":
+        return _index(args, log)
     return _run(args, log)
+
+
+def _index(args: argparse.Namespace, log: TextIO) -> int:
+    """`capability index`. The gate compares the index's table to `index_table`
+    (`tests/unit/test_docs.py`), so a promotion that lands without this fails CI
+    rather than misleading the next session."""
+    try:
+        log.write(f"wrote {write_index(args.out)}\n")
+    except (RuntimeError, OSError, CapabilityError) as exc:
+        log.write(f"index failed: {exc}\n")
+        return 1
+    return 0
 
 
 def _promote(args: argparse.Namespace, log: TextIO) -> int:

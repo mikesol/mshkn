@@ -395,6 +395,55 @@ def test_ancestry_walks_started_from(tmp_path: Path) -> None:
     assert ancestry(tmp_path, "nope") == []
 
 
+def test_write_index_replaces_the_table_and_leaves_the_prose(tmp_path: Path) -> None:
+    from membrane.capability import INDEX_HEADER, Promotion, write_index, write_promotion
+
+    write_promotion(
+        tmp_path,
+        Promotion(
+            capability="hatch",
+            run="hatch/2026-09-16-run-10",
+            membrane={},
+            promoted_at="t",
+            labels={},
+            rule_id="r",
+            key_id="k",
+            brain_recipe="rcp",
+            recipe_ids=(),
+            key_dir="/keys",
+            pubkey="ssh-ed25519 AAAA mike",
+            model="claude-opus-5",
+            default_effort=None,
+            reasks=0,
+            started_from=None,
+        ),
+    )
+    index = tmp_path / "README.md"
+    index.write_text(
+        f"# The evidence\n\nBefore.\n\n{INDEX_HEADER}\n|---|---|---|---|\n"
+        f"| hatch |  | `{tmp_path}/hatch/` | not yet |\n\nAfter.\n"
+    )
+    assert write_index(tmp_path) == index
+    lines = index.read_text().splitlines()
+    assert lines[0] == "# The evidence" and lines[2] == "Before." and lines[-1] == "After."
+    # The promoted cell is the run its record names, without the capability prefix;
+    # a capability with no PROMOTED.md says so rather than being left out.
+    assert f"| hatch |  | `{tmp_path}/hatch/` | [`2026-09-16-run-10`](hatch/PROMOTED.md) |" in lines
+    assert f"| security | hatch | `{tmp_path}/security/` | not yet |" in lines
+    # Rewriting is idempotent: the second run has nothing to change.
+    before = index.read_text()
+    write_index(tmp_path)
+    assert index.read_text() == before
+
+
+def test_write_index_refuses_a_document_with_no_table(tmp_path: Path) -> None:
+    from membrane.capability import write_index
+
+    (tmp_path / "README.md").write_text("# The evidence\n\nNo table here.\n")
+    with pytest.raises(RuntimeError, match="has no capability index"):
+        write_index(tmp_path)
+
+
 # ---------------------------------------------------------------- the doors over HTTP
 
 
@@ -5458,6 +5507,26 @@ def test_main_teardown_refuses_a_dependent_whose_promotion_is_missing(
     assert main(["teardown", str(run_dir), "--env", str(env), "--out", str(out)], log=log) == 1
     assert "has no promotion" in log.getvalue()
     assert [m for m, _ in seen if m == "DELETE"] == []
+
+
+def test_capability_index_rewrites_the_table_and_needs_no_account(tmp_path: Path) -> None:
+    """`index` reads PROMOTED.md and the catalog and nothing else: it takes no
+    `--env` and opens no client, so a drifted index is fixable without the host."""
+    from membrane.capability import INDEX_HEADER, main
+
+    (tmp_path / "README.md").write_text(f"# The evidence\n\n{INDEX_HEADER}\n|---|---|---|---|\n")
+    log = io.StringIO()
+    assert main(["index", "--out", str(tmp_path)], log=log) == 0
+    assert f"wrote {tmp_path / 'README.md'}" in log.getvalue()
+    assert "| security | hatch |" in (tmp_path / "README.md").read_text()
+
+
+def test_capability_index_reports_a_document_it_cannot_rewrite(tmp_path: Path) -> None:
+    from membrane.capability import main
+
+    log = io.StringIO()
+    assert main(["index", "--out", str(tmp_path)], log=log) == 1
+    assert "index failed:" in log.getvalue()
 
 
 async def test_a_dependent_checks_its_lineage_is_still_on_the_host_before_it_forks(
