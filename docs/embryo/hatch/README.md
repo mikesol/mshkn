@@ -4,7 +4,48 @@
 
 Two rounds are recorded. **2026-09-09** is the first real agent measured on the turn as it then was, one fork exec of 240 seconds: no run reached every postcondition, and the exercise paused on the finding that the turn's clock, not any defect, was the limit. **2026-09-10** is the measure resumed on the asynchronous turn (#110): the best run reached all seven, and medium effort beat the API's default on cost, time and outcome at once.
 
-## Seven of seven from another lab, the cheapest and fastest yet (2026-09-16-run-9) — **promoted**
+## The cheapest and fastest 7/7, and the repair for a deleted key (2026-09-16-run-10) — **promoted**
+
+`openai/gpt-5.6-sol`, `--effort off`, pinned to the `openai` provider, from the
+membrane at `f8f72a7` clean.
+**7/7, 50 model calls, 150 in / 56,951 cache write / 104,433 cache read / 12,226
+out, $0.2361, 905 seconds, 0 re-asks, one repair (`6-repair-1`).**
+
+It takes both records off run 9 below — cheaper than $0.3506 and, at 905 seconds
+against 881, the same speed for two thirds of the price. The catalog ends holding
+exactly `verify_mike_ssh`, `page_title` and `call_counter`; `counter` reads 1 then
+2 off two chained checkpoints; `nothing_by_hand` records 7 approvals, 5 root
+`say`s, 13 `ingress say`s and no provision.
+
+**It exists because run 9's promotion cannot speak.** The teardown that ran
+without `lineage=` deleted key `key-95bbb8b78e33` and rule
+`ir_b5dUoYn2kz_M2oMRcgQpQD2RUM8`, and a key's secret is readable only at
+creation and lives, for a promotion, inside the promoted checkpoint's brain
+environment file. Run 9's row in the table below is left as it was judged; what
+it no longer is, is promotable. This run is promoted in its place, with
+`capability/hatch/brain` at `ckpt-60fe53830c57` and
+`capability/hatch/verb/call_counter` at `ckpt-cdd81f4736ff`, on live key
+`key-5d3f734ba5b6` and rule `ir_t3cTQGIw-tHvgh4hAWqzdNJP1SU`.
+
+## Every signed turn arrived anonymous (2026-09-16-run-8)
+
+Same model, same flags, same membrane commit, 21 minutes earlier.
+**3/7, 39 model calls, $0.3103, 1,104 seconds, 0 re-asks.**
+
+`authentication` records `signed: anonymous`: the ingress door was reached with
+the run's signing key and delivered the anonymous principal anyway, and the
+`verify_mike_ssh` hook came back `host operation failed` against no computer at
+all. The other three misses follow from that one fact — `authorization`
+exercised nothing, `counter` never got a chain head, and `page_title` was
+refused with *"Anonymous users are not permitted to invoke verbs."*
+`no_undeclared_capability`, `root_unforgeable` and `nothing_by_hand` pass.
+
+Why the signature did not take is not established. Run 10 signed correctly on
+the same commit and the same model twenty-one minutes later, so this is not a
+standing defect in the signing path, and it is kept as one run's unexplained
+evidence rather than a finding.
+
+## Seven of seven from another lab (2026-09-16-run-9)
 
 `openai/gpt-5.6-sol`, `--effort off`, pinned to the `openai` provider.
 **7/7, 45 model calls, 135 in / 109,636 cache write / 77,121 cache read / 16,603
@@ -19,7 +60,7 @@ varies only the family — and hatch turns out to be reachable from outside the 
 that wrote the harness. The relay's message shape survived translation with no wire
 errors at any turn.
 
-It is also the fastest and cheapest 7/7 on file: 881 seconds against run 6's 2,700,
+It was, until run 10, the fastest and cheapest 7/7 on file: 881 seconds against run 6's 2,700,
 and against `2026-09-13-run-5`'s Opus at $3.18. **One repair in the whole run** —
 `6-repair-1`, the `silent` trigger — six continuations, no re-asks.
 

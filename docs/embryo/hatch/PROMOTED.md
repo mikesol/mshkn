@@ -1,43 +1,43 @@
 # Promoted: hatch
 
-Run `hatch/2026-09-16-run-9`, membrane `a67dad29988791a64f1d4cb03faadc5b2f7e8fcb`, promoted 2026-09-16T18:47:42+00:00, promoted from a run with 0 re-asks.
+Run `hatch/2026-09-16-run-10`, membrane `f8f72a76ef76cf1170df5aff7111af116cd36b40`, promoted 2026-09-17T05:16:09+00:00, promoted from a run with 0 re-asks.
 Dependents start from these labels; `capability promote` overwrites this file.
 
 | Working label | Promoted label | Checkpoint |
 |---|---|---|
-| `brain` | `capability/hatch/brain` | `ckpt-2d354f2c24fe` |
-| `verb/call_count` | `capability/hatch/verb/call_count` | `ckpt-a66a6de09942` |
+| `brain` | `capability/hatch/brain` | `ckpt-60fe53830c57` |
+| `verb/call_counter` | `capability/hatch/verb/call_counter` | `ckpt-cdd81f4736ff` |
 
 ```json
 {
  "base_url": "https://ai-gateway.vercel.sh",
  "body_extra": "{\"providerOptions\":{\"gateway\":{\"only\":[\"openai\"]}}}",
- "brain_recipe": "rcp-06135e631a9c",
+ "brain_recipe": "rcp-6e586c3878f2",
  "capability": "hatch",
  "default_effort": "off",
- "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-16-run-9",
- "key_id": "key-95bbb8b78e33",
+ "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-16-run-10",
+ "key_id": "key-5d3f734ba5b6",
  "labels": {
-  "brain": "ckpt-2d354f2c24fe",
-  "verb/call_count": "ckpt-a66a6de09942"
+  "brain": "ckpt-60fe53830c57",
+  "verb/call_counter": "ckpt-cdd81f4736ff"
  },
  "membrane": {
-  "commit": "a67dad29988791a64f1d4cb03faadc5b2f7e8fcb",
+  "commit": "f8f72a76ef76cf1170df5aff7111af116cd36b40",
   "dirty": false
  },
  "model": "openai/gpt-5.6-sol",
- "promoted_at": "2026-09-16T18:47:42+00:00",
- "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA0N9MFCw7jQoKSDhpaifVtGiStOti7YH5Ab4NuQ+gic mike",
+ "promoted_at": "2026-09-17T05:16:09+00:00",
+ "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILYgW0TAsroVv6uuC2N5pOkHqmmUB4u3VdDk3OXRVLnX mike",
  "reasks": 0,
  "recipe_ids": [
-  "rcp-06135e631a9c",
-  "rcp-319386ba3ef9",
-  "rcp-7ee5f2a00a38",
-  "rcp-ec544ca1c4b0"
+  "rcp-2512963336dd",
+  "rcp-4341c4662210",
+  "rcp-6a3c3d620b87",
+  "rcp-6e586c3878f2"
  ],
  "rotated_from": null,
- "rule_id": "ir_b5dUoYn2kz_M2oMRcgQpQD2RUM8",
- "run": "hatch/2026-09-16-run-9",
+ "rule_id": "ir_t3cTQGIw-tHvgh4hAWqzdNJP1SU",
+ "run": "hatch/2026-09-16-run-10",
  "started_from": null
 }
 ```
