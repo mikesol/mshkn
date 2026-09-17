@@ -6,10 +6,12 @@ Each capability (`docs/superpowers/specs/2026-09-12-capabilities-design.md`) has
 |---|---|---|---|
 | hatch | | `docs/embryo/hatch/` | [`2026-09-13-run-5`](hatch/PROMOTED.md) |
 | security | hatch | `docs/embryo/security/` | not yet |
+| web-search | hatch | `docs/embryo/web-search/` | not yet |
 | coding | security | `docs/embryo/coding/` | not yet |
+
 The capability files are under `embryo/capabilities/`. The checks a capability names are in `embryo/membrane/postconditions.py`; a capability names the invariants and its own exercises, not an ancestor's, because the ancestor's promotion is the proof those already passed (#167).
 
-A capability's module (`embryo/capabilities/<name>.py`) may register checks only it needs; security's are `no_foreign_credential_on_brain` and `secret_page`, and coding's are `runs_again` and `fixed`. A module may also define `verify(doors, turns, final, log)`, which coding uses to probe what the run left on the account before those two are judged.
+A capability's module (`embryo/capabilities/<name>.py`) may register checks only it needs; security's is `secret_page`, web-search's are `searched` and `read_page`, and coding's are `runs_again` and `fixed`. A module may also define `verify(doors, turns, final, log)`, which coding uses to probe what the run left on the account before those two are judged.
 
 ## Reading a run spoken through a gateway
 

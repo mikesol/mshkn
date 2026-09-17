@@ -35,6 +35,7 @@ DOCS: tuple[str, ...] = (
     "docs/embryo/README.md",
     "docs/embryo/hatch/README.md",
     "docs/embryo/security/README.md",
+    "docs/embryo/web-search/README.md",
     "docs/embryo/coding/README.md",
 )
 

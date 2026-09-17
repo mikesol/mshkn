@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-17T14:39:58+00:00",
+ "command": "say",
+ "computer_id": "comp-2682bb2ca9d6",
+ "detail": {
+  "msg": "search for what is a Firecracker microVM and tell me the first three results.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgtiBbRMCyuhW/q64LY3mk6QeqaZ\nQHi7dV0OTc5dFUudcAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABASGp3jJARchD7VT9dKsNwka/3lqGmyVMHdbOUysFI5ujZLJk5qbLP60ZiWh9aUF\nk/QP+tk79hxU9eZnZilDewCQ==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 64,
+ "seconds": 6.637352531775832,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\n",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-863d7c4f0689\", \"error\": null, \"exit_code\": 0, \"name\": \"verify_mike_ssh\", \"principal\": \"ssh:mike\", \"status\": \"ok\"}], \"job\": \"rj-695f20d9cd25\", \"offered\": [\"call_counter\", \"effort\", \"page_title\", \"propose\", \"remember\", \"try\", \"web_search\"], \"principal\": \"ssh:mike\", \"started\": true, \"turn\": 24}\n{\"turn\": 24, \"job\": \"rj-695f20d9cd25\"}\n"
+}

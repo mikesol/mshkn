@@ -41,7 +41,11 @@ if TYPE_CHECKING:
 
 CAPABILITIES = Path(__file__).resolve().parents[1] / "capabilities"
 DOORS: frozenset[str] = frozenset({"root say", "root list", "signed", "unsigned"})
-TEMPLATES: frozenset[str] = frozenset({"key", "url", "token"})
+# What a row's words may name in braces. `key` is the driver's (the run's public
+# key line); the rest come from a module's `prepare`. A closed set, checked at
+# load: a row that names something no module yields would otherwise be spoken
+# with the brace text in it, and the agent would be asked to search for `{query}`.
+TEMPLATES: frozenset[str] = frozenset({"key", "url", "token", "query", "page"})
 FRONTMATTER_KEYS = ("name", "depends", "postconditions")
 SEPARATOR = " · "  # U+00B7, between a row's label and its door in the heading
 PROPOSES = "proposes"  # the optional third field of a row heading

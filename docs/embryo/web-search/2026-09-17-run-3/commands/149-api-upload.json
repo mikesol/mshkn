@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-17T12:54:55+00:00",
+ "command": "upload",
+ "computer_id": "comp-a2ff47d55478",
+ "detail": {
+  "bytes": 57,
+  "path": "/usr/local/bin/web-search",
+  "verb": "web_search"
+ },
+ "door": "api",
+ "n": 149,
+ "seconds": 0.11815515533089638,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

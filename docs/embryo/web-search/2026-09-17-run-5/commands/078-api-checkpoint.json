@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-17T14:40:56+00:00",
+ "command": "checkpoint",
+ "computer_id": "comp-23b37e89879f",
+ "detail": {
+  "checkpoint_id": "ckpt-70e2d222fe48",
+  "label": "verb/web_search",
+  "verb": "web_search"
+ },
+ "door": "api",
+ "n": 78,
+ "seconds": 0.29249449633061886,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

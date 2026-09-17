@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-17T16:03:01+00:00",
+ "command": "create",
+ "computer_id": "comp-68a24d31b515",
+ "detail": {
+  "from": "rcp-150fca486978",
+  "verb": "tavily_extract"
+ },
+ "door": "api",
+ "n": 121,
+ "seconds": 3.0460096169263124,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

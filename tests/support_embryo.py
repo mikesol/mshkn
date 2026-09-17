@@ -1,5 +1,6 @@
-"""Fakes shared by the embryo's unit tests: mshkn and its relay in memory, and a
-list-backed memory. The flow tier uses the real app instead of FakeMshkn."""
+"""Fakes shared by the embryo's unit tests: mshkn and its relay in memory, a
+list-backed memory, and the computer routes a page and a brain inspection drive.
+The flow tier uses the real app instead of FakeMshkn."""
 
 from __future__ import annotations
 
@@ -9,13 +10,16 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from membrane.capabilities import CAPABILITIES, load
+from membrane.capability import Doors, Record
 from membrane.memory import Provenance, visible_from
 from membrane.model import Completion, ToolCall, zero_usage
 from membrane.mshkn import CheckpointInfo, Deferred, MshknError, RecipeInfo, RelayJob, RunResult
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from pathlib import Path
 
     from membrane.scripted import ScriptedModel
 
@@ -349,3 +353,85 @@ def scripted_asgi(model: ScriptedModel) -> Callable[..., Awaitable[None]]:
         await send({"type": "http.response.body", "body": data})
 
     return app
+
+
+# ---------------------------------------------------------------- pages and forks
+
+# The routes `membrane.page.serve` and `Doors.inspect_brain` use, in memory:
+# computers created and forked, what was uploaded to them, what was exec'd, and
+# what was destroyed. Shared by the page tests, the two capability modules' tests
+# and the driver's inspection test, because all four drive the same four routes.
+
+
+class PageApi:
+    def __init__(
+        self,
+        *,
+        exec_body: str = "",
+        fail: str | None = None,
+        checkpoints: list[dict[str, Any]] | None = None,
+        exec_raises_for: str | None = None,
+    ) -> None:
+        self.requests: list[tuple[str, str]] = []
+        self.uploads: dict[tuple[str, str], bytes] = {}
+        self.bg: list[tuple[str, str]] = []
+        self.execs: list[tuple[str, str]] = []
+        self.deleted: list[str] = []
+        self.exec_body = exec_body
+        self.fail = fail
+        self.checkpoints = (
+            [{"id": "ck-brain", "label": "brain", "created_at": "t", "recipe_id": "rcp-brain"}]
+            if checkpoints is None
+            else checkpoints
+        )
+        # A command that must raise something other than an httpx error from
+        # `/exec`, without touching the inspection's own exec call (Minor 4).
+        self.exec_raises_for = exec_raises_for
+        self.n = 0
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        self.requests.append((request.method, path))
+        if self.fail and path.endswith(self.fail):
+            return httpx.Response(500, json={"detail": "no"})
+        if request.method == "GET" and path == "/checkpoints":
+            return httpx.Response(200, json=self.checkpoints)
+        if request.method == "POST" and (path == "/computers" or path.endswith("/fork")):
+            self.n += 1
+            return httpx.Response(
+                200,
+                json={"computer_id": f"comp-{self.n}", "url": f"https://comp-{self.n}.test.dev"},
+            )
+        if request.method == "POST" and path.endswith("/upload"):
+            self.uploads[(path.split("/")[2], request.url.params["path"])] = request.content
+            return httpx.Response(
+                200, json={"status": "uploaded", "path": request.url.params["path"]}
+            )
+        if request.method == "POST" and path.endswith("/exec/bg"):
+            self.bg.append((path.split("/")[2], json.loads(request.content)["command"]))
+            return httpx.Response(200, json={"pid": 4000})
+        if request.method == "POST" and path.endswith("/exec"):
+            command = json.loads(request.content)["command"]
+            if self.exec_raises_for is not None and command == self.exec_raises_for:
+                raise RuntimeError("boom")
+            self.execs.append((path.split("/")[2], command))
+            return httpx.Response(
+                200, text=self.exec_body, headers={"content-type": "text/event-stream"}
+            )
+        if request.method == "DELETE":
+            self.deleted.append(path)
+            return httpx.Response(200, json={"status": "destroyed"})
+        return httpx.Response(404, json={"detail": path})
+
+
+def page_doors(api: PageApi, tmp_path: Path) -> Doors:
+    client = httpx.AsyncClient(
+        base_url="http://api",
+        headers={"Authorization": "Bearer k"},
+        transport=httpx.MockTransport(api.handler),
+    )
+    return Doors(client, client, "rule", Record(tmp_path / "run"))
+
+
+def sse(*events: tuple[str, str]) -> str:
+    return "".join(f"event: {e}\r\ndata: {d}\r\n\r\n" for e, d in events)

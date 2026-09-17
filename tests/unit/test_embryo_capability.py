@@ -11,6 +11,7 @@ import stat
 import subprocess
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -18,7 +19,9 @@ import pytest
 from membrane.capabilities import CAPABILITIES, load
 from membrane.capability import (
     CONFLICT_INTERVAL,
+    INSPECT,
     MAX_REASKS,
+    NEEDLE,
     TRANSPORT_RETRIES,
     TURN_WAIT,
     AskApprover,
@@ -27,6 +30,8 @@ from membrane.capability import (
     Hatched,
     Record,
     RunSettings,
+    _interrupted,
+    _last_listing,
     bare_model_id,
     cost_usd,
     hatch,
@@ -36,16 +41,18 @@ from membrane.capability import (
     membrane_version,
     new_key,
     run_once,
+    run_verify,
     sign,
     speak,
     split_output,
+    sse_stdout,
     transport_for,
 )
 from membrane.config import EFFORT_OFF
 from membrane.model import zero_usage
 from membrane.postconditions import CHECKS, Judged, Turn, by_label, judge, tool_computers
 
-from tests.support_embryo import HATCH, WORDS, audit_line, b64
+from tests.support_embryo import HATCH, WORDS, PageApi, audit_line, b64, page_doors, sse
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -530,7 +537,14 @@ class FakeApi:
             self.checkpoints.append(ck)
             return httpx.Response(200, json={"checkpoint_id": ck["id"]})
         if request.method == "DELETE":
-            return httpx.Response(500 if self.fail_deletes else 200, json={})
+            if self.fail_deletes:
+                return httpx.Response(500, json={})
+            # a deleted checkpoint stops being listed: what the account holds is
+            # what the next `GET /checkpoints` says it holds, not what was asked for
+            if path.startswith("/checkpoints/"):
+                gone = path.split("/")[2]
+                self.checkpoints = [c for c in self.checkpoints if c["id"] != gone]
+            return httpx.Response(200, json={})
         return httpx.Response(404, json={"detail": f"unrouted {request.method} {path}"})
 
 
@@ -762,7 +776,9 @@ async def test_wait_builds_gives_up_at_the_build_timeout(tmp_path: Path) -> None
 
 async def test_computer_checks_read_status_and_exec_log(tmp_path: Path) -> None:
     api = FakeApi(
-        exec_logs={"comp-1": {"stdout": "Example Domain\n", "exit_code": 0}},
+        exec_logs={
+            "comp-1": {"stdout": "Example Domain\n", "exit_code": 0, "stdout_truncated": False}
+        },
         gone={"comp-1"},
     )
     doors = _doors(api, tmp_path)
@@ -771,13 +787,36 @@ async def test_computer_checks_read_status_and_exec_log(tmp_path: Path) -> None:
         "gone": True,
         "stdout": "Example Domain\n",
         "exit_code": 0,
+        "truncated": False,
     }
     assert await doors.check_computer("comp-2") == {
         "computer_id": "comp-2",
         "gone": False,
         "stdout": None,
         "exit_code": None,
+        "truncated": None,
     }
+
+
+async def test_computer_checks_carry_the_apis_truncation_flag(tmp_path: Path) -> None:
+    """#196: `/exec_log` keeps at most `EXEC_LOG_OUTPUT_BYTES`, head and tail with
+    the middle dropped, and reports the cut in `stdout_truncated`. The embryo used
+    to read `stdout` and throw the flag away, so a check could not tell a short
+    answer from a butchered one -- which is how web-search run-4 read `results: 0`
+    off a payload whose outer JSON object had been destroyed."""
+    api = FakeApi(
+        exec_logs={
+            "comp-cut": {
+                "stdout": "{'head'...[mshkn: 4321 bytes truncated]...'tail'}",
+                "exit_code": 0,
+                "stdout_truncated": True,
+                "stderr_truncated": False,
+            }
+        },
+        gone={"comp-cut"},
+    )
+    doors = _doors(api, tmp_path)
+    assert (await doors.check_computer("comp-cut"))["truncated"] is True
 
 
 async def test_recipes_and_checkpoints(tmp_path: Path) -> None:
@@ -2114,7 +2153,7 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
         ]
     }
     result = judge(
-        list(CHECKS),
+        list(HATCH.postconditions),
         Judged(
             turns=turns,
             final=final,
@@ -2126,7 +2165,7 @@ async def test_the_happy_path_reaches_every_postcondition(tmp_path: Path) -> Non
             context={},
         ),
     )
-    assert list(result) == list(CHECKS)
+    assert list(result) == list(HATCH.postconditions)
     assert all(v["ok"] for v in result.values()), {k: v for k, v in result.items() if not v["ok"]}
     assert result["page_title"]["evidence"]["computer_id"] == "comp-title"
     assert result["counter"]["evidence"]["counts"] == [1, 2]
@@ -2185,7 +2224,7 @@ async def test_a_policy_change_makes_the_driver_re_ask_the_rows_that_called_no_v
         for cid in [c["computer_id"] for t in turns for c in tool_computers(t)]
     }
     result = judge(
-        list(CHECKS),
+        list(HATCH.postconditions),
         Judged(
             turns=turns,
             final=final,
@@ -2739,7 +2778,7 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
     assert turns[5].audit["principal"] == "anonymous"
     final = await doors.listing()
     result = judge(
-        list(CHECKS),
+        list(HATCH.postconditions),
         Judged(
             turns=turns,
             final=final,
@@ -2897,7 +2936,7 @@ async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -
     assert public and all(t.audit["principal"] is None for t in public)
     final = await doors.listing()
     result = judge(
-        list(CHECKS),
+        list(HATCH.postconditions),
         Judged(
             turns=turns,
             final=final,
@@ -3060,9 +3099,10 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     # every membrane command was answered by the fake's default (a root reply), so the
     # door was never opened and the postconditions that need it fail honestly
     assert summary["ok"] is False and summary["model"] == "claude-opus-5"
-    assert summary["hatched"]["rule_id"] == "rule-1" and summary["passed"] < len(CHECKS)
+    assert summary["hatched"]["rule_id"] == "rule-1"
+    assert summary["passed"] < len(HATCH.postconditions)
     assert summary["usage"]["input_tokens"] > 0 and summary["cost_usd"] > 0
-    assert set(summary["postconditions"]) == set(CHECKS)
+    assert set(summary["postconditions"]) == set(HATCH.postconditions)
     assert summary["capability"] == "hatch" and summary["started_from"] == "hatch"
     assert (out_dir / "run.json").exists() and (out_dir / "transcript.md").exists()
     assert (out_dir / "final-list.json").exists() and any((out_dir / "commands").iterdir())
@@ -3193,24 +3233,257 @@ async def test_run_once_records_effort_unsupported_when_the_run_was_given_off(
     assert summary["effort_supported"] is False
 
 
-async def test_run_once_refuses_an_account_that_already_has_a_brain(
+# A brain older than the record that claims it: the leavings of a run that has
+# finished, which is the only kind #193 clears.
+_MADE = {"created_at": "2026-09-17T09:00:00+00:00"}
+
+
+def _record_of(
+    out: Path,
+    capability: str,
+    name: str,
+    *,
+    ok: bool,
+    recipe: str = "rcp-brain",
+    ended: str = "2026-09-17T10:00:00+00:00",
+) -> Path:
+    """A run's evidence on disk, as `run_once` wrote it: enough of `run.json` for
+    the next run to say whose the brain on the account is and how it ended."""
+    run_dir = out / capability / name
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run": name,
+                "capability": capability,
+                "ok": ok,
+                "ended": ended,
+                "hatched": {
+                    "ingress_url": "",
+                    "rule_id": "rule-1",
+                    "key_id": "key-1",
+                    "recipe_id": recipe,
+                    "checkpoint_id": "ck-brain",
+                    "server_id": None,
+                },
+            }
+        )
+    )
+    return run_dir
+
+
+async def test_run_once_refuses_a_brain_no_run_record_claims(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": "r"}])
+    """An unexplained brain is a hazard, not a corpse (#193): nothing on disk says
+    which run built it or whether that run passed, so root is not going to guess."""
+    api = FakeApi(checkpoints=[{"id": "ck", "label": "brain", "recipe_id": "r", **_MADE}])
     monkeypatch.setattr(
         "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
-    with pytest.raises(RuntimeError, match="already has a brain"):
+    out_dir = tmp_path / "docs" / "hatch" / "2026-09-17-run-2"
+    with pytest.raises(RuntimeError, match="no run record"):
         await run_once(
             _settings(),
             HATCH,
-            tmp_path / "run",
+            out_dir,
             AutoApprover(),
             hatch_script=_stub_hatch(tmp_path),
             key_dir=tmp_path / "keys",
             keep=False,
             log=io.StringIO(),
-            out=tmp_path,
+            out=tmp_path / "docs",
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+    # the number is taken when the run writes, so an abort at the guard does not
+    # burn one on an empty directory (#193, "Also")
+    assert not out_dir.exists()
+
+
+async def test_run_once_tears_down_the_brain_of_a_failed_run_and_measures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed run's brain will never be promoted, so it is not worth a human
+    remembering `capability teardown` before the next attempt (#193). Its evidence
+    survives on disk for exactly as long as nobody needs the account."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    out = tmp_path / "docs"
+    stale = _record_of(out, "hatch", "2026-09-17-run-1", ok=False)
+    api = FakeApi(
+        checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain", **_MADE}]
+    )
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    log = io.StringIO()
+    summary = await run_once(
+        _settings(),
+        HATCH,
+        out / "hatch" / "2026-09-17-run-2",
+        AutoApprover(),
+        hatch_script=_stub_hatch(tmp_path),
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=log,
+        out=out,
+    )
+    assert summary["run"] == "2026-09-17-run-2"  # it got past the guard and measured
+    assert "/checkpoints/ck-stale" in [p for m, p, _ in api.requests if m == "DELETE"]
+    assert "2026-09-17-run-1" in log.getvalue()
+    assert (stale / "run.json").exists()  # the evidence, not the account state
+
+
+async def test_run_once_refuses_the_brain_of_the_newest_run_when_it_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A passing run is promotable and its brain is not ours to delete -- and the
+    brain on the account is the newest kept run's, so an older failure sharing the
+    same recipe does not license a teardown."""
+    out = tmp_path / "docs"
+    _record_of(out, "hatch", "2026-09-17-run-1", ok=False, ended="2026-09-17T10:00:00+00:00")
+    _record_of(out, "hatch", "2026-09-17-run-2", ok=True, ended="2026-09-17T12:00:00+00:00")
+    api = FakeApi(
+        checkpoints=[{"id": "ck-good", "label": "brain", "recipe_id": "rcp-brain", **_MADE}]
+    )
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="2026-09-17-run-2, which passed"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-3",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+
+
+async def test_run_once_refuses_when_the_blocking_runs_own_lineage_is_not_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The brain is torn down as its own run's capability, not as the one about to
+    measure: a dependent's leavings can only be told from its lineage's by reading
+    that lineage's promotion, and without it deleting nothing is the safe answer."""
+    out = tmp_path / "docs"
+    _record_of(out, "security", "2026-09-17-run-1", ok=False)
+    api = FakeApi(
+        checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain", **_MADE}]
+    )
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="security starts from hatch, which has no promotion"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-1",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+
+
+async def test_run_once_refuses_a_brain_younger_than_the_record_that_claims_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run writes `run.json` when it ends, so a run still speaking is claimed by
+    no record and its brain looks like the last failure's leavings. Tearing that
+    down would empty a running measure's account. The clock separates them: the
+    brain of a finished run cannot be younger than the record that claims it.
+
+    Read off the live account on 2026-09-17, where eight `brain` checkpoints
+    minutes old belonged to a run then in flight."""
+    out = tmp_path / "docs"
+    _record_of(out, "hatch", "2026-09-17-run-1", ok=False, ended="2026-09-17T10:00:00+00:00")
+    api = FakeApi(
+        checkpoints=[
+            {
+                "id": "ck-live",
+                "label": "brain",
+                "recipe_id": "rcp-brain",
+                "created_at": "2026-09-17T15:52:24.501213+00:00",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="a run is in flight"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-2",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+
+
+async def test_run_once_refuses_a_brain_the_api_gives_no_creation_time_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A time that cannot be read is never treated as an old one."""
+    out = tmp_path / "docs"
+    _record_of(out, "hatch", "2026-09-17-run-1", ok=False)
+    api = FakeApi(checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain"}])
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="not a corpse to clear"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-2",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
+        )
+    assert not any(m == "DELETE" for m, _, _ in api.requests)
+
+
+async def test_run_once_refuses_when_the_teardown_leaves_the_brain_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Doors.teardown` is best effort and swallows a failing delete, so a run that
+    proceeded on its word could measure on another run's brain. The guard reads the
+    account again rather than the teardown's silence."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    out = tmp_path / "docs"
+    _record_of(out, "hatch", "2026-09-17-run-1", ok=False)
+    api = FakeApi(
+        checkpoints=[{"id": "ck-stale", "label": "brain", "recipe_id": "rcp-brain", **_MADE}],
+        fail_deletes=True,
+    )
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    with pytest.raises(RuntimeError, match="still has a brain"):
+        await run_once(
+            _settings(),
+            HATCH,
+            out / "hatch" / "2026-09-17-run-2",
+            AutoApprover(),
+            hatch_script=_stub_hatch(tmp_path),
+            key_dir=tmp_path / "keys",
+            keep=False,
+            log=io.StringIO(),
+            out=out,
         )
 
 
@@ -5282,23 +5555,172 @@ async def test_a_dependent_checks_its_lineage_is_still_on_the_host_before_it_for
     await check_lineage(_bare_doors(tmp_path, held), lineage)
 
 
-def test_sse_stdout_reads_the_stdout_lines_and_the_exit_code() -> None:
-    from membrane.capability import sse_stdout
+# ---------------------------------------------------------------- the brain inspection
 
-    stream = "".join(
-        f"event: {e}\r\ndata: {d}\r\n\r\n"
-        for e, d in (("stdout", "a"), ("stderr", "x"), ("stdout", "b"), ("exit", "0"))
+
+def test_sse_stdout_reads_crlf_and_lf_streams() -> None:
+    assert sse_stdout(sse(("stdout", "a"), ("stderr", "x"), ("stdout", "b"), ("exit", "0"))) == (
+        "a\nb",
+        0,
     )
-    assert sse_stdout(stream) == ("a\nb", 0)
     assert sse_stdout("event: stdout\ndata: only\n\nevent: exit\ndata: 3\n\n") == ("only", 3)
     assert sse_stdout("") == ("", None)
 
 
+async def test_inspect_brain_forks_the_head_greps_for_the_secret_and_destroys_the_fork(
+    tmp_path: Path,
+) -> None:
+    api = PageApi(
+        exec_body=sse(
+            ("stdout", "---"),
+            ("stdout", "MSHKN_API_URL"),
+            ("stdout", "MSHKN_API_KEY"),
+            ("exit", "0"),
+        )
+    )
+    doors = page_doors(api, tmp_path)
+    log = io.StringIO()
+    found = await doors.inspect_brain("tok-1", log)
+    assert found == {
+        "checkpoint": "ck-brain",
+        "files_with_token": [],
+        "env_names": ["MSHKN_API_URL", "MSHKN_API_KEY"],
+    }
+    assert ("POST", "/checkpoints/ck-brain/fork") in api.requests
+    # the secret reached the fork as an upload's body; the command names neither it nor a value
+    assert api.uploads[("comp-1", NEEDLE)] == b"tok-1"
+    assert api.execs == [("comp-1", INSPECT)]
+    assert "tok-1" not in INSPECT and "tok-1" not in log.getvalue()
+    assert "/computers/comp-1" in api.deleted
+    # scaffolding, not a command root sent: nothing here may count for nothing_by_hand
+    assert doors.sent == []
+
+
+async def test_inspect_brain_needs_a_brain_and_destroys_the_fork_when_the_command_fails(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(RuntimeError, match="no brain to inspect"):
+        await Doors(
+            httpx.AsyncClient(
+                base_url="http://api",
+                transport=httpx.MockTransport(PageApi(checkpoints=[]).handler),
+            ),
+            httpx.AsyncClient(base_url="http://api"),
+            "rule",
+            None,
+        ).inspect_brain("tok-1", io.StringIO())
+    failing = PageApi(fail="/exec")
+    with pytest.raises(httpx.HTTPStatusError):
+        await page_doors(failing, tmp_path).inspect_brain("tok-1", io.StringIO())
+    assert "/computers/comp-1" in failing.deleted
+
+
+# ------------------------------------------------- tearing down an interrupted run
+
+
+def _killed_run(tmp_path: Path, capability: str = "web-search") -> Path:
+    """A run directory shaped the way a killed run leaves one: the commands it
+    managed to send, and no `run.json` or `final-list.json`."""
+    run_dir = tmp_path / "docs" / capability / "2026-09-17-run-3"
+    (run_dir / "commands").mkdir(parents=True)
+    return run_dir
+
+
+def _lineage(tmp_path: Path, out: Path) -> Any:
+    from membrane.capability import Promotion, write_promotion
+
+    key_dir = tmp_path / "lineage-keys"
+    key_dir.mkdir()
+    promotion = Promotion(
+        capability="hatch",
+        run="hatch/2026-09-16-run-10",
+        membrane={"commit": "abc", "dirty": False},
+        promoted_at="t",
+        labels={"brain": "ckpt-promoted"},
+        rule_id="ir_lineage",
+        key_id="key-lineage",
+        brain_recipe="rcp-lineage-brain",
+        recipe_ids=("rcp-lineage-brain",),
+        key_dir=str(key_dir),
+        pubkey=new_key(key_dir),
+        model="openai/gpt-5.6-sol",
+        default_effort=None,
+        reasks=0,
+        started_from=None,
+    )
+    write_promotion(out, promotion)
+    return promotion
+
+
+def test_interrupted_recovers_a_dependent_from_the_promotion_it_forked(tmp_path: Path) -> None:
+    """The three things `run.json` would have named are the lineage's, not this
+    run's: a dependent forks the promoted brain and speaks through the promoted
+    rule and key. Reading them back off PROMOTED.md is not a guess -- a finished
+    dependent's record repeats the same values."""
+    out = tmp_path / "out"
+    lineage = _lineage(tmp_path, out)
+    recovered = _interrupted(_killed_run(tmp_path), out, log=io.StringIO())
+    assert recovered is not None
+    hatched, capability = recovered
+    assert capability.name == "web-search"
+    assert hatched.rule_id == lineage.rule_id
+    assert hatched.key_id == lineage.key_id
+    assert hatched.recipe_id == lineage.brain_recipe
+    # never guessed: teardown does not read these with a lineage in hand, and a
+    # plausible-looking value here would be a fabrication
+    assert hatched.server_id is None
+    assert hatched.checkpoint_id == ""
+
+
+def test_interrupted_refuses_a_hatch_run_whose_key_and_rule_are_its_own(tmp_path: Path) -> None:
+    """hatch makes its own ingress rule, scoped key and brain recipe. They are
+    named in the record it never wrote and nowhere else, so root cannot tell them
+    from another run's and deletes nothing."""
+    out = tmp_path / "out"
+    _lineage(tmp_path, out)
+    log = io.StringIO()
+    assert _interrupted(_killed_run(tmp_path, "hatch"), out, log=log) is None
+    assert "starts from nothing" in log.getvalue()
+
+
+def test_interrupted_refuses_what_it_cannot_identify(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    # a directory that is not a capability's
+    log = io.StringIO()
+    assert _interrupted(_killed_run(tmp_path, "not-a-capability"), out, log=log) is None
+    assert "is not a capability" in log.getvalue()
+    # a dependent whose lineage was never promoted
+    log = io.StringIO()
+    assert _interrupted(_killed_run(tmp_path), out, log=log) is None
+    assert "has no promotion" in log.getvalue()
+
+
+def test_last_listing_recovers_the_proposals_from_the_command_log(tmp_path: Path) -> None:
+    """`final-list.json` is written at the end, so an interrupted run has none;
+    the `list` calls it did send are on disk and name the proposals whose recipes
+    teardown drops."""
+    run_dir = _killed_run(tmp_path)
+    commands = run_dir / "commands"
+    (commands / "002-api-list.json").write_text(
+        json.dumps({"stdout": json.dumps({"catalog": {}, "proposals": [{"recipe_id": "rcp-old"}]})})
+    )
+    (commands / "010-api-list.json").write_text(
+        json.dumps({"stdout": json.dumps({"catalog": {}, "proposals": [{"recipe_id": "rcp-new"}]})})
+    )
+    listing = _last_listing(run_dir)
+    assert listing is not None
+    assert listing["proposals"] == [{"recipe_id": "rcp-new"}]
+    # a truncated or non-JSON tail is skipped for the newest one that parses
+    (commands / "011-api-list.json").write_text('{"stdout": "{\\"proposals\\": ')
+    assert _last_listing(run_dir) == listing
+    # nothing readable at all: teardown falls back to deleting no proposal recipe
+    assert _last_listing(_killed_run(tmp_path, "security")) is None
+
+
+# ------------------------------------------------------------------- the verify hook
+
+
 async def test_run_verify_hands_the_module_the_turns_and_the_listing() -> None:
-    from types import SimpleNamespace
-
-    from membrane.capability import run_verify
-
     seen: dict[str, Any] = {}
 
     async def verify(doors: Any, turns: Any, final: Any, log: Any) -> None:
@@ -5313,10 +5735,6 @@ async def test_run_verify_hands_the_module_the_turns_and_the_listing() -> None:
 
 
 async def test_run_verify_is_a_no_op_without_a_module_or_without_the_hook() -> None:
-    from types import SimpleNamespace
-
-    from membrane.capability import run_verify
-
     log = io.StringIO()
     await run_verify(None, "doors", [], {}, log=log)  # type: ignore[arg-type]
     await run_verify(SimpleNamespace(), "doors", [], {}, log=log)  # type: ignore[arg-type]
@@ -5324,10 +5742,6 @@ async def test_run_verify_is_a_no_op_without_a_module_or_without_the_hook() -> N
 
 
 async def test_a_verify_that_raises_is_recorded_and_does_not_end_the_run() -> None:
-    from types import SimpleNamespace
-
-    from membrane.capability import run_verify
-
     async def verify(doors: Any, turns: Any, final: Any, log: Any) -> None:
         raise RuntimeError("no chain")
 

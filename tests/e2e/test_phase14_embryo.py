@@ -25,7 +25,7 @@ import pytest_asyncio
 from membrane.capabilities import CAPABILITIES, load, load_module
 from membrane.capability import Doors as DriverDoors
 from membrane.capability import paths_in, promote, read_promotion, start_from
-from membrane.postconditions import CHECKS
+from membrane.postconditions import CHECKS, HATCH_ENV
 from membrane.scripted import SECRET_PATH
 
 from tests.support_embryo import HATCH, WORDS, b64, split_output
@@ -623,9 +623,9 @@ class TestPhase14Embryo:
         }
         assert call["chain_head"] in chain  # the head is durable
         # the token: on the verb's chain and nowhere on the brain
-        found = await security.inspect_brain(driver, page["token"], sys.stderr)
+        found = await driver.inspect_brain(page["token"], sys.stderr)
         assert found["files_with_token"] == [], found
-        assert set(found["env_names"]) <= security.HATCH_ENV, found
+        assert set(found["env_names"]) <= HATCH_ENV, found
         assert page["token"] not in log.json()["stdout"] and page["token"] not in reply
 
     async def test_t14_11_a_second_verb_needs_the_same_token_and_the_final_state(

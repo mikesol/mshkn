@@ -21,7 +21,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from membrane.capability import FENCED_RE, sse_stdout, upload
+from membrane.capability import FENCED_RE, sse_stdout
 from membrane.postconditions import CHECKS, Judged, by_label, tool_computers
 
 if TYPE_CHECKING:
@@ -155,7 +155,7 @@ async def probe_fork(doors: Any, checkpoint: str, command: str, results: dict[st
     computer_id = str(forked.json()["computer_id"])
     try:
         for name, body in AMOUNTS:
-            await upload(doors, computer_id, PROBE_PATH, body.encode())
+            await doors.upload(computer_id, PROBE_PATH, body.encode())
             ran = await doors.api.post(
                 f"/computers/{computer_id}/exec",
                 json={"command": command, "timeout_seconds": 120},
@@ -193,14 +193,14 @@ async def verify(doors: Any, turns: list[Any], final: Mapping[str, Any], log: Te
     lists them, stopping wherever the host broke.
 
     `exit_code` is `None` when the stream carried no `event: exit` --
-    `sse_stdout` (`embryo/membrane/capability.py:93`) only assigns one if it
+    `sse_stdout` (`embryo/membrane/capability.py:535`) only assigns one if it
     arrives. A check must test it with `isinstance(code, int)` before comparing:
     `fixed` asks that the word file exited nonzero, and `None != 0` is true, so
     a truncated stream would otherwise read as the program correctly refusing a
     line it never saw.
 
     A probe that dies is a finding and not an absence: `run_verify` in the driver
-    (`embryo/membrane/capability.py:1775`) swallows what escapes here into its
+    (`embryo/membrane/capability.py:1818`) swallows what escapes here into its
     log, and that log is not the committed record, so an error that left `probes`
     empty would reach `runs_again` as a program that does not run. Every way out
     of here writes into `probes` before it writes a line to `log`, in that order:

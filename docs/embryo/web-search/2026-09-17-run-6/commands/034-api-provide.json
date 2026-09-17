@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-17T15:52:58+00:00",
+ "command": "provide",
+ "computer_id": "comp-68c23aa02e09",
+ "detail": [
+  "tavily_search",
+  "tavily_api_key"
+ ],
+ "door": "api",
+ "n": 34,
+ "seconds": 2.319832943379879,
+ "status": 200,
+ "stderr": "",
+ "stdout": "tavily_search: tavily_api_key provided (1/1)\n"
+}
