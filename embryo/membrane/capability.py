@@ -90,6 +90,40 @@ def paths_in(reply: str) -> list[str]:
     return list(dict.fromkeys(found))
 
 
+def sse_stdout(text: str) -> tuple[str, int | None]:
+    """The stdout lines and exit code from the body of `POST /computers/{id}/exec`,
+    which is a text/event-stream of `event:`/`data:` pairs in CRLF or LF. Stderr
+    events are discarded. A non-integer `exit` payload raises `ValueError`, which
+    any caller that distinguishes a clean exit from a missing one must catch
+    (`security.prepare` already does, around its `inspect_brain` call)."""
+    out: list[str] = []
+    code: int | None = None
+    event = ""
+    for raw in text.splitlines():
+        line = raw.rstrip("\r")
+        if line.startswith("event: "):
+            event = line[len("event: ") :]
+        elif line.startswith("data: "):
+            data = line[len("data: ") :]
+            if event == "stdout":
+                out.append(data)
+            elif event == "exit":
+                code = int(data)
+    return "\n".join(out), code
+
+
+async def upload(doors: Doors, computer_id: str, path: str, data: bytes) -> None:
+    """A file onto a computer, with the account key and through no door: what a
+    capability module's scaffolding writes before it runs something."""
+    response = await doors.api.post(
+        f"/computers/{computer_id}/upload",
+        params={"path": path},
+        content=data,
+        headers={"content-type": "application/octet-stream"},
+    )
+    response.raise_for_status()
+
+
 def unprovided_verbs(listing: Mapping[str, Any]) -> list[tuple[str, str, str, str]]:
     """(verb, name, recipe_id, chain) for every name a ready verb requires that
     root has not provided, in catalog order."""

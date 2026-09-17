@@ -116,17 +116,6 @@ def test_the_module_registers_exactly_the_checks_security_names(security: Any) -
     assert security.PAGE_BODY.endswith("\n") and "8128" in security.PAGE_BODY
 
 
-def test_sse_stdout_reads_crlf_and_lf_streams(security: Any) -> None:
-    assert security.sse_stdout(
-        _sse(("stdout", "a"), ("stderr", "x"), ("stdout", "b"), ("exit", "0"))
-    ) == ("a\nb", 0)
-    assert security.sse_stdout("event: stdout\ndata: only\n\nevent: exit\ndata: 3\n\n") == (
-        "only",
-        3,
-    )
-    assert security.sse_stdout("") == ("", None)
-
-
 def test_the_page_server_script_serves_the_body_behind_the_bearer(
     security: Any, tmp_path: Path
 ) -> None:

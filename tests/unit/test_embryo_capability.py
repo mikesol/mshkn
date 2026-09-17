@@ -5229,3 +5229,15 @@ async def test_a_dependent_checks_its_lineage_is_still_on_the_host_before_it_for
         return httpx.Response(200, json=[{"id": "ir_1"}])
 
     await check_lineage(_bare_doors(tmp_path, held), lineage)
+
+
+def test_sse_stdout_reads_the_stdout_lines_and_the_exit_code() -> None:
+    from membrane.capability import sse_stdout
+
+    stream = "".join(
+        f"event: {e}\r\ndata: {d}\r\n\r\n"
+        for e, d in (("stdout", "a"), ("stderr", "x"), ("stdout", "b"), ("exit", "0"))
+    )
+    assert sse_stdout(stream) == ("a\nb", 0)
+    assert sse_stdout("event: stdout\ndata: only\n\nevent: exit\ndata: 3\n\n") == ("only", 3)
+    assert sse_stdout("") == ("", None)

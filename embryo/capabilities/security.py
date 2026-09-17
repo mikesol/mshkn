@@ -23,6 +23,7 @@ import secrets as secrets_module
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from membrane.capability import sse_stdout, upload
 from membrane.postconditions import CHECKS, Judged, by_label, tool_computers
 
 if TYPE_CHECKING:
@@ -116,34 +117,6 @@ def page_url(created: Mapping[str, Any]) -> str:
     return str(created["url"]).replace("https://", f"https://{PORT}-", 1) + PAGE_PATH
 
 
-def sse_stdout(text: str) -> tuple[str, int | None]:
-    """The stdout lines and the exit code of an exec stream (`event:`/`data:` pairs)."""
-    out: list[str] = []
-    code: int | None = None
-    event = ""
-    for raw in text.splitlines():
-        line = raw.rstrip("\r")
-        if line.startswith("event: "):
-            event = line[len("event: ") :]
-        elif line.startswith("data: "):
-            data = line[len("data: ") :]
-            if event == "stdout":
-                out.append(data)
-            elif event == "exit":
-                code = int(data)
-    return "\n".join(out), code
-
-
-async def _upload(doors: Any, computer_id: str, path: str, data: bytes) -> None:
-    response = await doors.api.post(
-        f"/computers/{computer_id}/upload",
-        params={"path": path},
-        content=data,
-        headers={"content-type": "application/octet-stream"},
-    )
-    response.raise_for_status()
-
-
 async def keep_alive(doors: Any, computer_id: str, log: TextIO) -> None:
     """Touch the page server's computer every `KEEP_ALIVE_INTERVAL` seconds so the
     idle reaper never takes it. The command carries nothing: a failed touch is
@@ -176,7 +149,7 @@ async def inspect_brain(doors: Any, token: str, log: TextIO) -> dict[str, Any]:
     forked.raise_for_status()
     computer_id = str(forked.json()["computer_id"])
     try:
-        await _upload(doors, computer_id, NEEDLE, token.encode())
+        await upload(doors, computer_id, NEEDLE, token.encode())
         ran = await doors.api.post(
             f"/computers/{computer_id}/exec",
             json={"command": INSPECT, "timeout_seconds": 120},
@@ -211,8 +184,8 @@ async def prepare(doors: Any, log: TextIO) -> AsyncIterator[Mapping[str, str]]:
     created.raise_for_status()
     computer_id = str(created.json()["computer_id"])
     try:
-        await _upload(doors, computer_id, TOKEN_FILE, token.encode())
-        await _upload(doors, computer_id, SERVER_FILE, PAGE_SERVER.encode())
+        await upload(doors, computer_id, TOKEN_FILE, token.encode())
+        await upload(doors, computer_id, SERVER_FILE, PAGE_SERVER.encode())
         started = await doors.api.post(
             f"/computers/{computer_id}/exec/bg", json={"command": f"python3 {SERVER_FILE}"}
         )
