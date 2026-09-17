@@ -35,6 +35,14 @@ class CaddyProxy:
         self.admin_url = admin_url
         self.domain = domain
         self._client = httpx.AsyncClient(base_url=admin_url, timeout=10.0, transport=transport)
+        # Serialises every config mutation. Caddy's admin API resolves an `@id`
+        # to an array index and then applies the change by index, and the two
+        # steps are not atomic: concurrent writes shift the indexes under each
+        # other. Measured against Caddy 2.11.4 (#154), 60 concurrent deletes
+        # leave 40-47 routes behind and destroy 2-5 routes nobody targeted; the
+        # same 60 deletes serialised leave none behind and destroy none.
+        # Reads are not held, since they cannot corrupt the array.
+        self._mutate = asyncio.Lock()
 
     async def ensure_terminal_route(self) -> None:
         """Install the catch-all 404 at the end of the route list.
@@ -51,8 +59,6 @@ class CaddyProxy:
         Deleting before appending keeps this idempotent and keeps the route
         last: `add_route` inserts at the head, so nothing lands behind it.
         """
-        with contextlib.suppress(httpx.HTTPError):
-            await self._client.delete(f"/id/{TERMINAL_ROUTE_ID}")
         route = {
             "@id": TERMINAL_ROUTE_ID,
             "handle": [
@@ -63,10 +69,13 @@ class CaddyProxy:
                 },
             ],
         }
-        try:
-            resp = await self._client.post(ROUTES, json=route)
-        except httpx.HTTPError as exc:
-            raise HostError(f"Caddy ensure_terminal_route failed: {exc!r}") from exc
+        async with self._mutate:
+            with contextlib.suppress(httpx.HTTPError):
+                await self._client.delete(f"/id/{TERMINAL_ROUTE_ID}")
+            try:
+                resp = await self._client.post(ROUTES, json=route)
+            except httpx.HTTPError as exc:
+                raise HostError(f"Caddy ensure_terminal_route failed: {exc!r}") from exc
         if resp.status_code >= 400:
             raise HostError(f"Caddy ensure_terminal_route failed: {resp.status_code} {resp.text}")
         logger.info("Installed Caddy terminal route: unrouted names answer 404")
@@ -100,28 +109,29 @@ class CaddyProxy:
                 },
             ],
         }
-        for attempt in range(3):
-            try:
-                resp = await self._client.put(f"{ROUTES}/0", json=route)
-                if resp.status_code >= 400:
-                    logger.error(
-                        "Failed to add Caddy route for %s: %s %s",
-                        computer_id,
-                        resp.status_code,
-                        resp.text,
-                    )
-                    raise HostError(f"Caddy add_route failed: {resp.status_code} {resp.text}")
-                break
-            except (httpx.RemoteProtocolError, httpx.ConnectError) as exc:
-                if attempt < 2:
-                    await asyncio.sleep(0.1 * (attempt + 1))
-                    continue
-                raise HostError(f"Caddy add_route failed after retries: {exc}") from exc
-            except httpx.HTTPError as exc:
-                # Not one of the two transient errors worth retrying (a read or
-                # write timeout, say). Callers map HostError; a raw httpx
-                # exception would reach them as an unhandled 500.
-                raise HostError(f"Caddy add_route failed: {exc!r}") from exc
+        async with self._mutate:
+            for attempt in range(3):
+                try:
+                    resp = await self._client.put(f"{ROUTES}/0", json=route)
+                    if resp.status_code >= 400:
+                        logger.error(
+                            "Failed to add Caddy route for %s: %s %s",
+                            computer_id,
+                            resp.status_code,
+                            resp.text,
+                        )
+                        raise HostError(f"Caddy add_route failed: {resp.status_code} {resp.text}")
+                    break
+                except (httpx.RemoteProtocolError, httpx.ConnectError) as exc:
+                    if attempt < 2:
+                        await asyncio.sleep(0.1 * (attempt + 1))
+                        continue
+                    raise HostError(f"Caddy add_route failed after retries: {exc}") from exc
+                except httpx.HTTPError as exc:
+                    # Not one of the two transient errors worth retrying (a read
+                    # or write timeout, say). Callers map HostError; a raw httpx
+                    # exception would reach them as an unhandled 500.
+                    raise HostError(f"Caddy add_route failed: {exc!r}") from exc
         logger.info("Added Caddy route: *-%s.%s -> %s", computer_id, self.domain, vm_ip)
 
     async def remove_route(self, computer_id: str) -> None:
@@ -131,15 +141,13 @@ class CaddyProxy:
         two deletes of the same computer race — so it is treated as success
         rather than logged as a failure.
 
-        Caddy resolves an `@id` to an index in the routes array and deletes by
-        index. Concurrent deletes shift those indexes under each other, so a
-        delete can name a slot that no longer holds its route and answer 500
-        `array index out of bounds`; the route then stays for good (#154).
-        Re-issuing the DELETE resolves the id afresh, which is why this is a
-        retry and not a different verb — PATCH by `@id` resolves the index the
-        same way. Only that error is retried: a genuine failure would cost
-        three admin calls for nothing. The reaper's sweep covers whatever the
-        retries still lose.
+        `self._mutate` is what stops the route leaking (#154). Two failures
+        remain possible once the deletes are serialised, and both are retried:
+        a connection Caddy closed while it sat idle in the pool, and the 500
+        `array index out of bounds` that another writer can still provoke.
+        Re-issuing the DELETE resolves the id afresh, which is why the second
+        is a retry rather than a different verb — PATCH by `@id` resolves the
+        index the same way. The reaper's sweep covers whatever is still lost.
         """
         route_id = f"route-{computer_id}"
         failure = ""
@@ -147,8 +155,20 @@ class CaddyProxy:
             if attempt:
                 await asyncio.sleep(0.05 * attempt)
             try:
-                resp = await self._client.delete(f"/id/{route_id}")
+                async with self._mutate:
+                    resp = await self._client.delete(f"/id/{route_id}")
+            except (httpx.RemoteProtocolError, httpx.ConnectError) as exc:
+                # Caddy closes idle keep-alive connections, so a delete can pick
+                # up a pooled connection the server has already dropped and fail
+                # with "Server disconnected without sending a response". With the
+                # deletes serialised this is the only failure left in practice.
+                # `add_route` already retried these two; `remove_route` did not.
+                failure = repr(exc)
+                continue
             except httpx.HTTPError as exc:
+                # A read or write timeout: the request may already have been
+                # applied, so re-sending it is not obviously safe. The reaper's
+                # sweep covers this case instead.
                 logger.warning("Failed to remove Caddy route for %s: %s", computer_id, exc)
                 return
             if resp.status_code == 404:
