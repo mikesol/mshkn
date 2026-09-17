@@ -7,6 +7,15 @@ and a `## Repair` section with the phrases root says when a build fails or an
 approval is refused. The words and outcomes live only here; the checks the
 frontmatter names live in `membrane.postconditions`.
 
+A row heading may carry a third field, `### <label> · <door> · proposes`, which
+says the row's outcome is unreachable without a proposal. It is the driver's
+only machine-readable statement of what a row is *for*: the outcome beside it is
+prose for a human reader, and nothing else in the file distinguishes a row that
+must grow the agent (hatch 2, 6, 7, 9) from one that merely speaks to it (4, 5,
+8). Without it a row can end with the model narrating what it intends to propose,
+having proposed nothing, and the run walks on (2026-09-16-run-3, turn 2: twenty
+`try` calls and no `propose`).
+
 A capability may pair with `embryo/capabilities/<name>.py` beside its markdown:
 its own apparatus, not the driver's. The module may define `prepare(doors, log)`,
 an async context manager over the extra context its rows template, and may
@@ -33,9 +42,10 @@ DOORS: frozenset[str] = frozenset({"root say", "root list", "signed", "unsigned"
 TEMPLATES: frozenset[str] = frozenset({"key", "url", "token"})
 FRONTMATTER_KEYS = ("name", "depends", "postconditions")
 SEPARATOR = " · "  # U+00B7, between a row's label and its door in the heading
+PROPOSES = "proposes"  # the optional third field of a row heading
 FENCE = "```"
 TEMPLATE_RE = re.compile(r"\{([a-z_]+)\}")
-PHRASE_RE = re.compile(r"^- (build|refused|provide): `([^`]+)`$")
+PHRASE_RE = re.compile(r"^- (build|refused|provide|stalled|silent): `([^`]+)`$")
 
 
 class CapabilityError(ValueError):
@@ -59,6 +69,9 @@ class Row:
     door: str
     words: str
     outcome: str
+    # Whether the row's outcome is unreachable without a proposal; declared by a
+    # third field on the heading, `### <label> · <door> · proposes`.
+    proposes: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,6 +81,12 @@ class Repair:
     # What root says when a verb still needs something and the reply named no
     # path for it (spec §7.2); None for a capability that provides nothing.
     provide: str | None = None
+    # What root says when a turn ended of its own accord having called no tool at
+    # all, and when a `proposes` row ended having proposed nothing. Both are the
+    # same defect at two scales -- a plan stated and not enacted -- and both are
+    # read off the audit, never off the model's prose. None disables the trigger.
+    stalled: str | None = None
+    silent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -185,11 +204,17 @@ def _rows(sections: list[tuple[str, str, list[str]]], path: Path) -> tuple[Row, 
     for marker, heading, body in sections:
         if marker != "###":
             continue  # `## Repair`, or any other section of prose
-        label, sep, door = heading.partition(SEPARATOR)
-        label, door = label.strip(), door.strip()
-        if not sep or not label or not door:
+        fields = [field.strip() for field in heading.split(SEPARATOR)]
+        if len(fields) not in (2, 3) or not all(fields):
             raise CapabilityError(
-                f"{path.name}: row heading '### {heading}' is not '### <label> · <door>'"
+                f"{path.name}: row heading '### {heading}' is not "
+                f"'### <label> · <door>' or '### <label> · <door> · {PROPOSES}'"
+            )
+        label, door = fields[0], fields[1]
+        proposes = len(fields) == 3
+        if proposes and fields[2] != PROPOSES:
+            raise CapabilityError(
+                f"{path.name}: row {label}: third heading field '{fields[2]}' is not '{PROPOSES}'"
             )
         if label in seen:
             raise CapabilityError(f"{path.name}: row {label} appears twice")
@@ -200,6 +225,10 @@ def _rows(sections: list[tuple[str, str, list[str]]], path: Path) -> tuple[Row, 
             )
         block, outcome = _words(label, body, path)
         if door == "root list":
+            if proposes:
+                raise CapabilityError(
+                    f"{path.name}: row {label}: a root list row speaks to nobody and cannot propose"
+                )
             if block is not None:
                 raise CapabilityError(f"{path.name}: row {label}: a root list row carries no words")
             words = ""
@@ -210,7 +239,7 @@ def _rows(sections: list[tuple[str, str, list[str]]], path: Path) -> tuple[Row, 
         for name in TEMPLATE_RE.findall(words):
             if name not in TEMPLATES:
                 raise CapabilityError(f"{path.name}: row {label}: unknown template '{name}'")
-        rows.append(Row(label, door, words, outcome))
+        rows.append(Row(label, door, words, outcome, proposes))
     if not rows:
         raise CapabilityError(f"{path.name}: no rows")
     return tuple(rows)
@@ -231,7 +260,11 @@ def _repair(sections: list[tuple[str, str, list[str]]], path: Path) -> Repair:
         if key not in phrases:
             raise CapabilityError(f"{path.name}: Repair: missing '{key}'")
     return Repair(
-        build=phrases["build"], refused=phrases["refused"], provide=phrases.get("provide")
+        build=phrases["build"],
+        refused=phrases["refused"],
+        provide=phrases.get("provide"),
+        stalled=phrases.get("stalled"),
+        silent=phrases.get("silent"),
     )
 
 

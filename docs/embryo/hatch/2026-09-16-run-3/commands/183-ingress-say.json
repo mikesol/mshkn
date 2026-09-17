@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-16T05:15:10+00:00",
+ "command": "say",
+ "computer_id": "comp-4a392aaef85c",
+ "detail": {
+  "msg": "page_title https://example.com",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgea2xie+tLq+PUEbHrqdNA30qqt\nNycIr/AKPp/e2DMYMAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABAhIAYNT3VXrOZNyQwpBLgWmSvOu/kYU3tmTwylS43rbL8CcHbfeB/SxaLKmhM2Q\naFjdP3Z+s/BDiPABnt4efSCw==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 183,
+ "seconds": 2.3001608550548553,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"closed\": true, \"door\": \"ingress\", \"principal\": null}\nThe public door is closed.\n"
+}

@@ -1,0 +1,938 @@
+{
+ "approver": "AutoApprover",
+ "base_url": "https://ai-gateway.vercel.sh",
+ "body_extra": "{\"providerOptions\":{\"gateway\":{\"only\":[\"poolside\"]}}}",
+ "capability": "hatch",
+ "commands": 187,
+ "continuations": [],
+ "cost_usd": 0.0246,
+ "default_effort": "off",
+ "effort_supported": false,
+ "ended": "2026-09-16T06:47:27+00:00",
+ "hatched": {
+  "checkpoint_id": "ckpt-538b8f8b713f",
+  "ingress_url": "https://mshkn.dev/ingress/ir_b4uCBv0_9RY1WQrYcLGvWBxDV7k",
+  "key_id": "key-81a5fd810962",
+  "recipe_id": "rcp-830749742e3e",
+  "rule_id": "ir_b4uCBv0_9RY1WQrYcLGvWBxDV7k",
+  "server_id": null
+ },
+ "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-16-run-4",
+ "membrane": {
+  "commit": "fca77e6a0c5820e1d22b7ac939dcdb5d916e151b",
+  "dirty": false
+ },
+ "model": "poolside/laguna-s-2.1",
+ "model_calls": 66,
+ "ok": false,
+ "passed": 2,
+ "postconditions": {
+  "authentication": {
+   "evidence": {
+    "hook_logs": [],
+    "hooks": [],
+    "signed": null,
+    "unsigned": null
+   },
+   "ok": false
+  },
+  "authorization": {
+   "evidence": {
+    "anonymous": {
+     "invoke": [],
+     "propose": false
+    },
+    "anonymous_offered": null,
+    "exercised": [],
+    "verified": {}
+   },
+   "ok": false
+  },
+  "counter": {
+   "evidence": {
+    "chain_heads": [],
+    "computer_ids": [],
+    "counts": [],
+    "final_chain_head": null
+   },
+   "ok": false
+  },
+  "no_undeclared_capability": {
+   "evidence": {
+    "catalog": [
+     "verify_ssh_sig"
+    ],
+    "not_ready": [
+     "verify_ssh_sig"
+    ],
+    "undeclared_recipes": [],
+    "unexpected_tools": [],
+    "unproposed": [
+     "verify_ssh_sig"
+    ]
+   },
+   "ok": false
+  },
+  "nothing_by_hand": {
+   "evidence": {
+    "by_hand": [],
+    "commands": {
+     "api approve": 1,
+     "api list": 149,
+     "api say": 29,
+     "ingress say": 8
+    },
+    "provides": 0,
+    "provisions": 0
+   },
+   "ok": true
+  },
+  "page_title": {
+   "evidence": {
+    "computer_id": null,
+    "gone": null,
+    "reply": "The public door is closed.",
+    "stdout": null
+   },
+   "ok": false
+  },
+  "root_unforgeable": {
+   "evidence": {
+    "public_principals": []
+   },
+   "ok": true
+  }
+ },
+ "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILG2BxgdMMizvdGNuiT1dK60EqHxpeGZEMi8BP2swsC6 mike",
+ "reasks": [],
+ "run": "2026-09-16-run-4",
+ "seconds": 1072.2,
+ "started": "2026-09-16T06:29:34+00:00",
+ "started_from": "hatch",
+ "turns": [
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "1",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1920,
+    "input_tokens": 1498,
+    "output_tokens": 1319
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "2",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1344,
+    "input_tokens": 1349,
+    "output_tokens": 494
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 building: verb verify_ssh_sig recipe rcp-ee12ec3226b2"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "2-repair-1",
+   "model_calls": 12,
+   "principal": "root",
+   "proposals": [
+    "p-1"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 50880,
+    "input_tokens": 13930,
+    "output_tokens": 4127
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "2-repair-2",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 2880,
+    "input_tokens": 1490,
+    "output_tokens": 600
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "2-repair-3",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3616,
+    "input_tokens": 1103,
+    "output_tokens": 559
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [],
+   "label": "4",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "4-repair-1",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 4256,
+    "input_tokens": 1024,
+    "output_tokens": 250
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "4-repair-2",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 4832,
+    "input_tokens": 716,
+    "output_tokens": 507
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "4-repair-3",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 5088,
+    "input_tokens": 1033,
+    "output_tokens": 196
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress-unsigned",
+   "effort": [],
+   "label": "5",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "5-repair-1",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 5600,
+    "input_tokens": 709,
+    "output_tokens": 443
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "5-repair-2",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 2880,
+    "input_tokens": 3871,
+    "output_tokens": 110
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "5-repair-3",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 6272,
+    "input_tokens": 624,
+    "output_tokens": 228
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [],
+   "label": "6",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "6-repair-1",
+   "model_calls": 7,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 36992,
+    "input_tokens": 16939,
+    "output_tokens": 2172
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "6-repair-2",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1344,
+    "input_tokens": 4816,
+    "output_tokens": 112
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "6-repair-3",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1344,
+    "input_tokens": 4163,
+    "output_tokens": 185
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [],
+   "label": "7",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "7-repair-1",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1344,
+    "input_tokens": 3748,
+    "output_tokens": 192
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null
+   ],
+   "label": "7-repair-2",
+   "model_calls": 3,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 11104,
+    "input_tokens": 4696,
+    "output_tokens": 849
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "7-repair-3",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 6560,
+    "input_tokens": 3777,
+    "output_tokens": 603
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [],
+   "label": "8",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null
+   ],
+   "label": "8-repair-1",
+   "model_calls": 3,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 7744,
+    "input_tokens": 7677,
+    "output_tokens": 933
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "8-repair-2",
+   "model_calls": 4,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 12672,
+    "input_tokens": 9718,
+    "output_tokens": 1212
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null
+   ],
+   "label": "8-repair-3",
+   "model_calls": 3,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 11328,
+    "input_tokens": 4355,
+    "output_tokens": 733
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [],
+   "label": "9",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "9-repair-1",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1376,
+    "input_tokens": 3638,
+    "output_tokens": 316
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null
+   ],
+   "label": "9-repair-2",
+   "model_calls": 3,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 11808,
+    "input_tokens": 8655,
+    "output_tokens": 4323
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "9-repair-3",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1376,
+    "input_tokens": 7031,
+    "output_tokens": 120
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [],
+   "label": "9-count-1",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "9-count-1-repair-1",
+   "model_calls": 6,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try",
+    "try",
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 48832,
+    "input_tokens": 10652,
+    "output_tokens": 2987
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "9-count-1-repair-2",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1376,
+    "input_tokens": 8382,
+    "output_tokens": 230
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "9-count-1-repair-3",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1376,
+    "input_tokens": 8420,
+    "output_tokens": 151
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [],
+   "label": "9-count-2",
+   "model_calls": 0,
+   "principal": null,
+   "proposals": [],
+   "provisions": [],
+   "stopped": null,
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "9-count-2-repair-1",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 2752,
+    "input_tokens": 17292,
+    "output_tokens": 666
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "9-count-2-repair-2",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 11360,
+    "input_tokens": 8761,
+    "output_tokens": 671
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null
+   ],
+   "label": "9-count-2-repair-3",
+   "model_calls": 1,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1376,
+    "input_tokens": 8340,
+    "output_tokens": 336
+   }
+  }
+ ],
+ "usage": {
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 261632,
+  "input_tokens": 168407,
+  "output_tokens": 25624
+ }
+}

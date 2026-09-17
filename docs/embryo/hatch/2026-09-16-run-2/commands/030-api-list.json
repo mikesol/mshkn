@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-16T03:53:46+00:00",
+ "command": "list",
+ "computer_id": "comp-3107fad3c890",
+ "detail": [],
+ "door": "api",
+ "n": 30,
+ "seconds": 2.296511212363839,
+ "status": 200,
+ "stderr": "",
+ "stdout": "{\n \"catalog\": {},\n \"door\": {\n  \"hooks\": [],\n  \"hooks_ready\": [],\n  \"status\": \"closed\"\n },\n \"inbox\": 0,\n \"pending\": {\n  \"door\": \"api\",\n  \"forks\": 3,\n  \"job\": \"rj-3b6f90b49034\",\n  \"model_calls\": 3,\n  \"principal\": \"root\",\n  \"started_at\": \"2026-09-16T03:49:52+00:00\",\n  \"turn\": 1,\n  \"usage\": {\n   \"cache_creation_input_tokens\": 0,\n   \"cache_read_input_tokens\": 5696,\n   \"input_tokens\": 1568,\n   \"output_tokens\": 6228\n  }\n },\n \"policy\": {\n  \"door\": \"closed\",\n  \"hooks\": [],\n  \"principals\": {\n   \"anonymous\": {\n    \"invoke\": [],\n    \"propose\": false\n   }\n  }\n },\n \"principals\": [],\n \"proposals\": [],\n \"queue\": [],\n \"trials\": [\n  {\n   \"id\": \"t-1\",\n   \"recipe_id\": \"rcp-dad38bfef441\",\n   \"status\": \"failed\",\n   \"verb\": \"ping\"\n  }\n ],\n \"turn\": 1,\n \"window\": []\n}\n"
+}

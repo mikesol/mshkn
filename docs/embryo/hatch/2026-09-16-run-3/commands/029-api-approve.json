@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-16T04:54:10+00:00",
+ "command": "approve",
+ "computer_id": "comp-a0b46eda91f1",
+ "detail": [
+  "p-1"
+ ],
+ "door": "api",
+ "n": 29,
+ "seconds": 2.2792638037353754,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-1 applied: prompt replaced; effective from the next turn\n"
+}

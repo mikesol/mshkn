@@ -147,16 +147,43 @@ def test_model_api_key_raises_for_a_directly_built_settings_without_a_gateway_ke
         _ = settings.model_api_key
 
 
-def test_cost_uses_the_price_table_and_the_cache_multipliers() -> None:
+def test_cost_uses_each_models_own_four_published_rates() -> None:
+    """Every token count a turn reports is billed at the rate that model publishes for
+    it. There were two global multipliers here, `CACHE_READ = 0.1` and
+    `CACHE_WRITE = 1.25`, and they happen to be exactly right for the Anthropic rows
+    and wrong for two of the other four, so Opus's arithmetic is unchanged and
+    `gpt-5.6-sol`'s is not: its published cache write is 0.625x of input, and the
+    third assertion is the negative control holding the number the multiplier gave."""
     usage = {
         "input_tokens": 1_000_000,
         "output_tokens": 100_000,
         "cache_creation_input_tokens": 200_000,
         "cache_read_input_tokens": 1_000_000,
     }
-    # 5.00 + 2.50 + 0.25 * 5 + 0.1 * 5 = 5 + 2.5 + 1.25 + 0.5
+    # 1M x 5.00 + 200k x 6.25 + 1M x 0.50 + 100k x 25.00
     assert cost_usd(usage, "claude-opus-5") == pytest.approx(9.25)
     assert cost_usd(zero_usage(), "claude-opus-5") == 0.0
+    # 1M x 2.20 + 200k x 1.375 + 1M x 0.22 + 100k x 11.00
+    assert cost_usd(usage, "openai/gpt-5.6-sol") == pytest.approx(3.795)
+    assert cost_usd(usage, "openai/gpt-5.6-sol") != pytest.approx(4.07)
+
+
+def test_zai_reads_its_cache_at_a_fifth_of_input_not_a_tenth() -> None:
+    """The other direction, and the one no multiplier could have reached: `glm-4.7`
+    publishes `input_cache_read` at $0.12 against a $0.60 input price, a fifth where
+    every other model in the table charges a tenth. The old global `CACHE_READ = 0.1`
+    therefore *under*-charged it, which is why this is worth a test of its own rather
+    than a line in the row above -- an over-report gets noticed when a bill arrives
+    and an under-report does not."""
+    usage = {
+        "input_tokens": 1_000_000,
+        "output_tokens": 100_000,
+        "cache_creation_input_tokens": 200_000,
+        "cache_read_input_tokens": 1_000_000,
+    }
+    # 1M x 0.60 + 200k x 0.60 + 1M x 0.12 + 100k x 2.20
+    assert cost_usd(usage, "zai/glm-4.7") == pytest.approx(1.06)
+    assert cost_usd(usage, "zai/glm-4.7") != pytest.approx(1.03)
 
 
 def test_a_gateway_id_prices_as_the_model_it_names() -> None:
@@ -167,6 +194,74 @@ def test_a_gateway_id_prices_as_the_model_it_names() -> None:
     assert cost_usd(usage, "anthropic/claude-opus-5") == cost_usd(usage, "claude-opus-5")
     assert bare_model_id("anthropic/claude-opus-5") == "claude-opus-5"
     assert bare_model_id("claude-opus-5") == "claude-opus-5"
+
+
+def test_the_cheap_backend_is_priced_so_a_run_can_show_what_it_saved() -> None:
+    """`zai/glm-4.7` is the first non-Anthropic model the gateway was proved to
+    speak the liturgy to (2026-09-15 probe, spec §12). Without a row it records
+    `cost_usd: null`, and a run whose whole point is that it is cheaper cannot say
+    by how much. Prices from the gateway's own catalogue that day, per Mtok."""
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert cost_usd(usage, "zai/glm-4.7") == pytest.approx(2.80)
+    assert cost_usd(usage, "claude-opus-5") == pytest.approx(30.0)
+
+
+def test_deepseek_is_priced_at_the_rate_it_is_actually_served_at() -> None:
+    """The catalogue lists `deepseek-v4-pro` at $0.66/$1.98 and then serves it from
+    `us` only, where its own `regional` block doubles both. Taking the headline
+    would halve every cost this model records; the second assertion is the negative
+    control against exactly that. Its 2x weekday peak multiplier has no home in this
+    table and is a known under-report rather than an omission to fix here — `Price`
+    has no time axis, and giving it one to track a provider's tariff calendar is the
+    organism learning what a provider is."""
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert cost_usd(usage, "deepseek/deepseek-v4-pro") == pytest.approx(5.28)
+    assert cost_usd(usage, "deepseek/deepseek-v4-pro") != pytest.approx(2.64)
+
+
+def test_sonnet_is_priced_at_its_regional_rate_like_deepseek() -> None:
+    """`anthropic/claude-sonnet-5` is the rung between the cheap models and Opus:
+    2026-09-16-run-6 reached 7/7 on DeepSeek for $0.79 and 2026-09-13-run-5 on Opus
+    for $3.18, and nothing on file sits between them. Its catalogue entry has the
+    same shape as DeepSeek's -- a headline $2.00/$10.00 and a `regional` block that
+    is what it is actually served at -- but here `eu` and `us` agree at
+    $2.20/$11.00, so there is one rate and no region to pick. The second assertion
+    is the negative control against taking the headline, which would under-report
+    every run by a tenth. Catalogue read 2026-09-16."""
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert cost_usd(usage, "anthropic/claude-sonnet-5") == pytest.approx(13.20)
+    assert cost_usd(usage, "anthropic/claude-sonnet-5") != pytest.approx(12.0)
+
+
+def test_gpt_sol_costs_exactly_what_sonnet_costs() -> None:
+    """`openai/gpt-5.6-sol` is here to hold cost constant and vary only the lab. Every
+    run on file was judged by a driver an Anthropic model wrote, spoken to by a relay
+    that speaks the Anthropic message shape; a brain from another lab is the only way
+    to tell a finding about hatch from a finding about one family's habits, and it is
+    worth nothing if the comparison also moves the price. So the equality with sonnet
+    is the point of the row and is asserted directly: if either catalogue entry moves,
+    this fails and the pair stops being a controlled comparison. Its own headline is
+    $2.00/$10.00 against a `regional.us` $2.20/$11.00, the third model in this table
+    to be served above its top line, hence the negative control. Read 2026-09-16."""
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert cost_usd(usage, "openai/gpt-5.6-sol") == pytest.approx(13.20)
+    assert cost_usd(usage, "openai/gpt-5.6-sol") != pytest.approx(12.0)
+    assert cost_usd(usage, "openai/gpt-5.6-sol") == cost_usd(usage, "anthropic/claude-sonnet-5")
+
+
+def test_the_cheapest_backend_on_the_gateway_is_priced_before_it_is_run() -> None:
+    """`poolside/laguna-s-2.1` at $0.10/$0.20 is an order of magnitude under the two
+    cheap models already here, so an unpriced run would record `cost_usd: null` for
+    the one number the whole cheap-model exercise exists to produce. Catalogue read
+    2026-09-16: flat pricing, no `regional` block and no peak multiplier, so this row
+    carries none of the caveats the DeepSeek row above it does. The second assertion
+    is the negative control against transposing the two rates, which is why the
+    usage is lopsided: at a symmetric 1M/1M a transposed row sums to the same $0.30
+    and the control would prove nothing. A hatch's usage is lopsided the same way —
+    2026-09-16-run-1 spent 84k in against 168k out."""
+    usage = {"input_tokens": 2_000_000, "output_tokens": 1_000_000}
+    assert cost_usd(usage, "poolside/laguna-s-2.1") == pytest.approx(0.40)
+    assert cost_usd(usage, "poolside/laguna-s-2.1") != pytest.approx(0.50)
 
 
 def test_an_unpriced_model_costs_nothing_known_rather_than_losing_the_run() -> None:
@@ -1436,6 +1531,14 @@ SELF = "Say in your own words what you have become."
 SECURITY = load(CAPABILITIES / "security.md")  # rows 11-14, and the provide phrase
 
 
+REPAIR_PHRASES = frozenset(
+    phrase
+    for repair in (HATCH.repair, SECURITY.repair)
+    for phrase in (repair.build, repair.refused, repair.provide, repair.stalled, repair.silent)
+    if phrase is not None
+)
+
+
 class FakeDoors:
     """A door whose membrane is a small state machine: proposals are made on the
     turns hatch expects them, approvals move them to building, and each
@@ -1458,6 +1561,7 @@ class FakeDoors:
         growing: bool = False,
         secret: bool = False,
         path_in_reply: str | None = "```\n/verb/token\n```",
+        stall_on_repair: bool = False,
     ) -> None:
         # A membrane that grows a verb with a `requires` at row 11 (spec §7.2), and
         # what the replies of rows 11 and 13 say about where root should put the
@@ -1495,6 +1599,9 @@ class FakeDoors:
         self.turn = 0
         self.repairs = 0
         self.count_calls = 0  # invocations of the counter verb, not `count` messages
+        # The agent that answers a repair phrase with prose and no call at all
+        # (2026-09-16-run-2 `3-repair-3`, run-3 `3-repair-1`).
+        self.stall_on_repair = stall_on_repair
 
     def _may_invoke(self, name: str) -> bool:
         """Whether the policy in force lets `ssh:mike` invoke the verb."""
@@ -1588,8 +1695,16 @@ class FakeDoors:
         elif text == "where should I put it?":
             # security's provide phrase: the agent answers with the path alone
             said = "Put it at\n```\n/verb/token\n```"
+        tools = [{"name": "propose", "status": "ok", "id": p["id"]} for p in made]
+        if not tools and text in REPAIR_PHRASES and not self.stall_on_repair:
+            # A repair turn that looked and fixed nothing is not a repair turn that
+            # froze: the driver tells them apart by the tool list (`stalled`), and
+            # before it did, this fake collapsed both into an empty one. The default
+            # is the agent that acted and still did not fix it, which is what every
+            # test written before the distinction existed meant.
+            tools = [{"name": "remember", "status": "ok"}]
         audit = audit_line(
-            tools=[{"name": "propose", "status": "ok", "id": p["id"]} for p in made],
+            tools=tools,
             proposals=[{"id": p["id"], "sha256": "x"} for p in made],
         )
         return self._reply(audit, said)
@@ -2351,8 +2466,8 @@ async def test_every_row_settles_so_a_failed_build_after_a_signed_row_is_repaire
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
-    assert "3-repair-1" in labels and labels.index("3-repair-1") > labels.index("7")
-    assert "build failed for page_title; repair 1" in log.getvalue()
+    assert "7-repair-1" in labels and labels.index("7-repair-1") > labels.index("7")
+    assert "build failed for page_title; 7 repair 1" in log.getvalue()
 
 
 async def test_verbs_are_approved_before_the_policies_that_name_them(tmp_path: Path) -> None:
@@ -2401,7 +2516,7 @@ async def test_a_proposal_refused_before_its_build_is_approved_again_after_it(
     assert turns[2].audit["principal"] == "ssh:mike"
 
 
-async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) -> None:
+async def test_a_turn_that_ran_out_before_proposing_earns_a_repair(tmp_path: Path) -> None:
     doors = FakeDoors(deadline_first=True)
     key_dir, pubkey = _keys(tmp_path)
     turns, _final, _reasks = await speak(
@@ -2409,13 +2524,13 @@ async def test_a_turn_that_ran_out_before_proposing_gets_turn_3(tmp_path: Path) 
     )
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
-    assert [t.label for t in turns][:4] == ["1", "2", "3-repair-1", "4"]
+    assert [t.label for t in turns][:4] == ["1", "2", "2-repair-1", "4"]
     assert turns[1].audit["stopped"] == "deadline" and turns[1].approvals == []
     assert [a["id"] for a in turns[2].approvals] == ["p-1", "p-2"]
     assert turns[3].audit["principal"] == "ssh:mike"
 
 
-async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
+async def test_a_refused_approval_earns_a_repair_and_root_says_check_your_inbox(
     tmp_path: Path,
 ) -> None:
     """2026-09-10-postcut-run-2: the membrane refused a hook that declared no
@@ -2431,8 +2546,8 @@ async def test_a_refused_approval_gets_turn_3_and_root_says_check_your_inbox(
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
-    assert "3-repair-1" in labels, labels
-    repair = turns[labels.index("3-repair-1")]
+    assert "2-repair-1" in labels, labels
+    repair = turns[labels.index("2-repair-1")]
     assert repair.words == HATCH.repair.refused == "check your inbox"
 
 
@@ -2449,11 +2564,77 @@ async def test_a_refusal_earns_one_repair_round_not_one_per_settle(tmp_path: Pat
     )
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
-    repairs = [t.label for t in turns if t.label.startswith("3-repair-")]
-    assert repairs == ["3-repair-1"], repairs
+    repairs = [t.label for t in turns if "-repair-" in t.label]
+    assert repairs == ["2-repair-1"], repairs
 
 
-async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
+async def test_a_refused_proposal_is_not_approved_again_under_the_same_state(
+    tmp_path: Path,
+) -> None:
+    """`repaired` stops the model being *asked* about a refusal twice; it does not
+    stop the driver *approving* it twice. Every later settle re-offered the same
+    abandoned proposal and the membrane refused it again for the same reason, and
+    each refusal went back into the model's inbox: 2026-09-16-run-3 delivered one
+    `effect communicate` refusal 28 times for a proposal the model had already
+    superseded, which reads in the evidence as 28 fresh mistakes."""
+    doors = FakeDoors(refuse={"p-1"})
+    key_dir, pubkey = _keys(tmp_path)
+    log = io.StringIO()
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
+    )
+    offered = [a["id"] for t in turns for a in t.approvals]
+    # The decide, and the one retry round that settles a refusal. Nothing after.
+    assert offered.count("p-1") == 2, offered
+    assert "not re-approving p-1" in log.getvalue()
+    assert all("refused" in a["result"] for t in turns for a in t.approvals if a["id"] == "p-1")
+
+
+async def test_a_refused_proposal_is_offered_again_once_the_catalog_moves(
+    tmp_path: Path,
+) -> None:
+    """The negative control for the memo above, and the reason the skip is sound
+    rather than a heuristic: `refuse_approval` and `refuse_policy` read the catalog
+    and the policy and nothing else, so the skip holds only while that pair is
+    unchanged. Move it and the same proposal is put to the membrane again, because
+    the answer may now be different."""
+    from membrane.capabilities import Row
+
+    doors = FakeDoors(refuse={"p-1"})
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        made = [doors._propose("verb", text)] if text in ("alpha", "beta") else []
+        return doors._reply(
+            audit_line(
+                tools=[{"name": "propose", "status": "ok", "id": p["id"]} for p in made]
+                or [{"name": "remember", "status": "ok"}],
+                proposals=[{"id": p["id"], "sha256": "x"} for p in made],
+            ),
+            "Done.",
+        )
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(
+        HATCH,
+        rows=(
+            Row("one", "root say", "alpha", ""),  # p-1: refused, and never repaired
+            Row("two", "root say", "beta", ""),  # p-2: builds, so the catalog moves
+        ),
+    )
+    log = io.StringIO()
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=log
+    )
+    offered = [(t.label, a["id"]) for t in turns for a in t.approvals]
+    # Skipped while the pair held -- row two's own settle still sees an empty catalog
+    assert "not re-approving p-1" in log.getvalue()
+    # and put to the membrane again the moment beta went ready.
+    assert [label for label, pid in offered if pid == "p-1" and label != "one"], offered
+    assert doors.catalog["beta"]["status"] == "ready"
+
+
+async def test_a_failed_build_earns_a_repair_labelled_after_its_row(tmp_path: Path) -> None:
     doors = FakeDoors(fail_first={"verify_ssh"})
     key_dir, pubkey = _keys(tmp_path)
     turns, _final, _reasks = await speak(
@@ -2462,7 +2643,7 @@ async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
-    assert labels[:4] == ["1", "2", "3-repair-1", "4"]
+    assert labels[:4] == ["1", "2", "2-repair-1", "4"]
     repair = turns[2]
     assert repair.words == HATCH.repair.build and repair.door == "api"
     assert (
@@ -2470,6 +2651,69 @@ async def test_a_failed_build_is_repaired_with_turn_3(tmp_path: Path) -> None:
         and "building: verb verify_ssh" in repair.approvals[0]["result"]
     )
     assert turns[3].audit["principal"] == "ssh:mike"
+
+
+async def test_each_row_gets_its_own_repair_budget(tmp_path: Path) -> None:
+    """MAX_REPAIRS is per row, and a repair is labelled after the row that earned it.
+    A run-wide budget let one row's aftermath spend the whole of it before a later
+    row had run at all: 2026-09-16-run-3 spent all three on row 1 and its
+    continuation, so row 2 -- the identity row every public door waits on -- could
+    not be repaired even once."""
+    from membrane.capabilities import Row
+    from membrane.capability import MAX_REPAIRS
+
+    doors = FakeDoors()
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        return doors._reply(audit_line(tools=[{"name": "try", "status": "ok"}]), "I will.")
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(
+        HATCH,
+        rows=(
+            Row("one", "root say", "a", "", proposes=True),
+            Row("two", "root say", "b", "", proposes=True),
+        ),
+    )
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert [t.label for t in turns] == [
+        "one",
+        *[f"one-repair-{n}" for n in range(1, MAX_REPAIRS + 1)],
+        "two",
+        *[f"two-repair-{n}" for n in range(1, MAX_REPAIRS + 1)],
+    ]
+
+
+async def test_a_build_failure_that_has_not_moved_does_not_earn_a_second_repair(
+    tmp_path: Path,
+) -> None:
+    """A repair is owed by a failure that has moved, not by one that is merely still
+    there. 2026-09-16-run-4: `verify_ssh_sig` failed to build after row 2 and the
+    model never proposed a replacement, so its catalog entry was untouched for the
+    rest of the run -- and the per-row budget then bought three `check your build`
+    turns on every row after it, 24 of the run's 37 turns spent asking about one
+    failure the model had already been told about once."""
+    doors = FakeDoors(fail_first={"verify_ssh"})
+    original = doors.root_say
+
+    async def unrepentant(text: str) -> tuple[dict[str, Any], str]:
+        # The agent looks at the failure and proposes nothing, so the catalog entry
+        # it names is byte-for-byte the one the last repair was spent on.
+        if text == HATCH.repair.build:
+            return doors._reply(
+                audit_line(tools=[{"name": "remember", "status": "ok"}]), "I looked."
+            )
+        return await original(text)
+
+    doors.root_say = unrepentant  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert [t.label for t in turns if t.words == HATCH.repair.build] == ["2-repair-1"]
 
 
 async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Path) -> None:
@@ -2490,7 +2734,7 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
     labels = [t.label for t in turns]
-    assert labels[:6] == ["1", "2", "3-repair-1", "3-repair-2", "3-repair-3", "4"]
+    assert labels[:6] == ["1", "2", "2-repair-1", "2-repair-2", "2-repair-3", "4"]
     # the hook never became ready, so the signed knock is anonymous
     assert turns[5].audit["principal"] == "anonymous"
     final = await doors.listing()
@@ -2508,6 +2752,137 @@ async def test_repairs_stop_after_three_rounds_and_the_run_goes_on(tmp_path: Pat
         ),
     )
     assert result["authentication"]["ok"] is False
+
+
+async def test_a_repair_turn_that_called_no_tool_at_all_is_asked_again(tmp_path: Path) -> None:
+    """Root says `check your inbox`, the model writes prose about what it will do and
+    stops, and nothing truncated it: `unfinished` wants a truncating stop reason and
+    does not see this, so the row used to settle on it in silence. Two runs of the
+    same model produced one each (2026-09-16-run-2 `3-repair-3`, run-3 `3-repair-1`).
+    Read off the audit's tool list, never off the prose that says what it meant."""
+    doors = FakeDoors(refuse={"p-1"}, stall_on_repair=True)
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    repairs = [(t.label, t.words) for t in turns if "-repair-" in t.label]
+    assert repairs == [
+        ("2-repair-1", HATCH.repair.refused),
+        ("2-repair-2", "you called nothing; act"),
+        ("2-repair-3", "you called nothing; act"),
+    ], repairs
+
+
+async def test_a_repair_turn_that_acted_and_still_failed_is_not_a_stall(tmp_path: Path) -> None:
+    """The negative control: the trigger is the absence of every call, not the
+    absence of a fix. An agent that looked, acted and did not manage it has answered
+    the repair, and telling it `you called nothing` would be a lie it cannot use."""
+    doors = FakeDoors(refuse={"p-1"})  # the same run, with a repair turn that acts
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    repairs = [t.label for t in turns if "-repair-" in t.label]
+    assert repairs == ["2-repair-1"], repairs
+
+
+async def test_a_proposes_row_that_proposed_nothing_is_asked_again(tmp_path: Path) -> None:
+    """Hatch 2, 6, 7 and 9 cannot reach their outcome without a proposal, and the
+    heading says so. Without the trigger a row ends with the model narrating the
+    verb it intends to grow, having proposed nothing, and the run walks on
+    (2026-09-16-run-3 turn 2: twenty `try` calls and no `propose`). The trigger reads
+    the turn's proposal list, not the sentence about what it was going to do."""
+    from membrane.capabilities import Row
+    from membrane.capability import MAX_REPAIRS
+
+    doors = FakeDoors()
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        return doors._reply(
+            audit_line(tools=[{"name": "try", "status": "ok"}]),
+            "I will grow a verb that does this.",
+        )
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(HATCH, rows=(Row("grow", "root say", "Grow a verb.", "", proposes=True),))
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert [t.words for t in turns if "-repair-" in t.label] == [
+        "you proposed nothing; propose"
+    ] * MAX_REPAIRS
+
+
+async def test_a_row_that_does_not_propose_is_never_silent(tmp_path: Path) -> None:
+    """The first negative control: the heading is what makes a row answerable this
+    way. Hatch 1, 4, 5 and 8 ask a question whose whole outcome is a reply, and a
+    turn that answers one without proposing is right, not silent."""
+    from membrane.capabilities import Row
+
+    doors = FakeDoors()
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        return doors._reply(
+            audit_line(tools=[{"name": "try", "status": "ok"}]), "Here is my answer."
+        )
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(HATCH, rows=(Row("ask", "root say", "What are you?", ""),))
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert not [t for t in turns if "-repair-" in t.label]
+
+
+async def test_a_proposes_row_that_proposed_is_not_silent_on_its_continuation(
+    tmp_path: Path,
+) -> None:
+    """The second negative control, and the one that bit. A proposal produces an
+    external result, which buys a continuation, and the continuation is settled by a
+    second call: a row that proposed on its own turn and then continued must not be
+    read as having proposed nothing, so the memo of which rows have proposed outlives
+    the call."""
+    from membrane.capabilities import Row
+
+    doors = FakeDoors()
+
+    async def root(text: str) -> tuple[dict[str, Any], str]:
+        made = [doors._propose("verb", "alpha")] if text == "Grow a verb." else []
+        return doors._reply(
+            audit_line(
+                tools=[{"name": "propose", "status": "ok", "id": p["id"]} for p in made]
+                or [{"name": "try", "status": "ok"}],
+                proposals=[{"id": p["id"], "sha256": "x"} for p in made],
+            ),
+            "Done.",
+        )
+
+    doors.root_say = root  # type: ignore[method-assign]
+    key_dir, pubkey = _keys(tmp_path)
+    cap = replace(HATCH, rows=(Row("grow", "root say", "Grow a verb.", "", proposes=True),))
+    turns, _final, _reasks = await speak(
+        cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    assert any("-continue-" in t.label for t in turns), [t.label for t in turns]
+    assert not [t for t in turns if "-repair-" in t.label]
+
+
+async def test_a_proposes_row_behind_a_closed_door_is_not_silent(tmp_path: Path) -> None:
+    """The third negative control. Hatch 6, 7 and 9 all speak through the public
+    door, and a run whose identity verb never built leaves all three closed: the
+    membrane answers alone, the agent is never asked anything, and a turn nothing was
+    put to cannot have declined to propose. Root saying `you proposed nothing` there
+    would spend the whole repair budget on rows that never ran."""
+    doors = FakeDoors(open_door=False)
+    key_dir, pubkey = _keys(tmp_path)
+    turns, _final, _reasks = await speak(
+        HATCH, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
+    )
+    closed = [t for t in turns if t.door.startswith("ingress")]
+    assert closed and all(t.audit.get("closed") for t in closed)
+    assert not [t for t in turns if "-repair-" in t.label]
 
 
 async def test_a_closed_door_makes_every_public_turn_a_refusal(tmp_path: Path) -> None:
@@ -4423,10 +4798,10 @@ async def test_a_reply_with_no_path_earns_the_provide_repair_phrase(tmp_path: Pa
     )
     # These assertions concern script rows and repairs; continuations have their own tests.
     turns = [t for t in turns if "-continue-" not in t.label]
-    assert [t.label for t in turns][:3] == ["11", "3-repair-1", "12"]
+    assert [t.label for t in turns][:3] == ["11", "11-repair-1", "12"]
     assert turns[1].words == "where should I put it?"
     assert doors.provided_at[0] == ("secret_page", "/verb/token", "tok-1")
-    assert "no path for secret_page requires page_token; repair 1" in log.getvalue()
+    assert "no path for secret_page requires page_token; 11 repair 1" in log.getvalue()
 
 
 async def test_without_a_token_in_the_context_nothing_is_placed_and_nothing_repaired(
@@ -4617,7 +4992,14 @@ async def test_public_continuation_repairs_never_escalate_to_root(
         payloads.append(payload)
         if len(payloads) == 1:
             doors._propose("prompt", "self")
-        audit = audit_line(door="ingress", principal="ssh:mike" if signed else "anonymous")
+        audit = audit_line(
+            door="ingress",
+            principal="ssh:mike" if signed else "anonymous",
+            # The repair turn acts and still does not fix it, which is the case this
+            # test is about. A repair turn that calls nothing is a stall, and would
+            # buy two further repairs that have nothing to do with escalation.
+            tools=[{"name": "remember", "status": "ok"}] if len(payloads) > 2 else [],
+        )
         if len(payloads) == 2:
             audit["stopped"] = "deadline"
         return audit, "Done."
@@ -4632,6 +5014,6 @@ async def test_public_continuation_repairs_never_escalate_to_root(
     turns, _, _ = await speak(
         cap, doors, key_dir, {"key": pubkey}, AutoApprover(), log=io.StringIO()
     )
-    assert [t.label for t in turns] == ["request", "request-continue-1", "3-repair-1"]
+    assert [t.label for t in turns] == ["request", "request-continue-1", "request-repair-1"]
     assert all(("sig" in payload) == signed for payload in payloads)
     assert payloads[-1]["msg"] == HATCH.repair.build

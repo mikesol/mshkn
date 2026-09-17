@@ -53,6 +53,11 @@ TURN_WAIT = 3600.0
 BUILD_TIMEOUT = 600.0
 CONFLICT_INTERVAL = 3.0
 BUILD_INTERVAL = 5.0
+# Per row, not per run. A run-wide budget lets one row's aftermath spend the whole
+# of it before a later row has run at all: 2026-09-16-run-3 spent all three on row 1
+# and its continuation, so row 2 -- the identity row every public door waits on --
+# could not be repaired even once. A row's repairs are the run's answer to what went
+# wrong *there*, and a row that went well should leave the next one no poorer.
 MAX_REPAIRS = 3
 # A row whose answer a policy change makes possible is asked again, at most twice
 # in a run (#170): the bound is what makes a goto backwards finite.
@@ -183,15 +188,68 @@ def load_run_settings(
 
 @dataclass(frozen=True)
 class Price:
-    """USD per million tokens, from the Claude API reference (cached 2026-06-24)."""
+    """USD per million tokens, from the model's own published price list: one rate
+    for each of the four token counts a turn reports, and no multiplier standing in
+    for any of them.
+
+    All four are required, with no defaults, because the two that used to be
+    defaults were wrong for two of the six models here and nothing said so. A global
+    `CACHE_READ = 0.1` under-charged zai, whose published cache read is a *fifth* of
+    its input price; a global `CACHE_WRITE = 1.25` over-charged `gpt-5.6-sol`, whose
+    published cache write is 0.625x, and `2026-09-16-run-9` recorded $0.5014 against
+    a true $0.3506 for it. A row that cannot be added without looking up all four
+    rates cannot quietly inherit a wrong one.
+
+    Where a provider publishes no `input_cache_write`, `cache_write` is its input
+    rate rather than a multiple of it. That is not a guess: the catalogue tags those
+    models `implicit-caching` and not `explicit-caching`, meaning the provider caches
+    on its own account and there is no cache-write product to buy. A token it decided
+    to cache is billed as the ordinary input token it was."""
 
     input: float
     output: float
+    cache_read: float
+    cache_write: float
 
 
-PRICES = {"claude-opus-5": Price(input=5.0, output=25.0)}
-CACHE_WRITE = 1.25  # of the input price
-CACHE_READ = 0.1
+PRICES = {
+    # Claude API reference, cached 2026-06-24. These are the direct-API rates, which
+    # is where every Opus run on file was spoken: the gateway serves the same model
+    # from `regional` at $5.50/$27.50, 10% above this, and an Opus run dialled
+    # through `--base-url` would be under-reported by that much.
+    "claude-opus-5": Price(input=5.0, output=25.0, cache_read=0.5, cache_write=6.25),
+    # The gateway's own catalogue, read 2026-09-15, rechecked 2026-09-16. `us` is its
+    # only region and prices there match the top line. Its cache read is $0.12, a
+    # *fifth* of its input price and not the tenth every other model here charges --
+    # the one rate in this table that no multiplier would have got right, and
+    # 2026-09-15-run-2's cost is understated because of it.
+    "glm-4.7": Price(input=0.6, output=2.2, cache_read=0.12, cache_write=0.6),
+    # The `regional.us` rates, not the headline ones: the catalogue serves this
+    # model from `us` only and prices it there at double its own top line. It also
+    # carries a 2x peak multiplier on weekday 01:00-04:00 and 06:00-10:00 UTC,
+    # which this table has no axis for. A run inside those windows costs twice what
+    # its record says, and the record has no way to know it did.
+    "deepseek-v4-pro": Price(input=1.32, output=3.96, cache_read=0.132, cache_write=1.32),
+    # The gateway's catalogue, read 2026-09-16, flat: no `regional` block and no peak
+    # multiplier, so unlike the row above this one is the whole story. It is tagged
+    # for no caching at all, so a cache token from it would be a surprise; priced as
+    # ordinary input if one ever arrives.
+    "laguna-s-2.1": Price(input=0.1, output=0.2, cache_read=0.01, cache_write=0.1),
+    # The rung between the cheap models and Opus, catalogue read 2026-09-16. Like
+    # deepseek these are the `regional` rates and not the $2.00/$10.00 headline, but
+    # here `eu` and `us` carry the same numbers, so there is one rate and no region
+    # to choose.
+    "claude-sonnet-5": Price(input=2.2, output=11.0, cache_read=0.22, cache_write=2.75),
+    # An exact cost twin of the row above from another lab, catalogue read
+    # 2026-09-16: the same `regional` story as deepseek and sonnet, and the headline
+    # $2.00/$10.00 is again not what it is served at. `us` is its only region, so
+    # there is one rate. Its cache write is 0.625x of input where the two Anthropic
+    # rows charge 1.25x -- the divergence that cost `2026-09-16-run-9` a 43%
+    # over-report under the old global. One thing still unmodelled: its prices tier
+    # at 272,000 tokens in a call, above which input doubles and output goes to 1.5x,
+    # so a run whose context crosses that line costs more than its record says.
+    "gpt-5.6-sol": Price(input=2.2, output=11.0, cache_read=0.22, cache_write=1.375),
+}
 
 
 def bare_model_id(model_id: str) -> str:
@@ -213,8 +271,8 @@ def cost_usd(usage: Mapping[str, int], model_id: str) -> float | None:
         return None
     return (
         usage.get("input_tokens", 0) * price.input
-        + usage.get("cache_creation_input_tokens", 0) * price.input * CACHE_WRITE
-        + usage.get("cache_read_input_tokens", 0) * price.input * CACHE_READ
+        + usage.get("cache_creation_input_tokens", 0) * price.cache_write
+        + usage.get("cache_read_input_tokens", 0) * price.cache_read
         + usage.get("output_tokens", 0) * price.output
     ) / 1_000_000
 
@@ -1126,7 +1184,7 @@ async def speak(
     continuations: list[str] | None = None,
 ) -> tuple[list[Turn], dict[str, Any] | None, list[str]]:
     """The capability's rows in order, each followed by approvals, a wait for
-    builds and at most MAX_REPAIRS repair turns. A `root list` row takes the
+    builds and at most MAX_REPAIRS repair turns of its own. A `root list` row takes the
     listing and is not a turn; the last one taken is returned as the final state.
 
     Returns the turns, the final listing and the labels re-asked, in order: after
@@ -1174,19 +1232,60 @@ async def speak(
             )
             log.write(f"  {proposal['id']} {decision}: {result.rstrip()}\n")
 
+    def answerable_state(listing: dict[str, Any]) -> str:
+        """Everything `refuse_approval` and `refuse_policy` read (`membrane.invariants`):
+        the catalog and the policy, and nothing else. Both are pure functions of the
+        proposal and these two, so the same proposal under the same pair is refused
+        again for the same reason, deterministically."""
+        return json.dumps([listing["catalog"], listing.get("policy", {})], sort_keys=True)
+
+    # Proposal id -> the state its last refusal was decided under. A refusal leaves
+    # the proposal `pending` with the reason on its `log`, which is
+    # indistinguishable by status from one never decided, so every later turn used
+    # to re-approve it and re-refuse it. The cost is not the wasted command: the
+    # refusal lands in the agent's inbox each time, and a stale one it had already
+    # repaired reads exactly like a fresh mistake. 2026-09-16-run-3 delivered the
+    # same `effect communicate` refusal 28 times for one abandoned proposal, and
+    # run-2 delivered its 20 -- enough to fool a reader of the evidence into
+    # concluding the model never learned the rule when it had learned it on turn 2.
+    refused_under: dict[str, str] = {}
+
     async def approve_pending(turn: Turn) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Decide every pending proposal, wait for the builds, and give whatever was
-        refused one more chance once the builds are in; returns the listing as it
-        was before any of it was approved and as it is after."""
+        """Decide every pending proposal whose refusal is not already known under this
+        exact state, wait for the builds, and give whatever was refused one more chance
+        once the builds are in; returns the listing as it was before any of it was
+        approved and as it is after.
+
+        The second chance is what makes the skip safe to widen no further: a proposal
+        refused on ordering alone (a door policy before its hook is in the catalog,
+        §10.6) is retried the moment the build lands, and a later turn retries it again
+        as soon as the catalog or the policy moves at all."""
         since = mark()
         before = listing = await doors.listing()
-        await decide(turn, [p for p in listing["proposals"] if p["status"] == "pending"])
+        known = answerable_state(listing)
+        stale = sorted(p for p, under in refused_under.items() if under == known)
+        if stale:
+            log.write(f"  not re-approving {', '.join(stale)}: refused already under this state\n")
+        await decide(
+            turn,
+            [
+                p
+                for p in listing["proposals"]
+                if p["status"] == "pending" and refused_under.get(p["id"]) != known
+            ],
+        )
         listing = await doors.wait_builds()
         refused = {a["id"] for a in turn.approvals if "refused" in a["result"]}
         again = [p for p in listing["proposals"] if p["status"] == "pending" and p["id"] in refused]
         if again:
             await decide(turn, again)
             listing = await doors.wait_builds()
+        settled_under = answerable_state(listing)
+        for approval in turn.approvals:
+            if "refused" in approval["result"]:
+                refused_under[approval["id"]] = settled_under
+            else:
+                refused_under.pop(approval["id"], None)
         turn.commands += spent(since)
         return before, listing
 
@@ -1255,8 +1354,58 @@ async def speak(
         stopped = turn.audit.get("stopped")
         return stopped in ("deadline", "cap", "max_tokens") and not turn.audit.get("proposals")
 
+    def stalled(turn: Turn) -> bool:
+        """A repair turn that ended of its own accord having called no tool at all.
+
+        Nothing truncated it and nothing failed: root said `check your build` or
+        `check your inbox`, the model wrote prose, and stopped. `unfinished` does not
+        see this, because it wants a truncating stop reason, so the turn used to fall
+        through every branch and the row settled on it in silence. Two runs of the same
+        model produced one each (2026-09-16-run-2 `3-repair-3`, run-3 `3-repair-1`).
+
+        Repair turns only, which is not a hedge but the whole of the rule. On a row it
+        would be nonsense: hatch 1, 4, 5 and 8 ask a question whose entire outcome is a
+        reply, and a turn that answers one by calling nothing is right, not stalled. A
+        repair turn is different in kind -- it exists only because something is already
+        broken and root has just said so -- so there is no reading of it under which
+        prose alone is the correct response.
+
+        Read off the audit's tool list and stop reason. There is deliberately no attempt
+        to find a stated intention in the reply and match it against the calls made: on
+        a turn that exists to provoke an action, the absence of every action is
+        unambiguous and costs no parsing."""
+        return turn.audit.get("stopped") == "done" and not turn.audit.get("tools")
+
+    def reached(turn: Turn) -> bool:
+        """Whether the turn got as far as the model. A door the membrane refuses to
+        open answers from the membrane alone -- `{"principal": null, "closed": true}`,
+        no tools, no stop reason, no model call -- and the agent is never asked
+        anything. Such a turn cannot have declined to propose, because nothing was
+        put to it, so `silent` must not read one as a refusal to act: hatch 6, 7 and
+        9 all speak through the public door, and a run whose identity verb never
+        built leaves all three closed."""
+        return bool(turn.audit.get("model_calls"))
+
     repaired: set[str] = set()
-    repairs = 0
+    # Verb name -> the catalog entry the last build repair for it was spent on. A
+    # failed build that has not moved since is the same failure, and saying `check
+    # your build` about it again buys nothing: the model has been told, and if it
+    # proposes a replacement the entry changes and the next one is owed. Keyed on
+    # the whole entry for the same reason `answerable_state` is keyed on the whole
+    # catalog -- any movement at all counts, and no field has to be picked as the
+    # one that means "a new attempt". 2026-09-16-run-4 spent 24 of its 37 turns on
+    # one `verify_ssh_sig` that failed after row 2 and was never proposed again.
+    repaired_builds: dict[str, str] = {}
+    # Row label -> repairs spent on it. Per row, and it has to outlive a single
+    # `settle_repairs` call, because a continuation is settled by a second call and
+    # a row must not get a fresh budget by continuing.
+    repairs: dict[str, int] = {}
+    # Row labels that have proposed at least once, anywhere: the row's own turn, a
+    # continuation of it, a repair after it, or a re-ask of it. It has to outlive a
+    # single `settle_repairs` call because a continuation is settled by a second
+    # call, and a row that proposed and then continued would otherwise look silent
+    # on the continuation and buy itself a repair it does not need.
+    proposed_rows: set[str] = set()
 
     def policy_applied(turn: Turn, listing: dict[str, Any]) -> bool:
         """Whether an approval on this turn replaced the policy, read from the
@@ -1270,26 +1419,33 @@ async def speak(
             for a in turn.approvals
         )
 
-    async def settle_repairs(turn: Turn, *, continuation: bool = False) -> Settled:
+    async def settle_repairs(turn: Turn, row: Row, *, continuation: bool = False) -> Settled:
         """Approvals, builds, root's provisions, and at most MAX_REPAIRS repair
-        turns in the whole run for a failed build, a refused approval, a turn that
-        ran out before proposing, or a requirement the reply named no path for
-        (capabilities design §4: every row settles). Returns whether any approval in
-        the settle — the row's own turn or a repair turn — applied a policy, and the
-        listing as it stood before the settle and after it, which is what a re-ask
-        round reads the policy change out of.
+        turns for *this row* for a failed build, a refused approval, a turn that ran
+        out before proposing, a turn that called nothing, or a requirement the reply
+        named no path for (capabilities design §4: every row settles). Returns
+        whether any approval in the settle — the row's own turn or a repair turn —
+        applied a policy, and the listing as it stood before the settle and after it,
+        which is what a re-ask round reads the policy change out of.
 
         A refusal leaves its proposal `pending` with the reason on its `log`, and
         the catalog untouched, so a build-only trigger walks straight past it
         (2026-09-10-postcut-run-2). A repair is spoken through root's door, so it
-        reaches the model whatever door the row used."""
-        nonlocal repairs
+        reaches the model whatever door the row used, and is labelled after the row
+        that earned it: the budget is the row's, so the evidence has to say whose."""
+        if turn.audit.get("proposals"):
+            proposed_rows.add(row.label)
         before, listing = await approve_pending(turn)
         applied = policy_applied(turn, listing)
         current = turn
         while True:
             listing, unplaced = await provide_pending(current, listing)
-            failed = sorted(n for n, e in listing["catalog"].items() if e["status"] == "failed")
+            failed = sorted(
+                n
+                for n, e in listing["catalog"].items()
+                if e["status"] == "failed"
+                and repaired_builds.get(n) != json.dumps(e, sort_keys=True)
+            )
             # Once per refusal, not once per settle: a proposal the model never
             # repairs stays pending with its reason forever, and every later
             # settle would otherwise buy it more turns of the model's time
@@ -1301,17 +1457,43 @@ async def speak(
                 and p.get("log")
                 and p["id"] not in repaired
             )
-            if not failed and not refused and not unfinished(current) and not unplaced:
+            stall = (
+                capability.repair.stalled is not None
+                and current is not turn  # a repair turn, never the row's own
+                and stalled(current)
+            )
+            silent = (
+                capability.repair.silent is not None
+                and row.proposes
+                and reached(turn)
+                and row.label not in proposed_rows
+            )
+            if (
+                not failed
+                and not refused
+                and not unfinished(current)
+                and not stall
+                and not silent
+                and not unplaced
+            ):
                 return Settled(applied, before, listing)
-            if repairs >= MAX_REPAIRS:
+            if repairs.get(row.label, 0) >= MAX_REPAIRS:
                 return Settled(applied, before, listing)
             if failed:
+                for name in failed:
+                    repaired_builds[name] = json.dumps(listing["catalog"][name], sort_keys=True)
                 why, words = f"build failed for {', '.join(failed)}", capability.repair.build
             elif refused:
                 repaired.update(refused)
                 why, words = f"approval refused for {', '.join(refused)}", capability.repair.refused
             elif unfinished(current):
                 why, words = "the turn ran out", capability.repair.build
+            elif stall:
+                assert capability.repair.stalled is not None
+                why, words = "the turn called nothing", capability.repair.stalled
+            elif silent:
+                assert capability.repair.silent is not None
+                why, words = f"row {row.label} proposed nothing", capability.repair.silent
             elif capability.repair.provide is None:
                 log.write(
                     f"  no path for {', '.join(unplaced)} and {capability.name} "
@@ -1320,19 +1502,21 @@ async def speak(
                 return Settled(applied, before, listing)
             else:
                 why, words = f"no path for {', '.join(unplaced)}", capability.repair.provide
-            repairs += 1
-            log.write(f"  {why}; repair {repairs}\n")
-            label = f"3-repair-{repairs}"
+            spent_here = repairs[row.label] = repairs.get(row.label, 0) + 1
+            log.write(f"  {why}; {row.label} repair {spent_here}\n")
+            label = f"{row.label}-repair-{spent_here}"
             if continuation and turn.door != "api":
                 current = await public_turn(label, words, signed=turn.door == "ingress")
             else:
                 current = await root_turn(label, words)
+            if current.audit.get("proposals"):
+                proposed_rows.add(row.label)
             _, listing = await approve_pending(current)
             applied = applied or policy_applied(current, listing)
 
     delivered: set[tuple[str, ...]] = set()
 
-    async def settle(turn: Turn) -> Settled:
+    async def settle(turn: Turn, row: Row) -> Settled:
         """Deliver successful external results once, under the originating authority.
 
         Only observed state is reported: no script, scoring hints, secret values,
@@ -1343,7 +1527,7 @@ async def speak(
         first: Settled | None = None
         for n in range(MAX_CONTINUATIONS + 1):
             start = len(turns)
-            settled = await settle_repairs(current, continuation=n > 0)
+            settled = await settle_repairs(current, row, continuation=n > 0)
             first = Settled(
                 settled.applied or (first.applied if first else False),
                 first.before if first else settled.before,
@@ -1455,7 +1639,7 @@ async def speak(
                 reasks.append(row.label)
                 # a re-asked turn is itself a row spoken since this policy change
                 since_policy.append((row, again))
-                after = await settle(again)
+                after = await settle(again, row)
                 if after.applied:
                     # another change: the next round runs from the first of them
                     nxt = Settled(True, nxt.before if nxt else after.before, after.after)
@@ -1467,11 +1651,11 @@ async def speak(
             log.write(f"Turn {row.label} (root): list\n")
             final = await doors.listing()
         elif row.door == "root say":
-            await reask(await settle(await root_turn(row.label, words)))
+            await reask(await settle(await root_turn(row.label, words), row))
         else:
             turn = await public_turn(row.label, words, signed=row.door == "signed")
             since_policy.append((row, turn))
-            await reask(await settle(turn))
+            await reask(await settle(turn, row))
     return turns, final, reasks
 
 

@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-16T09:21:32+00:00",
+ "command": "list",
+ "computer_id": null,
+ "detail": [],
+ "door": "api",
+ "n": 370,
+ "seconds": 0.06089390628039837,
+ "status": 0,
+ "stderr": "",
+ "stdout": "ConnectError: "
+}

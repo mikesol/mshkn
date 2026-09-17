@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-16T03:36:48+00:00",
+ "command": "say",
+ "computer_id": "comp-57b655b14efb",
+ "detail": {
+  "msg": "Give yourself a verb: given a URL, report the page's title. It must run on its own computer.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgboaiPmUiaMVQXXXfTYFSsm3Alw\noGK2Jm9rqstjiNhrgAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABAWPH/wIskYYTlw6052zJ28NbbJ1Zuv0U1dDPbVf803g63L0NE4vHrMpvXv8ylzi\n0ec1bG61aEDX3z0twX3kMcDQ==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 353,
+ "seconds": 4.551728658378124,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-b5e87410bb1e\", \"error\": null, \"exit_code\": 255, \"name\": \"verify_ssh\", \"principal\": \"anonymous\", \"status\": \"ok\"}], \"job\": \"rj-b12d7fdac322\", \"offered\": [], \"principal\": \"anonymous\", \"started\": true, \"turn\": 9}\n{\"turn\": 9, \"job\": \"rj-b12d7fdac322\"}\n"
+}

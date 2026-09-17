@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-16T04:57:05+00:00",
+ "command": "approve",
+ "computer_id": "comp-413050b6b7cb",
+ "detail": [
+  "p-4"
+ ],
+ "door": "api",
+ "n": 55,
+ "seconds": 2.1497433837503195,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-4 building: verb ping recipe rcp-87b22050d452\n"
+}

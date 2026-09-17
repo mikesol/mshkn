@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-16T06:37:37+00:00",
+ "command": "say",
+ "computer_id": "comp-ccfd1c6a25de",
+ "detail": {
+  "msg": "Give yourself a verb: given a URL, report the page's title. It must run on its own computer.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgsbYHGB0wyLO90Y26JPV0rrQSof\nGl4ZkQyLwE/azCwLoAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABA2G3udBeNJ4ryc4a7nDFJVrRa8KGOEBFoSllMiV5oJyoz1TTBmQIOL5pFa1Icxp\naGC4YVvc/lhG2xXkDyr4kcCg==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 88,
+ "seconds": 2.2984141130000353,
+ "status": 200,
+ "stderr": "",
+ "stdout": "audit {\"closed\": true, \"door\": \"ingress\", \"principal\": null}\nThe public door is closed.\n"
+}

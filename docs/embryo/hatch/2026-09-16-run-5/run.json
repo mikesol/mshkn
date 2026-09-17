@@ -1,0 +1,33 @@
+{
+ "base_url": "https://ai-gateway.vercel.sh",
+ "body_extra": "{\"providerOptions\":{\"gateway\":{\"only\":[\"deepseek\"]}}}",
+ "capability": "hatch",
+ "commands": 637,
+ "continuations": [
+  "2-continue-1"
+ ],
+ "default_effort": "off",
+ "effort_supported": false,
+ "ended": "2026-09-16T10:00:01+00:00",
+ "error": "RuntimeError: api list on comp-9e18a9bcca07: exit -1\nstdout: \nstderr",
+ "hatched": {
+  "checkpoint_id": "ckpt-757f2d68b63f",
+  "ingress_url": "https://mshkn.dev/ingress/ir_ZjHAI-rj9irbU7QztJCSM5aIpqE",
+  "key_id": "key-e2bf3882c40f",
+  "recipe_id": "rcp-2f1670580d10",
+  "rule_id": "ir_ZjHAI-rj9irbU7QztJCSM5aIpqE",
+  "server_id": null
+ },
+ "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-16-run-5",
+ "membrane": {
+  "commit": "6f433601861f067b20dd7440aa7fd641296f7cc8",
+  "dirty": false
+ },
+ "model": "deepseek/deepseek-v4-pro",
+ "ok": false,
+ "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGBOx5qhuCa7F5+H2+67PuEm90BFkfiSZ6KLH8nwAJ9K mike",
+ "reasks": [],
+ "run": "2026-09-16-run-5",
+ "started": "2026-09-16T08:35:03+00:00",
+ "started_from": "hatch"
+}

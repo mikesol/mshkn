@@ -29,7 +29,7 @@ INT_RE = re.compile(r"-?\d+")
 
 @dataclass
 class Turn:
-    label: str  # a row's label, "3-repair-<k>" for a repair, "9-count-<k>" for a count
+    label: str  # a row's label, "<row>-repair-<k>" for a repair, "9-count-<k>" for a count
     door: str  # api | ingress | ingress-unsigned
     words: str
     audit: dict[str, Any]

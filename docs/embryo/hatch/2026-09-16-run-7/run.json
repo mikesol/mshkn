@@ -1,0 +1,646 @@
+{
+ "approver": "AutoApprover",
+ "base_url": "https://ai-gateway.vercel.sh",
+ "body_extra": "{\"providerOptions\":{\"gateway\":{\"only\":[\"deepseek\"]}}}",
+ "capability": "hatch",
+ "commands": 441,
+ "continuations": [
+  "2-continue-1",
+  "6-continue-1",
+  "7-continue-1",
+  "9-continue-1"
+ ],
+ "cost_usd": 0.9499,
+ "default_effort": "off",
+ "effort_supported": false,
+ "ended": "2026-09-16T15:22:30+00:00",
+ "hatched": {
+  "checkpoint_id": "ckpt-ea550922a6ca",
+  "ingress_url": "https://mshkn.dev/ingress/ir_XbXJnL34lG7m4oRsT6T43fkqDSc",
+  "key_id": "key-0c986aede11e",
+  "recipe_id": "rcp-eba33728acf7",
+  "rule_id": "ir_XbXJnL34lG7m4oRsT6T43fkqDSc",
+  "server_id": null
+ },
+ "key_dir": "/home/mike/.mshkn/keys/hatch/2026-09-16-run-7",
+ "membrane": {
+  "commit": "53c75c08bccdae9e7bdc60fa4e61fc489af19c85",
+  "dirty": false
+ },
+ "model": "deepseek/deepseek-v4-pro",
+ "model_calls": 40,
+ "ok": false,
+ "passed": 3,
+ "postconditions": {
+  "authentication": {
+   "evidence": {
+    "hook_logs": [
+     {
+      "computer_id": "comp-5ea48a0831ac",
+      "exit_code": 255,
+      "gone": true,
+      "stdout": ""
+     }
+    ],
+    "hooks": [
+     {
+      "computer_id": "comp-5ea48a0831ac",
+      "error": null,
+      "exit_code": 255,
+      "name": "ssh_verify",
+      "principal": "anonymous",
+      "status": "ok"
+     }
+    ],
+    "signed": "anonymous",
+    "unsigned": "anonymous"
+   },
+   "ok": false
+  },
+  "authorization": {
+   "evidence": {
+    "anonymous": {
+     "invoke": [],
+     "propose": false
+    },
+    "anonymous_offered": [],
+    "exercised": [],
+    "verified": {
+     "invoke": [
+      "page_title",
+      "count_calls"
+     ],
+     "propose": true
+    }
+   },
+   "ok": false
+  },
+  "counter": {
+   "evidence": {
+    "chain_heads": [],
+    "computer_ids": [],
+    "counts": [],
+    "final_chain_head": null
+   },
+   "ok": false
+  },
+  "no_undeclared_capability": {
+   "evidence": {
+    "catalog": [
+     "count_calls",
+     "page_title",
+     "ssh_verify"
+    ],
+    "not_ready": [],
+    "undeclared_recipes": [],
+    "unexpected_tools": [],
+    "unproposed": []
+   },
+   "ok": true
+  },
+  "nothing_by_hand": {
+   "evidence": {
+    "by_hand": [],
+    "commands": {
+     "api approve": 7,
+     "api list": 416,
+     "api say": 7,
+     "ingress say": 11
+    },
+    "provides": 0,
+    "provisions": 0
+   },
+   "ok": true
+  },
+  "page_title": {
+   "evidence": {
+    "computer_id": null,
+    "gone": null,
+    "reply": "You are **anonymous** at the public door, and under the active policy:\n\n- `anonymous`: `invoke: []`, `propose: false`\n- `ssh:mike`: `invoke: [\"page_title\"]`, `propose: true`\n\nSo I will not run `page_title` on `https://example.com` on an unsigned request, and I have not stored this input.\n\nIf you are **mike**, sign the exact message text you intend, for example:\n\n```\nprintf '%s' \"page_title https://example.com\" | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n mshkn\n```\n\nThen send:\n\n```json\n{\"msg\": \"page_title https://example.com\", \"sig\": \"<the signature>\"}\n```\n\nIf the signature verifies, you will arrive as `ssh:mike`, and I\u2019ll invoke `page_title` for you.",
+    "stdout": null
+   },
+   "ok": false
+  },
+  "root_unforgeable": {
+   "evidence": {
+    "public_principals": [
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous",
+     "anonymous"
+    ]
+   },
+   "ok": true
+  }
+ },
+ "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMxgpUVbGxL/HlBs2XGk/Kd/qLaYG5PAy9PyYXPKxhCI mike",
+ "reasks": [],
+ "run": "2026-09-16-run-7",
+ "seconds": 3232.3,
+ "started": "2026-09-16T14:28:38+00:00",
+ "started_from": "hatch",
+ "turns": [
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "1",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember",
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3840,
+    "input_tokens": 147,
+    "output_tokens": 924
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "2",
+   "model_calls": 7,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "cap",
+   "tools": [
+    "effort",
+    "remember",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 209920,
+    "input_tokens": 15934,
+    "output_tokens": 50114
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-1",
+     "result": "p-1 building: verb ssh_verify recipe rcp-59fdc85342a1"
+    },
+    {
+     "decision": "approve",
+     "id": "p-2",
+     "result": "p-2 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "2-repair-1",
+   "model_calls": 7,
+   "principal": "root",
+   "proposals": [
+    "p-1",
+    "p-2"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "try",
+    "propose",
+    "propose",
+    "remember",
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 308096,
+    "input_tokens": 23924,
+    "output_tokens": 63235
+   }
+  },
+  {
+   "approvals": [],
+   "door": "api",
+   "effort": [
+    null,
+    null
+   ],
+   "label": "2-continue-1",
+   "model_calls": 2,
+   "principal": "root",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember",
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 5248,
+    "input_tokens": 1611,
+    "output_tokens": 998
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "4",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 768,
+    "input_tokens": 1319,
+    "output_tokens": 409
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress-unsigned",
+   "effort": [
+    null
+   ],
+   "label": "5",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 768,
+    "input_tokens": 1505,
+    "output_tokens": 409
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "6",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 2176,
+    "input_tokens": 294,
+    "output_tokens": 3786
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-3",
+     "result": "p-3 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null
+   ],
+   "label": "6-repair-1",
+   "model_calls": 3,
+   "principal": "root",
+   "proposals": [
+    "p-3"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "remember",
+    "try",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 32640,
+    "input_tokens": 2612,
+    "output_tokens": 12269
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "6-continue-1",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 2176,
+    "input_tokens": 678,
+    "output_tokens": 1260
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "7",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 2304,
+    "input_tokens": 737,
+    "output_tokens": 2277
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-4",
+     "result": "p-4 ready: verb page_title recipe rcp-a7597d2f2f3b"
+    },
+    {
+     "decision": "approve",
+     "id": "p-5",
+     "result": "p-5 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "7-repair-1",
+   "model_calls": 4,
+   "principal": "root",
+   "proposals": [
+    "p-4",
+    "p-5"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "propose",
+    "try",
+    "propose",
+    "remember",
+    "remember",
+    "propose"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 95232,
+    "input_tokens": 14061,
+    "output_tokens": 31885
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "7-continue-1",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 768,
+    "input_tokens": 2608,
+    "output_tokens": 2475
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "8",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 768,
+    "input_tokens": 2760,
+    "output_tokens": 787
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 768,
+    "input_tokens": 2594,
+    "output_tokens": 1258
+   }
+  },
+  {
+   "approvals": [
+    {
+     "decision": "approve",
+     "id": "p-6",
+     "result": "p-6 ready: verb count_calls recipe rcp-07a0c249f959"
+    },
+    {
+     "decision": "approve",
+     "id": "p-7",
+     "result": "p-7 applied: policy replaced; effective from the next turn"
+    }
+   ],
+   "door": "api",
+   "effort": [
+    null,
+    null,
+    null,
+    null
+   ],
+   "label": "9-repair-1",
+   "model_calls": 4,
+   "principal": "root",
+   "proposals": [
+    "p-6",
+    "p-7"
+   ],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [
+    "try",
+    "try",
+    "propose",
+    "propose",
+    "remember"
+   ],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 36608,
+    "input_tokens": 12934,
+    "output_tokens": 11197
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9-continue-1",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 768,
+    "input_tokens": 2794,
+    "output_tokens": 1232
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9-count-1",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 768,
+    "input_tokens": 2818,
+    "output_tokens": 620
+   }
+  },
+  {
+   "approvals": [],
+   "door": "ingress",
+   "effort": [
+    null
+   ],
+   "label": "9-count-2",
+   "model_calls": 1,
+   "principal": "anonymous",
+   "proposals": [],
+   "provisions": [],
+   "stopped": "done",
+   "tools": [],
+   "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 768,
+    "input_tokens": 2875,
+    "output_tokens": 527
+   }
+  }
+ ],
+ "usage": {
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 704384,
+  "input_tokens": 92205,
+  "output_tokens": 185662
+ }
+}
