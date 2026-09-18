@@ -46,6 +46,7 @@ DOCS: tuple[str, ...] = (
     "docs/embryo/hatch/README.md",
     "docs/embryo/security/README.md",
     "docs/embryo/web-search/README.md",
+    "docs/embryo/coding/README.md",
 )
 
 # Words a document must not contain because the thing they name is gone.

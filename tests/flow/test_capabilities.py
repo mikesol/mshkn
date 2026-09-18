@@ -6,7 +6,9 @@ twice on a scratch chain before it is proposed and then run to two checkpoints
 of its own. Security: hatch's state grown the short way, then the three rows of
 §7.2 — a verb with `requires` refused until root has placed the token on its
 chain at the path the reply named, the page read from a computer that is gone,
-and a second verb needing the same token — judged by the five checks it names."""
+and a second verb needing the same token — judged by the five checks it names.
+Coding: not a run but its apparatus, `verify` probing a real chain over the real
+checkpoint listing, fork, upload, exec and destroy routes."""
 
 from __future__ import annotations
 
@@ -55,6 +57,7 @@ if TYPE_CHECKING:
 EMBRYO = Path(__file__).resolve().parents[2] / "embryo"
 SECURITY = load(CAPABILITIES / "security.md")
 SEARCH = load(CAPABILITIES / "web-search.md")
+CODING = load(CAPABILITIES / "coding.md")
 # What the scripted provider answers row 12 with: Brave's field names, so the
 # fixture is not written against the check's own vocabulary, and two entries that
 # carry a URL each -- which is the only thing `searched` looks for.
@@ -904,3 +907,123 @@ async def test_the_transform_dry_runs_to_the_public_say(flow: Flow) -> None:
 
 def test_hatch_script_parses() -> None:
     assert subprocess.run(["bash", "-n", str(EMBRYO / "hatch.sh")], check=False).returncode == 0
+
+
+async def test_coding_probes_a_real_chain(
+    flow: Flow, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The coding capability's `verify` against the real app and the fake host:
+    a checkpoint on `verb/total` is forked, root's three files are uploaded to
+    the fork over the upload route, the command runs on each through the exec
+    stream, and the fork is destroyed without a checkpoint of its own -- so the
+    chain has exactly the one head it started with.
+
+    The unit tier drives the same code over an `httpx.MockTransport` that answers
+    those five routes out of a dictionary, which can say nothing about whether the
+    app has them, takes the bodies `probe_fork` sends, or leaves the account as it
+    found it. That is what this tier is for; the `verify` seam's own contract --
+    called with the turns and the listing, absent hook a no-op, a raising hook
+    recorded and not fatal -- is unit-tested, because no test here drives a whole
+    run for the call site to sit inside.
+    """
+    coding = load_module(CODING)
+    assert coding is not None
+    try:
+        command = "/verb/total.sh /tmp/amounts"
+        flow.host.guest.stream_script[command] = [("stdout", "105.00"), ("exit", "0")]
+        base = (await flow.client.post("/computers", json={})).json()["computer_id"]
+        taken = await flow.client.post(
+            f"/computers/{base}/checkpoint", json={"label": "verb/total"}
+        )
+        head = taken.json()["checkpoint_id"]
+        await flow.client.delete(f"/computers/{base}")
+        # `FakeGuest.files` is keyed by (ip, path), so the three writes to the one
+        # path overwrite each other and only the last body survives the run; the
+        # order, and the two bodies before it, are readable only as they arrive.
+        # Each write also carries the guest it landed on and how many times the
+        # command had run when it did, because `uploads` and `guest.commands` are
+        # two lists and neither can say on its own that `probe_fork` alternates
+        # (coding.py:157). Splitting that loop into write-all-then-run-all scores
+        # `runs_again` on a file holding `pending` and `fixed` on a refusal of a
+        # file nobody was shown, and every other assertion here still passes.
+        uploads: list[tuple[str, str, bytes, int]] = []
+        guest_upload = flow.host.guest.upload
+
+        async def recording_upload(vm_ip: str, remote_path: str, data: bytes) -> None:
+            ran = sum(1 for _, c in flow.host.guest.commands if c == command)
+            uploads.append((vm_ip, remote_path, data, ran))
+            await guest_upload(vm_ip, remote_path, data)
+
+        monkeypatch.setattr(flow.host.guest, "upload", recording_upload)
+
+        driver = DriverDoors(flow.client, flow.client, "", Record(tmp_path / "run"))
+        final = {"catalog": {"total": {"chain": "verb/total", "state": "chain"}}}
+        turns = [Turn("20", "ingress", "w", {"tools": []}, f"```\n{command}\n```", [], [])]
+        await coding.verify(driver, turns, final, io.StringIO())
+
+        # `verify` catches everything into `probes["error"]` (coding.py:250), so a
+        # route that was not there, or refused the body it was sent, arrives at the
+        # assertions below as a missing result -- indistinguishable from the agent's
+        # program having printed nothing, which is a verdict and not a host failure.
+        assert "error" not in coding.probes, coding.probes
+        assert coding.probes["command"] == command
+        assert coding.probes["chain"] == "verb/total"
+        assert coding.probes["checkpoint"] == head  # the head of that chain, forked
+        # every probe by name, in `AMOUNTS` order: asserting only on `clean` would
+        # pass on an apparatus that ran one file and never wrote the other two.
+        assert list(coding.probes["results"]) == [name for name, _ in coding.AMOUNTS]
+        for name, result in coding.probes["results"].items():
+            # `totals` is every number the program printed and not the one that looks
+            # like the total (coding.py:84); `PROBE_TOTAL` rather than a literal keeps
+            # the amounts the module writes and what they come to from drifting apart.
+            assert result == {
+                "exit_code": 0,
+                "stdout": "105.00",
+                "totals": [coding.PROBE_TOTAL],
+            }, name
+        # the computer the probes made, read off the app's own provenance column:
+        # `POST /computers` passes `source_checkpoint=None` unconditionally
+        # (`api/computers.py:64`), so a probe that made a bare computer instead of
+        # forking -- which every other assertion here survives -- finds no row.
+        # `get_computer` (tests/flow/test_lifecycle.py:69) wants an id
+        # nothing here has yet, and `list_all_computers` is `status != 'destroyed'`
+        # and answers [] once the fork is gone; the row itself is retained, since
+        # `services/computers.py:434` only updates `status`, so one query over the
+        # column gives the fork's id, where it came from and that it ended destroyed.
+        cursor = await flow.runtime.db.execute(
+            "SELECT id, vm_ip, status, source_checkpoint_id FROM computers "
+            "WHERE source_checkpoint_id IS NOT NULL"
+        )
+        forked = list(await cursor.fetchall())  # aiosqlite types `fetchall` as an Iterable
+        assert len(forked) == 1, forked  # exactly one computer was forked
+        fork_id, fork_ip, fork_status, fork_parent = forked[0]
+        assert fork_parent == head  # the head of `verb/total`, and not some other disk
+        assert fork_status == "destroyed"
+        # the bodies `AMOUNTS` names, in the order it names them, each landing on the
+        # fork's own guest with the command having run once per body written before
+        # it -- `write, run, write, run, write, run`. Through the same upload route
+        # `security.prepare` drives against this app. Counting three uploads would
+        # pass on three copies of the clean file, and `fixed` would be scored on a
+        # mess the program was never shown.
+        assert uploads == [
+            (fork_ip, coding.PROBE_PATH, body.encode(), ran)
+            for ran, (_, body) in enumerate(coding.AMOUNTS)
+        ]
+        # three runs and not four: the counters above see only what had run when each
+        # write landed, so a fourth run after the last write -- a retry whose output
+        # replaced the word file's in `results` -- is legible nowhere else.
+        assert [c for _, c in flow.host.guest.commands].count(command) == 3
+        # `capabilities.py:68-83`: `sent` is snapshotted after `verify` returns, so a
+        # probe that went through a door is charged to the agent by `nothing_by_hand`
+        # -- every coding run would fail it with nothing in the record to say why.
+        assert driver.sent == []
+        # `status` is the row; the route is the app agreeing the fork is gone. The
+        # head count below says neither: a fork left running takes no checkpoint of
+        # its own, and neither does a second one nobody destroyed.
+        assert (await flow.client.get(f"/computers/{fork_id}/status")).status_code == 404
+        heads = (await flow.client.get("/checkpoints", params={"label": "verb/total"})).json()
+        assert [c["id"] for c in heads] == [head]  # the probe took no checkpoint of its own
+    finally:
+        # the module's registrations are global; they do not leak into the next test
+        CHECKS.pop("runs_again", None)
+        CHECKS.pop("fixed", None)

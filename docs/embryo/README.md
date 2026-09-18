@@ -7,10 +7,11 @@ Each capability (`docs/superpowers/specs/2026-09-12-capabilities-design.md`) has
 | hatch |  | `docs/embryo/hatch/` | [`2026-09-16-run-10`](hatch/PROMOTED.md) |
 | security | hatch | `docs/embryo/security/` | [`2026-09-18-run-2`](security/PROMOTED.md) |
 | web-search | hatch | `docs/embryo/web-search/` | [`2026-09-17-run-6`](web-search/PROMOTED.md) |
+| coding | security | `docs/embryo/coding/` | not yet |
 
 The capability files are under `embryo/capabilities/`. The checks a capability names are in `embryo/membrane/postconditions.py`; a capability names the invariants and its own exercises, not an ancestor's, because the ancestor's promotion is the proof those already passed (#167).
 
-A capability's module (`embryo/capabilities/<name>.py`) may register checks only it needs; security's is `secret_page`, and web-search's are `searched` and `read_page`. `no_foreign_credential_on_brain` reads like security's and is not: it lives in `embryo/membrane/postconditions.py` so a second capability can name it too.
+A capability's module (`embryo/capabilities/<name>.py`) may register checks only it needs; security's is `secret_page`, web-search's are `searched` and `read_page`, and coding's are `runs_again` and `fixed`. `no_foreign_credential_on_brain` reads like security's and is not: it lives in `embryo/membrane/postconditions.py` so a second capability can name it too. A module may also define `verify(doors, turns, final, log)`, which coding uses to probe what the run left on the account before those two are judged.
 
 The table above is derived, not written by hand: `uv run capability index` rewrites it from the `PROMOTED.md` files on disk, and `tests/unit/test_docs.py` fails the gate when the file and the derivation disagree. Two of the three rows had drifted when #204 was filed — web-search said "not yet" a day after it was promoted, and hatch named the run before the one its record names.
 
