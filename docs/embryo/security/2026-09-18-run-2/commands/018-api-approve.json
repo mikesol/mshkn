@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-18T09:15:43+00:00",
+ "command": "approve",
+ "computer_id": "comp-87547c1d028e",
+ "detail": [
+  "p-8"
+ ],
+ "door": "api",
+ "n": 18,
+ "seconds": 2.38439379632473,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-8 ready: verb read_token_page recipe rcp-50db50858b68\n"
+}
