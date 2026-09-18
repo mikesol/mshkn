@@ -118,6 +118,7 @@ async def test_self_destruct_checkpoints_destroys_and_calls_back(
             "checkpoint_id": None,
             "label": "chain",
             "exec_exit_code": 0,
+            "exec_exit_signal": None,
             "exec_stdout": "done\n",
             "exec_stderr": "err\n",
             "created_checkpoint_id": result.created_checkpoint_id,

@@ -178,11 +178,43 @@ class StatuslessProcess:
         self.killed = True
 
 
+_SIGNAL_NUMBERS = {"KILL": 9, "TERM": 15, "SEGV": 11}
+
+
 @dataclass(frozen=True)
 class RunResult:
-    exit_status: int = 0
+    """asyncssh's SSHCompletedProcess, reduced to the fields exec reads.
+
+    ``exit_status``, ``returncode`` and ``exit_signal`` are derived from the
+    status and signal the channel was sent, by the same rules asyncssh uses
+    (SSHClientChannel.get_exit_status / get_returncode / get_exit_signal): a
+    signalled command has no status of its own, so exit_status reads -1 and
+    only returncode carries the signal, as its negative number. A fake
+    without that distinction cannot represent a killed command at all.
+    """
+
+    status: int | None = 0
     stdout: str = "ok\n"
     stderr: str = ""
+    signal_name: str | None = None
+
+    @property
+    def exit_signal(self) -> tuple[str, bool, str, str] | None:
+        return None if self.signal_name is None else (self.signal_name, False, "", "")
+
+    @property
+    def exit_status(self) -> int | None:
+        if self.status is not None:
+            return self.status
+        return None if self.signal_name is None else -1
+
+    @property
+    def returncode(self) -> int | None:
+        if self.status is not None:
+            return self.status
+        if self.signal_name is None:
+            return None
+        return -_SIGNAL_NUMBERS[self.signal_name]
 
 
 class _FakeSftpFile:
@@ -536,6 +568,35 @@ async def test_exec_evicts_and_retries_when_the_connection_is_lost() -> None:
     assert result == ExecResult(exit_code=0, stdout="ok\n", stderr="")
     assert pooled.closed, "a lost connection must be evicted"
     assert not replacement.closed, "the replacement must stay in the pool"
+
+
+async def test_exec_reports_a_signalled_command_as_128_plus_the_signal() -> None:
+    """A command the guest killed must not read as exit -1 with nothing else (#197).
+
+    asyncssh leaves exit_status at -1 and puts the signal in exit_signal, so
+    reading exit_status alone reports a code no shell can produce and loses
+    the only fact that says the command was killed rather than that it failed.
+    """
+    conn = FakeConn(FakeProcess([], [], 0), run_result=RunResult(None, "", "", signal_name="KILL"))
+    guest = make_guest_with([conn])
+    result = await guest.exec("172.16.1.2", "membrane root list")
+    assert result == ExecResult(exit_code=137, stdout="", stderr="", exit_signal="KILL")
+
+
+async def test_exec_leaves_an_ordinary_exit_alone() -> None:
+    """The signal branch must not touch a command that exited on its own status."""
+    conn = FakeConn(FakeProcess([], [], 0), run_result=RunResult(3, "out\n", "err\n"))
+    guest = make_guest_with([conn])
+    result = await guest.exec("172.16.1.2", "false")
+    assert result == ExecResult(exit_code=3, stdout="out\n", stderr="err\n", exit_signal=None)
+
+
+async def test_exec_reports_a_statusless_channel_as_255() -> None:
+    """Neither a status nor a signal is not success; stream already says 255."""
+    conn = FakeConn(FakeProcess([], [], 0), run_result=RunResult(None, "", ""))
+    guest = make_guest_with([conn])
+    result = await guest.exec("172.16.1.2", "x")
+    assert result == ExecResult(exit_code=255, stdout="", stderr="", exit_signal=None)
 
 
 async def test_concurrent_warms_share_one_connection() -> None:

@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-17T22:12:12+00:00",
+ "command": "destroy",
+ "computer_id": "comp-12dc8f852984",
+ "detail": {
+  "verb": "read_token_page"
+ },
+ "door": "api",
+ "n": 24,
+ "seconds": 0.5383866168558598,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

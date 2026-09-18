@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-17T22:17:10+00:00",
+ "command": "provide",
+ "computer_id": "comp-5a18a0f4c981",
+ "detail": [
+  "fingerprint_token_page",
+  "page_bearer_token"
+ ],
+ "door": "api",
+ "n": 74,
+ "seconds": 2.294653346762061,
+ "status": 200,
+ "stderr": "",
+ "stdout": "fingerprint_token_page: page_bearer_token provided (1/1)\n"
+}

@@ -39,9 +39,19 @@ class SnapshotFiles:
 
 @dataclass(frozen=True)
 class ExecResult:
+    """What a guest command left behind.
+
+    ``exit_signal`` is the signal name (without the SIG prefix) when the guest
+    killed the command rather than letting it exit, and None otherwise. It is
+    the only thing that separates a command the guest's OOM killer took from
+    one that failed on its own: ``exit_code`` is 128 + the signal number in
+    that case, which a command can also produce by exiting with it (#197).
+    """
+
     exit_code: int
     stdout: str
     stderr: str
+    exit_signal: str | None = None
 
 
 @dataclass(frozen=True)

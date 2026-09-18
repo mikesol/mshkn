@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-17T21:17:30+00:00",
+ "command": "provide",
+ "computer_id": "comp-1092ec563489",
+ "detail": [
+  "protected_page_digest",
+  "page_bearer_token"
+ ],
+ "door": "api",
+ "n": 71,
+ "seconds": 2.368728643283248,
+ "status": 200,
+ "stderr": "",
+ "stdout": "protected_page_digest: page_bearer_token provided (1/1)\n"
+}

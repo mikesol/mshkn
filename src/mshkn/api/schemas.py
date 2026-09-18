@@ -31,6 +31,7 @@ class CreateResponse(BaseModel):
     url: str
     recipe_id: str | None = None
     exec_exit_code: int | None = None
+    exec_exit_signal: str | None = None
     exec_stdout: str | None = None
     exec_stderr: str | None = None
     created_checkpoint_id: str | None = None
@@ -64,6 +65,7 @@ class ExecLogResponse(BaseModel):
     label: str | None = None
     command: str
     exit_code: int
+    exit_signal: str | None = None
     stdout: str
     stderr: str
     stdout_truncated: bool
@@ -121,6 +123,7 @@ class ForkResponse(BaseModel):
     computer_id: str
     checkpoint_id: str
     exec_exit_code: int | None = None
+    exec_exit_signal: str | None = None
     exec_stdout: str | None = None
     exec_stderr: str | None = None
     created_checkpoint_id: str | None = None
@@ -395,6 +398,7 @@ def create_response(computer: Computer, result: EphemeralResult, *, domain: str)
         url=f"https://{computer.id}.{domain}",
         recipe_id=computer.recipe_id,
         exec_exit_code=result.exec_exit_code,
+        exec_exit_signal=result.exec_exit_signal,
         exec_stdout=result.exec_stdout,
         exec_stderr=result.exec_stderr,
         created_checkpoint_id=result.created_checkpoint_id,
@@ -407,6 +411,7 @@ def fork_response(computer: Computer, checkpoint_id: str, result: EphemeralResul
         computer_id=computer.id,
         checkpoint_id=checkpoint_id,
         exec_exit_code=result.exec_exit_code,
+        exec_exit_signal=result.exec_exit_signal,
         exec_stdout=result.exec_stdout,
         exec_stderr=result.exec_stderr,
         created_checkpoint_id=result.created_checkpoint_id,

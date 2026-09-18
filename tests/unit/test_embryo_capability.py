@@ -397,6 +397,85 @@ def test_ancestry_walks_started_from(tmp_path: Path) -> None:
     assert ancestry(tmp_path, "nope") == []
 
 
+def test_write_index_replaces_the_table_and_leaves_the_prose(tmp_path: Path) -> None:
+    from membrane.capability import INDEX_HEADER, Promotion, write_index, write_promotion
+
+    write_promotion(
+        tmp_path,
+        Promotion(
+            capability="hatch",
+            run="hatch/2026-09-16-run-10",
+            membrane={},
+            promoted_at="t",
+            labels={},
+            rule_id="r",
+            key_id="k",
+            brain_recipe="rcp",
+            recipe_ids=(),
+            key_dir="/keys",
+            pubkey="ssh-ed25519 AAAA mike",
+            model="claude-opus-5",
+            default_effort=None,
+            reasks=0,
+            started_from=None,
+        ),
+    )
+    index = tmp_path / "README.md"
+    index.write_text(
+        f"# The evidence\n\nBefore.\n\n{INDEX_HEADER}\n|---|---|---|---|\n"
+        f"| hatch |  | `{tmp_path}/hatch/` | not yet |\n\nAfter.\n"
+    )
+    assert write_index(tmp_path) == index
+    lines = index.read_text().splitlines()
+    assert lines[0] == "# The evidence" and lines[2] == "Before." and lines[-1] == "After."
+    # The promoted cell is the run its record names, without the capability prefix;
+    # a capability with no PROMOTED.md says so rather than being left out.
+    assert f"| hatch |  | `{tmp_path}/hatch/` | [`2026-09-16-run-10`](hatch/PROMOTED.md) |" in lines
+    assert f"| security | hatch | `{tmp_path}/security/` | not yet |" in lines
+    # Rewriting is idempotent: the second run has nothing to change.
+    before = index.read_text()
+    write_index(tmp_path)
+    assert index.read_text() == before
+
+
+def test_the_index_puts_a_dependency_above_its_dependants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The index is the DAG, so alphabetical order is wrong for it: coding starts
+    from security and sorts above it. The real catalog cannot tell the two
+    orderings apart -- hatch, security, web-search is both -- so a catalog that
+    can is built here."""
+    from membrane.capabilities import Capability, Repair
+    from membrane.capability import index_table
+
+    def cap(name: str, *depends: str) -> Capability:
+        return Capability(
+            name=name,
+            depends=depends,
+            postconditions=(),
+            rows=(),
+            repair=Repair(build="b", refused="r"),
+            path=tmp_path / f"{name}.md",
+            module=None,
+        )
+
+    known = {
+        c.name: c
+        for c in (cap("coding", "security"), cap("hatch"), cap("security", "hatch"), cap("zebra"))
+    }
+    monkeypatch.setattr("membrane.capability.catalog", lambda: known)
+    names = [line.split(" | ")[0].removeprefix("| ") for line in index_table(tmp_path)[2:]]
+    assert names == ["hatch", "zebra", "security", "coding"]
+
+
+def test_write_index_refuses_a_document_with_no_table(tmp_path: Path) -> None:
+    from membrane.capability import write_index
+
+    (tmp_path / "README.md").write_text("# The evidence\n\nNo table here.\n")
+    with pytest.raises(RuntimeError, match="has no capability index"):
+        write_index(tmp_path)
+
+
 # ---------------------------------------------------------------- the doors over HTTP
 
 
@@ -1261,7 +1340,7 @@ async def test_promote_refuses_when_the_working_brain_is_gone(tmp_path: Path) ->
     )
     (run_dir / "final-list.json").write_text(json.dumps({"proposals": []}))
     doors = _bare_doors(tmp_path, lambda _request: httpx.Response(200, json=[]))
-    with pytest.raises(RuntimeError, match="no working brain on the account; was the run kept"):
+    with pytest.raises(RuntimeError, match="a passing run keeps its brain, so this one was"):
         await promote(doors, tmp_path, "hatch", run_dir, log=io.StringIO())
 
 
@@ -3099,6 +3178,8 @@ async def test_run_once_hatches_speaks_judges_records_and_tears_down(
     # every membrane command was answered by the fake's default (a root reply), so the
     # door was never opened and the postconditions that need it fail honestly
     assert summary["ok"] is False and summary["model"] == "claude-opus-5"
+    # The run failed and `--keep` was not passed, so its brain went with it (#203).
+    assert summary["kept"] is False
     assert summary["hatched"]["rule_id"] == "rule-1"
     assert summary["passed"] < len(HATCH.postconditions)
     assert summary["usage"]["input_tokens"] > 0 and summary["cost_usd"] > 0
@@ -3687,7 +3768,8 @@ async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr(
         "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
     )
-    await run_once(
+    log = io.StringIO()
+    summary = await run_once(
         _settings(),
         HATCH,
         tmp_path / "run",
@@ -3695,9 +3777,51 @@ async def test_keep_skips_the_teardown(tmp_path: Path, monkeypatch: pytest.Monke
         hatch_script=_stub_hatch(tmp_path),
         key_dir=tmp_path / "keys",
         keep=True,
-        log=io.StringIO(),
+        log=log,
         out=tmp_path,
     )
+    # The scripted run fails, so this is `--keep` doing its one job: holding a
+    # failed brain up to be booted and asked what it thought it was doing (#203).
+    assert summary["ok"] is False and summary["kept"] is True
+    assert "the run failed and can be inspected" in log.getvalue()
+    assert not [p for m, p, _ in api.requests if m == "DELETE"]
+
+
+async def test_a_passing_run_keeps_its_brain_without_being_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#203. `--keep` is not passed here. A passing run's brain is the only thing
+    that run is for -- `promote` copies it off the account and refuses once it is
+    gone, and the scoped key baked into it can never be read again -- so losing it
+    costs the whole measure. security/2026-09-17-run-1 scored 5/5, was torn down
+    for want of a flag, and three sessions then planned on top of a promotion that
+    could not be made.
+
+    The scripted run fails on its own, so the verdict is forced: the teardown reads
+    `run.json`'s `ok` and nothing else."""
+    monkeypatch.setenv("HATCH_ENV_OUT", str(tmp_path / "env.txt"))
+    api = FakeApi()
+    monkeypatch.setattr(
+        "membrane.capability.transport_for", lambda _url: httpx.MockTransport(api.handler)
+    )
+    monkeypatch.setattr(
+        "membrane.capability.judge",
+        lambda names, _judged: {n: {"ok": True, "evidence": {}} for n in names},
+    )
+    log = io.StringIO()
+    summary = await run_once(
+        _settings(),
+        HATCH,
+        tmp_path / "run",
+        AutoApprover(),
+        hatch_script=_stub_hatch(tmp_path),
+        key_dir=tmp_path / "keys",
+        keep=False,
+        log=log,
+        out=tmp_path,
+    )
+    assert summary["ok"] is True and summary["kept"] is True
+    assert "the run passed and is promotable" in log.getvalue()
     assert not [p for m, p, _ in api.requests if m == "DELETE"]
 
 
@@ -3705,7 +3829,8 @@ async def test_run_once_of_a_dependent_without_a_promotion_names_both_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """No promotion for `hatch` on disk: the message names the run and the
-    promote command that would produce one."""
+    promote command that would produce one. It no longer names `--keep`: a run
+    that passes keeps its brain without being asked (#203)."""
     from membrane.capabilities import Capability
 
     monkeypatch.setattr(
@@ -3722,7 +3847,7 @@ async def test_run_once_of_a_dependent_without_a_promotion_names_both_commands(
         module=None,
     )
     with pytest.raises(
-        RuntimeError, match=r"capability run hatch --keep.*capability promote hatch"
+        RuntimeError, match=r"capability run hatch` to a passing run.*capability promote hatch"
     ):
         await run_once(
             _settings(),
@@ -3802,7 +3927,10 @@ async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_i
     teardown gets the same promotion as its lineage, the words carry the lineage's
     public key (the promoted identity hook trusts no other), and the membrane,
     model and effort recorded are the hatch's, not this working tree's and not
-    the defaults of this command line."""
+    the defaults of this command line.
+
+    The scripted postcondition fails, because a teardown to observe is only a
+    failed run's: a passing run keeps its brain now (#203)."""
     from membrane.capabilities import Capability, Row
     from membrane.capability import Promotion, write_promotion
 
@@ -3830,11 +3958,15 @@ async def test_run_once_of_a_dependent_signs_with_its_lineages_key_and_reports_i
     cap = Capability(
         name="security",
         depends=("hatch",),
-        postconditions=(),
+        postconditions=("spoke",),
         rows=(Row("2", "root say", "My public key is {key}", "A reply."),),
         repair=HATCH.repair,
         path=tmp_path / "security.md",
         module=None,
+    )
+    monkeypatch.setattr(
+        "membrane.capability.judge",
+        lambda names, _judged: {n: {"ok": False, "evidence": {}} for n in names},
     )
     hatched = Hatched(
         ingress_url="",
@@ -5511,6 +5643,26 @@ def test_main_teardown_refuses_a_dependent_whose_promotion_is_missing(
     assert main(["teardown", str(run_dir), "--env", str(env), "--out", str(out)], log=log) == 1
     assert "has no promotion" in log.getvalue()
     assert [m for m, _ in seen if m == "DELETE"] == []
+
+
+def test_capability_index_rewrites_the_table_and_needs_no_account(tmp_path: Path) -> None:
+    """`index` reads PROMOTED.md and the catalog and nothing else: it takes no
+    `--env` and opens no client, so a drifted index is fixable without the host."""
+    from membrane.capability import INDEX_HEADER, main
+
+    (tmp_path / "README.md").write_text(f"# The evidence\n\n{INDEX_HEADER}\n|---|---|---|---|\n")
+    log = io.StringIO()
+    assert main(["index", "--out", str(tmp_path)], log=log) == 0
+    assert f"wrote {tmp_path / 'README.md'}" in log.getvalue()
+    assert "| security | hatch |" in (tmp_path / "README.md").read_text()
+
+
+def test_capability_index_reports_a_document_it_cannot_rewrite(tmp_path: Path) -> None:
+    from membrane.capability import main
+
+    log = io.StringIO()
+    assert main(["index", "--out", str(tmp_path)], log=log) == 1
+    assert "index failed:" in log.getvalue()
 
 
 async def test_a_dependent_checks_its_lineage_is_still_on_the_host_before_it_forks(

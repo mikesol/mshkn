@@ -10,7 +10,7 @@ Two things about a security run are not scored and are worth reading anyway. Row
 |---|---|---|---|---|---|---|---|---|---|
 | [2026-09-16-run-1](2026-09-16-run-1/) | 2026-09-16 19:15 | `a67dad2` | hatch/2026-09-16-run-9 | 4/5 — `secret_page` | 25 | 97,440 / 8,730 | $0.1699 | 6.4 | 0 |
 | [2026-09-16-run-2](2026-09-16-run-2/) | 2026-09-16 19:50 | `a67dad2` | hatch/2026-09-16-run-9 | Aborted — the lineage it forked was dead | — | — | — | — | — |
-| [2026-09-17-run-1](2026-09-17-run-1/) | 2026-09-17 05:18 | `f8f72a7` | hatch/2026-09-16-run-10 | **5/5** | 34 | 128,156 / 10,269 | $0.2133 | 9.3 | 0 |
+| [2026-09-17-run-1](2026-09-17-run-1/) | 2026-09-17 05:18 | `f8f72a7` | hatch/2026-09-16-run-10 | **5/5** — spent, see below | 34 | 128,156 / 10,269 | $0.2133 | 9.3 | 0 |
 
 ## What the runs found
 
@@ -40,6 +40,16 @@ Both repairs in the run are the `silent` trigger on root's provisioning turns
 (`11-repair-2`, `13-repair-2`, each *you called nothing; act*), and each was
 preceded by root being asked where to put the secret — the capability's
 designed exchange, not a defect.
+
+**This run cannot be promoted, and that is what #203 is about.** It scored 5/5
+and was torn down at 05:27 without `--keep`, which at the time was how a passing
+run's brain was kept; `promote` refuses once the working `brain` label is gone
+(`embryo/membrane/capability.py`), so the evidence in this directory is complete,
+correct and permanently unusable as a start point. Nobody noticed for fifteen
+hours, and in that window three sessions planned work on top of "security is
+promoted". The measure has to be taken again before any dependent of security can
+run. A run that passes now keeps its brain without being asked, so no later row
+in this table can read like this one.
 
 **The teardown is the other result.** This is the first run torn down through
 `Doors.teardown` since `lineage=` lost its default, and the account afterwards

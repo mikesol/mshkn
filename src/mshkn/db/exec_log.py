@@ -19,6 +19,7 @@ COLUMNS: tuple[str, ...] = (
     "label",
     "command",
     "exit_code",
+    "exit_signal",
     "stdout",
     "stderr",
     "stdout_truncated",
@@ -42,6 +43,7 @@ def _row_to_exec_log(row: Sequence[object]) -> ExecLog:
         label=None if d["label"] is None else str(d["label"]),
         command=str(d["command"]),
         exit_code=int(d["exit_code"]),  # type: ignore[call-overload]
+        exit_signal=None if d["exit_signal"] is None else str(d["exit_signal"]),
         stdout=str(d["stdout"]),
         stderr=str(d["stderr"]),
         stdout_truncated=bool(d["stdout_truncated"]),
@@ -62,6 +64,7 @@ async def insert_exec_log(db: aiosqlite.Connection, log: ExecLog) -> None:
             log.label,
             log.command,
             log.exit_code,
+            log.exit_signal,
             log.stdout,
             log.stderr,
             int(log.stdout_truncated),

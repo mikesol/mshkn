@@ -356,6 +356,7 @@ class ExecSpec:
 class EphemeralResult:
     computer_id: str
     exec_exit_code: int | None
+    exec_exit_signal: str | None
     exec_stdout: str | None
     exec_stderr: str | None
     created_checkpoint_id: str | None
@@ -372,6 +373,7 @@ class ExecLog:
     label: str | None
     command: str
     exit_code: int
+    exit_signal: str | None
     stdout: str
     stderr: str
     stdout_truncated: bool

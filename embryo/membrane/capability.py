@@ -520,6 +520,54 @@ def ancestry(out: Path, name: str) -> list[str]:
     return chain
 
 
+INDEX_HEADER = "| Capability | Depends on | Directory | Promoted |"
+
+
+def index_table(out: Path) -> list[str]:
+    """The DAG index's table, derived: one row per capability in the catalog, each
+    `Promoted` cell read off that capability's `PROMOTED.md` rather than written by
+    hand.
+
+    The column drifted because `promote` writes the record and a human wrote the
+    row: web-search was promoted on 2026-09-17 and the index said "not yet" until
+    #204, which is the cell a fresh session reads to decide what can be built
+    next."""
+    rows = [INDEX_HEADER, "|---|---|---|---|"]
+    known = catalog()
+    # Dependencies before dependants, ties by name. The index is the DAG, and
+    # sorting it alphabetically puts coding above the security it starts from.
+    # `order` raises on a cycle rather than letting one out as a plausible table.
+    depth = {name: len(order(known, name)) - 1 for name in known}
+    for name in sorted(known, key=lambda n: (depth[n], n)):
+        capability = known[name]
+        promotion = read_promotion(out, name)
+        cell = (
+            "not yet"
+            if promotion is None
+            else f"[`{promotion.run.split('/')[-1]}`]({name}/PROMOTED.md)"
+        )
+        depends = ", ".join(capability.depends)
+        rows.append(f"| {name} | {depends} | `{out.as_posix()}/{name}/` | {cell} |")
+    return rows
+
+
+def write_index(out: Path) -> Path:
+    """Replace the table in `<out>/README.md` with `index_table`, leaving the prose
+    around it alone: the table is the only part of that document derivable from
+    disk, and rewriting the whole file would throw away the reading notes under
+    it."""
+    path = out / "README.md"
+    lines = path.read_text().splitlines()
+    if INDEX_HEADER not in lines:
+        raise RuntimeError(f"{path} has no capability index: no line reads {INDEX_HEADER!r}")
+    start = lines.index(INDEX_HEADER)
+    end = start
+    while end < len(lines) and lines[end].startswith("|"):
+        end += 1
+    path.write_text("\n".join([*lines[:start], *index_table(out), *lines[end:]]) + "\n")
+    return path
+
+
 def b64(obj: Any) -> str:
     text = obj if isinstance(obj, str) else json.dumps(obj)
     return base64.b64encode(text.encode()).decode()
@@ -1172,7 +1220,11 @@ async def promote(doors: Doors, out: Path, name: str, run_dir: Path, *, log: Tex
     final = json.loads((run_dir / "final-list.json").read_text())
     working = await doors.working_labels()
     if "brain" not in working:
-        raise RuntimeError("no working brain on the account; was the run kept (--keep)?")
+        raise RuntimeError(
+            f"no working brain on the account for {run_dir.name}; a passing run keeps its "
+            f"brain, so this one was torn down afterwards (`capability teardown {run_dir}`) "
+            f"or dropped by a later promotion, and the measure has to be taken again"
+        )
     head = await doors.head("brain") or {}
     if head.get("recipe_id") != hatched.recipe_id:
         raise RuntimeError(
@@ -1928,16 +1980,17 @@ async def teardown_run(
 
 
 async def clear_brain(doors: Doors, out: Path, *, log: TextIO) -> None:
-    """The account holds at most one brain and `--keep` is required to promote, so
-    every promotable run leaves one behind. A run that *passed* owns its brain
+    """The account holds at most one brain and a passing run keeps its own (#203),
+    so every promotable run leaves one behind. A run that *passed* owns its brain
     until root promotes it; a run that failed never will, and its brain does
     nothing but block the next attempt until a human remembers `capability
     teardown` (#193).
 
     So a failed run's brain goes here, at the start of the next run, rather than
-    at the end of its own: a failure in the agent is diagnosed by booting its
-    brain and asking it what it thought it was doing, and that is possible for
-    exactly as long as nobody needs the account."""
+    at the end of its own -- but only when `--keep` asked for it, since without
+    the flag `run_once` clears it already. A failure in the agent is diagnosed by
+    booting its brain and asking it what it thought it was doing, and that is
+    possible for exactly as long as nobody needs the account."""
     brains = await doors.checkpoints("brain")
     if not brains:
         return
@@ -2024,7 +2077,7 @@ async def run_once(
         if lineage is None:
             raise RuntimeError(
                 f"{capability.name} starts from {start}, which has no promotion; "
-                f"run `capability run {start} --keep` to a passing run, then "
+                f"run `capability run {start}` to a passing run, then "
                 f"`capability promote {start} <run-dir>`"
             )
         missing = [d for d in capability.depends[:-1] if d not in ancestry(out, start)]
@@ -2077,6 +2130,10 @@ async def run_once(
         final: dict[str, Any] | None = None
         reasks: list[str] = []
         continuations: list[str] = []
+        # Read by the teardown below, which runs on the way out of an exception too.
+        # A run that died before it judged anything did not pass, so it is torn down
+        # like any other failure.
+        run_passed = False
         try:
             try:
                 async with run_context(module, capability.name, pubkey, doors, log=log) as context:
@@ -2166,6 +2223,7 @@ async def run_once(
             )
             usage, model_calls = _usage_total(turns)
             passed = sum(1 for v in judged.values() if v["ok"])
+            run_passed = passed == len(capability.postconditions)
             cost = cost_usd(usage, model_id)
             summary = {
                 "run": out_dir.name,
@@ -2210,7 +2268,11 @@ async def run_once(
                 "cost_usd": None if cost is None else round(cost, 4),
                 "postconditions": judged,
                 "passed": passed,
-                "ok": passed == len(capability.postconditions),
+                "ok": run_passed,
+                # What the teardown below decided, recorded before it runs: a reader
+                # of the evidence directory can tell a run whose brain is still on the
+                # account from one whose is not, without asking the account (#203).
+                "kept": run_passed or keep,
             }
             record.transcript(model_id, turns)
             record.summary(summary)
@@ -2224,8 +2286,21 @@ async def run_once(
                 log.write(f"  {'ok ' if v['ok'] else 'NOT'} {name}\n")
             return summary
         finally:
-            if keep:
-                log.write("keeping the brain (--keep)\n")
+            # A passing run's brain is the only thing that run is for: `promote`
+            # copies it off the account and refuses once it is gone, and a key's
+            # secret is readable only at creation, so destroying it is not
+            # recoverable -- the measure has to be taken again. Leaving it costs a
+            # blocked account, which `clear_brain` reports at the start of the next
+            # run with the two commands that free it. The irreversible act is the
+            # one that has to be asked for (#203).
+            #
+            # `--keep` holds a *failed* run's brain, which is otherwise cleared: a
+            # failure is diagnosed by booting the brain and asking it what it thought
+            # it was doing.
+            if run_passed:
+                log.write("keeping the brain: the run passed and is promotable\n")
+            elif keep:
+                log.write("keeping the brain (--keep): the run failed and can be inspected\n")
             else:
                 await doors.teardown(hatched, final, lineage=lineage, log=log)
 
@@ -2273,7 +2348,12 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
         default=None,
         help="where the run's signing key lives (default ~/.mshkn/keys/<capability>/<run>)",
     )
-    run.add_argument("--keep", action="store_true", help="leave the brain on the account")
+    run.add_argument(
+        "--keep",
+        action="store_true",
+        help="leave a failed run's brain on the account to be inspected; a passing run "
+        "keeps its brain either way, because it is the only thing that run is for",
+    )
     run.add_argument("--hatch", type=Path, default=HATCH)
     promote_p = sub.add_parser(
         "promote", help="copy a kept, passing run's heads under capability/<name>/"
@@ -2283,17 +2363,35 @@ def main(argv: list[str] | None = None, *, log: TextIO = sys.stderr) -> int:
     promote_p.add_argument("--env", type=Path, default=Path(".env"))
     promote_p.add_argument("--out", type=Path, default=DEFAULT_OUT)
     teardown_p = sub.add_parser(
-        "teardown", help="undo a run that was kept with --keep, leaving its lineage alone"
+        "teardown", help="undo a run that kept its brain, leaving its lineage alone"
     )
     teardown_p.add_argument("run_dir", type=Path, help="the run's evidence directory")
     teardown_p.add_argument("--env", type=Path, default=Path(".env"))
     teardown_p.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    index_p = sub.add_parser(
+        "index", help="rewrite the capability index's table from the promotions on disk"
+    )
+    index_p.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args(argv)
     if args.command == "promote":
         return _promote(args, log)
     if args.command == "teardown":
         return _teardown(args, log)
+    if args.command == "index":
+        return _index(args, log)
     return _run(args, log)
+
+
+def _index(args: argparse.Namespace, log: TextIO) -> int:
+    """`capability index`. The gate compares the index's table to `index_table`
+    (`tests/unit/test_docs.py`), so a promotion that lands without this fails CI
+    rather than misleading the next session."""
+    try:
+        log.write(f"wrote {write_index(args.out)}\n")
+    except (RuntimeError, OSError, CapabilityError) as exc:
+        log.write(f"index failed: {exc}\n")
+        return 1
+    return 0
 
 
 def _promote(args: argparse.Namespace, log: TextIO) -> int:
@@ -2378,8 +2476,8 @@ def _interrupted(run_dir: Path, out: Path, *, log: TextIO) -> tuple[Hatched, Cap
 
 
 def _teardown(args: argparse.Namespace, log: TextIO) -> int:
-    """Undo a run that was kept. `--keep` is required to promote and the brain
-    guard in `run_once` refuses to measure while a *passing* run's brain is on
+    """Undo a run that kept its brain. A passing run keeps its own (#203) and the
+    brain guard in `run_once` refuses to measure while a *passing* run's brain is on
         the account, so every promotable run leaves one behind and something has to
         take it off; until this subcommand there was nothing, and the call was
         written by hand each time. One of those hand-written calls omitted
