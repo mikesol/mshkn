@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-18T09:19:32+00:00",
+ "command": "provide",
+ "computer_id": "comp-8e0228f3e3c9",
+ "detail": [
+  "read_token_page_second",
+  "bearer_token"
+ ],
+ "door": "api",
+ "n": 67,
+ "seconds": 2.4581329952925444,
+ "status": 200,
+ "stderr": "",
+ "stdout": "read_token_page_second: bearer_token provided (1/1)\n"
+}
