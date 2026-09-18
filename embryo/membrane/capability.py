@@ -533,7 +533,13 @@ def index_table(out: Path) -> list[str]:
     #204, which is the cell a fresh session reads to decide what can be built
     next."""
     rows = [INDEX_HEADER, "|---|---|---|---|"]
-    for name, capability in sorted(catalog().items()):
+    known = catalog()
+    # Dependencies before dependants, ties by name. The index is the DAG, and
+    # sorting it alphabetically puts coding above the security it starts from.
+    # `order` raises on a cycle rather than letting one out as a plausible table.
+    depth = {name: len(order(known, name)) - 1 for name in known}
+    for name in sorted(known, key=lambda n: (depth[n], n)):
+        capability = known[name]
         promotion = read_promotion(out, name)
         cell = (
             "not yet"

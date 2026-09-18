@@ -436,6 +436,36 @@ def test_write_index_replaces_the_table_and_leaves_the_prose(tmp_path: Path) -> 
     assert index.read_text() == before
 
 
+def test_the_index_puts_a_dependency_above_its_dependants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The index is the DAG, so alphabetical order is wrong for it: coding starts
+    from security and sorts above it. The real catalog cannot tell the two
+    orderings apart -- hatch, security, web-search is both -- so a catalog that
+    can is built here."""
+    from membrane.capabilities import Capability, Repair
+    from membrane.capability import index_table
+
+    def cap(name: str, *depends: str) -> Capability:
+        return Capability(
+            name=name,
+            depends=depends,
+            postconditions=(),
+            rows=(),
+            repair=Repair(build="b", refused="r"),
+            path=tmp_path / f"{name}.md",
+            module=None,
+        )
+
+    known = {
+        c.name: c
+        for c in (cap("coding", "security"), cap("hatch"), cap("security", "hatch"), cap("zebra"))
+    }
+    monkeypatch.setattr("membrane.capability.catalog", lambda: known)
+    names = [line.split(" | ")[0].removeprefix("| ") for line in index_table(tmp_path)[2:]]
+    assert names == ["hatch", "zebra", "security", "coding"]
+
+
 def test_write_index_refuses_a_document_with_no_table(tmp_path: Path) -> None:
     from membrane.capability import write_index
 
