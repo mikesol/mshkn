@@ -1,0 +1,12 @@
+{
+ "at": "2026-09-17T21:17:11+00:00",
+ "command": "list",
+ "computer_id": null,
+ "detail": [],
+ "door": "api",
+ "n": 63,
+ "seconds": 0.09407316707074642,
+ "status": 0,
+ "stderr": "",
+ "stdout": "RemoteProtocolError: Server disconnected without sending a response."
+}

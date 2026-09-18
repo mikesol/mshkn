@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-17T21:17:27+00:00",
+ "command": "destroy",
+ "computer_id": "comp-428432bdb8d3",
+ "detail": {
+  "verb": "protected_page_digest"
+ },
+ "door": "api",
+ "n": 70,
+ "seconds": 0.5512343682348728,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}
