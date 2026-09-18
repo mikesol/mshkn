@@ -1,0 +1,15 @@
+{
+ "at": "2026-09-18T10:17:20+00:00",
+ "command": "say",
+ "computer_id": "comp-717423c0fab0",
+ "detail": {
+  "msg": "Suppose I have that disk in front of me and no way to reach you. What command totals a file of amounts I leave at /tmp/amounts? Give me the command alone, on one line I can paste, in a code block.",
+  "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgtiBbRMCyuhW/q64LY3mk6QeqaZ\nQHi7dV0OTc5dFUudcAAAAFbXNoa24AAAAAAAAABnNoYTUxMgAAAFMAAAALc3NoLWVkMjU1\nMTkAAABAv2eJAvCeleodu1wsM2ffB3yxb4HXOlLqrVi69Rh5/g6yo0HML29FmI+Mr2nSEn\nX8b/m2LMqU5nEkbWjoT+y3CA==\n-----END SSH SIGNATURE-----\n"
+ },
+ "door": "ingress",
+ "n": 157,
+ "seconds": 7.454210052266717,
+ "status": 200,
+ "stderr": "Failed to load spaCy lemma model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nFailed to load spaCy full model: spaCy is not installed. Install it with: pip install mem0ai[nlp]\nfastembed not installed - BM25 keyword search disabled. Install it with: pip install \"mem0ai[extras]\"\n",
+ "stdout": "audit {\"door\": \"ingress\", \"hooks\": [{\"computer_id\": \"comp-4796ed2b540d\", \"error\": null, \"exit_code\": 0, \"name\": \"verify_mike_ssh\", \"principal\": \"ssh:mike\", \"status\": \"ok\"}], \"job\": \"rj-a435984a9763\", \"offered\": [\"amount_total\", \"call_counter\", \"effort\", \"page_title\", \"propose\", \"read_token_page\", \"read_token_page_second\", \"remember\", \"try\"], \"principal\": \"ssh:mike\", \"started\": true, \"turn\": 38}\n{\"turn\": 38, \"job\": \"rj-a435984a9763\"}\n"
+}

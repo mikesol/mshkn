@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-18T10:04:03+00:00",
+ "command": "approve",
+ "computer_id": "comp-bf47cc04c05c",
+ "detail": [
+  "p-14"
+ ],
+ "door": "api",
+ "n": 60,
+ "seconds": 2.8036535512655973,
+ "status": 200,
+ "stderr": "",
+ "stdout": "p-14 ready: verb amount_total recipe rcp-8d5ef22f8b97\n"
+}
