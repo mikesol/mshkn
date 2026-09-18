@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-17T22:17:07+00:00",
+ "command": "checkpoint",
+ "computer_id": "comp-583c9c57e86e",
+ "detail": {
+  "checkpoint_id": "ckpt-4d30d233aa38",
+  "label": "verb/fingerprint_token_page",
+  "verb": "fingerprint_token_page"
+ },
+ "door": "api",
+ "n": 72,
+ "seconds": 0.28370355628430843,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

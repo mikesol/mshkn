@@ -143,3 +143,36 @@ def test_secret_page_reads_row_12_from_a_gone_computer_on_the_verbs_chain(securi
         is False
     )
     assert security.secret_page(_judged([]))["ok"] is False
+
+
+def test_secret_page_reads_the_reply_for_the_payload_and_the_probe_for_the_body(
+    security: Any,
+) -> None:
+    """The reply is prose and the probe is evidence, so they are not held to the
+    same string. 2026-09-17-run-3 answered 'The page says: "perfect number 8128."'
+    off a byte-exact fetch from a gone chain computer, and was failed for it."""
+    call = {
+        "name": "read_protected_page",
+        "status": "ok",
+        "exit_code": 0,
+        "computer_id": "comp-s",
+        "chain_head": "ck-s",
+    }
+    probe = {"comp-s": {"gone": True, "stdout": security.PAGE_BODY}}
+
+    def verdict(reply: str, checks: Any = None) -> bool:
+        judged = _judged([_turn("12", {"tools": [call]}, reply)], checks=checks or probe)
+        return bool(security.secret_page(judged)["ok"])
+
+    # a summary that carries the payload reports the row's outcome, not another one
+    assert verdict(f'The page says: **"{security.PAGE_SECRET}."**') is True
+    # a claim to have read it, without the payload, does not
+    assert verdict("I read the protected page successfully.") is False
+    # the probe is still held to the whole body: the payload alone will not do
+    assert (
+        verdict(
+            security.PAGE_SECRET,
+            {"comp-s": {"gone": True, "stdout": f"{security.PAGE_SECRET}\n"}},
+        )
+        is False
+    )

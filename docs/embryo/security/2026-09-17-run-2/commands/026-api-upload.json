@@ -1,0 +1,16 @@
+{
+ "at": "2026-09-17T21:13:14+00:00",
+ "command": "upload",
+ "computer_id": "comp-c8c1190b6f08",
+ "detail": {
+  "bytes": 43,
+  "path": "/run/secrets/page_bearer_token",
+  "verb": "read_protected_page"
+ },
+ "door": "api",
+ "n": 26,
+ "seconds": 0.104854641482234,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}

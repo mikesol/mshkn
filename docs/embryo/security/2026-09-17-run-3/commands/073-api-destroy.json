@@ -1,0 +1,14 @@
+{
+ "at": "2026-09-17T22:17:08+00:00",
+ "command": "destroy",
+ "computer_id": "comp-583c9c57e86e",
+ "detail": {
+  "verb": "fingerprint_token_page"
+ },
+ "door": "api",
+ "n": 73,
+ "seconds": 0.5276854578405619,
+ "status": 200,
+ "stderr": "",
+ "stdout": ""
+}
