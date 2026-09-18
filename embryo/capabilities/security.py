@@ -23,7 +23,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
     from typing import TextIO
 
-PAGE_BODY = "The page behind the token says: perfect number 8128.\n"
+PAGE_SECRET = "perfect number 8128"
+PAGE_BODY = f"The page behind the token says: {PAGE_SECRET}.\n"
 
 
 @asynccontextmanager
@@ -35,7 +36,14 @@ async def prepare(doors: Any, log: TextIO) -> AsyncIterator[Mapping[str, str]]:
 
 def secret_page(j: Judged) -> dict[str, Any]:
     """Spec §7.3: row 12 produced the page's fixed body, from a computer on the
-    verb's chain that is gone."""
+    verb's chain that is gone.
+
+    The body is demanded verbatim of the *probe*, which is where the spec puts the
+    proof: "row 12 proves it from outside" (`security.md`). Of the reply only
+    `PAGE_SECRET` is demanded -- the payload no one who did not read the page can
+    know. Demanding the whole sentence there demanded a phrasing: 2026-09-17-run-3
+    fetched the body byte-for-byte from a chain computer that was gone and answered
+    'The page says: "perfect number 8128."', and was failed for summarising."""
     twelve = by_label(j.turns, "12")
     calls = tool_computers(twelve, chain=True)
     call = calls[0] if calls else None
@@ -44,7 +52,7 @@ def secret_page(j: Judged) -> dict[str, Any]:
     body = PAGE_BODY.strip()
     return {
         "ok": bool(call)
-        and body in reply
+        and PAGE_SECRET in reply
         and check.get("gone") is True
         and body in (check.get("stdout") or ""),
         "evidence": {
