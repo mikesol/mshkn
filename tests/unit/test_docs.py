@@ -4,6 +4,13 @@ Every backticked path, dotted module name, `METHOD /route`, `mshkn_*` metric and
 `MSHKN_*`/`R2_*` variable in the documents listed in DOCS must exist in the
 code, and the architecture doc must name every route and metric.
 A doc that drifts from the code fails here instead of misleading a reader.
+
+The capability index (`docs/embryo/README.md`) gets two more: its table must be
+the one `capability index` derives from the promotions on disk, and its sentence
+about per-module checks must name what those modules register. Both are claims a
+reader acts on rather than decoration -- the Promoted column is how a fresh
+session decides what can be built next, and it was wrong in two of three rows
+(#204).
 """
 
 from __future__ import annotations
@@ -14,6 +21,9 @@ from dataclasses import fields
 from pathlib import Path
 
 import pytest
+from membrane.capabilities import catalog, load_module
+from membrane.capability import DEFAULT_OUT, INDEX_HEADER, index_table
+from membrane.postconditions import CHECKS
 from prometheus_client import REGISTRY
 
 from mshkn.app import create_app
@@ -56,6 +66,10 @@ MODULE_RE = re.compile(r"`(mshkn(?!\.dev`)(?:\.[A-Za-z_][A-Za-z0-9_]*)+)`")  # n
 ROUTE_RE = re.compile(r"`(GET|POST|PUT|PATCH|DELETE) (/[A-Za-z0-9_{}/]*)`")
 METRIC_RE = re.compile(r"`(mshkn_[a-z_]+)(?:\{[^}]*\})?`")
 ENV_RE = re.compile(r"`((?:MSHKN|R2)_[A-Z0-9_]+)(?:=[^`]*)?`")
+
+INDEX = "docs/embryo/README.md"
+# "security's is `secret_page`, and web-search's are `searched` and `read_page`"
+OWN_CHECKS_RE = re.compile(r"([a-z][a-z-]*)'s (?:is|are) ((?:`[a-z_]+`(?:,? and )?)+)")
 
 
 def _text(doc: str) -> str:
@@ -144,6 +158,39 @@ def test_every_env_var_is_config(doc: str) -> None:
 def test_retired_terms_are_absent(doc: str) -> None:
     present = [term for term in BANNED[doc] if term in _text(doc)]
     assert present == [], f"{doc} still mentions retired things: {present}"
+
+
+def test_the_capability_index_table_is_the_derived_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`capability index` is run from the repository root, so the test is too: the
+    directory cells and the promotion lookups are both relative to `--out`."""
+    monkeypatch.chdir(ROOT)
+    lines = _text(INDEX).splitlines()
+    start = lines.index(INDEX_HEADER)
+    end = start
+    while end < len(lines) and lines[end].startswith("|"):
+        end += 1
+    assert lines[start:end] == index_table(DEFAULT_OUT), (
+        f"{INDEX}'s table has drifted from the PROMOTED.md files on disk; "
+        "run `uv run capability index`"
+    )
+
+
+def test_the_capability_index_names_each_module_own_checks() -> None:
+    """A check is attributed to the module that defined it, not to import order:
+    `CHECKS` is a module-level dict every capability mutates, so the registry
+    carries another capability's entries by the time this reads it."""
+    for capability in catalog().values():
+        load_module(capability)
+    claimed = {
+        name: set(re.findall(r"`([a-z_]+)`", names))
+        for name, names in OWN_CHECKS_RE.findall(_text(INDEX))
+    }
+    registered = {
+        name: own
+        for name in catalog()
+        if (own := {c for c, fn in CHECKS.items() if fn.__module__ == f"capabilities.{name}"})
+    }
+    assert claimed == registered, f"{INDEX} misstates which checks a capability's module registers"
 
 
 def test_architecture_lists_every_route_and_metric() -> None:
